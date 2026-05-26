@@ -3,12 +3,22 @@
 `nf` is the planned agency-level CLI for nonfiction WordPress infrastructure,
 deployment, and shared operational state.
 
-This repository documents the design before implementation.
-No executable CLI code should be added yet.
+This repository now includes the first safe executable CLI slice.
+It is local-only and read-only except for `.nf/project.json` init, local
+project command running, and local theme zip packaging.
+Remote provisioning, deploy, sync, and destructive workflows are not
+implemented yet and remain future policy-gated work.
 
 The intended packaging path for `nf` is a `flake.nix` in this repository that
 builds and distributes the CLI to the nonfiction team and lets WordPress
 project flakes consume it as an input.
+
+## Try it
+
+- `nix run .#nf -- --help`
+- `nix develop -c nf --help`
+- With direnv: run `direnv allow` once, then enter the repo to auto-load the
+  flake dev shell.
 
 ## Problem
 
@@ -168,6 +178,16 @@ Notes:
 - It must not contain secrets.
 - It should not duplicate mutable server state.
 - It should describe intent, not replace shared nf state.
+- The generated default `commands` block uses direct project-local commands,
+  not project Makefiles. `nf` owns these workflows going forward.
+- The default source layout assumes `theme/` for the theme and `workbench/`
+  for the local compose environment.
+- Commands such as `install-theme` and `activate-theme` can be customized per
+  project if a repo wants named arguments instead of the default positional
+  form.
+
+The current CLI also reads an optional `commands` block from this file for
+local project command aliases and direct workbench wrappers.
 
 ## Command design
 
@@ -194,6 +214,25 @@ The planned command surface should include at least:
 
 The command set should stay provider-agnostic where possible and delegate to
 provider adapters when it must not.
+
+The initial safe implementation slice includes only local-safe commands:
+
+- `nf list servers`
+- `nf list sites`
+- `nf show server <id-or-name>`
+- `nf show site <id-or-name>`
+- `nf commands`
+- `nf run <name>`
+- `nf project init`
+- `nf password derive <project-slug> <purpose>`
+- `nf theme package`
+- common local project aliases like `nf build`, `nf wp`, and `nf install-theme`
+
+Of those, only `nf project init` writes `.nf/project.json`, and `nf theme
+package` writes a local zip artifact. Local project commands are direct project
+workflows owned by `nf`, not Makefile wrappers. They may mutate local project
+or workbench files and containers when explicitly invoked, but the CLI still has
+no remote provisioning, deploy, or sync workflows yet.
 
 ## Planned workflows
 
@@ -351,6 +390,9 @@ Project repos should only track:
 - add config loading
 - add state loading
 - add read-only inspection commands
+
+This phase now has an initial implementation in the repository. The remaining
+provisioning, deploy, and sync phases stay future work.
 
 ### Phase 3: Linode provider
 

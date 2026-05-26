@@ -1,151 +1,75 @@
 # nf agent guide
 
-## Purpose
+## Current shape
 
-This repository is the planning home for `nf`, an agency-level CLI for
-nonfiction WordPress infrastructure, deployment, and state management.
+- `nf` is a Python 3.11+ CLI (`nf/`, entrypoint `nf.cli:main`) packaged by
+  `pyproject.toml` and `flake.nix`.
+- The implemented slice is local-only: shared state inspection, `.nf/project.json`
+  init, local project command running, password derivation, and local theme zip
+  packaging.
+- Remote provisioning, deploy, sync, and destructive workflows are not
+  implemented yet. Do not add them without explicit design and policy gates.
 
-It is not a project-specific script repo.
-It is not yet an executable CLI implementation repo.
+## Commands that work now
 
-The current goal is to design the command set, state model, provider
-abstractions, safety rules, and WordPress deployment workflows before any code
-is written.
+- Try the CLI: `nix run .#nf -- --help`.
+- Dev shell: `nix develop -c nf --help`; inside `nix develop`, `nf` is on PATH.
+- Direnv: `.envrc` runs `watch_file flake.nix`, `watch_file pyproject.toml`,
+  then `use flake`; user must run `direnv allow` locally.
+- Focused checks used so far:
+  - `python -m nf --help`
+  - `python -m nf list servers`
+  - `NF_SECRET_SALT=test-salt python -m nf password derive demo db`
+  - `nix flake check`
+  - `nix run .#nf -- --help`
+  - `nix develop -c nf --help`
 
-The CLI should also be designed for eventual `flake.nix` packaging in this repo
-so the nonfiction team can consume it from WordPress project flakes.
+## State and config boundaries
 
-## Current status
+- Local secrets: `~/.config/nf/.env`; current salt name is only
+  `NF_SECRET_SALT`.
+- Shared machine-readable state: `~/.config/nf/state`, loaded from
+  `servers.json`, `sites.json`, and `projects.json` when present.
+- Project-safe metadata: `.nf/project.json` inside client repos. It may contain
+  project identity, layout hints, deploy intent, and a local `commands` registry.
+- Never store API tokens, SSH keys, DB credentials, live server passwords, or
+  mutable server/site state in `.nf/project.json`.
 
-- Planning only.
-- No executable CLI code should be added here yet.
-- Docs should stay internally consistent and reflect the current design
-  decisions.
-- Future implementation work should follow the architecture described in
-  `README.md` unless a later decision explicitly replaces it.
+## Project context behavior
 
-## Flake packaging rules
+- Project context is discovered by walking upward for `.nf/project.json`.
+- `nf project init` assumes the Sanjel project shape: `theme/` for the theme and
+  `workbench/` for Docker Compose local WordPress.
+- Project command aliases (`nf build`, `nf up`, `nf wp`, etc.) come from
+  `.nf/project.json` `commands`; they are direct `nf`-owned workflows, not
+  Makefile wrappers. The long-term goal is to remove per-project Makefiles.
+- String commands execute from the project root through `sh -lc` and receive
+  passthrough args after `--`; argv-list commands execute directly.
+- Local command aliases can mutate local files or Docker containers when invoked;
+  they are still not remote workflows.
 
-- `nf` should eventually be created and distributed through a `flake.nix` in
-  this repository.
-- The flake should expose `packages.${system}.default` containing the `nf`
-  executable.
-- The flake may also expose `devShells.default` for `nf` development.
-- WordPress project repositories should consume `nf` as a flake input in their
-  own `flake.nix` files.
-- Do not vendor or copy `nf` scripts into project repositories as the normal
-  distribution path.
-- Team usage may come from a project dev shell input, a direct checkout of this
-  repo for local development, or an optional Nix profile install.
-- This packaging and distribution path is distinct from the private `nf` state
-  repo and from `~/.config/nf/.env`, which remain for shared state and local
-  secrets respectively.
+## WordPress deployment design constraints
 
-## What this repo should contain
+- Theme deploy artifacts must include the built theme, especially `vendor/` and
+  `assets/dist/` when present.
+- `nf theme package` only zips existing files; it does not run Composer, npm, or
+  build steps first.
+- Future direct deploy and versioned zip flows should use the same artifact
+  posture.
+- Future DB/uploads sync must preserve production passwords and sensitive options;
+  treat production DB push as high risk.
 
-- Strategy and design docs.
-- Future implementation notes.
-- Agent instructions for later coding work.
+## Provider model to preserve
 
-## What this repo should not contain yet
-
-- CLI entrypoints.
-- Build scripts.
-- Provisioning scripts.
-- Provider API implementations.
-- Secrets.
-- Project-specific deployment logic.
-
-## Core design rules
-
-1. The CLI name is `nf`.
-2. `nf` is an agency-level tool, not a per-project script collection.
-3. Shared config/state lives under `~/.config/nf`.
-4. Long-lived shared state should be synced through a private GitHub repo.
-5. Secrets live locally in `~/.config/nf/.env` and are manually copied from
-   1Password or an equivalent secure source.
-6. Do not commit secrets, tokens, passwords, or private keys.
-7. Treat server state, site state, and project metadata as separate concerns.
-8. Keep provider behavior abstract so Linode and future providers can share the
-   same command surface.
-9. Do not destroy or overwrite remote state unless the command and target are
-   explicitly confirmed and the safety rules in `README.md` are satisfied.
-10. Package and distribute `nf` through `flake.nix`, and consume it from
-    WordPress project flakes instead of vendoring scripts.
-
-## Repository hygiene
-
-- Prefer Markdown documentation updates over speculative implementation.
-- Keep examples realistic and aligned with the client and nonfiction context.
-- Preserve the distinction between project repositories and shared `nf` state.
-- Avoid adding hidden behavior or undocumented assumptions.
-
-## Safety rules for future implementation work
-
-- Never print secrets in logs or docs.
-- Never store secrets in project repositories.
-- Never assume a destructive remote action is safe because it is a staging
-  environment.
-- Require explicit confirmation before destructive actions such as server
-  removal, site removal, DB overwrite, or uploads overwrite.
-- Preserve production passwords and sensitive options when performing database
-  push/pull flows unless a provider-specific policy explicitly allows a change.
-- Treat `push db` to production as high risk.
-- Prefer reversible workflows and clear prompts over implicit automation.
-
-## State model rules
-
-- Shared machine-readable state belongs in the `nf` state repo or state checkout
-  under `~/.config/nf/state`.
-- Project repositories should only contain safe metadata, such as
-  `.nf/project.json`.
-- Do not store live server passwords, API tokens, or production secrets in the
-  project repository.
-- Server and site records must remain separate even when a server hosts only
-  one site today.
-
-## WordPress deployment rules
-
-- The deploy artifact for themes is the fully built theme, including `vendor/`
-  and `assets/dist/`.
-- Direct deploy and versioned `theme.zip` must use the same artifact posture.
-- Deploy logic should be provider-adapter based, not hardcoded to Linode.
-- Theme deploy should be local-build-first, then sync the built artifact.
-- Future DB and uploads workflows must preserve the current production layout
-  and avoid accidental clobbering.
-
-## Provider abstraction rules
-
-- Linode is the first provider.
-- DNSimple handles DNS hostnames and DNS/TLS challenge support for `nfweb.dev`.
-- Kinsta must be considered a future provider with no Linode provisioning.
-- Provider-specific provisioning, deploy, push, and pull behavior should live
-  behind shared command contracts.
-- Use provider policies to control what is allowed for server creation, site
-  install, DB sync, and uploads sync.
-
-## Testing and validation expectations for future code
-
-- Add narrow tests for parsing, state handling, and provider policy logic.
-- Validate any command behavior with focused tests before broad integration
+- Linode is first provider; DNSimple handles `nfweb.dev` DNS/TLS support.
+- Kinsta is a future provider and has no Linode provisioning step.
+- Keep provider-specific behavior behind shared command contracts and policy
   checks.
-- Avoid broad destructive tests against live infrastructure.
-- Prefer dry-run style checks where possible.
-- If a change affects docs only, verify consistency by reading the diff and the
-  rendered Markdown structure.
 
-## Working style for future agents
+## Change discipline
 
-- Inspect existing docs before editing.
-- Keep changes small and bounded.
-- Preserve existing terminology once introduced.
-- If a design decision changes, update all docs that depend on it.
-- When uncertain about infrastructure safety, stop and ask rather than guess.
-
-## Explicitly excluded actions unless requested
-
-- Initializing git.
-- Creating executable files.
-- Building a CLI.
-- Writing provider integrations.
-- Touching unrelated nonfiction repos.
+- Keep docs and `AGENTS.md` aligned when command scope or safety posture changes.
+- Do not touch sibling client repos such as `sanjel` or `siafintech` unless the
+  user explicitly asks.
+- Do not commit secrets or generated caches (`__pycache__`, `.direnv`, build
+  outputs).
