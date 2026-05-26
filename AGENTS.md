@@ -7,8 +7,12 @@
 - The implemented slice is local-only: shared state inspection, `.nf/project.json`
   init, local project command running, password derivation, and local theme zip
   packaging.
-- Remote provisioning, deploy, sync, and destructive workflows are not
-  implemented yet. Do not add them without explicit design and policy gates.
+- Remote provisioning now has a guarded first slice: `nf provision-server`
+  defaults to dry-run. Interactive use is gum-first; flags are shortcuts, and
+  `--non-interactive` exists for scripts/tests. Actual remote execution is
+  Linode-only for now and requires both `--execute` and `--yes`, plus the
+  required env credentials. Keep deploy, sync, and destructive workflows
+  policy-gated.
 
 ## Commands that work now
 
@@ -23,6 +27,8 @@
   - `nix flake check`
   - `nix run .#nf -- --help`
   - `nix develop -c nf --help`
+  - `python -m nf provision-server --help`
+  - `python -m nf provision-server --non-interactive --project-slug demo --site-domain demo.ln.nfweb.dev --write-cloud-init /tmp/opencode/nf-provision-gum-preview.yaml`
 
 ## State and config boundaries
 

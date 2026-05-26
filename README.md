@@ -5,9 +5,11 @@ deployment, and shared operational state.
 
 This repository now includes the first safe executable CLI slice.
 It is local-only and read-only except for `.nf/project.json` init, local
-project command running, and local theme zip packaging.
-Remote provisioning, deploy, sync, and destructive workflows are not
-implemented yet and remain future policy-gated work.
+project command running, local theme zip packaging, and a guarded
+`nf provision-server` slice.
+`nf provision-server` is interactive-first through `gum`; flags are shortcuts,
+and `--non-interactive` is available for scripting and tests.
+Remote deploy, sync, and destructive workflows remain policy-gated work.
 
 The intended packaging path for `nf` is a `flake.nix` in this repository that
 builds and distributes the CLI to the nonfiction team and lets WordPress
@@ -228,11 +230,21 @@ The initial safe implementation slice includes only local-safe commands:
 - `nf theme package`
 - common local project aliases like `nf build`, `nf wp`, and `nf install-theme`
 
-Of those, only `nf project init` writes `.nf/project.json`, and `nf theme
-package` writes a local zip artifact. Local project commands are direct project
-workflows owned by `nf`, not Makefile wrappers. They may mutate local project
-or workbench files and containers when explicitly invoked, but the CLI still has
-no remote provisioning, deploy, or sync workflows yet.
+The first guarded remote slice is `nf provision-server`.
+It defaults to dry-run, guides interactive use through `gum`, prints a concise
+plan, and can write a redacted cloud-init preview locally.
+Flags act as shortcuts for prompts, and `--non-interactive` supports
+scripted/test usage.
+Actual remote execution is Linode-only for now and requires both `--execute`
+and `--yes` plus the required local credentials.
+Basic auth is not included in this first slice.
+
+Of those, `nf project init` writes `.nf/project.json`, `nf theme package` writes
+a local zip artifact, and `nf provision-server --execute --yes` can create a
+remote Linode and DNS records. Local project commands are direct project
+workflows owned by `nf`, not Makefile wrappers. They may mutate local project or
+workbench files and containers when explicitly invoked. Deploy and sync workflows
+are still not implemented.
 
 ## Planned workflows
 
@@ -240,8 +252,26 @@ no remote provisioning, deploy, or sync workflows yet.
 
 `provision-server` creates a reusable host target such as `app1.nfweb.dev`.
 
-For Linode, this includes Linode API provisioning and any required DNSimple
-records and TLS challenge support for `nfweb.dev`.
+For Linode, this includes Linode API provisioning, DNSimple A records, and TLS
+challenge support for `nfweb.dev`.
+
+The guarded first slice behaves as follows:
+
+- default mode is dry-run
+- `--execute` enables real remote work
+- `--execute` must be paired with `--yes` for actual changes
+- `--provider` currently accepts only `linode`
+- DNSimple zone discovery happens only during actual execution
+- `NF_SECRET_SALT` is used for derived passwords
+- basic auth is intentionally omitted in this slice
+
+Required environment for actual execution:
+
+- `LINODE_CLI_TOKEN` or `LINODE_TOKEN`
+- `DNSIMPLE_TOKEN`
+- `NF_SECRET_SALT`
+
+`DNSIMPLE_ACCOUNT_ID` defaults to `14` unless overridden.
 
 ### Import server
 

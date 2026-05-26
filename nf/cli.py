@@ -5,14 +5,15 @@ import json
 import shlex
 import subprocess
 import sys
-from dataclasses import dataclass
 from pathlib import Path
+from dataclasses import dataclass
 from typing import Any
 
 from .config import discover_project_root, project_file
 from .passwords import PasswordError, derive_password, secret_salt
 from .state import StateError, load_state_bundle, matching_record
 from .theme import ThemeError, load_project_metadata, package_theme
+from .provision import ProvisionError, build_provision_plan, provision_server
 
 
 class ProjectError(RuntimeError):
@@ -351,6 +352,33 @@ def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="nf", description="Safe local nf CLI skeleton")
     subparsers = parser.add_subparsers(dest="command", required=True)
 
+    provision_parser = subparsers.add_parser("provision-server", help="Provision a Linode server")
+    provision_parser.add_argument("--provider")
+    provision_parser.add_argument("--project-slug")
+    provision_parser.add_argument("--server-name")
+    provision_parser.add_argument("--site-domain")
+    provision_parser.add_argument("--label")
+    provision_parser.add_argument("--region")
+    provision_parser.add_argument("--type")
+    provision_parser.add_argument("--image")
+    provision_parser.add_argument("--ssh-user")
+    provision_parser.add_argument("--ssh-public-key-file")
+    provision_parser.add_argument("--remote-wp-path")
+    provision_parser.add_argument("--php-fpm-socket")
+    provision_parser.add_argument("--db-name")
+    provision_parser.add_argument("--db-user")
+    provision_parser.add_argument("--wp-admin-user")
+    provision_parser.add_argument("--wp-admin-email")
+    provision_parser.add_argument("--site-title")
+    provision_parser.add_argument("--dns-zone")
+    provision_parser.add_argument("--dnsimple-account-id")
+    provision_parser.add_argument("--write-cloud-init")
+    provision_parser.add_argument("--non-interactive", action="store_true")
+    provision_parser.add_argument("--show-cloud-init", action="store_true")
+    provision_parser.add_argument("--execute", action="store_true")
+    provision_parser.add_argument("--yes", action="store_true")
+    provision_parser.add_argument("--dry-run", action="store_true")
+
     subparsers.add_parser("commands", help="List configured local project commands")
 
     run_parser = subparsers.add_parser("run", help="Run a configured local project command")
@@ -405,6 +433,21 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
 
     try:
+        if args.command == "provision-server":
+            if args.provider not in (None, "linode"):
+                print("Only --provider linode is supported in this slice.", file=sys.stderr)
+                return 1
+            if args.execute and args.dry_run:
+                print("Choose either --execute or --dry-run, not both.", file=sys.stderr)
+                return 1
+            if args.non_interactive and args.execute and not args.yes:
+                print("Remote execution requires both --execute and --yes in non-interactive mode.", file=sys.stderr)
+                return 1
+            if not args.execute:
+                args.dry_run = True
+            plan = build_provision_plan(args)
+            provision_server(plan)
+            return 0
         if args.command == "commands":
             return cmd_project_commands()
         if args.command == "run":
@@ -424,7 +467,7 @@ def main(argv: list[str] | None = None) -> int:
         if args.command == "theme":
             if args.theme_command == "package":
                 return cmd_theme_package(args)
-    except (PasswordError, ProjectError, StateError, ThemeError) as exc:
+    except (PasswordError, ProjectError, ProvisionError, StateError, ThemeError) as exc:
         print(str(exc), file=sys.stderr)
         return 1
 
