@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"github.com/nonfiction/nf/internal/config"
+	"github.com/nonfiction/nf/internal/envwizard"
 	"github.com/nonfiction/nf/internal/passwords"
 	"github.com/nonfiction/nf/internal/theme"
 	"github.com/nonfiction/nf/internal/ui"
@@ -104,18 +105,11 @@ func slugToTitle(value string) string {
 	return strings.Join(titles, " ")
 }
 
-func envOrNone(name string) string {
-	if v := os.Getenv(name); v != "" {
-		return v
-	}
-	return ""
-}
-
 func requiredEnv(name string) (string, error) {
-	if v := envOrNone(name); v != "" {
+	if v := envwizard.Value(name); v != "" {
 		return v, nil
 	}
-	return "", Error{Msg: fmt.Sprintf("Expected %s in the environment.", name)}
+	return "", Error{Msg: fmt.Sprintf("Expected %s in the environment or %s.", name, config.EnvFile())}
 }
 
 func projectContext() (string, map[string]any, error) {
@@ -130,12 +124,15 @@ func projectContext() (string, map[string]any, error) {
 	return root, metadata, nil
 }
 
-func projectSlug(explicit string, metadata map[string]any) string {
+func inferProjectSlug(explicit string, metadata map[string]any, projectRoot string) string {
 	if v := strings.TrimSpace(explicit); v != "" {
 		return v
 	}
 	if v, ok := metadata["project_slug"].(string); ok && strings.TrimSpace(v) != "" {
 		return strings.TrimSpace(v)
+	}
+	if strings.TrimSpace(projectRoot) != "" {
+		return filepath.Base(projectRoot)
 	}
 	cwd, err := os.Getwd()
 	if err != nil {
@@ -144,11 +141,19 @@ func projectSlug(explicit string, metadata map[string]any) string {
 	return filepath.Base(cwd)
 }
 
-func projectName(metadata map[string]any) string {
+func inferProjectName(metadata map[string]any, projectSlug string) string {
 	if v, ok := metadata["project_name"].(string); ok && strings.TrimSpace(v) != "" {
 		return strings.TrimSpace(v)
 	}
-	return ""
+	return slugToTitle(projectSlug)
+}
+
+func provisionRequirements() []envwizard.Requirement {
+	return []envwizard.Requirement{
+		{Keys: []string{"NF_SECRET_SALT"}, Prompt: "NF_SECRET_SALT (used for derived passwords): ", Secret: true, WriteKey: "NF_SECRET_SALT", Required: true},
+		{Keys: []string{"DNSIMPLE_TOKEN"}, Prompt: "DNSimple token: ", Secret: true, WriteKey: "DNSIMPLE_TOKEN", Required: true},
+		{Keys: []string{"LINODE_CLI_TOKEN", "LINODE_TOKEN"}, Prompt: "Linode token: ", Secret: true, WriteKey: "LINODE_CLI_TOKEN", Required: true},
+	}
 }
 
 func defaultRemoteWpPath(projectSlug string) string {
@@ -381,8 +386,8 @@ func validateActualExecution(plan Plan) error {
 	if _, err := passwords.SecretSalt(); err != nil {
 		return err
 	}
-	if envOrNone("LINODE_CLI_TOKEN") == "" && envOrNone("LINODE_TOKEN") == "" {
-		return Error{Msg: "Expected LINODE_CLI_TOKEN or LINODE_TOKEN in the environment."}
+	if envwizard.Value("LINODE_CLI_TOKEN") == "" && envwizard.Value("LINODE_TOKEN") == "" {
+		return Error{Msg: fmt.Sprintf("Expected LINODE_CLI_TOKEN or LINODE_TOKEN in the environment or %s.", config.EnvFile())}
 	}
 	if _, err := requiredEnv("DNSIMPLE_TOKEN"); err != nil {
 		return err
@@ -394,13 +399,13 @@ func validateActualExecution(plan Plan) error {
 }
 
 func linodeTokenEnv() (string, error) {
-	if token := envOrNone("LINODE_CLI_TOKEN"); token != "" {
+	if token := envwizard.Value("LINODE_CLI_TOKEN"); token != "" {
 		return token, nil
 	}
-	if token := envOrNone("LINODE_TOKEN"); token != "" {
+	if token := envwizard.Value("LINODE_TOKEN"); token != "" {
 		return token, nil
 	}
-	return "", Error{Msg: "Expected LINODE_CLI_TOKEN or LINODE_TOKEN in the environment."}
+	return "", Error{Msg: fmt.Sprintf("Expected LINODE_CLI_TOKEN or LINODE_TOKEN in the environment or %s.", config.EnvFile())}
 }
 
 func runLinodeCLI(args []string) (map[string]any, error) {
@@ -546,28 +551,21 @@ func dnsimpleUpsertARecord(token, accountID, zone, name, ip string) error {
 }
 
 func planLines(plan Plan, cloudInitPath string) []string {
-	cloudInitLabel := "not written"
-	if cloudInitPath != "" {
-		cloudInitLabel = cloudInitPath
-	}
-	return []string{
+	lines := []string{
 		"provider: " + plan.Provider,
-		"project slug: " + plan.ProjectSlug,
-		"project name: " + firstNonEmpty(plan.ProjectName, plan.SiteTitle),
 		"server name: " + plan.ServerName,
 		"label: " + plan.Label,
 		"region: " + plan.Region,
 		"type: " + plan.LinodeType,
 		"image: " + plan.Image,
-		"site domain: " + plan.SiteDomain,
-		"remote wp path: " + plan.RemoteWpPath,
-		"db name/user: " + plan.DbName + " / " + plan.DbUser,
-		"wp admin user: " + plan.WpAdminUser,
-		"site title: " + plan.SiteTitle,
+		"server domain: " + plan.SiteDomain,
 		"dns zone: " + firstNonEmpty(plan.DnsZone, "inferred during execution"),
 		"dnsimple account id: " + plan.DnsimpleAccountID,
-		"cloud-init preview: " + cloudInitLabel,
 	}
+	if cloudInitPath != "" {
+		lines = append(lines, "cloud-init preview: "+cloudInitPath)
+	}
+	return lines
 }
 
 func renderPlan(plan Plan, cloudInitPath, cloudInitPreview string) string {
@@ -622,38 +620,22 @@ func BuildPlan(args Args) (Plan, error) {
 	if err != nil {
 		return Plan{}, err
 	}
-	provider := args.Provider
-	if strings.TrimSpace(provider) == "" {
-		if nonInteractive {
-			provider = "linode"
-		} else {
-			provider, err = ui.PromptString("Select provider", "linode", false)
-			if err != nil {
-				return Plan{}, err
-			}
-		}
+	provider := firstNonEmpty(args.Provider, "linode")
+	projectSlug := inferProjectSlug(args.ProjectSlug, metadata, projectRoot)
+	if strings.TrimSpace(projectSlug) == "" {
+		projectSlug = "site"
 	}
-	projectSlug := projectSlug(args.ProjectSlug, metadata)
-	if strings.TrimSpace(args.ProjectSlug) == "" && !nonInteractive {
-		projectSlug, err = ui.PromptString("Project slug: ", projectSlug, false)
-		if err != nil {
-			return Plan{}, err
-		}
-	}
-	projectName := projectName(metadata)
+	projectName := inferProjectName(metadata, projectSlug)
+	// TODO: move project-aware inference into the future project deploy flow.
 	serverName, err := resolveValue(args.ServerName, "Server name: ", "app1", nonInteractive, false)
 	if err != nil {
 		return Plan{}, err
 	}
-	label, err := resolveValue(args.Label, "Linode label: ", firstNonEmpty(projectSlug, serverName), nonInteractive, false)
+	label, err := resolveValue(args.Label, "Linode label: ", firstNonEmpty(serverName, projectSlug), nonInteractive, false)
 	if err != nil {
 		return Plan{}, err
 	}
-	siteDomain, err := resolveValue(args.SiteDomain, "Site domain: ", projectSlug+".ln.nfweb.dev", nonInteractive, false)
-	if err != nil {
-		return Plan{}, err
-	}
-	remoteWpPath, err := resolveValue(args.RemoteWpPath, "Remote WordPress path: ", defaultRemoteWpPath(projectSlug), nonInteractive, false)
+	siteDomain, err := resolveValue(args.SiteDomain, "Server domain: ", serverName+".nfweb.dev", nonInteractive, false)
 	if err != nil {
 		return Plan{}, err
 	}
@@ -681,58 +663,29 @@ func BuildPlan(args Args) (Plan, error) {
 	if err != nil {
 		return Plan{}, err
 	}
-	dbName, err := resolveValue(args.DbName, "Database name: ", projectSlug, nonInteractive, false)
-	if err != nil {
-		return Plan{}, err
-	}
-	dbUser, err := resolveValue(args.DbUser, "Database user: ", projectSlug, nonInteractive, false)
-	if err != nil {
-		return Plan{}, err
-	}
-	wpAdminUser, err := resolveValue(args.WpAdminUser, "WP admin user: ", "nf-"+projectSlug, nonInteractive, false)
-	if err != nil {
-		return Plan{}, err
-	}
-	wpAdminEmail, err := resolveValue(args.WpAdminEmail, "WP admin email: ", "web@nonfiction.ca", nonInteractive, false)
-	if err != nil {
-		return Plan{}, err
-	}
-	siteTitle, err := resolveValue(args.SiteTitle, "Site title: ", firstNonEmpty(projectName, slugToTitle(projectSlug)), nonInteractive, false)
-	if err != nil {
-		return Plan{}, err
-	}
-	dnsimpleAccountID, err := resolveValue(args.DnsimpleAccountID, "DNSimple account id: ", firstNonEmpty(envOrNone("DNSIMPLE_ACCOUNT_ID"), "14"), nonInteractive, false)
-	if err != nil {
-		return Plan{}, err
-	}
-	dnsZone, err := resolveValue(args.DnsZone, "DNS zone (blank to infer during execution): ", "", nonInteractive, true)
-	if err != nil {
-		return Plan{}, err
-	}
-	writeCloudInit, err := resolveValue(args.WriteCloudInit, "Cloud-init preview path (blank to skip): ", "", nonInteractive, true)
-	if err != nil {
-		return Plan{}, err
-	}
+	dnsimpleAccountID := firstNonEmpty(args.DnsimpleAccountID, envwizard.Value("DNSIMPLE_ACCOUNT_ID"), "14")
+	dnsZone := strings.TrimSpace(args.DnsZone)
+	writeCloudInit := strings.TrimSpace(args.WriteCloudInit)
 	return Plan{
 		Provider:          provider,
 		ProjectRoot:       projectRoot,
 		ProjectSlug:       projectSlug,
 		ProjectName:       projectName,
 		ServerName:        firstNonEmpty(serverName, "app1"),
-		Label:             firstNonEmpty(label, projectSlug),
+		Label:             firstNonEmpty(label, serverName, projectSlug),
 		Region:            firstNonEmpty(region, "ca-central"),
 		LinodeType:        firstNonEmpty(linodeType, "g6-standard-1"),
 		Image:             firstNonEmpty(image, "linode/ubuntu24.04"),
 		SshUser:           firstNonEmpty(sshUser, "nonfiction"),
 		SshPublicKeyFile:  cleanPath(firstNonEmpty(sshPublicKeyFile, "~/.ssh/id_ed25519.pub")),
-		SiteDomain:        firstNonEmpty(siteDomain, projectSlug+".ln.nfweb.dev"),
-		RemoteWpPath:      firstNonEmpty(remoteWpPath, defaultRemoteWpPath(projectSlug)),
+		SiteDomain:        firstNonEmpty(siteDomain, firstNonEmpty(serverName, "app1")+".nfweb.dev"),
+		RemoteWpPath:      firstNonEmpty(args.RemoteWpPath, defaultRemoteWpPath(projectSlug)),
 		PhpFpmSocket:      firstNonEmpty(phpFpmSocket, "/var/run/php/php8.3-fpm.sock"),
-		DbName:            firstNonEmpty(dbName, projectSlug),
-		DbUser:            firstNonEmpty(dbUser, projectSlug),
-		WpAdminUser:       firstNonEmpty(wpAdminUser, "nf-"+projectSlug),
-		WpAdminEmail:      firstNonEmpty(wpAdminEmail, "web@nonfiction.ca"),
-		SiteTitle:         firstNonEmpty(siteTitle, projectName, slugToTitle(projectSlug)),
+		DbName:            firstNonEmpty(args.DbName, projectSlug),
+		DbUser:            firstNonEmpty(args.DbUser, projectSlug),
+		WpAdminUser:       firstNonEmpty(args.WpAdminUser, "nf-"+projectSlug),
+		WpAdminEmail:      firstNonEmpty(args.WpAdminEmail, "web@nonfiction.ca"),
+		SiteTitle:         firstNonEmpty(args.SiteTitle, projectName, slugToTitle(projectSlug)),
 		DnsZone:           dnsZone,
 		DnsimpleAccountID: firstNonEmpty(dnsimpleAccountID, "14"),
 		WriteCloudInit:    cleanPath(writeCloudInit),
@@ -768,18 +721,18 @@ func preparePlan(plan Plan) (Plan, string, error) {
 	if plan.Execute && plan.Yes {
 		return plan, plan.WriteCloudInit, nil
 	}
-	answer, err := ui.PromptString("Execute remote provisioning?", "n", false)
+	answer, err := ui.Confirm("Execute remote provisioning?", false)
 	if err != nil {
 		return Plan{}, plan.WriteCloudInit, err
 	}
-	if strings.ToLower(strings.TrimSpace(answer)) != "y" && strings.ToLower(strings.TrimSpace(answer)) != "yes" {
+	if !answer {
 		return Plan{}, plan.WriteCloudInit, nil
 	}
-	answer, err = ui.PromptString("This will create a Linode and DNS records. Continue?", "n", false)
+	answer, err = ui.Confirm("This will create a Linode and DNS records. Continue?", false)
 	if err != nil {
 		return Plan{}, plan.WriteCloudInit, err
 	}
-	if strings.ToLower(strings.TrimSpace(answer)) != "y" && strings.ToLower(strings.TrimSpace(answer)) != "yes" {
+	if !answer {
 		return Plan{}, plan.WriteCloudInit, nil
 	}
 	plan.Execute = true
@@ -818,6 +771,9 @@ func ProvisionServer(plan Plan) (*struct{ LinodeID, IPv4, DnsZone, ServerStatePa
 	_ = previewPath
 	if !effectivePlan.Execute {
 		return nil, nil
+	}
+	if err := envwizard.Ensure(provisionRequirements(), effectivePlan.NonInteractive); err != nil {
+		return nil, err
 	}
 	if err := validateActualExecution(effectivePlan); err != nil {
 		return nil, err
