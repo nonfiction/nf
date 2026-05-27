@@ -10,12 +10,13 @@
     flake-utils.lib.eachDefaultSystem (system:
       let
         pkgs = import nixpkgs { inherit system; };
-        nfPackage = pkgs.python3Packages.buildPythonApplication {
+        nfPackage = pkgs.buildGoModule {
           pname = "nf";
           version = "0.1.0";
           src = ./.;
-          format = "pyproject";
-          nativeBuildInputs = with pkgs.python3Packages; [ setuptools wheel ];
+          modRoot = ".";
+          subPackages = [ "cmd/nf" ];
+          vendorHash = "sha256-JGQ/UHaGj8t8G/stfcTTnGtifw8ZfbxCzByzH5METyo=";
         };
       in {
         packages.default = nfPackage;
@@ -30,7 +31,7 @@
         };
 
         devShells.default = pkgs.mkShell {
-          packages = [ nfPackage ];
+          packages = [ pkgs.go pkgs.gotools nfPackage ];
         };
       }
     );

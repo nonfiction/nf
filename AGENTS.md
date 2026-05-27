@@ -2,33 +2,33 @@
 
 ## Current shape
 
-- `nf` is a Python 3.11+ CLI (`nf/`, entrypoint `nf.cli:main`) packaged by
-  `pyproject.toml` and `flake.nix`.
+- `nf` is a Go CLI (`cmd/nf`, entrypoint `internal/cli.Run`) packaged by
+  `go.mod` and `flake.nix`.
 - The implemented slice is local-only: shared state inspection, `.nf/project.json`
   init, local project command running, password derivation, and local theme zip
   packaging.
 - Remote provisioning now has a guarded first slice: `nf provision-server`
-  defaults to dry-run. Interactive use is gum-first; flags are shortcuts, and
-  `--non-interactive` exists for scripts/tests. Actual remote execution is
-  Linode-only for now and requires both `--execute` and `--yes`, plus the
-  required env credentials. Keep deploy, sync, and destructive workflows
-  policy-gated.
+  defaults to dry-run. Interactive use is Bubble Tea/Bubbles/Lip Gloss-based;
+  flags are shortcuts, and `--non-interactive` exists for scripts/tests.
+  Actual remote execution is Linode-only for now and requires both `--execute`
+  and `--yes`, plus the required env credentials. Keep deploy, sync, and
+  destructive workflows policy-gated.
 
 ## Commands that work now
 
 - Try the CLI: `nix run .#nf -- --help`.
 - Dev shell: `nix develop -c nf --help`; inside `nix develop`, `nf` is on PATH.
-- Direnv: `.envrc` runs `watch_file flake.nix`, `watch_file pyproject.toml`,
-  then `use flake`; user must run `direnv allow` locally.
+- Direnv: `.envrc` runs `watch_file flake.nix`, `watch_file go.mod`, and
+  `watch_file go.sum`, then `use flake`; user must run `direnv allow` locally.
 - Focused checks used so far:
-  - `python -m nf --help`
-  - `python -m nf list servers`
-  - `NF_SECRET_SALT=test-salt python -m nf password derive demo db`
+  - `go run ./cmd/nf --help`
+  - `go run ./cmd/nf list servers`
+  - `NF_SECRET_SALT=test-salt go run ./cmd/nf password derive demo db`
   - `nix flake check`
   - `nix run .#nf -- --help`
   - `nix develop -c nf --help`
-  - `python -m nf provision-server --help`
-  - `python -m nf provision-server --non-interactive --project-slug demo --site-domain demo.ln.nfweb.dev --write-cloud-init /tmp/opencode/nf-provision-gum-preview.yaml`
+  - `go run ./cmd/nf provision-server --help`
+  - `go run ./cmd/nf provision-server --non-interactive --project-slug demo --site-domain demo.ln.nfweb.dev --write-cloud-init /tmp/opencode/nf-provision-go-preview.yaml`
 
 ## State and config boundaries
 

@@ -7,12 +7,12 @@ This repository now includes the first safe executable CLI slice.
 It is local-only and read-only except for `.nf/project.json` init, local
 project command running, local theme zip packaging, and a guarded
 `nf provision-server` slice.
-`nf provision-server` is interactive-first through `gum`; flags are shortcuts,
-and `--non-interactive` is available for scripting and tests.
+`nf provision-server` is interactive-first through Bubble Tea/Bubbles/Lip Gloss;
+flags are shortcuts, and `--non-interactive` is available for scripting and tests.
 Remote deploy, sync, and destructive workflows remain policy-gated work.
 
 The intended packaging path for `nf` is a `flake.nix` in this repository that
-builds and distributes the CLI to the nonfiction team and lets WordPress
+builds and distributes the Go CLI to the nonfiction team and lets WordPress
 project flakes consume it as an input.
 
 ## Try it
@@ -231,7 +231,7 @@ The initial safe implementation slice includes only local-safe commands:
 - common local project aliases like `nf build`, `nf wp`, and `nf install-theme`
 
 The first guarded remote slice is `nf provision-server`.
-It defaults to dry-run, guides interactive use through `gum`, prints a concise
+It defaults to dry-run and guides interactive use through Bubble Tea/Bubbles/Lip Gloss,
 plan, and can write a redacted cloud-init preview locally.
 Flags act as shortcuts for prompts, and `--non-interactive` supports
 scripted/test usage.
