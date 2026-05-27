@@ -223,6 +223,7 @@ The initial safe implementation slice includes only local-safe commands:
 - `nf list sites`
 - `nf show server <id-or-name>`
 - `nf show site <id-or-name>`
+- `nf delete server <id-or-name>`
 - `nf commands`
 - `nf run <name>`
 - `nf project init`
@@ -230,14 +231,21 @@ The initial safe implementation slice includes only local-safe commands:
 - `nf theme package`
 - common local project aliases like `nf build`, `nf wp`, and `nf install-theme`
 
+Project-context commands only appear when `nf` is run inside a `.git`
+repository.
+
 The first guarded remote slice is `nf provision-server`.
-It defaults to dry-run and guides interactive use through Bubble Tea/Bubbles/Lip Gloss,
-plan, and can write a redacted cloud-init preview locally.
+It defaults to dry-run, guides interactive use through Bubble Tea/Bubbles/Lip Gloss,
+prints a reviewable plan, and can write a redacted cloud-init preview locally.
 Flags act as shortcuts for prompts, and `--non-interactive` supports
 scripted/test usage.
 Actual remote execution is Linode-only for now and requires both `--execute`
 and `--yes` plus the required local credentials.
 Basic auth is not included in this first slice.
+
+`nf delete server <id-or-name>` is also guarded and defaults to dry-run.
+Actual Linode deletion and shared state cleanup require `--execute` and `--yes`
+in non-interactive mode.
 
 Of those, `nf project init` writes `.nf/project.json`, `nf theme package` writes
 a local zip artifact, and `nf provision-server --execute --yes` can create a
@@ -272,6 +280,8 @@ Required environment for actual execution:
 - `NF_SECRET_SALT`
 
 `DNSIMPLE_ACCOUNT_ID` defaults to `14` unless overridden.
+
+Use `nf config init` to populate `~/.config/nf/.env` interactively.
 
 ### Import server
 
