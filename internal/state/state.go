@@ -86,7 +86,7 @@ func recordsFromPayload(payload any, key string) ([]map[string]any, error) {
 }
 
 func LoadStateRecords(kind string) ([]map[string]any, error) {
-	path := filepath.Join(config.StateDir(), kind+".json")
+	path := StatePath(kind)
 	if _, err := os.Stat(path); err != nil {
 		if os.IsNotExist(err) {
 			return []map[string]any{}, nil
@@ -98,6 +98,55 @@ func LoadStateRecords(kind string) ([]map[string]any, error) {
 		return nil, err
 	}
 	return recordsFromPayload(payload, kind)
+}
+
+func StatePath(kind string) string {
+	return filepath.Join(config.StateDir(), kind+".json")
+}
+
+func SaveStateRecords(kind string, records []map[string]any) error {
+	path := StatePath(kind)
+	if records == nil {
+		records = []map[string]any{}
+	}
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		return err
+	}
+	data, err := json.MarshalIndent(records, "", "  ")
+	if err != nil {
+		return err
+	}
+	return os.WriteFile(path, append(data, '\n'), 0o644)
+}
+
+func DeleteStateRecords(kind string, remove func(map[string]any) bool) (int, error) {
+	path := StatePath(kind)
+	if _, err := os.Stat(path); err != nil {
+		if os.IsNotExist(err) {
+			return 0, nil
+		}
+		return 0, err
+	}
+	records, err := LoadStateRecords(kind)
+	if err != nil {
+		return 0, err
+	}
+	kept := make([]map[string]any, 0, len(records))
+	removed := 0
+	for _, record := range records {
+		if remove(record) {
+			removed++
+			continue
+		}
+		kept = append(kept, record)
+	}
+	if removed == 0 {
+		return 0, nil
+	}
+	if err := SaveStateRecords(kind, kept); err != nil {
+		return 0, err
+	}
+	return removed, nil
 }
 
 func LoadStateBundle() (Bundle, error) {
