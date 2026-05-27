@@ -4,10 +4,10 @@
 deployment, and shared operational state.
 
 This repository now includes the first safe executable CLI slice.
-It is local-only and read-only except for `.nf/project.json` init, local
-project command running, local theme zip packaging, and a guarded
-`nf provision-server` slice.
-`nf provision-server` is interactive-first through Bubble Tea/Bubbles/Lip Gloss;
+It is local-only and read-only except for `.nf/project.json` init, local repo
+command running, local theme zip packaging, and guarded `nf server provision`
+and `nf server delete` slices.
+`nf server provision` is interactive-first through Bubble Tea/Bubbles/Lip Gloss;
 flags are shortcuts, and `--non-interactive` is available for scripting and tests.
 Remote deploy, sync, and destructive workflows remain policy-gated work.
 
@@ -19,6 +19,7 @@ project flakes consume it as an input.
 
 - `nix run .#nf -- --help`
 - `nix develop -c nf --help`
+- Grouped commands: `nf server ...`, `nf site ...`, `nf repo ...`
 - With direnv: run `direnv allow` once, then enter the repo to auto-load the
   flake dev shell.
 
@@ -195,15 +196,15 @@ local project command aliases and direct workbench wrappers.
 
 The planned command surface should include at least:
 
-- `nf provision-server`
+- `nf server provision`
 - `nf import-server`
-- `nf list servers`
-- `nf show server`
-- `nf remove server`
+- `nf server list`
+- `nf server show`
+- `nf server delete`
 - `nf install-site`
-- `nf list sites`
-- `nf show site`
-- `nf remove site`
+- `nf site list`
+- `nf site show`
+- `nf site delete`
 - `nf build-theme`
 - `nf package-theme`
 - `nf deploy-theme`
@@ -217,24 +218,22 @@ The planned command surface should include at least:
 The command set should stay provider-agnostic where possible and delegate to
 provider adapters when it must not.
 
-The initial safe implementation slice includes only local-safe commands:
+The current CLI uses grouped commands:
 
-- `nf list servers`
-- `nf list sites`
-- `nf show server <id-or-name>`
-- `nf show site <id-or-name>`
-- `nf delete server <id-or-name>`
-- `nf commands`
-- `nf run <name>`
-- `nf project init`
+- `nf server provision|list|show|delete`
+- `nf site list|show` plus future site actions as stubs
+- `nf repo init|commands|run <name>|package`
+- `nf config init`
 - `nf password derive <project-slug> <purpose>`
-- `nf theme package`
-- common local project aliases like `nf build`, `nf wp`, and `nf install-theme`
 
-Project-context commands only appear when `nf` is run inside a `.git`
+Repo-context commands only appear when `nf` is run inside a `.git`
 repository.
+Interactive commands prefer pickers over required positional arguments where a
+safe choice can be made from known state; for example, `nf server show`,
+`nf site show`, and `nf server delete` open a selector when no identifier is
+provided.
 
-The first guarded remote slice is `nf provision-server`.
+The first guarded remote slice is `nf server provision`.
 It defaults to dry-run, guides interactive use through Bubble Tea/Bubbles/Lip Gloss,
 prints a reviewable plan, and can write a redacted cloud-init preview locally.
 Flags act as shortcuts for prompts, and `--non-interactive` supports
@@ -243,22 +242,23 @@ Actual remote execution is Linode-only for now and requires both `--execute`
 and `--yes` plus the required local credentials.
 Basic auth is not included in this first slice.
 
-`nf delete server <id-or-name>` is also guarded and defaults to dry-run.
-Actual Linode deletion and shared state cleanup require `--execute` and `--yes`
-in non-interactive mode.
+`nf server delete [id-or-name]` opens a server picker when no identifier is
+provided, then prints a plan and asks for confirmation in interactive mode.
+Non-interactive deletion remains dry-run unless explicitly run with
+`--execute --yes`.
 
-Of those, `nf project init` writes `.nf/project.json`, `nf theme package` writes
-a local zip artifact, and `nf provision-server --execute --yes` can create a
-remote Linode and DNS records. Local project commands are direct project
-workflows owned by `nf`, not Makefile wrappers. They may mutate local project or
-workbench files and containers when explicitly invoked. Deploy and sync workflows
-are still not implemented.
+Of those, `nf repo init` writes `.nf/project.json`, `nf repo package` writes a
+local zip artifact, and `nf server provision --execute --yes` can create a
+remote Linode and DNS records. Local repo commands are direct repo workflows
+owned by `nf`, not Makefile wrappers. They may mutate local repo or workbench
+files and containers when explicitly invoked. Deploy and sync workflows are
+still not implemented.
 
 ## Planned workflows
 
 ### Provision server
 
-`provision-server` creates a reusable host target such as `app1.nfweb.dev`.
+`nf server provision` creates a reusable host target such as `app1.nfweb.dev`.
 
 For Linode, this includes Linode API provisioning, DNSimple A records, and TLS
 challenge support for `nfweb.dev`.

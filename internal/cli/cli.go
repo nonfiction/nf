@@ -9,6 +9,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"sort"
+	"strconv"
 	"strings"
 
 	"github.com/nonfiction/nf/internal/config"
@@ -148,11 +149,55 @@ func renderCommandRun(run any) string {
 	}
 }
 
+func recordValueString(value any) string {
+	switch typed := value.(type) {
+	case nil:
+		return ""
+	case string:
+		value := strings.TrimSpace(typed)
+		if strings.ContainsAny(value, "eE") {
+			if parsed, err := strconv.ParseFloat(value, 64); err == nil && parsed == float64(int64(parsed)) {
+				return strconv.FormatInt(int64(parsed), 10)
+			}
+		}
+		return value
+	case float64:
+		if typed == float64(int64(typed)) {
+			return strconv.FormatInt(int64(typed), 10)
+		}
+		return strconv.FormatFloat(typed, 'f', -1, 64)
+	case float32:
+		f := float64(typed)
+		if f == float64(int64(f)) {
+			return strconv.FormatInt(int64(f), 10)
+		}
+		return strconv.FormatFloat(f, 'f', -1, 32)
+	case int:
+		return strconv.Itoa(typed)
+	case int64:
+		return strconv.FormatInt(typed, 10)
+	case int32:
+		return strconv.FormatInt(int64(typed), 10)
+	case uint64:
+		return strconv.FormatUint(typed, 10)
+	case uint:
+		return strconv.FormatUint(uint64(typed), 10)
+	case json.Number:
+		return typed.String()
+	default:
+		value := strings.TrimSpace(fmt.Sprint(typed))
+		if value == "<nil>" {
+			return ""
+		}
+		return value
+	}
+}
+
 func recordStringValues(record map[string]any, keys ...string) []string {
 	values := make([]string, 0, len(keys))
 	seen := map[string]struct{}{}
 	for _, key := range keys {
-		value := strings.TrimSpace(fmt.Sprint(record[key]))
+		value := recordValueString(record[key])
 		if value == "" || value == "<nil>" {
 			continue
 		}
@@ -174,7 +219,7 @@ func recordMatchesAnyValue(record map[string]any, keys, values []string) bool {
 		needle[strings.ToLower(strings.TrimSpace(value))] = struct{}{}
 	}
 	for _, key := range keys {
-		value := strings.ToLower(strings.TrimSpace(fmt.Sprint(record[key])))
+		value := strings.ToLower(recordValueString(record[key]))
 		if value == "" || value == "<nil>" {
 			continue
 		}
@@ -198,9 +243,9 @@ func serverMatchesRecord(record, server map[string]any) bool {
 }
 
 func serverSummary(server map[string]any) string {
-	name := fmt.Sprint(firstRecordValue(server, "name", "slug", "_state_key", "hostname", "label"))
-	id := fmt.Sprint(firstRecordValue(server, "id", "linode_id"))
-	provider := fmt.Sprint(server["provider"])
+	name := firstRecordString(server, "name", "slug", "_state_key", "hostname", "label")
+	id := firstRecordString(server, "id", "linode_id")
+	provider := recordValueString(server["provider"])
 	parts := make([]string, 0, 3)
 	if name != "" {
 		parts = append(parts, name)
@@ -215,11 +260,7 @@ func serverSummary(server map[string]any) string {
 }
 
 func siteSummary(site map[string]any) string {
-	name := fmt.Sprint(firstRecordValue(site, "hostname", "name", "slug", "label", "server_name", "_state_key"))
-	if name == "<nil>" {
-		return ""
-	}
-	return name
+	return firstRecordString(site, "hostname", "name", "slug", "label", "server_name", "_state_key")
 }
 
 func linodeTokenEnv() (string, error) {
@@ -253,6 +294,14 @@ func runLinodeDelete(id string) error {
 		return fmt.Errorf("%s", details)
 	}
 	return nil
+}
+
+func isLinodeNotFoundError(err error) bool {
+	if err == nil {
+		return false
+	}
+	message := strings.ToLower(err.Error())
+	return strings.Contains(message, "request failed: 404") || strings.Contains(message, "not found")
 }
 
 func defaultProjectCommands() map[string]map[string]any {
@@ -359,7 +408,7 @@ func discoverProjectRootOrError() (string, error) {
 	if root, ok := config.DiscoverProjectRoot(""); ok {
 		return root, nil
 	}
-	return "", ProjectError{Msg: "No .nf/project.json found above the current directory. Add one with commands.<name>."}
+	return "", ProjectError{Msg: "No repo metadata found above the current directory. Add .nf/project.json with commands.<name>."}
 }
 
 func executeProjectCommand(root string, run any, extraArgs []string) error {
@@ -379,12 +428,12 @@ func executeProjectCommand(root string, run any, extraArgs []string) error {
 		cmd.Stdin = os.Stdin
 		return cmd.Run()
 	default:
-		return fmt.Errorf("unsupported project command type")
+		return fmt.Errorf("unsupported repo command type")
 	}
 }
 
 func cmdProjectCommands() int {
-	if err := requireProjectContext("commands"); err != nil {
+	if err := requireProjectContext("repo commands"); err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		return 1
 	}
@@ -399,7 +448,7 @@ func cmdProjectCommands() int {
 		return 1
 	}
 	if len(commands) == 0 {
-		fmt.Fprintln(os.Stderr, "No local project commands configured. Add .nf/project.json commands.<name>.")
+		fmt.Fprintln(os.Stderr, "No local repo commands configured. Add .nf/project.json commands.<name>.")
 		return 1
 	}
 	rows := [][]string{{"name", "description", "run"}}
@@ -417,7 +466,7 @@ func cmdProjectCommands() int {
 }
 
 func cmdProjectRun(name string, extraArgs []string) int {
-	if err := requireProjectContext("run"); err != nil {
+	if err := requireProjectContext("repo run"); err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		return 1
 	}
@@ -433,7 +482,7 @@ func cmdProjectRun(name string, extraArgs []string) int {
 	}
 	command, ok := commands[name]
 	if !ok {
-		fmt.Fprintf(os.Stderr, "No configured local project command named %q. Add .nf/project.json commands.%s.\n", name, name)
+		fmt.Fprintf(os.Stderr, "No configured local repo command named %q. Add .nf/project.json commands.%s.\n", name, name)
 		return 1
 	}
 	if err := executeProjectCommand(root, command.Run, normalizePassthroughArgs(extraArgs)); err != nil {
@@ -468,11 +517,8 @@ func cmdDeleteServer(needle string, dryRun, execute, yes, nonInteractive bool) i
 			matchedSites = append(matchedSites, site)
 		}
 	}
-	remoteID := fmt.Sprint(firstRecordValue(server, "linode_id", "id", "_state_key"))
-	if remoteID == "<nil>" {
-		remoteID = ""
-	}
-	if !execute {
+	remoteID := firstRecordString(server, "linode_id", "id", "_state_key")
+	if !execute && (dryRun || nonInteractive) {
 		dryRun = true
 	}
 	if execute && dryRun {
@@ -483,16 +529,17 @@ func cmdDeleteServer(needle string, dryRun, execute, yes, nonInteractive bool) i
 		fmt.Fprintln(os.Stderr, "Remote execution requires both --execute and --yes in non-interactive mode.")
 		return 1
 	}
-	if execute && provider != "linode" {
+	willExecute := execute || (!dryRun && !nonInteractive)
+	if willExecute && provider != "linode" {
 		fmt.Fprintf(os.Stderr, "Unsupported provider %q. Only linode is available for server deletion.\n", provider)
 		return 1
 	}
-	if execute && provider == "linode" && strings.TrimSpace(remoteID) == "" {
+	if willExecute && provider == "linode" && strings.TrimSpace(remoteID) == "" {
 		fmt.Fprintln(os.Stderr, "Selected server is missing a Linode id.")
 		return 1
 	}
 	mode := "dry-run"
-	if execute {
+	if willExecute {
 		mode = "execute"
 	}
 	serverLabel := serverSummary(server)
@@ -525,10 +572,10 @@ func cmdDeleteServer(needle string, dryRun, execute, yes, nonInteractive bool) i
 		}
 	}
 	fmt.Printf("  mode: %s\n", mode)
-	if dryRun {
+	if !willExecute {
 		return 0
 	}
-	if !nonInteractive {
+	if !yes {
 		confirmed, err := ui.Confirm(fmt.Sprintf("Delete server %q and matching sites from remote infrastructure and shared state?", needle), false)
 		if err != nil {
 			fmt.Fprintln(os.Stderr, err)
@@ -540,8 +587,12 @@ func cmdDeleteServer(needle string, dryRun, execute, yes, nonInteractive bool) i
 		}
 	}
 	if err := runLinodeDelete(remoteID); err != nil {
-		fmt.Fprintln(os.Stderr, err)
-		return 1
+		if isLinodeNotFoundError(err) {
+			fmt.Fprintln(os.Stderr, "Remote Linode was not found; removing stale local state.")
+		} else {
+			fmt.Fprintln(os.Stderr, err)
+			return 1
+		}
 	}
 	if _, err := state.DeleteStateRecords("servers", func(record map[string]any) bool { return serverMatchesRecord(record, server) }); err != nil {
 		fmt.Fprintln(os.Stderr, err)
@@ -552,6 +603,73 @@ func cmdDeleteServer(needle string, dryRun, execute, yes, nonInteractive bool) i
 		return 1
 	}
 	return 0
+}
+
+func recordPickerValue(kind string, record map[string]any) string {
+	switch kind {
+	case "server":
+		return firstRecordString(record, "name", "slug", "hostname", "label", "linode_id", "id", "_state_key")
+	case "site":
+		return firstRecordString(record, "hostname", "name", "slug", "label", "id", "_state_key")
+	default:
+		return firstRecordString(record, "name", "slug", "hostname", "label", "id", "_state_key")
+	}
+}
+
+func recordPickerLabel(kind string, record map[string]any) string {
+	switch kind {
+	case "server":
+		label := serverSummary(record)
+		if hostname := firstRecordString(record, "hostname"); hostname != "" && !strings.Contains(label, hostname) {
+			label += " / " + hostname
+		}
+		return label
+	case "site":
+		parts := []string{}
+		if name := siteSummary(record); name != "" {
+			parts = append(parts, name)
+		}
+		if server := firstRecordString(record, "server_name", "server", "server_hostname", "server_label"); server != "" {
+			parts = append(parts, "server "+server)
+		}
+		if status := recordValueString(record["status"]); status != "" {
+			parts = append(parts, status)
+		}
+		return strings.Join(parts, " / ")
+	default:
+		return firstRecordString(record, "name", "slug", "hostname", "label", "id", "_state_key")
+	}
+}
+
+func chooseRecord(kind, action string) (string, error) {
+	stateKind := kind + "s"
+	records, err := state.LoadStateRecords(stateKind)
+	if err != nil {
+		return "", err
+	}
+	if len(records) == 0 {
+		return "", fmt.Errorf("No %ss found.", kind)
+	}
+	options := make([]ui.SelectOption, 0, len(records))
+	for _, record := range records {
+		value := recordPickerValue(kind, record)
+		if value == "" {
+			continue
+		}
+		label := recordPickerLabel(kind, record)
+		if label == "" {
+			label = value
+		}
+		options = append(options, ui.SelectOption{Label: label, Value: value})
+	}
+	if len(options) == 0 {
+		return "", fmt.Errorf("No selectable %ss found.", kind)
+	}
+	return ui.Select(fmt.Sprintf("Choose a %s to %s", kind, action), options)
+}
+
+func chooseServerForDelete() (string, error) {
+	return chooseRecord("server", "delete")
 }
 
 func cmdList(kind string) int {
@@ -577,11 +695,11 @@ func cmdList(kind string) int {
 	rows := [][]string{{"id", "name", "provider", "hostname", "status"}}
 	for _, record := range records {
 		rows = append(rows, []string{
-			fmt.Sprint(firstRecordValue(record, "id", "_state_key")),
-			fmt.Sprint(firstRecordValue(record, "name", "slug")),
-			fmt.Sprint(record["provider"]),
-			fmt.Sprint(firstRecordValue(record, "hostname", "site_url")),
-			fmt.Sprint(record["status"]),
+			firstRecordString(record, "id", "_state_key"),
+			firstRecordString(record, "name", "slug"),
+			recordValueString(record["provider"]),
+			firstRecordString(record, "hostname", "site_url"),
+			recordValueString(record["status"]),
 		})
 	}
 	fmt.Println(formatTable(rows))
@@ -590,11 +708,15 @@ func cmdList(kind string) int {
 
 func firstRecordValue(record map[string]any, keys ...string) any {
 	for _, key := range keys {
-		if value, ok := record[key]; ok && fmt.Sprint(value) != "<nil>" && fmt.Sprint(value) != "" {
+		if value, ok := record[key]; ok && recordValueString(value) != "" {
 			return value
 		}
 	}
 	return ""
+}
+
+func firstRecordString(record map[string]any, keys ...string) string {
+	return recordValueString(firstRecordValue(record, keys...))
 }
 
 func cmdShow(kind, needle string) int {
@@ -680,7 +802,11 @@ func cmdPasswordDerive(slug, purpose string, nonInteractive bool) int {
 	return 0
 }
 
-func cmdThemePackage(source, output string, dryRun bool) int {
+func cmdRepoPackage(source, output string, dryRun bool) int {
+	return cmdPackage("repo package", source, output, dryRun)
+}
+
+func cmdPackage(commandName, source, output string, dryRun bool) int {
 	root, _ := config.DiscoverProjectRoot("")
 	if root == "" {
 		root = "."
@@ -736,129 +862,262 @@ func normalizePassthroughArgs(args []string) []string {
 
 func buildParser() *flag.FlagSet { return flag.NewFlagSet("nf", flag.ContinueOnError) }
 
+func printGroupHelp(title string, lines []string) {
+	fmt.Println(title)
+	fmt.Println("\nCommands:")
+	for _, line := range lines {
+		fmt.Printf("  %s\n", line)
+	}
+}
+
+func runServerHelp() int {
+	printGroupHelp("server", []string{
+		"provision [flags]   provision a new server",
+		"list                list servers",
+		"show <id-or-name>   show a server",
+		"delete [flags] <id-or-name>   delete a server (flags may also follow the id)",
+	})
+	return 0
+}
+
+func runSiteHelp() int {
+	printGroupHelp("site", []string{
+		"list                list sites",
+		"show <id-or-name>   show a site",
+		"install             not implemented yet",
+		"delete              not implemented yet",
+		"deploy              not implemented yet",
+		"push                not implemented yet",
+		"pull                not implemented yet",
+	})
+	return 0
+}
+
+func runConfigHelp() int {
+	printGroupHelp("config", []string{
+		"init                initialize local config",
+	})
+	return 0
+}
+
+func runPasswordHelp() int {
+	printGroupHelp("password", []string{
+		"derive [--non-interactive] <project-slug> <purpose>   derive a password",
+	})
+	return 0
+}
+
+func runRepoHelp() int {
+	lines := []string{
+		"init                create .nf/project.json",
+	}
+	if projectContextAvailable() {
+		lines = append(lines,
+			"commands            list configured local repo commands",
+			"run <name>          run a configured local repo command",
+			"package [--dry-run] [--source] [--output]   package theme artifacts",
+		)
+		if root, ok := currentGitRoot(); ok {
+			if commands, err := loadProjectCommands(root); err == nil && len(commands) > 0 {
+				lines = append(lines, "repo-local commands:")
+				keys := make([]string, 0, len(commands))
+				for name := range commands {
+					keys = append(keys, name)
+				}
+				sort.Strings(keys)
+				for _, name := range keys {
+					lines = append(lines, fmt.Sprintf("%s - %s", name, commands[name].Description))
+				}
+			}
+			lines = append(lines,
+				"build               repo alias",
+				"watch               repo alias",
+				"test                repo alias",
+				"setup               repo alias",
+				"up                  repo alias",
+				"down                repo alias",
+				"restart             repo alias",
+				"logs                repo alias",
+				"reset               repo alias",
+				"fresh               repo alias",
+				"wp                  repo alias",
+				"install-theme       repo alias",
+				"activate-theme      repo alias",
+			)
+		}
+	}
+	printGroupHelp("repo", lines)
+	return 0
+}
+
+func runHelp() int {
+	fmt.Println("nf")
+	fmt.Println("\nCommands:")
+	fmt.Println("  server        provision, list, show, delete servers")
+	fmt.Println("  site          list, show, future install/delete/deploy/sync")
+	repoLine := "  repo          init repo metadata"
+	if projectContextAvailable() {
+		repoLine = "  repo          init and repo-local commands"
+	}
+	fmt.Println(repoLine)
+	fmt.Println("  config        init local config")
+	fmt.Println("  password      derive passwords")
+	fmt.Println("  help          show help")
+	return 0
+}
+
+type deleteServerOptions struct {
+	dryRun         bool
+	execute        bool
+	yes            bool
+	nonInteractive bool
+}
+
+func parseDeleteServerArgs(argv []string) (string, deleteServerOptions, error) {
+	var opts deleteServerOptions
+	positionals := make([]string, 0, 1)
+	for i := 0; i < len(argv); i++ {
+		arg := argv[i]
+		switch arg {
+		case "--":
+			positionals = append(positionals, argv[i+1:]...)
+			i = len(argv)
+		case "--non-interactive":
+			opts.nonInteractive = true
+		case "--execute":
+			opts.execute = true
+		case "--yes":
+			opts.yes = true
+		case "--dry-run":
+			opts.dryRun = true
+		default:
+			if strings.HasPrefix(arg, "-") {
+				return "", opts, fmt.Errorf("unsupported flag %s", arg)
+			}
+			positionals = append(positionals, arg)
+		}
+	}
+	if len(positionals) > 1 {
+		return "", opts, fmt.Errorf("server delete takes at most one id or name")
+	}
+	if len(positionals) == 0 {
+		return "", opts, nil
+	}
+	return positionals[0], opts, nil
+}
+
 func Run(argv []string) int {
 	if len(argv) == 0 {
 		return runHelp()
 	}
 	switch argv[0] {
 	case "--help", "-h", "help":
-		return runHelp()
-	case "provision-server":
-		return runProvision(argv[1:])
-	case "commands":
-		return cmdProjectCommands()
-	case "run":
-		if len(argv) < 2 {
-			fmt.Fprintln(os.Stderr, "run requires a command name")
-			return 1
+		if len(argv) == 1 {
+			return runHelp()
 		}
-		return cmdProjectRun(argv[1], argv[2:])
-	case "list":
-		if len(argv) < 2 {
-			fmt.Fprintln(os.Stderr, "list requires servers or sites")
-			return 1
-		}
-		return cmdList(argv[1])
-	case "show":
-		if len(argv) < 3 {
-			fmt.Fprintln(os.Stderr, "show requires server/site and an identifier")
-			return 1
-		}
-		return cmdShow(argv[1], argv[2])
-	case "delete":
-		return runDelete(argv[1:])
+		return runTopicHelp(argv[1:])
+	case "server":
+		return runServer(argv[1:])
+	case "site":
+		return runSite(argv[1:])
+	case "repo":
+		return runRepo(argv[1:])
 	case "config":
 		return runConfig(argv[1:])
-	case "project":
-		return runProject(argv[1:])
 	case "password":
 		return runPassword(argv[1:])
-	case "theme":
-		return runTheme(argv[1:])
 	default:
-		for _, name := range localProjectCommands {
-			if argv[0] == name {
-				if err := requireProjectContext(name); err != nil {
-					fmt.Fprintln(os.Stderr, err)
-					return 1
-				}
-				return cmdProjectAlias(name, argv[1:])
-			}
-		}
 		fmt.Fprintf(os.Stderr, "unsupported command: %s\n", argv[0])
 		return 1
 	}
 }
 
-func runHelp() int {
-	fmt.Println("nf")
-	fmt.Println("\nCommands:")
-	fmt.Println("  provision-server")
-	fmt.Println("  delete server <id-or-name>")
-	fmt.Println("  list servers|sites")
-	fmt.Println("  show server|site <id-or-name>")
-	fmt.Println("  config init")
-	fmt.Println("  project init")
-	fmt.Println("  password derive [--non-interactive] <project-slug> <purpose>")
-	if projectContextAvailable() {
-		fmt.Println("  commands")
-		fmt.Println("  run <name>")
-		fmt.Println("  theme package")
-		for _, name := range localProjectCommands {
-			fmt.Printf("  %s\n", name)
+func runTopicHelp(argv []string) int {
+	if len(argv) == 0 {
+		return runHelp()
+	}
+	switch argv[0] {
+	case "server":
+		return runServerHelp()
+	case "site":
+		return runSiteHelp()
+	case "repo":
+		return runRepoHelp()
+	case "config":
+		return runConfigHelp()
+	case "password":
+		return runPasswordHelp()
+	default:
+		return runHelp()
+	}
+}
+
+func runRepo(argv []string) int {
+	if len(argv) == 0 || argv[0] == "help" {
+		return runRepoHelp()
+	}
+	if argv[0] == "init" {
+		fs := flag.NewFlagSet("repo init", flag.ContinueOnError)
+		projectSlug := fs.String("project-slug", "", "")
+		projectName := fs.String("project-name", "", "")
+		themeSlug := fs.String("theme-slug", "", "")
+		themeSource := fs.String("theme-source", "", "")
+		localWorkbenchURL := fs.String("local-workbench-url", "http://localhost:18181", "")
+		defaultProvider := fs.String("default-provider", "linode", "")
+		force := fs.Bool("force", false, "")
+		fs.SetOutput(os.Stderr)
+		if err := fs.Parse(argv[1:]); err != nil {
+			return 1
+		}
+		if strings.TrimSpace(*projectSlug) == "" {
+			fmt.Fprintln(os.Stderr, "--project-slug is required")
+			return 1
+		}
+		return cmdProjectInit(projectInitArgs{*projectSlug, *projectName, *themeSlug, *themeSource, *localWorkbenchURL, *defaultProvider, *force})
+	}
+	if argv[0] == "package" {
+		if err := requireProjectContext("repo package"); err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			return 1
+		}
+		fs := flag.NewFlagSet("repo package", flag.ContinueOnError)
+		source := fs.String("source", "", "")
+		output := fs.String("output", "", "")
+		dryRun := fs.Bool("dry-run", false, "")
+		fs.SetOutput(os.Stderr)
+		if err := fs.Parse(argv[1:]); err != nil {
+			return 1
+		}
+		return cmdRepoPackage(*source, *output, *dryRun)
+	}
+	for _, name := range localProjectCommands {
+		if argv[0] == name {
+			if err := requireProjectContext(name); err != nil {
+				fmt.Fprintln(os.Stderr, err)
+				return 1
+			}
+			return cmdProjectAlias(name, argv[1:])
 		}
 	}
-	return 0
-}
-
-func runDelete(argv []string) int {
-	if len(argv) == 0 || argv[0] != "server" {
-		fmt.Fprintln(os.Stderr, "unsupported delete command")
-		return 1
+	if argv[0] == "commands" {
+		return cmdProjectCommands()
 	}
-	fs := flag.NewFlagSet("delete server", flag.ContinueOnError)
-	nonInteractive := fs.Bool("non-interactive", false, "")
-	execute := fs.Bool("execute", false, "")
-	yes := fs.Bool("yes", false, "")
-	dryRun := fs.Bool("dry-run", false, "")
-	fs.SetOutput(os.Stderr)
-	if err := fs.Parse(argv[1:]); err != nil {
-		return 1
+	if argv[0] == "run" {
+		if len(argv) < 2 {
+			fmt.Fprintln(os.Stderr, "repo run requires a command name")
+			return 1
+		}
+		return cmdProjectRun(argv[1], argv[2:])
 	}
-	args := fs.Args()
-	if len(args) != 1 {
-		fmt.Fprintln(os.Stderr, "delete server requires an id or name")
-		return 1
-	}
-	return cmdDeleteServer(args[0], *dryRun, *execute, *yes, *nonInteractive)
-}
-
-func runProject(argv []string) int {
-	if len(argv) == 0 || argv[0] != "init" {
-		fmt.Fprintln(os.Stderr, "unsupported project command")
-		return 1
-	}
-	fs := flag.NewFlagSet("project init", flag.ContinueOnError)
-	projectSlug := fs.String("project-slug", "", "")
-	projectName := fs.String("project-name", "", "")
-	themeSlug := fs.String("theme-slug", "", "")
-	themeSource := fs.String("theme-source", "", "")
-	localWorkbenchURL := fs.String("local-workbench-url", "http://localhost:18181", "")
-	defaultProvider := fs.String("default-provider", "linode", "")
-	force := fs.Bool("force", false, "")
-	fs.SetOutput(os.Stderr)
-	if err := fs.Parse(argv[1:]); err != nil {
-		return 1
-	}
-	if strings.TrimSpace(*projectSlug) == "" {
-		fmt.Fprintln(os.Stderr, "--project-slug is required")
-		return 1
-	}
-	return cmdProjectInit(projectInitArgs{*projectSlug, *projectName, *themeSlug, *themeSource, *localWorkbenchURL, *defaultProvider, *force})
+	fmt.Fprintln(os.Stderr, "unsupported repo command")
+	return 1
 }
 
 func runPassword(argv []string) int {
-	if len(argv) == 0 || argv[0] != "derive" {
+	if len(argv) == 0 || argv[0] == "help" {
+		return runPasswordHelp()
+	}
+	if argv[0] != "derive" {
 		fmt.Fprintln(os.Stderr, "unsupported password command")
 		return 1
 	}
@@ -877,7 +1136,10 @@ func runPassword(argv []string) int {
 }
 
 func runConfig(argv []string) int {
-	if len(argv) == 0 || argv[0] != "init" {
+	if len(argv) == 0 || argv[0] == "help" {
+		return runConfigHelp()
+	}
+	if argv[0] != "init" {
 		fmt.Fprintln(os.Stderr, "unsupported config command")
 		return 1
 	}
@@ -894,28 +1156,100 @@ func runConfig(argv []string) int {
 	return 0
 }
 
-func runTheme(argv []string) int {
-	if len(argv) == 0 || argv[0] != "package" {
-		fmt.Fprintln(os.Stderr, "unsupported theme command")
+func runServer(argv []string) int {
+	if len(argv) == 0 || argv[0] == "help" {
+		return runServerHelp()
+	}
+	switch argv[0] {
+	case "provision":
+		return runProvision(argv[1:])
+	case "list":
+		if len(argv) != 1 {
+			fmt.Fprintln(os.Stderr, "server list takes no arguments")
+			return 1
+		}
+		return cmdList("servers")
+	case "show":
+		if len(argv) > 2 {
+			fmt.Fprintln(os.Stderr, "server show takes exactly one identifier")
+			return 1
+		}
+		needle := ""
+		if len(argv) == 2 {
+			needle = argv[1]
+		} else {
+			selected, err := chooseRecord("server", "show")
+			if err != nil {
+				fmt.Fprintln(os.Stderr, err)
+				return 1
+			}
+			needle = selected
+		}
+		return cmdShow("server", needle)
+	case "delete":
+		needle, opts, err := parseDeleteServerArgs(argv[1:])
+		if err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			return 1
+		}
+		if needle == "" {
+			if opts.nonInteractive {
+				fmt.Fprintln(os.Stderr, "server delete requires an id or name in non-interactive mode")
+				return 1
+			}
+			selected, err := chooseServerForDelete()
+			if err != nil {
+				fmt.Fprintln(os.Stderr, err)
+				return 1
+			}
+			needle = selected
+		}
+		return cmdDeleteServer(needle, opts.dryRun, opts.execute, opts.yes, opts.nonInteractive)
+	default:
+		fmt.Fprintln(os.Stderr, "unsupported server command")
 		return 1
 	}
-	if err := requireProjectContext("theme package"); err != nil {
-		fmt.Fprintln(os.Stderr, err)
+}
+
+func runSite(argv []string) int {
+	if len(argv) == 0 || argv[0] == "help" {
+		return runSiteHelp()
+	}
+	switch argv[0] {
+	case "list":
+		if len(argv) != 1 {
+			fmt.Fprintln(os.Stderr, "site list takes no arguments")
+			return 1
+		}
+		return cmdList("sites")
+	case "show":
+		if len(argv) > 2 {
+			fmt.Fprintln(os.Stderr, "site show takes exactly one identifier")
+			return 1
+		}
+		needle := ""
+		if len(argv) == 2 {
+			needle = argv[1]
+		} else {
+			selected, err := chooseRecord("site", "show")
+			if err != nil {
+				fmt.Fprintln(os.Stderr, err)
+				return 1
+			}
+			needle = selected
+		}
+		return cmdShow("site", needle)
+	case "install", "delete", "deploy", "push", "pull":
+		fmt.Fprintf(os.Stderr, "site %s is not implemented yet\n", argv[0])
+		return 1
+	default:
+		fmt.Fprintln(os.Stderr, "unsupported site command")
 		return 1
 	}
-	fs := flag.NewFlagSet("theme package", flag.ContinueOnError)
-	source := fs.String("source", "", "")
-	output := fs.String("output", "", "")
-	dryRun := fs.Bool("dry-run", false, "")
-	fs.SetOutput(os.Stderr)
-	if err := fs.Parse(argv[1:]); err != nil {
-		return 1
-	}
-	return cmdThemePackage(*source, *output, *dryRun)
 }
 
 func runProvision(argv []string) int {
-	fs := flag.NewFlagSet("provision-server", flag.ContinueOnError)
+	fs := flag.NewFlagSet("server provision", flag.ContinueOnError)
 	args := provision.Args{}
 	fs.StringVar(&args.Provider, "provider", "", "")
 	fs.StringVar(&args.ProjectSlug, "project-slug", "", "")
