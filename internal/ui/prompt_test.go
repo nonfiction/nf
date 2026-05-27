@@ -55,3 +55,25 @@ func TestPromptModelAllowBlankUsesPlaceholder(t *testing.T) {
 		t.Fatalf("prompt result = %q, want %q", got, want)
 	}
 }
+
+func TestSelectModelNavigationAndSubmit(t *testing.T) {
+	m := newSelectModel("Choose", []SelectOption{{Label: "One", Value: "1"}, {Label: "Two", Value: "2"}})
+
+	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyDown})
+	m = updated.(selectModel)
+	if got, want := m.selected, 1; got != want {
+		t.Fatalf("down selected = %d, want %d", got, want)
+	}
+
+	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyTab})
+	m = updated.(selectModel)
+	if got, want := m.selected, 0; got != want {
+		t.Fatalf("tab selected = %d, want %d", got, want)
+	}
+
+	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	m = updated.(selectModel)
+	if !m.answered || m.result != "1" {
+		t.Fatalf("enter result = %#v, want answered value 1", m)
+	}
+}

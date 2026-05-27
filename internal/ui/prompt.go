@@ -118,6 +118,26 @@ type confirmModel struct {
 	width      int
 }
 
+type SelectOption struct {
+	Label string
+	Value string
+}
+
+type selectModel struct {
+	title     string
+	options   []SelectOption
+	selected  int
+	result    string
+	answered  bool
+	cancelled bool
+	width     int
+	viewport  int
+}
+
+func newSelectModel(title string, options []SelectOption) selectModel {
+	return selectModel{title: title, options: options, width: 64, viewport: 8}
+}
+
 func newConfirmModel(prompt string, defaultYes bool) confirmModel {
 	selected := 1
 	if defaultYes {
@@ -218,6 +238,81 @@ func (m confirmModel) View() string {
 	return frameStyle.Render(body)
 }
 
+func (m selectModel) Init() tea.Cmd { return nil }
+
+func (m selectModel) move(delta int) selectModel {
+	if len(m.options) == 0 {
+		return m
+	}
+	m.selected += delta
+	if m.selected < 0 {
+		m.selected = len(m.options) - 1
+	}
+	if m.selected >= len(m.options) {
+		m.selected = 0
+	}
+	return m
+}
+
+func (m selectModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
+	switch msg := msg.(type) {
+	case tea.WindowSizeMsg:
+		m.width = clampInt(32, 96, msg.Width-8)
+		m.viewport = clampInt(4, 12, msg.Height-10)
+		return m, nil
+	case tea.KeyMsg:
+		switch strings.ToLower(msg.String()) {
+		case "ctrl+c", "esc":
+			m.cancelled = true
+			return m, tea.Quit
+		case "up", "k", "shift+tab":
+			m = m.move(-1)
+			return m, nil
+		case "down", "j", "tab":
+			m = m.move(1)
+			return m, nil
+		}
+		switch msg.Type {
+		case tea.KeyEnter:
+			if len(m.options) == 0 {
+				m.cancelled = true
+				return m, tea.Quit
+			}
+			m.result = m.options[m.selected].Value
+			m.answered = true
+			return m, tea.Quit
+		}
+	}
+	return m, nil
+}
+
+func (m selectModel) View() string {
+	start := 0
+	if m.viewport > 0 && m.selected >= m.viewport {
+		start = m.selected - m.viewport + 1
+	}
+	end := len(m.options)
+	if m.viewport > 0 && end > start+m.viewport {
+		end = start + m.viewport
+	}
+	lines := []string{titleStyle.Render("Select"), labelStyle.Render(m.title), ""}
+	if len(m.options) == 0 {
+		lines = append(lines, hintStyle.Render("No options available"))
+	} else {
+		for i := start; i < end; i++ {
+			prefix := "  "
+			style := lipgloss.NewStyle()
+			if i == m.selected {
+				prefix = "▸ "
+				style = lipgloss.NewStyle().Foreground(accentColor).Bold(true)
+			}
+			lines = append(lines, style.Render(prefix+m.options[i].Label))
+		}
+	}
+	lines = append(lines, hintStyle.Render("Use ↑/↓, j/k, Enter, or Esc/Ctrl+C"))
+	return frameStyle.Render(lipgloss.JoinVertical(lipgloss.Left, lines...))
+}
+
 func PromptString(prompt, defaultValue string, allowBlank bool) (string, error) {
 	program := tea.NewProgram(newPromptModel(prompt, defaultValue, allowBlank))
 	model, err := program.Run()
@@ -271,6 +366,28 @@ func Confirm(prompt string, defaultYes bool) (bool, error) {
 	}
 	if !final.answered {
 		return false, fmt.Errorf("confirm failed")
+	}
+	return final.result, nil
+}
+
+func Select(title string, options []SelectOption) (string, error) {
+	if len(options) == 0 {
+		return "", fmt.Errorf("no options available")
+	}
+	program := tea.NewProgram(newSelectModel(title, options))
+	model, err := program.Run()
+	if err != nil {
+		return "", err
+	}
+	final, ok := model.(selectModel)
+	if !ok {
+		return "", fmt.Errorf("select failed")
+	}
+	if final.cancelled {
+		return "", fmt.Errorf("select cancelled")
+	}
+	if !final.answered {
+		return "", fmt.Errorf("select failed")
 	}
 	return final.result, nil
 }
