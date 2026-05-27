@@ -1,81 +1,74 @@
 # nf agent guide
 
-## Current shape
+## Shape and entrypoints
 
-- `nf` is a Go CLI (`cmd/nf`, entrypoint `internal/cli.Run`) packaged by
-  `go.mod` and `flake.nix`.
-- The implemented slice is local-only: shared state inspection, `.nf/project.json`
-  init, local project command running, password derivation, and local theme zip
-  packaging.
-- Remote provisioning now has a guarded first slice: `nf provision-server`
-  defaults to dry-run. Interactive use is Bubble Tea/Bubbles/Lip Gloss-based;
-  flags are shortcuts, and `--non-interactive` exists for scripts/tests.
-  Actual remote execution is Linode-only for now and requires both `--execute`
-  and `--yes`, plus the required env credentials. Keep deploy, sync, and
-  destructive workflows policy-gated.
+- Go CLI only: `cmd/nf/main.go` calls `internal/cli.Run`; there is no supported
+  Python implementation left.
+- Main command groups are `nf server ...`, `nf site ...`, `nf repo ...`,
+  `nf config ...`, and `nf password ...`; do not add old compatibility routes
+  such as `provision-server`, top-level `list/show`, or top-level repo aliases.
+- UI prompts/selectors live in `internal/ui` and use Bubble Tea/Bubbles/Lip
+  Gloss. Interactive commands should prefer selectors over required positional
+  args when the choice can be inferred from state.
+- `internal/provision` still provisions a first Linode-focused WordPress host
+  slice; future deploy/sync/site install work should stay policy-gated.
 
-## Commands that work now
+## Commands worth using
 
-- Try the CLI: `nix run .#nf -- --help`.
-- Dev shell: `nix develop -c nf --help`; inside `nix develop`, `nf` is on PATH.
-- Direnv: `.envrc` runs `watch_file flake.nix`, `watch_file go.mod`, and
-  `watch_file go.sum`, then `use flake`; user must run `direnv allow` locally.
-- Focused checks used so far:
-  - `go run ./cmd/nf --help`
-  - `go run ./cmd/nf list servers`
-  - `NF_SECRET_SALT=test-salt go run ./cmd/nf password derive demo db`
-  - `nix flake check`
-  - `nix run .#nf -- --help`
-  - `nix develop -c nf --help`
-  - `go run ./cmd/nf provision-server --help`
-  - `go run ./cmd/nf provision-server --non-interactive --project-slug demo --site-domain demo.ln.nfweb.dev --write-cloud-init /tmp/opencode/nf-provision-go-preview.yaml`
+- Fast checks: `go test ./...`; focused package test: `go test ./internal/cli`.
+- CLI smoke: `go run ./cmd/nf --help` and grouped commands such as
+  `go run ./cmd/nf server list`.
+- Nix smoke: `nix run .#nf -- --help`; build: `nix build .#nf -L`.
+- Dev shell: `nix develop -c nf --help`. `.envrc` watches `flake.nix`,
+  `go.mod`, and `go.sum`, then `use flake`.
+- Flake builds use the git source snapshot. Stage newly added files before
+  trusting `nix run .#nf`/`nix build .#nf`; otherwise Nix may silently build
+  without untracked Go files.
 
-## State and config boundaries
+## Config, state, and secrets
 
-- Local secrets: `~/.config/nf/.env`; current salt name is only
-  `NF_SECRET_SALT`.
-- Shared machine-readable state: `~/.config/nf/state`, loaded from
-  `servers.json`, `sites.json`, and `projects.json` when present.
-- Project-safe metadata: `.nf/project.json` inside client repos. It may contain
-  project identity, layout hints, deploy intent, and a local `commands` registry.
-- Never store API tokens, SSH keys, DB credentials, live server passwords, or
-  mutable server/site state in `.nf/project.json`.
+- Local secrets/config are read from `~/.config/nf/.env` (or `NF_CONFIG_HOME` in
+  tests). `nf config init` can populate missing values interactively.
+- Shared state lives under `~/.config/nf/state` as JSON files such as
+  `servers.json`, `sites.json`, and `projects.json`.
+- Repo-local metadata is `.nf/project.json`; it is safe intent/config only. Do
+  not put API tokens, SSH keys, DB credentials, live passwords, or mutable
+  server/site state there.
+- `NF_SECRET_SALT` is required for password derivation; Linode execution uses
+  `LINODE_CLI_TOKEN` or `LINODE_TOKEN`; DNS work uses `DNSIMPLE_TOKEN` and
+  optional `DNSIMPLE_ACCOUNT_ID`.
 
-## Project context behavior
+## Repo-context behavior
 
-- Project context is discovered by walking upward for `.nf/project.json`.
-- `nf project init` assumes the Sanjel project shape: `theme/` for the theme and
-  `workbench/` for Docker Compose local WordPress.
-- Project command aliases (`nf build`, `nf up`, `nf wp`, etc.) come from
-  `.nf/project.json` `commands`; they are direct `nf`-owned workflows, not
-  Makefile wrappers. The long-term goal is to remove per-project Makefiles.
-- String commands execute from the project root through `sh -lc` and receive
-  passthrough args after `--`; argv-list commands execute directly.
-- Local command aliases can mutate local files or Docker containers when invoked;
-  they are still not remote workflows.
-
-## WordPress deployment design constraints
-
-- Theme deploy artifacts must include the built theme, especially `vendor/` and
+- `nf repo ...` commands are the only local project command surface. Repo-local
+  aliases come from `.nf/project.json` `commands` and execute from the project
+  root.
+- String commands run through `sh -lc`; argv-list commands execute directly;
+  passthrough args follow `--`.
+- Repo-context commands are hidden/rejected outside a `.git` repo. Keep that
+  distinction when adding local workflow commands.
+- `nf repo package` only zips existing theme files; it does not run Composer,
+  npm, or asset builds first. Deploy artifacts must include built `vendor/` and
   `assets/dist/` when present.
-- `nf theme package` only zips existing files; it does not run Composer, npm, or
-  build steps first.
-- Future direct deploy and versioned zip flows should use the same artifact
-  posture.
-- Future DB/uploads sync must preserve production passwords and sensitive options;
-  treat production DB push as high risk.
 
-## Provider model to preserve
+## Safety and provider rules
 
-- Linode is first provider; DNSimple handles `nfweb.dev` DNS/TLS support.
-- Kinsta is a future provider and has no Linode provisioning step.
-- Keep provider-specific behavior behind shared command contracts and policy
-  checks.
+- Linode is the only implemented remote provider; DNSimple supports `nfweb.dev`
+  DNS/TLS. Kinsta is future work and should not use Linode provisioning paths.
+- `nf server provision` is dry-run by default. Actual remote execution requires
+  `--execute --yes` in non-interactive mode plus credentials.
+- `nf server delete` is interactive by default with a picker + confirm; in
+  non-interactive mode it remains dry-run unless `--execute --yes` is supplied.
+  Linode 404/not-found means “already deleted remotely” and should still clean
+  stale local state.
+- Treat DB/uploads sync and production DB push as high risk; preserve production
+  passwords and sensitive options.
 
-## Change discipline
+## Hygiene
 
-- Keep docs and `AGENTS.md` aligned when command scope or safety posture changes.
+- Keep README and this file aligned when command names, safety posture, or state
+  layout changes.
 - Do not touch sibling client repos such as `sanjel` or `siafintech` unless the
   user explicitly asks.
-- Do not commit secrets or generated caches (`__pycache__`, `.direnv`, build
-  outputs).
+- Do not commit secrets or generated caches (`.direnv`, build outputs,
+  leftover `__pycache__`).
