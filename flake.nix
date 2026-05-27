@@ -24,10 +24,12 @@
 
         apps.default = flake-utils.lib.mkApp {
           drv = nfPackage;
+          exePath = "/bin/nf";
         };
 
         apps.nf = flake-utils.lib.mkApp {
           drv = nfPackage;
+          exePath = "/bin/nf";
         };
 
         devShells.default = pkgs.mkShell {
