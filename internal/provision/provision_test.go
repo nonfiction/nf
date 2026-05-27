@@ -1,6 +1,8 @@
 package provision
 
 import (
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 )
@@ -42,5 +44,38 @@ func TestCloudInitTemplateIncludesRuncmd(t *testing.T) {
 	}
 	if !strings.Contains(rendered, "\n  - mkdir -p /var/www/demo\n") {
 		t.Fatalf("renderCloudInit() output missing mkdir command:\n%s", rendered)
+	}
+}
+
+func TestBuildPlanInfersProjectDefaultsWithoutPrompting(t *testing.T) {
+	t.Setenv("NF_CONFIG_HOME", t.TempDir())
+	workdir := t.TempDir()
+	oldwd, err := os.Getwd()
+	if err != nil {
+		t.Fatalf("Getwd() error = %v", err)
+	}
+	if err := os.Chdir(workdir); err != nil {
+		t.Fatalf("Chdir() error = %v", err)
+	}
+	t.Cleanup(func() { _ = os.Chdir(oldwd) })
+
+	plan, err := BuildPlan(Args{NonInteractive: true})
+	if err != nil {
+		t.Fatalf("BuildPlan() error = %v", err)
+	}
+	if got, want := plan.ProjectSlug, filepath.Base(workdir); got != want {
+		t.Fatalf("ProjectSlug = %q, want %q", got, want)
+	}
+	if got, want := plan.RemoteWpPath, "/var/www/"+filepath.Base(workdir); got != want {
+		t.Fatalf("RemoteWpPath = %q, want %q", got, want)
+	}
+	if got, want := plan.DbName, filepath.Base(workdir); got != want {
+		t.Fatalf("DbName = %q, want %q", got, want)
+	}
+	if got, want := plan.WpAdminUser, "nf-"+filepath.Base(workdir); got != want {
+		t.Fatalf("WpAdminUser = %q, want %q", got, want)
+	}
+	if got, want := plan.SiteDomain, "app1.nfweb.dev"; got != want {
+		t.Fatalf("SiteDomain = %q, want %q", got, want)
 	}
 }
