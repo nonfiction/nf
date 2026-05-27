@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"bytes"
 	"encoding/json"
 	"flag"
 	"fmt"
@@ -11,15 +12,32 @@ import (
 	"strings"
 
 	"github.com/nonfiction/nf/internal/config"
+	"github.com/nonfiction/nf/internal/envwizard"
 	"github.com/nonfiction/nf/internal/passwords"
 	"github.com/nonfiction/nf/internal/provision"
 	"github.com/nonfiction/nf/internal/state"
 	"github.com/nonfiction/nf/internal/theme"
+	"github.com/nonfiction/nf/internal/ui"
 )
 
 type ProjectError struct{ Msg string }
 
 func (e ProjectError) Error() string { return e.Msg }
+
+func configInitRequirements() []envwizard.Requirement {
+	return []envwizard.Requirement{
+		{Keys: []string{"NF_SECRET_SALT"}, Prompt: "NF_SECRET_SALT (used for derived passwords): ", Secret: true, WriteKey: "NF_SECRET_SALT", Required: true},
+		{Keys: []string{"DNSIMPLE_TOKEN"}, Prompt: "DNSimple token: ", Secret: true, WriteKey: "DNSIMPLE_TOKEN", Required: true},
+		{Keys: []string{"LINODE_CLI_TOKEN", "LINODE_TOKEN"}, Prompt: "Linode token: ", Secret: true, WriteKey: "LINODE_CLI_TOKEN", Required: true},
+		{Keys: []string{"DNSIMPLE_ACCOUNT_ID"}, Prompt: "DNSimple account id: ", Default: "14", WriteKey: "DNSIMPLE_ACCOUNT_ID"},
+	}
+}
+
+func passwordRequirements() []envwizard.Requirement {
+	return []envwizard.Requirement{
+		{Keys: []string{"NF_SECRET_SALT"}, Prompt: "NF_SECRET_SALT (used for derived passwords): ", Secret: true, WriteKey: "NF_SECRET_SALT", Required: true},
+	}
+}
 
 var localProjectCommands = []string{"composer", "npm", "build", "watch", "test", "setup", "up", "down", "restart", "logs", "reset", "fresh", "wp", "install-theme", "activate-theme"}
 
@@ -42,6 +60,51 @@ func firstNonEmpty(values ...string) string {
 		}
 	}
 	return ""
+}
+
+func currentGitRoot() (string, bool) {
+	wd, err := os.Getwd()
+	if err != nil {
+		return "", false
+	}
+	return discoverGitRoot(wd)
+}
+
+func discoverGitRoot(start string) (string, bool) {
+	if strings.TrimSpace(start) == "" {
+		return "", false
+	}
+	abs, err := filepath.Abs(start)
+	if err != nil {
+		return "", false
+	}
+	if info, err := os.Stat(abs); err == nil && !info.IsDir() {
+		abs = filepath.Dir(abs)
+	}
+	for {
+		if info, err := os.Stat(filepath.Join(abs, ".git")); err == nil {
+			if info.IsDir() || !info.IsDir() {
+				return abs, true
+			}
+		}
+		parent := filepath.Dir(abs)
+		if parent == abs {
+			return "", false
+		}
+		abs = parent
+	}
+}
+
+func projectContextAvailable() bool {
+	_, ok := currentGitRoot()
+	return ok
+}
+
+func requireProjectContext(command string) error {
+	if _, ok := currentGitRoot(); !ok {
+		return ProjectError{Msg: fmt.Sprintf("%s requires a .git repository above the current directory", command)}
+	}
+	return nil
 }
 
 func formatTable(rows [][]string) string {
@@ -83,6 +146,113 @@ func renderCommandRun(run any) string {
 	default:
 		return fmt.Sprint(run)
 	}
+}
+
+func recordStringValues(record map[string]any, keys ...string) []string {
+	values := make([]string, 0, len(keys))
+	seen := map[string]struct{}{}
+	for _, key := range keys {
+		value := strings.TrimSpace(fmt.Sprint(record[key]))
+		if value == "" || value == "<nil>" {
+			continue
+		}
+		if _, ok := seen[value]; ok {
+			continue
+		}
+		seen[value] = struct{}{}
+		values = append(values, value)
+	}
+	return values
+}
+
+func recordMatchesAnyValue(record map[string]any, keys, values []string) bool {
+	if len(values) == 0 {
+		return false
+	}
+	needle := map[string]struct{}{}
+	for _, value := range values {
+		needle[strings.ToLower(strings.TrimSpace(value))] = struct{}{}
+	}
+	for _, key := range keys {
+		value := strings.ToLower(strings.TrimSpace(fmt.Sprint(record[key])))
+		if value == "" || value == "<nil>" {
+			continue
+		}
+		if _, ok := needle[value]; ok {
+			return true
+		}
+	}
+	return false
+}
+
+func serverIdentityValues(server map[string]any) []string {
+	return recordStringValues(server, "id", "linode_id", "_state_key", "name", "slug", "hostname", "label")
+}
+
+func siteMatchesServer(site, server map[string]any) bool {
+	return recordMatchesAnyValue(site, []string{"server_id", "server", "server_name", "server_hostname", "server_label", "hostname", "label"}, serverIdentityValues(server))
+}
+
+func serverMatchesRecord(record, server map[string]any) bool {
+	return recordMatchesAnyValue(record, []string{"id", "linode_id", "_state_key", "name", "slug", "hostname", "label"}, serverIdentityValues(server))
+}
+
+func serverSummary(server map[string]any) string {
+	name := fmt.Sprint(firstRecordValue(server, "name", "slug", "_state_key", "hostname", "label"))
+	id := fmt.Sprint(firstRecordValue(server, "id", "linode_id"))
+	provider := fmt.Sprint(server["provider"])
+	parts := make([]string, 0, 3)
+	if name != "" {
+		parts = append(parts, name)
+	}
+	if id != "" {
+		parts = append(parts, "id "+id)
+	}
+	if provider != "" && provider != "<nil>" {
+		parts = append(parts, provider)
+	}
+	return strings.Join(parts, " / ")
+}
+
+func siteSummary(site map[string]any) string {
+	name := fmt.Sprint(firstRecordValue(site, "hostname", "name", "slug", "label", "server_name", "_state_key"))
+	if name == "<nil>" {
+		return ""
+	}
+	return name
+}
+
+func linodeTokenEnv() (string, error) {
+	if token := envwizard.Value("LINODE_CLI_TOKEN"); token != "" {
+		return token, nil
+	}
+	if token := envwizard.Value("LINODE_TOKEN"); token != "" {
+		return token, nil
+	}
+	return "", fmt.Errorf("Expected LINODE_CLI_TOKEN or LINODE_TOKEN in the environment or %s.", config.EnvFile())
+}
+
+func runLinodeDelete(id string) error {
+	token, err := linodeTokenEnv()
+	if err != nil {
+		return err
+	}
+	cmd := exec.Command("linode-cli", "linodes", "delete", id, "--json")
+	cmd.Env = append(os.Environ(), "LINODE_CLI_TOKEN="+token, "LINODE_TOKEN="+token)
+	var stdout, stderr bytes.Buffer
+	cmd.Stdout = &stdout
+	cmd.Stderr = &stderr
+	if err := cmd.Run(); err != nil {
+		details := strings.TrimSpace(stderr.String())
+		if details == "" {
+			details = strings.TrimSpace(stdout.String())
+		}
+		if details == "" {
+			details = "linode-cli failed"
+		}
+		return fmt.Errorf("%s", details)
+	}
+	return nil
 }
 
 func defaultProjectCommands() map[string]map[string]any {
@@ -214,6 +384,10 @@ func executeProjectCommand(root string, run any, extraArgs []string) error {
 }
 
 func cmdProjectCommands() int {
+	if err := requireProjectContext("commands"); err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		return 1
+	}
 	root, err := discoverProjectRootOrError()
 	if err != nil {
 		fmt.Fprintln(os.Stderr, err)
@@ -243,6 +417,10 @@ func cmdProjectCommands() int {
 }
 
 func cmdProjectRun(name string, extraArgs []string) int {
+	if err := requireProjectContext("run"); err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		return 1
+	}
 	root, err := discoverProjectRootOrError()
 	if err != nil {
 		fmt.Fprintln(os.Stderr, err)
@@ -266,6 +444,115 @@ func cmdProjectRun(name string, extraArgs []string) int {
 }
 
 func cmdProjectAlias(name string, extraArgs []string) int { return cmdProjectRun(name, extraArgs) }
+
+func cmdDeleteServer(needle string, dryRun, execute, yes, nonInteractive bool) int {
+	servers, err := state.LoadStateRecords("servers")
+	if err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		return 1
+	}
+	server := state.MatchingRecord(servers, needle)
+	if server == nil {
+		fmt.Fprintf(os.Stderr, "No server matched %q.\n", needle)
+		return 1
+	}
+	provider := strings.ToLower(strings.TrimSpace(fmt.Sprint(server["provider"])))
+	relatedSites, err := state.LoadStateRecords("sites")
+	if err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		return 1
+	}
+	matchedSites := make([]map[string]any, 0)
+	for _, site := range relatedSites {
+		if siteMatchesServer(site, server) {
+			matchedSites = append(matchedSites, site)
+		}
+	}
+	remoteID := fmt.Sprint(firstRecordValue(server, "linode_id", "id", "_state_key"))
+	if remoteID == "<nil>" {
+		remoteID = ""
+	}
+	if !execute {
+		dryRun = true
+	}
+	if execute && dryRun {
+		fmt.Fprintln(os.Stderr, "Choose either --execute or --dry-run, not both.")
+		return 1
+	}
+	if nonInteractive && execute && !yes {
+		fmt.Fprintln(os.Stderr, "Remote execution requires both --execute and --yes in non-interactive mode.")
+		return 1
+	}
+	if execute && provider != "linode" {
+		fmt.Fprintf(os.Stderr, "Unsupported provider %q. Only linode is available for server deletion.\n", provider)
+		return 1
+	}
+	if execute && provider == "linode" && strings.TrimSpace(remoteID) == "" {
+		fmt.Fprintln(os.Stderr, "Selected server is missing a Linode id.")
+		return 1
+	}
+	mode := "dry-run"
+	if execute {
+		mode = "execute"
+	}
+	serverLabel := serverSummary(server)
+	if serverLabel == "" {
+		serverLabel = needle
+	}
+	fmt.Println("Delete server plan:")
+	fmt.Printf("  server: %s\n", serverLabel)
+	fmt.Printf("  provider: %s\n", provider)
+	if remoteID != "" {
+		if provider == "linode" {
+			fmt.Printf("  remote action: linode-cli linodes delete %s --json\n", remoteID)
+		} else {
+			fmt.Printf("  remote action: unavailable for provider %q\n", provider)
+		}
+	}
+	if len(matchedSites) == 0 {
+		fmt.Println("  related sites: none")
+	} else {
+		names := make([]string, 0, len(matchedSites))
+		for _, site := range matchedSites {
+			if summary := siteSummary(site); summary != "" {
+				names = append(names, summary)
+			}
+		}
+		if len(names) == 0 {
+			fmt.Printf("  related sites: %d\n", len(matchedSites))
+		} else {
+			fmt.Printf("  related sites: %d (%s)\n", len(matchedSites), strings.Join(names, ", "))
+		}
+	}
+	fmt.Printf("  mode: %s\n", mode)
+	if dryRun {
+		return 0
+	}
+	if !nonInteractive {
+		confirmed, err := ui.Confirm(fmt.Sprintf("Delete server %q and matching sites from remote infrastructure and shared state?", needle), false)
+		if err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			return 1
+		}
+		if !confirmed {
+			fmt.Fprintln(os.Stderr, "Aborted.")
+			return 1
+		}
+	}
+	if err := runLinodeDelete(remoteID); err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		return 1
+	}
+	if _, err := state.DeleteStateRecords("servers", func(record map[string]any) bool { return serverMatchesRecord(record, server) }); err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		return 1
+	}
+	if _, err := state.DeleteStateRecords("sites", func(record map[string]any) bool { return siteMatchesServer(record, server) }); err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		return 1
+	}
+	return 0
+}
 
 func cmdList(kind string) int {
 	bundle, err := state.LoadStateBundle()
@@ -379,7 +666,11 @@ type projectInitArgs struct {
 	force             bool
 }
 
-func cmdPasswordDerive(slug, purpose string) int {
+func cmdPasswordDerive(slug, purpose string, nonInteractive bool) int {
+	if err := envwizard.Ensure(passwordRequirements(), nonInteractive); err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		return 1
+	}
 	salt, err := passwords.SecretSalt()
 	if err != nil {
 		fmt.Fprintln(os.Stderr, err)
@@ -474,6 +765,10 @@ func Run(argv []string) int {
 			return 1
 		}
 		return cmdShow(argv[1], argv[2])
+	case "delete":
+		return runDelete(argv[1:])
+	case "config":
+		return runConfig(argv[1:])
 	case "project":
 		return runProject(argv[1:])
 	case "password":
@@ -483,6 +778,10 @@ func Run(argv []string) int {
 	default:
 		for _, name := range localProjectCommands {
 			if argv[0] == name {
+				if err := requireProjectContext(name); err != nil {
+					fmt.Fprintln(os.Stderr, err)
+					return 1
+				}
 				return cmdProjectAlias(name, argv[1:])
 			}
 		}
@@ -495,17 +794,43 @@ func runHelp() int {
 	fmt.Println("nf")
 	fmt.Println("\nCommands:")
 	fmt.Println("  provision-server")
-	fmt.Println("  commands")
-	fmt.Println("  run <name>")
+	fmt.Println("  delete server <id-or-name>")
 	fmt.Println("  list servers|sites")
 	fmt.Println("  show server|site <id-or-name>")
+	fmt.Println("  config init")
 	fmt.Println("  project init")
-	fmt.Println("  password derive <project-slug> <purpose>")
-	fmt.Println("  theme package")
-	for _, name := range localProjectCommands {
-		fmt.Printf("  %s\n", name)
+	fmt.Println("  password derive [--non-interactive] <project-slug> <purpose>")
+	if projectContextAvailable() {
+		fmt.Println("  commands")
+		fmt.Println("  run <name>")
+		fmt.Println("  theme package")
+		for _, name := range localProjectCommands {
+			fmt.Printf("  %s\n", name)
+		}
 	}
 	return 0
+}
+
+func runDelete(argv []string) int {
+	if len(argv) == 0 || argv[0] != "server" {
+		fmt.Fprintln(os.Stderr, "unsupported delete command")
+		return 1
+	}
+	fs := flag.NewFlagSet("delete server", flag.ContinueOnError)
+	nonInteractive := fs.Bool("non-interactive", false, "")
+	execute := fs.Bool("execute", false, "")
+	yes := fs.Bool("yes", false, "")
+	dryRun := fs.Bool("dry-run", false, "")
+	fs.SetOutput(os.Stderr)
+	if err := fs.Parse(argv[1:]); err != nil {
+		return 1
+	}
+	args := fs.Args()
+	if len(args) != 1 {
+		fmt.Fprintln(os.Stderr, "delete server requires an id or name")
+		return 1
+	}
+	return cmdDeleteServer(args[0], *dryRun, *execute, *yes, *nonInteractive)
 }
 
 func runProject(argv []string) int {
@@ -533,16 +858,49 @@ func runProject(argv []string) int {
 }
 
 func runPassword(argv []string) int {
-	if len(argv) < 3 || argv[0] != "derive" {
+	if len(argv) == 0 || argv[0] != "derive" {
 		fmt.Fprintln(os.Stderr, "unsupported password command")
 		return 1
 	}
-	return cmdPasswordDerive(argv[1], argv[2])
+	fs := flag.NewFlagSet("password derive", flag.ContinueOnError)
+	nonInteractive := fs.Bool("non-interactive", false, "")
+	fs.SetOutput(os.Stderr)
+	if err := fs.Parse(argv[1:]); err != nil {
+		return 1
+	}
+	args := fs.Args()
+	if len(args) < 2 {
+		fmt.Fprintln(os.Stderr, "password derive requires a project slug and purpose")
+		return 1
+	}
+	return cmdPasswordDerive(args[0], args[1], *nonInteractive)
+}
+
+func runConfig(argv []string) int {
+	if len(argv) == 0 || argv[0] != "init" {
+		fmt.Fprintln(os.Stderr, "unsupported config command")
+		return 1
+	}
+	fs := flag.NewFlagSet("config init", flag.ContinueOnError)
+	nonInteractive := fs.Bool("non-interactive", false, "")
+	fs.SetOutput(os.Stderr)
+	if err := fs.Parse(argv[1:]); err != nil {
+		return 1
+	}
+	if err := envwizard.Init(configInitRequirements(), *nonInteractive); err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		return 1
+	}
+	return 0
 }
 
 func runTheme(argv []string) int {
 	if len(argv) == 0 || argv[0] != "package" {
 		fmt.Fprintln(os.Stderr, "unsupported theme command")
+		return 1
+	}
+	if err := requireProjectContext("theme package"); err != nil {
+		fmt.Fprintln(os.Stderr, err)
 		return 1
 	}
 	fs := flag.NewFlagSet("theme package", flag.ContinueOnError)
