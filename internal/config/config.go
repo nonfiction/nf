@@ -43,12 +43,26 @@ func EnvFile() string { return filepath.Join(ConfigHome(), ".env") }
 
 func RuntimesDir() string { return filepath.Join(ConfigHome(), "runtimes") }
 
+func SnapshotsDir() string { return filepath.Join(ConfigHome(), "snapshots") }
+
 func RuntimeDir(projectSlug string) string {
 	projectSlug = strings.TrimSpace(projectSlug)
 	if projectSlug == "" {
 		projectSlug = "project"
 	}
 	return filepath.Join(RuntimesDir(), projectSlug)
+}
+
+func SnapshotProjectDir(projectSlug string) string {
+	projectSlug = strings.TrimSpace(projectSlug)
+	if projectSlug == "" {
+		projectSlug = "project"
+	}
+	return filepath.Join(SnapshotsDir(), projectSlug)
+}
+
+func SnapshotDir(projectSlug, snapshotName string) string {
+	return filepath.Join(SnapshotProjectDir(projectSlug), snapshotName)
 }
 
 func ProjectFile(root string) string {
