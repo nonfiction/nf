@@ -63,7 +63,7 @@ func (c argvCommandRunner) Execute(root string, extraArgs []string) error {
 
 func (c argvCommandRunner) Render() string { return strings.Join(c, " ") }
 
-type workbenchConfig struct {
+type runtimeConfig struct {
 	ProjectSlug      string
 	ProjectName      string
 	RepoRoot         string
@@ -77,60 +77,60 @@ type workbenchConfig struct {
 	ThemeSlug        string
 }
 
-func (c workbenchConfig) managedUploadsDir() string {
+func (c runtimeConfig) managedUploadsDir() string {
 	return filepath.Join(c.ManagedDir, firstNonEmpty(c.UploadsPath, "uploads"))
 }
 
-func (c workbenchConfig) uploadsContainerPath() string {
-	return path.Join("/", "workbench", firstNonEmpty(c.UploadsPath, "uploads"))
+func (c runtimeConfig) uploadsContainerPath() string {
+	return path.Join("/", "runtime", firstNonEmpty(c.UploadsPath, "uploads"))
 }
 
-type workbenchCommandRunner struct {
+type runtimeCommandRunner struct {
 	name string
-	cfg  workbenchConfig
+	cfg  runtimeConfig
 }
 
-func (c workbenchCommandRunner) ensureUpInstalledActive(workbenchDir string) error {
-	if err := runCommandSpec(execSpec{Dir: workbenchDir, Args: workbenchComposeArgs(c.cfg, "up", "-d")}); err != nil {
+func (c runtimeCommandRunner) ensureUpInstalledActive(runtimeDir string) error {
+	if err := runCommandSpec(execSpec{Dir: runtimeDir, Args: runtimeComposeArgs(c.cfg, "up", "-d")}); err != nil {
 		return err
 	}
-	if err := runCommandSpecQuiet(execSpec{Dir: workbenchDir, Args: workbenchWpProbeArgs(c.cfg, "core", "is-installed")}); err != nil {
-		if err := runCommandSpec(execSpec{Dir: workbenchDir, Args: workbenchWpCoreInstallArgs(c.cfg)}); err != nil {
+	if err := runCommandSpecQuiet(execSpec{Dir: runtimeDir, Args: runtimeWpProbeArgs(c.cfg, "core", "is-installed")}); err != nil {
+		if err := runCommandSpec(execSpec{Dir: runtimeDir, Args: runtimeWpCoreInstallArgs(c.cfg)}); err != nil {
 			return err
 		}
 		return nil
 	}
-	if err := runCommandSpecQuiet(execSpec{Dir: workbenchDir, Args: workbenchWpThemeIsActiveArgs(c.cfg, "")}); err != nil {
-		return runCommandSpec(execSpec{Dir: workbenchDir, Args: workbenchWpThemeActivateArgs(c.cfg, "")})
+	if err := runCommandSpecQuiet(execSpec{Dir: runtimeDir, Args: runtimeWpThemeIsActiveArgs(c.cfg, "")}); err != nil {
+		return runCommandSpec(execSpec{Dir: runtimeDir, Args: runtimeWpThemeActivateArgs(c.cfg, "")})
 	}
 	return nil
 }
 
-func (c workbenchCommandRunner) Execute(root string, extraArgs []string) error {
-	if err := ensureManagedWorkbenchRuntime(c.cfg); err != nil {
+func (c runtimeCommandRunner) Execute(root string, extraArgs []string) error {
+	if err := ensureManagedRuntime(c.cfg); err != nil {
 		return err
 	}
-	workbenchDir := c.cfg.ManagedDir
+	runtimeDir := c.cfg.ManagedDir
 	switch c.name {
 	case "up":
-		return c.ensureUpInstalledActive(workbenchDir)
+		return c.ensureUpInstalledActive(runtimeDir)
 	case "down":
-		return runCommandSpec(execSpec{Dir: workbenchDir, Args: workbenchComposeArgs(c.cfg, "down")})
+		return runCommandSpec(execSpec{Dir: runtimeDir, Args: runtimeComposeArgs(c.cfg, "down")})
 	case "logs":
-		return runCommandSpec(execSpec{Dir: workbenchDir, Args: workbenchComposeArgs(c.cfg, "logs", "-f", c.cfg.WordpressService)})
+		return runCommandSpec(execSpec{Dir: runtimeDir, Args: runtimeComposeArgs(c.cfg, "logs", "-f", c.cfg.WordpressService)})
 	case "reset":
-		if err := runCommandSpec(execSpec{Dir: workbenchDir, Args: workbenchComposeArgs(c.cfg, "down", "-v", "--remove-orphans")}); err != nil {
+		if err := runCommandSpec(execSpec{Dir: runtimeDir, Args: runtimeComposeArgs(c.cfg, "down", "-v", "--remove-orphans")}); err != nil {
 			return err
 		}
-		return c.ensureUpInstalledActive(workbenchDir)
+		return c.ensureUpInstalledActive(runtimeDir)
 	case "wp":
-		return runCommandSpec(execSpec{Dir: workbenchDir, Args: workbenchWpArgs(c.cfg, extraArgs...)})
+		return runCommandSpec(execSpec{Dir: runtimeDir, Args: runtimeWpArgs(c.cfg, extraArgs...)})
 	default:
 		return fmt.Errorf("unsupported repo command type")
 	}
 }
 
-func (c workbenchCommandRunner) Render() string {
+func (c runtimeCommandRunner) Render() string {
 	switch c.name {
 	case "up":
 		return "docker compose up -d; install WordPress if missing and ensure the mounted theme is active"
@@ -139,7 +139,7 @@ func (c workbenchCommandRunner) Render() string {
 	case "logs":
 		return "docker compose logs -f " + c.cfg.WordpressService
 	case "reset":
-		return "docker compose down -v --remove-orphans; nuke workbench data and recreate it with docker compose up -d, install WordPress if missing, and ensure the mounted theme is active"
+		return "docker compose down -v --remove-orphans; nuke runtime data and recreate it with docker compose up -d, install WordPress if missing, and ensure the mounted theme is active"
 	case "wp":
 		return "docker compose run --rm " + c.cfg.CliService + " wp ... --allow-root"
 	default:
@@ -208,23 +208,23 @@ func shellQuoteArg(arg string) string {
 	return "'" + strings.ReplaceAll(arg, "'", "'\\''") + "'"
 }
 
-func workbenchCommandDir(cfg workbenchConfig) string {
+func runtimeCommandDir(cfg runtimeConfig) string {
 	return cfg.ManagedDir
 }
 
-func ensureManagedWorkbenchRuntime(cfg workbenchConfig) error {
+func ensureManagedRuntime(cfg runtimeConfig) error {
 	if strings.TrimSpace(cfg.ManagedDir) == "" {
-		return fmt.Errorf("missing managed workbench directory")
+		return fmt.Errorf("missing managed runtime directory")
 	}
 	if err := os.MkdirAll(cfg.ManagedDir, 0o755); err != nil {
 		return err
 	}
 	files := map[string]string{
-		filepath.Join(cfg.ManagedDir, "docker-compose.yml"):                                  renderWorkbenchCompose(cfg),
-		filepath.Join(cfg.ManagedDir, ".env"):                                                renderWorkbenchEnv(cfg),
-		filepath.Join(cfg.ManagedDir, "php", "uploads.ini"):                                  renderWorkbenchUploadsINI(),
-		filepath.Join(cfg.ManagedDir, "wordpress", "Dockerfile"):                             renderWorkbenchDockerfile(),
-		filepath.Join(cfg.ManagedDir, "wordpress", "wordpress-rewrites.conf"):                renderWorkbenchRewritesConf(),
+		filepath.Join(cfg.ManagedDir, "docker-compose.yml"):                                  renderRuntimeCompose(cfg),
+		filepath.Join(cfg.ManagedDir, ".env"):                                                renderRuntimeEnv(cfg),
+		filepath.Join(cfg.ManagedDir, "php", "uploads.ini"):                                  renderRuntimeUploadsINI(),
+		filepath.Join(cfg.ManagedDir, "wordpress", "Dockerfile"):                             renderRuntimeDockerfile(),
+		filepath.Join(cfg.ManagedDir, "wordpress", "wordpress-rewrites.conf"):                renderRuntimeRewritesConf(),
 		filepath.Join(cfg.ManagedDir, firstNonEmpty(cfg.UploadsPath, "uploads"), ".gitkeep"): "",
 	}
 	for path, contents := range files {
@@ -252,44 +252,44 @@ func writeManagedFile(path, contents string, mode os.FileMode) error {
 	return nil
 }
 
-func workbenchComposeArgs(cfg workbenchConfig, args ...string) []string {
+func runtimeComposeArgs(cfg runtimeConfig, args ...string) []string {
 	fields := strings.Fields(firstNonEmpty(cfg.Compose, "docker compose"))
 	return append(fields, args...)
 }
 
-func workbenchCliArgs(cfg workbenchConfig, args ...string) []string {
-	return append(workbenchComposeArgs(cfg, "run", "--rm", firstNonEmpty(cfg.CliService, "cli")), args...)
+func runtimeCliArgs(cfg runtimeConfig, args ...string) []string {
+	return append(runtimeComposeArgs(cfg, "run", "--rm", firstNonEmpty(cfg.CliService, "cli")), args...)
 }
 
-func workbenchWpArgs(cfg workbenchConfig, args ...string) []string {
-	return append(workbenchCliArgs(cfg, "wp"), append(args, "--allow-root")...)
+func runtimeWpArgs(cfg runtimeConfig, args ...string) []string {
+	return append(runtimeCliArgs(cfg, "wp"), append(args, "--allow-root")...)
 }
 
-func workbenchWpProbeArgs(cfg workbenchConfig, args ...string) []string {
-	return workbenchWpArgs(cfg, args...)
+func runtimeWpProbeArgs(cfg runtimeConfig, args ...string) []string {
+	return runtimeWpArgs(cfg, args...)
 }
 
-func workbenchWpThemeIsActiveArgs(cfg workbenchConfig, slug string) []string {
-	return workbenchWpArgs(cfg, "theme", "is-active", firstNonEmpty(slug, cfg.ThemeMountSlug, cfg.ThemeSlug, "theme"))
+func runtimeWpThemeIsActiveArgs(cfg runtimeConfig, slug string) []string {
+	return runtimeWpArgs(cfg, "theme", "is-active", firstNonEmpty(slug, cfg.ThemeMountSlug, cfg.ThemeSlug, "theme"))
 }
 
-func workbenchWpCoreInstallArgs(cfg workbenchConfig) []string {
+func runtimeWpCoreInstallArgs(cfg runtimeConfig) []string {
 	slug := firstNonEmpty(cfg.ThemeMountSlug, cfg.ThemeSlug, "theme")
-	return append(workbenchComposeArgs(cfg, "run", "--rm", firstNonEmpty(cfg.CliService, "cli"), "sh", "-lc"), `wp core install --url="$WP_URL" --title="$WP_TITLE" --admin_user="$ADMIN_USER" --admin_password="$ADMIN_PASSWORD" --admin_email="$ADMIN_EMAIL" --skip-email --allow-root && wp theme activate `+slug+` --allow-root`)
+	return append(runtimeComposeArgs(cfg, "run", "--rm", firstNonEmpty(cfg.CliService, "cli"), "sh", "-lc"), `wp core install --url="$WP_URL" --title="$WP_TITLE" --admin_user="$ADMIN_USER" --admin_password="$ADMIN_PASSWORD" --admin_email="$ADMIN_EMAIL" --skip-email --allow-root && wp theme activate `+slug+` --allow-root`)
 }
 
-func workbenchWpThemeActivateArgs(cfg workbenchConfig, slug string) []string {
-	return workbenchWpArgs(cfg, "theme", "activate", firstNonEmpty(slug, cfg.ThemeMountSlug, cfg.ThemeSlug, "theme"))
+func runtimeWpThemeActivateArgs(cfg runtimeConfig, slug string) []string {
+	return runtimeWpArgs(cfg, "theme", "activate", firstNonEmpty(slug, cfg.ThemeMountSlug, cfg.ThemeSlug, "theme"))
 }
 
-func workbenchThemeArchivePaths(cfg workbenchConfig, sourcePath string) (string, string) {
+func runtimeThemeArchivePaths(cfg runtimeConfig, sourcePath string) (string, string) {
 	base := filepath.Base(sourcePath)
-	host := filepath.Join(workbenchCommandDir(cfg), firstNonEmpty(cfg.UploadsPath, "uploads"), base)
-	container := path.Join("/", "workbench", firstNonEmpty(cfg.UploadsPath, "uploads"), base)
+	host := filepath.Join(runtimeCommandDir(cfg), firstNonEmpty(cfg.UploadsPath, "uploads"), base)
+	container := path.Join("/", "runtime", firstNonEmpty(cfg.UploadsPath, "uploads"), base)
 	return host, container
 }
 
-func workbenchRepoPath(root, sourcePath string) string {
+func runtimeRepoPath(root, sourcePath string) string {
 	if filepath.IsAbs(sourcePath) {
 		return sourcePath
 	}
@@ -655,8 +655,8 @@ func loadProjectCommands(root string) (map[string]projectCommand, error) {
 		return nil, err
 	}
 	parsed := map[string]projectCommand{}
-	if cfg, ok := loadWorkbenchConfig(root, metadata); ok {
-		for name, command := range defaultWorkbenchCommands(cfg) {
+	if cfg, ok := loadRuntimeConfig(root, metadata); ok {
+		for name, command := range defaultRuntimeCommands(cfg) {
 			parsed[name] = command
 		}
 	}
@@ -694,10 +694,10 @@ func formatProjectCommandLines(commands map[string]projectCommand) []string {
 	return lines
 }
 
-func loadWorkbenchConfig(root string, metadata map[string]any) (workbenchConfig, bool) {
-	raw, ok := metadata["workbench"].(map[string]any)
+func loadRuntimeConfig(root string, metadata map[string]any) (runtimeConfig, bool) {
+	raw, ok := metadata["runtime"].(map[string]any)
 	if !ok || raw == nil {
-		return workbenchConfig{}, false
+		return runtimeConfig{}, false
 	}
 	projectSlug := firstNonEmpty(mapStringAtPath(metadata, "project", "slug"), "project")
 	projectName := firstNonEmpty(mapStringAtPath(metadata, "project", "name"), slugToTitle(projectSlug))
@@ -706,12 +706,12 @@ func loadWorkbenchConfig(root string, metadata map[string]any) (workbenchConfig,
 		themePath = filepath.Join(root, themePath)
 	}
 	wordpress := mapMapAtPath(metadata, "wordpress")
-	return workbenchConfig{
+	return runtimeConfig{
 		ProjectSlug:      projectSlug,
 		ProjectName:      projectName,
 		RepoRoot:         root,
 		ThemePath:        themePath,
-		ManagedDir:       config.WorkbenchDir(projectSlug),
+		ManagedDir:       config.RuntimeDir(projectSlug),
 		Compose:          firstNonEmpty(mapStringAtPath(raw, "compose"), "docker compose"),
 		WordpressService: firstNonEmpty(mapStringAtPath(raw, "wordpress_service"), "wordpress"),
 		CliService:       firstNonEmpty(mapStringAtPath(raw, "cli_service"), "cli"),
@@ -721,13 +721,13 @@ func loadWorkbenchConfig(root string, metadata map[string]any) (workbenchConfig,
 	}, true
 }
 
-func defaultWorkbenchCommands(cfg workbenchConfig) map[string]projectCommand {
+func defaultRuntimeCommands(cfg runtimeConfig) map[string]projectCommand {
 	return map[string]projectCommand{
-		"up":    {Description: "Start the managed workbench, install WordPress if missing, and ensure the mounted theme is active", Run: workbenchCommandRunner{name: "up", cfg: cfg}},
-		"down":  {Description: "Stop the managed workbench", Run: workbenchCommandRunner{name: "down", cfg: cfg}},
-		"logs":  {Description: "Tail WordPress logs", Run: workbenchCommandRunner{name: "logs", cfg: cfg}},
-		"reset": {Description: "Nuke workbench data and recreate a clean workbench", Run: workbenchCommandRunner{name: "reset", cfg: cfg}},
-		"wp":    {Description: "Run wp-cli passthrough", Run: workbenchCommandRunner{name: "wp", cfg: cfg}},
+		"up":    {Description: "Start the managed runtime, install WordPress if missing, and ensure the mounted theme is active", Run: runtimeCommandRunner{name: "up", cfg: cfg}},
+		"down":  {Description: "Stop the managed runtime", Run: runtimeCommandRunner{name: "down", cfg: cfg}},
+		"logs":  {Description: "Tail WordPress logs", Run: runtimeCommandRunner{name: "logs", cfg: cfg}},
+		"reset": {Description: "Destroy and recreate the local runtime", Run: runtimeCommandRunner{name: "reset", cfg: cfg}},
+		"wp":    {Description: "Run wp-cli passthrough", Run: runtimeCommandRunner{name: "wp", cfg: cfg}},
 	}
 }
 
@@ -735,7 +735,7 @@ func discoverProjectRootOrError() (string, error) {
 	if root, ok := config.DiscoverProjectRoot(""); ok {
 		return root, nil
 	}
-	return "", ProjectError{Msg: "No repo metadata found above the current directory. Add .nf/project.json with workbench metadata or commands.<name>."}
+	return "", ProjectError{Msg: "No repo metadata found above the current directory. Add .nf/project.json with runtime metadata or commands.<name>."}
 }
 
 func cmdProjectCommands() int {
@@ -754,7 +754,7 @@ func cmdProjectCommands() int {
 		return 1
 	}
 	if len(commands) == 0 {
-		fmt.Fprintln(os.Stderr, "No local repo commands configured. Add .nf/project.json workbench metadata or commands.<name>.")
+		fmt.Fprintln(os.Stderr, "No local repo commands configured. Add .nf/project.json runtime metadata or commands.<name>.")
 		return 1
 	}
 	fmt.Println("repo-local commands:")
@@ -1303,7 +1303,7 @@ func repoInitMetadata(args projectInitArgs) map[string]any {
 			"theme_slug":  themeSlug,
 			"theme_path":  themePath,
 		},
-		"workbench": map[string]any{
+		"runtime": map[string]any{
 			"compose":           "docker compose",
 			"wordpress_service": "wordpress",
 			"cli_service":       "cli",
@@ -1339,7 +1339,7 @@ func repoInitJSON(metadata map[string]any) string {
 	return string(append(data, '\n'))
 }
 
-func renderWorkbenchCompose(cfg workbenchConfig) string {
+func renderRuntimeCompose(cfg runtimeConfig) string {
 	themeMountSlug := firstNonEmpty(cfg.ThemeMountSlug, "theme")
 	wordpressService := firstNonEmpty(cfg.WordpressService, "wordpress")
 	cliService := firstNonEmpty(cfg.CliService, "cli")
@@ -1423,10 +1423,10 @@ func renderWorkbenchCompose(cfg workbenchConfig) string {
 volumes:
   db_data:
   wp_data:
-`, wordpressService, themePath, themeMountSlug, cliService, wordpressService, themePath, themeMountSlug, uploadsPath, path.Join("/", "workbench", uploadsPath))
+	`, wordpressService, themePath, themeMountSlug, cliService, wordpressService, themePath, themeMountSlug, uploadsPath, path.Join("/", "runtime", uploadsPath))
 }
 
-func renderWorkbenchEnv(cfg workbenchConfig) string {
+func renderRuntimeEnv(cfg runtimeConfig) string {
 	wpTitle := firstNonEmpty(cfg.ProjectName, slugToTitle(cfg.ProjectSlug))
 	return fmt.Sprintf(`COMPOSE_PROJECT_NAME=%s
 WP_PORT=18080
@@ -1440,13 +1440,13 @@ WP_TITLE=%s
 ADMIN_USER=admin
 ADMIN_PASSWORD=admin
 ADMIN_EMAIL=web@nonfiction.ca
-`, workbenchComposeProjectName(cfg.ProjectSlug), cfg.ProjectSlug, cfg.ProjectSlug, wpTitle)
+`, runtimeComposeProjectName(cfg.ProjectSlug), cfg.ProjectSlug, cfg.ProjectSlug, wpTitle)
 }
 
-func workbenchComposeProjectName(projectSlug string) string {
+func runtimeComposeProjectName(projectSlug string) string {
 	cleaned := strings.ToLower(strings.TrimSpace(projectSlug))
 	var b strings.Builder
-	b.Grow(len(cleaned) + len("nf__workbench"))
+	b.Grow(len(cleaned) + len("nf__runtime"))
 	for _, r := range cleaned {
 		switch {
 		case r >= 'a' && r <= 'z', r >= '0' && r <= '9', r == '_', r == '-':
@@ -1461,14 +1461,14 @@ func workbenchComposeProjectName(projectSlug string) string {
 	if slug == "" {
 		slug = "project"
 	}
-	return "nf_" + slug + "_workbench"
+	return "nf_" + slug + "_runtime"
 }
 
-func renderWorkbenchUploadsINI() string {
+func renderRuntimeUploadsINI() string {
 	return "file_uploads=On\nmemory_limit=256M\nupload_max_filesize=128M\npost_max_size=128M\nmax_execution_time=120\nmax_input_time=120\n"
 }
 
-func renderWorkbenchDockerfile() string {
+func renderRuntimeDockerfile() string {
 	return `FROM wordpress:7.0-php8.4-apache
 
 RUN a2enmod rewrite \
@@ -1478,7 +1478,7 @@ COPY wordpress/wordpress-rewrites.conf /etc/apache2/conf-enabled/wordpress-rewri
 `
 }
 
-func renderWorkbenchRewritesConf() string {
+func renderRuntimeRewritesConf() string {
 	return `<Directory /var/www/html>
   Options FollowSymLinks
   AllowOverride All
@@ -1711,9 +1711,9 @@ func runHelp() int {
 	fmt.Println("\nCommands:")
 	fmt.Println("  server        provision, list, show, delete servers")
 	fmt.Println("  site          list, show, future install/delete/deploy/sync")
-	repoLine := "  repo          init repo metadata and manage workbench runtime"
+	repoLine := "  repo          init repo metadata and manage runtime"
 	if projectContextAvailable() {
-		repoLine = "  repo          init, workbench commands, and repo-local aliases"
+		repoLine = "  repo          init, runtime commands, and repo-local aliases"
 	}
 	fmt.Println(repoLine)
 	fmt.Println("  config        init local config")

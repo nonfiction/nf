@@ -2,7 +2,7 @@
 
 `nf` is nonfiction’s internal CLI for agency WordPress theme work.
 
-It gives the team one command surface for project metadata, local WordPress workbenches, repo-local build/test commands, theme packaging, shared server/site state, password derivation, and guarded infrastructure operations.
+It gives the team one command surface for project metadata, local WordPress runtimes, repo-local build/test commands, theme packaging, shared server/site state, password derivation, and guarded infrastructure operations.
 
 This is an internal agency tool, not a general-purpose public WordPress framework.
 
@@ -72,7 +72,7 @@ For normal development:
 
 * Nix with flakes enabled
 * Go, when working outside the Nix dev shell
-* Docker with Docker Compose, for local workbenches
+* Docker with Docker Compose, for local runtimes
 
 For remote Linode provisioning:
 
@@ -89,13 +89,13 @@ nf
 Commands:
   server        provision, list, show, delete servers
   site          list, show, future install/delete/deploy/sync
-  repo          init repo metadata and manage workbench runtime
+  repo          init repo metadata and manage runtime
   config        init local config
   password      derive passwords
   help          show help
 ```
 
-Inside a project repository, `nf repo` also exposes workbench commands and repo-local aliases from `.nf/project.json`.
+Inside a project repository, `nf repo` also exposes runtime commands and repo-local aliases from `.nf/project.json`.
 
 ## Repo workflow
 
@@ -105,7 +105,7 @@ Project repositories use:
 .nf/project.json
 ```
 
-This file is safe to commit. It describes project intent, theme paths, local workbench behavior, artifact naming, deploy aliases, and repo-local commands.
+This file is safe to commit. It describes project intent, theme paths, local runtime behavior, artifact naming, deploy aliases, and repo-local commands.
 
 It must not contain secrets, API tokens, SSH keys, live database passwords, or mutable infrastructure state.
 
@@ -142,7 +142,7 @@ Example `.nf/project.json`:
     "theme_slug": "theme",
     "theme_path": "theme"
   },
-  "workbench": {
+  "runtime": {
     "compose": "docker compose",
     "wordpress_service": "wordpress",
     "cli_service": "cli",
@@ -212,7 +212,7 @@ nf repo package [--dry-run] [--source path] [--output path]
 nf repo <alias>
 ```
 
-`nf repo commands` lists built-in workbench commands plus custom project aliases.
+`nf repo commands` lists built-in runtime commands plus custom project aliases.
 
 `nf repo <alias>` runs a command defined in `.nf/project.json`.
 
@@ -227,22 +227,24 @@ nf repo test
 nf repo wp -- plugin list
 ```
 
-## Local WordPress workbench
+## Local WordPress runtime
 
-The workbench is generated and owned by `nf`.
+A runtime is `nf`'s generated local WordPress environment for a project. It contains the Docker/WordPress scaffolding and mutable local state used to run, reset, snapshot, and sync the project during development.
 
-Project repositories should contain the theme source and `.nf/project.json`. They should not need committed Docker workbench scaffolding.
+The runtime is generated and owned by `nf`.
+
+Project repositories should contain the theme source and `.nf/project.json` runtime definition. They should not need committed Docker runtime scaffolding.
 
 Generated runtime files live under:
 
 ```text
-~/.config/nf/workbenches/<project-slug>/
+~/.config/nf/runtimes/<project-slug>/
 ```
 
 For the placeholder project:
 
 ```text
-~/.config/nf/workbenches/client/
+~/.config/nf/runtimes/client/
 ```
 
 Default local URL:
@@ -260,7 +262,7 @@ admin / admin
 Default Docker Compose project name:
 
 ```text
-nf_client_workbench
+nf_client_runtime
 ```
 
 Common workflow:
@@ -272,7 +274,7 @@ nf repo wp -- plugin list
 nf repo down
 ```
 
-Reset the workbench database and WordPress runtime:
+Reset the local runtime:
 
 ```sh
 nf repo reset
@@ -280,7 +282,7 @@ nf repo reset
 
 `nf repo up` is idempotent. It starts Docker Compose, installs WordPress if needed, and ensures the mounted theme is active.
 
-`nf repo reset` runs a volume-destroying reset and recreates the same managed workbench state.
+`nf repo reset` runs a volume-destroying reset and recreates the same managed runtime state.
 
 ## Theme packaging
 
@@ -368,7 +370,7 @@ Expected layout:
     servers.json
     sites.json
     projects.json
-  workbenches/
+  runtimes/
     <project-slug>/
 ```
 

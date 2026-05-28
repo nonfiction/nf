@@ -131,7 +131,7 @@ func TestRunHelpShowsRepoMetadataOutsideGit(t *testing.T) {
 	t.Cleanup(func() { _ = os.Chdir(oldwd) })
 
 	output := captureStdout(t, func() { _ = runHelp() })
-	for _, wanted := range []string{"\n  server        provision, list, show, delete servers\n", "\n  site          list, show, future install/delete/deploy/sync\n", "\n  repo          init repo metadata and manage workbench runtime\n", "\n  config        init local config\n", "\n  password      derive passwords\n", "\n  help          show help\n"} {
+	for _, wanted := range []string{"\n  server        provision, list, show, delete servers\n", "\n  site          list, show, future install/delete/deploy/sync\n", "\n  repo          init repo metadata and manage runtime\n", "\n  config        init local config\n", "\n  password      derive passwords\n", "\n  help          show help\n"} {
 		if !strings.Contains(output, wanted) {
 			t.Fatalf("runHelp() output missing %q:\n%s", wanted, output)
 		}
@@ -158,7 +158,7 @@ func TestRunHelpShowsRepoCommandsInsideGit(t *testing.T) {
 	t.Cleanup(func() { _ = os.Chdir(oldwd) })
 
 	output := captureStdout(t, func() { _ = runHelp() })
-	for _, wanted := range []string{"\n  repo          init, workbench commands, and repo-local aliases\n"} {
+	for _, wanted := range []string{"\n  repo          init, runtime commands, and repo-local aliases\n"} {
 		if !strings.Contains(output, wanted) {
 			t.Fatalf("runHelp() output missing %q:\n%s", wanted, output)
 		}
@@ -270,7 +270,7 @@ func TestRunSiteShowResolvesAliasAndIncludesServerSummary(t *testing.T) {
 	}
 	sites := map[string]any{
 		"sites": map[string]any{
-			"sanjel-app1-production": map[string]any{"provider": "linode", "server": "app1", "hostname": "sanjel.app1.nfweb.dev", "url": "https://sanjel.app1.nfweb.dev/", "branch": "main", "environment": "production"},
+			"client-app1-production": map[string]any{"provider": "linode", "server": "app1", "hostname": "client.app1.nfweb.dev", "url": "https://client.app1.nfweb.dev/", "branch": "main", "environment": "production"},
 		},
 	}
 	siteData, err := json.MarshalIndent(sites, "", "  ")
@@ -287,11 +287,11 @@ func TestRunSiteShowResolvesAliasAndIncludesServerSummary(t *testing.T) {
 	}
 	project := map[string]any{
 		"schema":    1,
-		"project":   map[string]any{"slug": "sanjel", "name": "Sanjel", "type": "wordpress-theme"},
+		"project":   map[string]any{"slug": "client", "name": "Client", "type": "wordpress-theme"},
 		"wordpress": map[string]any{"deploy_unit": "theme", "theme_slug": "theme", "theme_path": "theme"},
 		"build":     map[string]any{"commands": []any{"composer install", "npm run build"}},
 		"artifact":  map[string]any{"include": []any{"vendor/", "assets/dist/"}, "exclude": []any{"node_modules/", ".git/"}},
-		"deploy":    map[string]any{"aliases": map[string]any{"app1": "sanjel-app1-production", "production": "sanjel-app1-production", "staging": "sanjel-app1-staging"}},
+		"deploy":    map[string]any{"aliases": map[string]any{"app1": "client-app1-production", "production": "client-app1-production", "staging": "client-app1-staging"}},
 	}
 	projectData, err := json.MarshalIndent(project, "", "  ")
 	if err != nil {
@@ -325,7 +325,7 @@ func TestRunSiteShowResolvesAliasAndIncludesServerSummary(t *testing.T) {
 			t.Fatalf("Run() = %d, want 0", got)
 		}
 	})
-	for _, wanted := range []string{`"requested_target": "app1"`, `"resolved_target": "sanjel-app1-production"`, `"resolved_server_summary": "app1 / id 98222343 / linode / ssh nonfiction@app1.nfweb.dev"`, `"url": "https://sanjel.app1.nfweb.dev/"`} {
+	for _, wanted := range []string{`"requested_target": "app1"`, `"resolved_target": "client-app1-production"`, `"resolved_server_summary": "app1 / id 98222343 / linode / ssh nonfiction@app1.nfweb.dev"`, `"url": "https://client.app1.nfweb.dev/"`} {
 		if !strings.Contains(output, wanted) {
 			t.Fatalf("Run() output missing %q:\n%s", wanted, output)
 		}
@@ -346,7 +346,7 @@ func TestRunSiteShowUsesDirectTargetWithoutAlias(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(stateDir, "servers.json"), append(serverData, '\n'), 0o644); err != nil {
 		t.Fatalf("WriteFile() error = %v", err)
 	}
-	sites := map[string]any{"sites": map[string]any{"sanjel-app1-production": map[string]any{"provider": "linode", "server": "app1", "hostname": "sanjel.app1.nfweb.dev", "branch": "main"}}}
+	sites := map[string]any{"sites": map[string]any{"client-app1-production": map[string]any{"provider": "linode", "server": "app1", "hostname": "client.app1.nfweb.dev", "branch": "main"}}}
 	siteData, err := json.MarshalIndent(sites, "", "  ")
 	if err != nil {
 		t.Fatalf("MarshalIndent() error = %v", err)
@@ -359,7 +359,7 @@ func TestRunSiteShowUsesDirectTargetWithoutAlias(t *testing.T) {
 	if err := os.Mkdir(filepath.Join(workdir, ".git"), 0o755); err != nil {
 		t.Fatalf("Mkdir() error = %v", err)
 	}
-	project := map[string]any{"schema": 1, "project": map[string]any{"slug": "sanjel"}, "deploy": map[string]any{"aliases": map[string]any{"app1": "sanjel-app1-production"}}}
+	project := map[string]any{"schema": 1, "project": map[string]any{"slug": "client"}, "deploy": map[string]any{"aliases": map[string]any{"app1": "client-app1-production"}}}
 	projectData, err := json.MarshalIndent(project, "", "  ")
 	if err != nil {
 		t.Fatalf("MarshalIndent() error = %v", err)
@@ -388,11 +388,11 @@ func TestRunSiteShowUsesDirectTargetWithoutAlias(t *testing.T) {
 	})
 
 	output := captureStdout(t, func() {
-		if got := Run([]string{"site", "show", "sanjel-app1-production"}); got != 0 {
+		if got := Run([]string{"site", "show", "client-app1-production"}); got != 0 {
 			t.Fatalf("Run() = %d, want 0", got)
 		}
 	})
-	for _, wanted := range []string{`"requested_target": "sanjel-app1-production"`, `"resolved_target": "sanjel-app1-production"`, `"server": "app1"`} {
+	for _, wanted := range []string{`"requested_target": "client-app1-production"`, `"resolved_target": "client-app1-production"`, `"server": "app1"`} {
 		if !strings.Contains(output, wanted) {
 			t.Fatalf("Run() output missing %q:\n%s", wanted, output)
 		}
@@ -410,7 +410,7 @@ func TestRunRepoInitWritesPortableMetadataShape(t *testing.T) {
 	}
 	t.Cleanup(func() { _ = os.Chdir(oldwd) })
 
-	if got := Run([]string{"repo", "init", "--project-slug", "sanjel", "--force"}); got != 0 {
+	if got := Run([]string{"repo", "init", "--project-slug", "client", "--force"}); got != 0 {
 		t.Fatalf("Run() = %d, want 0", got)
 	}
 	data, err := os.ReadFile(filepath.Join(workdir, ".nf", "project.json"))
@@ -424,22 +424,22 @@ func TestRunRepoInitWritesPortableMetadataShape(t *testing.T) {
 	if metadata["schema"] != float64(1) {
 		t.Fatalf("schema = %v, want 1", metadata["schema"])
 	}
-	if project, ok := metadata["project"].(map[string]any); !ok || project["slug"] != "sanjel" {
-		t.Fatalf("project block = %#v, want slug sanjel", metadata["project"])
+	if project, ok := metadata["project"].(map[string]any); !ok || project["slug"] != "client" {
+		t.Fatalf("project block = %#v, want slug client", metadata["project"])
 	}
 	if wordpress, ok := metadata["wordpress"].(map[string]any); !ok || wordpress["theme_path"] != "theme" || wordpress["theme_slug"] != "theme" {
 		t.Fatalf("wordpress block = %#v, want theme_path theme and theme_slug theme", metadata["wordpress"])
 	}
-	if workbench, ok := metadata["workbench"].(map[string]any); !ok {
-		t.Fatalf("workbench block = %#v, want workbench config", metadata["workbench"])
+	if runtime, ok := metadata["runtime"].(map[string]any); !ok {
+		t.Fatalf("runtime block = %#v, want runtime config", metadata["runtime"])
 	} else {
 		for key, want := range map[string]string{"compose": "docker compose", "wordpress_service": "wordpress", "cli_service": "cli", "theme_mount_slug": "theme", "uploads_path": "uploads"} {
-			if got := workbench[key]; got != want {
-				t.Fatalf("workbench.%s = %#v, want %q", key, got, want)
+			if got := runtime[key]; got != want {
+				t.Fatalf("runtime.%s = %#v, want %q", key, got, want)
 			}
 		}
-		if _, exists := workbench["path"]; exists {
-			t.Fatalf("workbench.path unexpectedly present: %#v", workbench)
+		if _, exists := runtime["path"]; exists {
+			t.Fatalf("runtime.path unexpectedly present: %#v", runtime)
 		}
 	}
 	if build, ok := metadata["build"].(map[string]any); !ok {
@@ -447,8 +447,8 @@ func TestRunRepoInitWritesPortableMetadataShape(t *testing.T) {
 	} else if commands, ok := build["commands"].([]any); !ok || len(commands) != 2 {
 		t.Fatalf("build.commands = %#v, want two commands", build["commands"])
 	}
-	if artifact, ok := metadata["artifact"].(map[string]any); !ok || artifact["path"] != "dist/sanjel-v{version}.zip" {
-		t.Fatalf("artifact block = %#v, want dist/sanjel-v{version}.zip", metadata["artifact"])
+	if artifact, ok := metadata["artifact"].(map[string]any); !ok || artifact["path"] != "dist/client-v{version}.zip" {
+		t.Fatalf("artifact block = %#v, want dist/client-v{version}.zip", metadata["artifact"])
 	} else if include, ok := artifact["include"].([]any); !ok || len(include) != 2 {
 		t.Fatalf("artifact.include = %#v, want include paths", artifact["include"])
 	} else if exclude, ok := artifact["exclude"].([]any); !ok || len(exclude) != 2 {
@@ -471,7 +471,7 @@ func TestRunRepoInitWritesPortableMetadataShape(t *testing.T) {
 			t.Fatalf("commands block len = %d, want 5", len(commands))
 		}
 	}
-	for _, legacy := range []string{"project_slug", "project_name", "theme_slug", "theme_source", "local_workbench_url", "default_provider"} {
+	for _, legacy := range []string{"project_slug", "project_name", "theme_slug", "theme_source", "default_provider"} {
 		if _, ok := metadata[legacy]; ok {
 			t.Fatalf("legacy field %q unexpectedly present: %#v", legacy, metadata[legacy])
 		}
@@ -487,13 +487,13 @@ func TestRunRepoInitWritesPortableMetadataShape(t *testing.T) {
 			t.Fatalf("build.source unexpectedly present: %#v", metadata["build"])
 		}
 	}
-	if _, err := os.Stat(filepath.Join(workdir, "workbench")); !os.IsNotExist(err) {
-		t.Fatalf("workbench scaffold unexpectedly created: %v", err)
+	if _, err := os.Stat(filepath.Join(workdir, "runtime")); !os.IsNotExist(err) {
+		t.Fatalf("runtime scaffold unexpectedly created: %v", err)
 	}
 }
 
 func TestRunRepoInitDefaultsProjectSlugFromGitRoot(t *testing.T) {
-	repoRoot := filepath.Join(t.TempDir(), "sanjel-site")
+	repoRoot := filepath.Join(t.TempDir(), "client-site")
 	if err := os.MkdirAll(filepath.Join(repoRoot, ".git"), 0o755); err != nil {
 		t.Fatalf("MkdirAll() error = %v", err)
 	}
@@ -522,10 +522,10 @@ func TestRunRepoInitDefaultsProjectSlugFromGitRoot(t *testing.T) {
 	if err := json.Unmarshal(data, &metadata); err != nil {
 		t.Fatalf("Unmarshal() error = %v", err)
 	}
-	if project, ok := metadata["project"].(map[string]any); !ok || project["slug"] != "sanjel-site" {
-		t.Fatalf("project block = %#v, want slug sanjel-site", metadata["project"])
-	} else if project["name"] != "Sanjel Site" {
-		t.Fatalf("project block = %#v, want name Sanjel Site", metadata["project"])
+	if project, ok := metadata["project"].(map[string]any); !ok || project["slug"] != "client-site" {
+		t.Fatalf("project block = %#v, want slug client-site", metadata["project"])
+	} else if project["name"] != "Client Site" {
+		t.Fatalf("project block = %#v, want name Client Site", metadata["project"])
 	}
 }
 
@@ -561,7 +561,7 @@ func TestRunRepoInitHonorsExplicitThemeSlug(t *testing.T) {
 	}
 	t.Cleanup(func() { _ = os.Chdir(oldwd) })
 
-	if got := Run([]string{"repo", "init", "--project-slug", "sanjel", "--theme-slug", "custom-theme", "--force"}); got != 0 {
+	if got := Run([]string{"repo", "init", "--project-slug", "client", "--theme-slug", "custom-theme", "--force"}); got != 0 {
 		t.Fatalf("Run() = %d, want 0", got)
 	}
 	data, err := os.ReadFile(filepath.Join(workdir, ".nf", "project.json"))
@@ -597,7 +597,7 @@ func TestRunRepoInitWithoutForceRejectsExistingProjectJson(t *testing.T) {
 	t.Cleanup(func() { _ = os.Chdir(oldwd) })
 
 	output := captureStderr(t, func() {
-		if got := Run([]string{"repo", "init", "--project-slug", "sanjel"}); got != 1 {
+		if got := Run([]string{"repo", "init", "--project-slug", "client"}); got != 1 {
 			t.Fatalf("Run() = %d, want 1", got)
 		}
 	})
@@ -613,27 +613,55 @@ func TestRunRepoInitWithoutForceRejectsExistingProjectJson(t *testing.T) {
 	}
 }
 
-func TestRenderWorkbenchComposeUsesMetadataDefaults(t *testing.T) {
+func TestRenderRuntimeComposeUsesMetadataDefaults(t *testing.T) {
 	root := t.TempDir()
 	metadata := map[string]any{
-		"project":   map[string]any{"slug": "sanjel"},
+		"project":   map[string]any{"slug": "client"},
 		"wordpress": map[string]any{"theme_path": "theme-src"},
-		"workbench": map[string]any{"compose": "docker compose", "wordpress_service": "wp-app", "cli_service": "wp-cli", "theme_mount_slug": "theme-slot", "uploads_path": "uploads"},
+		"runtime":   map[string]any{"compose": "docker compose", "wordpress_service": "wp-app", "cli_service": "wp-cli", "theme_mount_slug": "theme-slot", "uploads_path": "uploads"},
 	}
-	cfg, ok := loadWorkbenchConfig(root, metadata)
+	cfg, ok := loadRuntimeConfig(root, metadata)
 	if !ok {
-		t.Fatalf("loadWorkbenchConfig() = false, want true")
+		t.Fatalf("loadRuntimeConfig() = false, want true")
 	}
-	compose := renderWorkbenchCompose(cfg)
+	compose := renderRuntimeCompose(cfg)
 	for _, want := range []string{"wp-app:", "wp-cli:", "condition: service_healthy", "depends_on:\n      wp-app:", "working_dir: /var/www/html", filepath.Join(root, "theme-src") + ":/var/www/html/wp-content/themes/theme-slot"} {
 		if !strings.Contains(compose, want) {
-			t.Fatalf("renderWorkbenchCompose() missing %q:\n%s", want, compose)
+			t.Fatalf("renderRuntimeCompose() missing %q:\n%s", want, compose)
 		}
 	}
 }
 
+func TestLoadRuntimeConfigUsesRuntimeBlock(t *testing.T) {
+	root := t.TempDir()
+	metadata := map[string]any{
+		"project":   map[string]any{"slug": "client", "name": "Client"},
+		"wordpress": map[string]any{"theme_path": "theme-src", "theme_slug": "theme"},
+		"runtime":   map[string]any{"compose": "runtime compose", "wordpress_service": "runtime-wp", "cli_service": "runtime-cli", "theme_mount_slug": "runtime-theme", "uploads_path": "runtime-uploads"},
+	}
+	cfg, ok := loadRuntimeConfig(root, metadata)
+	if !ok {
+		t.Fatalf("loadRuntimeConfig() = false, want true")
+	}
+	if got, want := cfg.Compose, "runtime compose"; got != want {
+		t.Fatalf("Compose = %q, want %q", got, want)
+	}
+	if got, want := cfg.WordpressService, "runtime-wp"; got != want {
+		t.Fatalf("WordpressService = %q, want %q", got, want)
+	}
+	if got, want := cfg.CliService, "runtime-cli"; got != want {
+		t.Fatalf("CliService = %q, want %q", got, want)
+	}
+	if got, want := cfg.ThemeMountSlug, "runtime-theme"; got != want {
+		t.Fatalf("ThemeMountSlug = %q, want %q", got, want)
+	}
+	if got, want := cfg.UploadsPath, "runtime-uploads"; got != want {
+		t.Fatalf("UploadsPath = %q, want %q", got, want)
+	}
+}
+
 func TestRunRepoCommandsUsesCompactDescriptions(t *testing.T) {
-	repoRoot := filepath.Join(t.TempDir(), "sanjel-site")
+	repoRoot := filepath.Join(t.TempDir(), "client-site")
 	if err := os.MkdirAll(filepath.Join(repoRoot, ".git"), 0o755); err != nil {
 		t.Fatalf("MkdirAll() error = %v", err)
 	}
@@ -654,7 +682,7 @@ func TestRunRepoCommandsUsesCompactDescriptions(t *testing.T) {
 			t.Fatalf("Run(commands) = %d, want 0", got)
 		}
 	})
-	for _, want := range []string{"repo-local commands:", "Update theme Composer dependencies", "Build the theme assets", "Start the managed workbench, install WordPress if missing, and ensure the mounted theme is active", "Nuke workbench data and recreate a clean workbench"} {
+	for _, want := range []string{"repo-local commands:", "Update theme Composer dependencies", "Build the theme assets", "Start the managed runtime, install WordPress if missing, and ensure the mounted theme is active", "Destroy and recreate the local runtime"} {
 		if !strings.Contains(output, want) {
 			t.Fatalf("Run(commands) output missing %q:\n%s", want, output)
 		}
@@ -664,88 +692,88 @@ func TestRunRepoCommandsUsesCompactDescriptions(t *testing.T) {
 	}
 }
 
-func TestWorkbenchComposeProjectName(t *testing.T) {
+func TestRuntimeComposeProjectName(t *testing.T) {
 	for input, want := range map[string]string{
-		"sanjel":        "nf_sanjel_workbench",
-		" Sanjel Site ": "nf_sanjel_site_workbench",
-		"":              "nf_project_workbench",
+		"client":        "nf_client_runtime",
+		" Client Site ": "nf_client_site_runtime",
+		"":              "nf_project_runtime",
 	} {
-		if got := workbenchComposeProjectName(input); got != want {
-			t.Fatalf("workbenchComposeProjectName(%q) = %q, want %q", input, got, want)
+		if got := runtimeComposeProjectName(input); got != want {
+			t.Fatalf("runtimeComposeProjectName(%q) = %q, want %q", input, got, want)
 		}
 	}
 }
 
-func TestRenderWorkbenchEnvUsesComposeProjectName(t *testing.T) {
-	cfg := workbenchConfig{ProjectSlug: "sanjel", ProjectName: "Sanjel"}
-	want := "COMPOSE_PROJECT_NAME=nf_sanjel_workbench\nWP_PORT=18080\nMAILPIT_PORT=8026\nDB_NAME=sanjel\nDB_USER=sanjel\nDB_PASSWORD=wordpress\nDB_ROOT_PASSWORD=root\nWP_URL=http://localhost:18080\nWP_TITLE=Sanjel\nADMIN_USER=admin\nADMIN_PASSWORD=admin\nADMIN_EMAIL=web@nonfiction.ca\n"
-	if got := renderWorkbenchEnv(cfg); got != want {
-		t.Fatalf("renderWorkbenchEnv() = %q, want %q", got, want)
+func TestRenderRuntimeEnvUsesComposeProjectName(t *testing.T) {
+	cfg := runtimeConfig{ProjectSlug: "client", ProjectName: "Client"}
+	want := "COMPOSE_PROJECT_NAME=nf_client_runtime\nWP_PORT=18080\nMAILPIT_PORT=8026\nDB_NAME=client\nDB_USER=client\nDB_PASSWORD=wordpress\nDB_ROOT_PASSWORD=root\nWP_URL=http://localhost:18080\nWP_TITLE=Client\nADMIN_USER=admin\nADMIN_PASSWORD=admin\nADMIN_EMAIL=web@nonfiction.ca\n"
+	if got := renderRuntimeEnv(cfg); got != want {
+		t.Fatalf("renderRuntimeEnv() = %q, want %q", got, want)
 	}
 }
 
-func TestWorkbenchCommandHelpersBuildExpectedArgs(t *testing.T) {
-	cfg := workbenchConfig{
-		ProjectSlug:      "sanjel",
-		ProjectName:      "Sanjel",
+func TestRuntimeCommandHelpersBuildExpectedArgs(t *testing.T) {
+	cfg := runtimeConfig{
+		ProjectSlug:      "client",
+		ProjectName:      "Client",
 		RepoRoot:         "/repo",
 		ThemePath:        "/repo/theme",
-		ManagedDir:       filepath.Join("/config", "workbenches", "sanjel"),
+		ManagedDir:       filepath.Join("/config", "runtimes", "client"),
 		Compose:          "docker compose",
 		WordpressService: "wordpress",
 		CliService:       "cli",
 		ThemeMountSlug:   "theme",
 		UploadsPath:      "uploads",
-		ThemeSlug:        "sanjel",
+		ThemeSlug:        "client",
 	}
 
-	if got, want := workbenchComposeArgs(cfg, "up", "-d"), []string{"docker", "compose", "up", "-d"}; !reflect.DeepEqual(got, want) {
-		t.Fatalf("workbenchComposeArgs() = %#v, want %#v", got, want)
+	if got, want := runtimeComposeArgs(cfg, "up", "-d"), []string{"docker", "compose", "up", "-d"}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("runtimeComposeArgs() = %#v, want %#v", got, want)
 	}
-	if got, want := workbenchWpArgs(cfg, "plugin", "list"), []string{"docker", "compose", "run", "--rm", "cli", "wp", "plugin", "list", "--allow-root"}; !reflect.DeepEqual(got, want) {
-		t.Fatalf("workbenchWpArgs() = %#v, want %#v", got, want)
+	if got, want := runtimeWpArgs(cfg, "plugin", "list"), []string{"docker", "compose", "run", "--rm", "cli", "wp", "plugin", "list", "--allow-root"}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("runtimeWpArgs() = %#v, want %#v", got, want)
 	}
-	if got, want := workbenchWpThemeIsActiveArgs(cfg, ""), []string{"docker", "compose", "run", "--rm", "cli", "wp", "theme", "is-active", "theme", "--allow-root"}; !reflect.DeepEqual(got, want) {
-		t.Fatalf("workbenchWpThemeIsActiveArgs() = %#v, want %#v", got, want)
+	if got, want := runtimeWpThemeIsActiveArgs(cfg, ""), []string{"docker", "compose", "run", "--rm", "cli", "wp", "theme", "is-active", "theme", "--allow-root"}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("runtimeWpThemeIsActiveArgs() = %#v, want %#v", got, want)
 	}
-	hostPath, containerPath := workbenchThemeArchivePaths(cfg, "/tmp/theme.zip")
-	if hostPath != filepath.Join(cfg.ManagedDir, "uploads", "theme.zip") || containerPath != "/workbench/uploads/theme.zip" {
-		t.Fatalf("workbenchThemeArchivePaths() = (%q, %q), want host and container upload paths", hostPath, containerPath)
+	hostPath, containerPath := runtimeThemeArchivePaths(cfg, "/tmp/theme.zip")
+	if hostPath != filepath.Join(cfg.ManagedDir, "uploads", "theme.zip") || containerPath != "/runtime/uploads/theme.zip" {
+		t.Fatalf("runtimeThemeArchivePaths() = (%q, %q), want host and container upload paths", hostPath, containerPath)
 	}
-	if got, want := workbenchCommandDir(cfg), cfg.ManagedDir; got != want {
-		t.Fatalf("workbenchCommandDir() = %q, want %q", got, want)
+	if got, want := runtimeCommandDir(cfg), cfg.ManagedDir; got != want {
+		t.Fatalf("runtimeCommandDir() = %q, want %q", got, want)
 	}
-	if got, want := workbenchWpThemeActivateArgs(cfg, ""), []string{"docker", "compose", "run", "--rm", "cli", "wp", "theme", "activate", "theme", "--allow-root"}; !reflect.DeepEqual(got, want) {
-		t.Fatalf("workbenchWpThemeActivateArgs() = %#v, want %#v", got, want)
+	if got, want := runtimeWpThemeActivateArgs(cfg, ""), []string{"docker", "compose", "run", "--rm", "cli", "wp", "theme", "activate", "theme", "--allow-root"}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("runtimeWpThemeActivateArgs() = %#v, want %#v", got, want)
 	}
-	if got, want := workbenchWpThemeActivateArgs(cfg, "custom-slug"), []string{"docker", "compose", "run", "--rm", "cli", "wp", "theme", "activate", "custom-slug", "--allow-root"}; !reflect.DeepEqual(got, want) {
-		t.Fatalf("workbenchWpThemeActivateArgs(explicit) = %#v, want %#v", got, want)
+	if got, want := runtimeWpThemeActivateArgs(cfg, "custom-slug"), []string{"docker", "compose", "run", "--rm", "cli", "wp", "theme", "activate", "custom-slug", "--allow-root"}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("runtimeWpThemeActivateArgs(explicit) = %#v, want %#v", got, want)
 	}
-	installArgs := workbenchWpCoreInstallArgs(cfg)
+	installArgs := runtimeWpCoreInstallArgs(cfg)
 	joined := strings.Join(installArgs, " ")
 	for _, wanted := range []string{"docker compose run --rm cli sh -lc", "WP_URL", "WP_TITLE", "ADMIN_USER", "ADMIN_PASSWORD", "ADMIN_EMAIL", "wp theme activate theme --allow-root"} {
 		if !strings.Contains(joined, wanted) {
-			t.Fatalf("workbenchWpCoreInstallArgs() missing %q in %#v", wanted, installArgs)
+			t.Fatalf("runtimeWpCoreInstallArgs() missing %q in %#v", wanted, installArgs)
 		}
 	}
 	if strings.Contains(joined, "wp core is-installed") {
-		t.Fatalf("workbenchWpCoreInstallArgs() unexpectedly probes install state: %#v", installArgs)
+		t.Fatalf("runtimeWpCoreInstallArgs() unexpectedly probes install state: %#v", installArgs)
 	}
-	if got, want := workbenchRepoPath("/repo", "dist/theme.zip"), filepath.Join("/repo", "dist", "theme.zip"); got != want {
-		t.Fatalf("workbenchRepoPath() = %q, want %q", got, want)
+	if got, want := runtimeRepoPath("/repo", "dist/theme.zip"), filepath.Join("/repo", "dist", "theme.zip"); got != want {
+		t.Fatalf("runtimeRepoPath() = %q, want %q", got, want)
 	}
-	if got, want := workbenchRepoPath("/repo", "/tmp/theme.zip"), "/tmp/theme.zip"; got != want {
-		t.Fatalf("workbenchRepoPath() = %q, want %q", got, want)
+	if got, want := runtimeRepoPath("/repo", "/tmp/theme.zip"), "/tmp/theme.zip"; got != want {
+		t.Fatalf("runtimeRepoPath() = %q, want %q", got, want)
 	}
-	if got, want := (workbenchCommandRunner{name: "up", cfg: cfg}).Render(), "docker compose up -d; install WordPress if missing and ensure the mounted theme is active"; got != want {
+	if got, want := (runtimeCommandRunner{name: "up", cfg: cfg}).Render(), "docker compose up -d; install WordPress if missing and ensure the mounted theme is active"; got != want {
 		t.Fatalf("up Render() = %q, want %q", got, want)
 	}
-	if got, want := (workbenchCommandRunner{name: "reset", cfg: cfg}).Render(), "docker compose down -v --remove-orphans; nuke workbench data and recreate it with docker compose up -d, install WordPress if missing, and ensure the mounted theme is active"; got != want {
+	if got, want := (runtimeCommandRunner{name: "reset", cfg: cfg}).Render(), "docker compose down -v --remove-orphans; nuke runtime data and recreate it with docker compose up -d, install WordPress if missing, and ensure the mounted theme is active"; got != want {
 		t.Fatalf("reset Render() = %q, want %q", got, want)
 	}
 }
 
-func TestEnsureManagedWorkbenchRuntimeWritesManagedFiles(t *testing.T) {
+func TestEnsureManagedRuntimeWritesManagedFiles(t *testing.T) {
 	configHome := t.TempDir()
 	t.Setenv("NF_CONFIG_HOME", configHome)
 	root := t.TempDir()
@@ -756,23 +784,23 @@ func TestEnsureManagedWorkbenchRuntimeWritesManagedFiles(t *testing.T) {
 		t.Fatalf("WriteFile() error = %v", err)
 	}
 	metadata := map[string]any{
-		"project":   map[string]any{"slug": "sanjel", "name": "Sanjel"},
+		"project":   map[string]any{"slug": "client", "name": "Client"},
 		"wordpress": map[string]any{"theme_slug": "theme", "theme_path": "theme"},
-		"workbench": map[string]any{"compose": "docker compose", "wordpress_service": "wordpress", "cli_service": "cli", "theme_mount_slug": "theme", "uploads_path": "uploads"},
+		"runtime":   map[string]any{"compose": "docker compose", "wordpress_service": "wordpress", "cli_service": "cli", "theme_mount_slug": "theme", "uploads_path": "uploads"},
 	}
-	cfg, ok := loadWorkbenchConfig(root, metadata)
+	cfg, ok := loadRuntimeConfig(root, metadata)
 	if !ok {
-		t.Fatalf("loadWorkbenchConfig() = false, want true")
+		t.Fatalf("loadRuntimeConfig() = false, want true")
 	}
-	if got, want := cfg.ManagedDir, config.WorkbenchDir("sanjel"); got != want {
+	if got, want := cfg.ManagedDir, config.RuntimeDir("client"); got != want {
 		t.Fatalf("ManagedDir = %q, want %q", got, want)
 	}
-	if err := ensureManagedWorkbenchRuntime(cfg); err != nil {
-		t.Fatalf("ensureManagedWorkbenchRuntime() error = %v", err)
+	if err := ensureManagedRuntime(cfg); err != nil {
+		t.Fatalf("ensureManagedRuntime() error = %v", err)
 	}
 	checks := map[string][]string{
 		filepath.Join(cfg.ManagedDir, "docker-compose.yml"):                   {filepath.Join(root, "theme") + ":/var/www/html/wp-content/themes/theme", "mailpit", "wordpress:cli-php8.4"},
-		filepath.Join(cfg.ManagedDir, ".env"):                                 {"COMPOSE_PROJECT_NAME=nf_sanjel_workbench", "WP_TITLE=Sanjel"},
+		filepath.Join(cfg.ManagedDir, ".env"):                                 {"COMPOSE_PROJECT_NAME=nf_client_runtime", "WP_TITLE=Client"},
 		filepath.Join(cfg.ManagedDir, "php", "uploads.ini"):                   {"upload_max_filesize=128M", "max_execution_time=120"},
 		filepath.Join(cfg.ManagedDir, "wordpress", "Dockerfile"):              {"FROM wordpress:7.0-php8.4-apache", "COPY wordpress/wordpress-rewrites.conf"},
 		filepath.Join(cfg.ManagedDir, "wordpress", "wordpress-rewrites.conf"): {"RewriteRule . /index.php [L]"},
@@ -797,7 +825,7 @@ func TestEnsureManagedWorkbenchRuntimeWritesManagedFiles(t *testing.T) {
 }
 
 func TestRunRepoUpPrintsUnderlyingCommands(t *testing.T) {
-	repoRoot := filepath.Join(t.TempDir(), "sanjel-site")
+	repoRoot := filepath.Join(t.TempDir(), "client-site")
 	if err := os.MkdirAll(filepath.Join(repoRoot, ".git"), 0o755); err != nil {
 		t.Fatalf("MkdirAll() error = %v", err)
 	}
@@ -812,9 +840,9 @@ func TestRunRepoUpPrintsUnderlyingCommands(t *testing.T) {
 	}
 	project := map[string]any{
 		"schema":    1,
-		"project":   map[string]any{"slug": "sanjel-site", "name": "Sanjel Site", "type": "wordpress-theme"},
+		"project":   map[string]any{"slug": "client-site", "name": "Client Site", "type": "wordpress-theme"},
 		"wordpress": map[string]any{"deploy_unit": "theme", "theme_slug": "theme", "theme_path": "theme"},
-		"workbench": map[string]any{"compose": "docker compose", "wordpress_service": "wordpress", "cli_service": "cli", "theme_mount_slug": "theme", "uploads_path": "uploads"},
+		"runtime":   map[string]any{"compose": "docker compose", "wordpress_service": "wordpress", "cli_service": "cli", "theme_mount_slug": "theme", "uploads_path": "uploads"},
 	}
 	data, err := json.MarshalIndent(project, "", "  ")
 	if err != nil {
@@ -864,7 +892,7 @@ func TestRunRepoUpPrintsUnderlyingCommands(t *testing.T) {
 }
 
 func TestRunRepoUpActivatesThemeWhenAlreadyInstalled(t *testing.T) {
-	repoRoot := filepath.Join(t.TempDir(), "sanjel-site")
+	repoRoot := filepath.Join(t.TempDir(), "client-site")
 	if err := os.MkdirAll(filepath.Join(repoRoot, ".git"), 0o755); err != nil {
 		t.Fatalf("MkdirAll() error = %v", err)
 	}
@@ -879,9 +907,9 @@ func TestRunRepoUpActivatesThemeWhenAlreadyInstalled(t *testing.T) {
 	}
 	project := map[string]any{
 		"schema":    1,
-		"project":   map[string]any{"slug": "sanjel-site", "name": "Sanjel Site", "type": "wordpress-theme"},
+		"project":   map[string]any{"slug": "client-site", "name": "Client Site", "type": "wordpress-theme"},
 		"wordpress": map[string]any{"deploy_unit": "theme", "theme_slug": "theme", "theme_path": "theme"},
-		"workbench": map[string]any{"compose": "docker compose", "wordpress_service": "wordpress", "cli_service": "cli", "theme_mount_slug": "theme", "uploads_path": "uploads"},
+		"runtime":   map[string]any{"compose": "docker compose", "wordpress_service": "wordpress", "cli_service": "cli", "theme_mount_slug": "theme", "uploads_path": "uploads"},
 	}
 	data, err := json.MarshalIndent(project, "", "  ")
 	if err != nil {
@@ -935,7 +963,7 @@ func TestRunRepoUpActivatesThemeWhenAlreadyInstalled(t *testing.T) {
 }
 
 func TestRunRepoResetPrintsUnderlyingCommands(t *testing.T) {
-	repoRoot := filepath.Join(t.TempDir(), "sanjel-site")
+	repoRoot := filepath.Join(t.TempDir(), "client-site")
 	if err := os.MkdirAll(filepath.Join(repoRoot, ".git"), 0o755); err != nil {
 		t.Fatalf("MkdirAll() error = %v", err)
 	}
@@ -950,9 +978,9 @@ func TestRunRepoResetPrintsUnderlyingCommands(t *testing.T) {
 	}
 	project := map[string]any{
 		"schema":    1,
-		"project":   map[string]any{"slug": "sanjel-site", "name": "Sanjel Site", "type": "wordpress-theme"},
+		"project":   map[string]any{"slug": "client-site", "name": "Client Site", "type": "wordpress-theme"},
 		"wordpress": map[string]any{"deploy_unit": "theme", "theme_slug": "theme", "theme_path": "theme"},
-		"workbench": map[string]any{"compose": "docker compose", "wordpress_service": "wordpress", "cli_service": "cli", "theme_mount_slug": "theme", "uploads_path": "uploads"},
+		"runtime":   map[string]any{"compose": "docker compose", "wordpress_service": "wordpress", "cli_service": "cli", "theme_mount_slug": "theme", "uploads_path": "uploads"},
 	}
 	data, err := json.MarshalIndent(project, "", "  ")
 	if err != nil {
@@ -1021,10 +1049,10 @@ func TestRunRepoPackageUsesThemeStyleVersionWhenPresent(t *testing.T) {
 	}
 	project := map[string]any{
 		"schema":       1,
-		"project":      map[string]any{"slug": "sanjel", "name": "Sanjel", "type": "wordpress-theme"},
+		"project":      map[string]any{"slug": "client", "name": "Client", "type": "wordpress-theme"},
 		"wordpress":    map[string]any{"deploy_unit": "theme", "theme_slug": "theme", "theme_path": "theme"},
 		"build":        map[string]any{"commands": []any{"composer install", "npm run build"}},
-		"artifact":     map[string]any{"path": "release/sanjel-v{version}.zip", "include": []any{"vendor/", "assets/dist/"}, "exclude": []any{"node_modules/", ".git/"}},
+		"artifact":     map[string]any{"path": "release/client-v{version}.zip", "include": []any{"vendor/", "assets/dist/"}, "exclude": []any{"node_modules/", ".git/"}},
 		"deploy":       map[string]any{"aliases": map[string]any{}},
 		"project_slug": "legacy-project",
 		"project_name": "Legacy Project",
@@ -1053,7 +1081,7 @@ func TestRunRepoPackageUsesThemeStyleVersionWhenPresent(t *testing.T) {
 			t.Fatalf("Run() = %d, want 0", got)
 		}
 	})
-	if !strings.Contains(output, "Would package "+filepath.Join(workdir, "theme")+" -> "+filepath.Join(workdir, "release", "sanjel-v2.0.0.zip")) {
+	if !strings.Contains(output, "Would package "+filepath.Join(workdir, "theme")+" -> "+filepath.Join(workdir, "release", "client-v2.0.0.zip")) {
 		t.Fatalf("Run() output = %q, want style.css version to win over package.json", output)
 	}
 	for _, unwanted := range []string{"legacy-theme", "legacy-project"} {
@@ -1079,9 +1107,9 @@ func TestRunRepoPackageFallsBackToPackageVersionWhenStyleVersionMissing(t *testi
 	}
 	project := map[string]any{
 		"schema":    1,
-		"project":   map[string]any{"slug": "sanjel", "name": "Sanjel", "type": "wordpress-theme"},
+		"project":   map[string]any{"slug": "client", "name": "Client", "type": "wordpress-theme"},
 		"wordpress": map[string]any{"deploy_unit": "theme", "theme_slug": "theme", "theme_path": "theme"},
-		"artifact":  map[string]any{"path": "dist/sanjel-v{version}.zip", "include": []any{"vendor/", "assets/dist/"}, "exclude": []any{"node_modules/", ".git/"}},
+		"artifact":  map[string]any{"path": "dist/client-v{version}.zip", "include": []any{"vendor/", "assets/dist/"}, "exclude": []any{"node_modules/", ".git/"}},
 	}
 	projectData, err := json.MarshalIndent(project, "", "  ")
 	if err != nil {
@@ -1105,7 +1133,7 @@ func TestRunRepoPackageFallsBackToPackageVersionWhenStyleVersionMissing(t *testi
 			t.Fatalf("Run() = %d, want 0", got)
 		}
 	})
-	if !strings.Contains(output, "sanjel-v1.2.3.zip") {
+	if !strings.Contains(output, "client-v1.2.3.zip") {
 		t.Fatalf("Run() output = %q, want package.json fallback version", output)
 	}
 	if strings.Contains(output, "theme version not found") {
@@ -1129,9 +1157,9 @@ func TestRunRepoPackageFailsWhenThemeVersionMissingFromStyleAndPackage(t *testin
 	}
 	project := map[string]any{
 		"schema":    1,
-		"project":   map[string]any{"slug": "sanjel", "name": "Sanjel", "type": "wordpress-theme"},
+		"project":   map[string]any{"slug": "client", "name": "Client", "type": "wordpress-theme"},
 		"wordpress": map[string]any{"deploy_unit": "theme", "theme_slug": "theme", "theme_path": "theme"},
-		"artifact":  map[string]any{"path": "dist/sanjel-v{version}.zip", "include": []any{"vendor/", "assets/dist/"}, "exclude": []any{"node_modules/", ".git/"}},
+		"artifact":  map[string]any{"path": "dist/client-v{version}.zip", "include": []any{"vendor/", "assets/dist/"}, "exclude": []any{"node_modules/", ".git/"}},
 	}
 	projectData, err := json.MarshalIndent(project, "", "  ")
 	if err != nil {

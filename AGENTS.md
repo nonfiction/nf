@@ -108,7 +108,7 @@ Expected local layout:
     servers.json
     sites.json
     projects.json
-  workbenches/
+  runtimes/
     <project-slug>/
 ```
 
@@ -132,15 +132,17 @@ Current shared state files:
 * `sites.json`
 * `projects.json`
 
-Local WordPress workbench runtime lives under:
+Local WordPress runtime lives under:
 
 ```text
-~/.config/nf/workbenches/<project-slug>/
+~/.config/nf/runtimes/<project-slug>/
 ```
 
 or the equivalent `NF_CONFIG_HOME` test path.
 
-The workbench runtime is generated and owned by `nf`. Do not scaffold Docker workbench files into project repos by default.
+A runtime is `nf`'s generated local WordPress environment for a project. It contains the Docker/WordPress scaffolding and mutable local state used to run, reset, snapshot, and sync the project during development.
+
+The runtime is generated and owned by `nf`. Do not scaffold Docker runtime files into project repos by default.
 
 Repo-local metadata lives at:
 
@@ -189,7 +191,7 @@ Generated metadata should default these values to `theme` unless an explicit ove
 
 * `wordpress.theme_path`
 * `wordpress.theme_slug`
-* `workbench.theme_mount_slug`
+* `runtime.theme_mount_slug`
 
 String commands run through:
 
@@ -225,9 +227,9 @@ Resolve `{version}` from:
 
 Fail clearly if neither exists.
 
-## Workbench behavior
+## Runtime behavior
 
-Built-in workbench commands come from `workbench` metadata in `.nf/project.json`.
+Built-in runtime commands come from `runtime` metadata in `.nf/project.json`.
 
 Current built-ins:
 
@@ -239,21 +241,21 @@ Current built-ins:
 
 `nf repo up` should be idempotent:
 
-* ensure the managed workbench runtime exists
+* ensure the managed runtime exists
 * start Docker Compose
 * install WordPress if missing
 * ensure the mounted theme is active
 
-`nf repo reset` is destructive for the local workbench only:
+`nf repo reset` is destructive for the local runtime only:
 
 * run Docker Compose down with volumes removed
-* recreate the workbench
+* recreate the runtime
 * reinstall WordPress if missing
 * ensure the mounted theme is active
 
-Workbench-generated files should stay under `~/.config/nf/workbenches/<project-slug>/`.
+Runtime-generated files should stay under `~/.config/nf/runtimes/<project-slug>/`.
 
-Do not write generated workbench scaffolding into project repos unless the user explicitly changes that design.
+Do not write generated runtime scaffolding into project repos unless the user explicitly changes that design.
 
 ## Theme packaging behavior
 
@@ -290,7 +292,7 @@ Project repos should track:
 
 * project slug/type
 * WordPress/theme structure
-* workbench intent
+* runtime intent
 * build/artifact recipe
 * deploy aliases
 * repo-local commands
@@ -466,7 +468,7 @@ Do not commit:
 * `.direnv`
 * build outputs
 * local state
-* workbench runtime files
+* runtime files
 * temporary artifacts
 
 Keep examples neutral and fictional.
