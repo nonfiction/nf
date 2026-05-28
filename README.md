@@ -2,7 +2,7 @@
 
 `nf` is nonfiction’s internal CLI for agency WordPress theme work.
 
-It gives the team one command surface for project metadata, local WordPress runtimes, repo-local build/test commands, theme packaging, shared server/site state, password derivation, and guarded infrastructure operations.
+It gives the team one command surface for project metadata, local WordPress runtimes, repo tasks, theme packaging, shared server/site state, password derivation, and guarded infrastructure operations.
 
 This is an internal agency tool, not a general-purpose public WordPress framework.
 
@@ -11,12 +11,17 @@ This is an internal agency tool, not a general-purpose public WordPress framewor
 Working now:
 
 * `nf repo init`
-* `nf repo commands`
-* `nf repo up`
-* `nf repo down`
-* `nf repo logs`
-* `nf repo reset`
-* `nf repo wp`
+* `nf repo tasks`
+* `nf runtime up`
+* `nf runtime down`
+* `nf runtime logs`
+* `nf runtime reset`
+* `nf runtime wp`
+* `nf up`
+* `nf down`
+* `nf logs`
+* `nf reset`
+* `nf wp`
 * `nf repo package`
 * `nf server list`
 * `nf server show`
@@ -88,14 +93,15 @@ nf
 
 Commands:
   server        provision, list, show, delete servers
-  site          list, show, future install/delete/deploy/sync
-  repo          init repo metadata and manage runtime
+  site          list, show, deploy/sync remote sites
+  runtime       manage the local WordPress runtime
+  repo          init metadata, package artifacts, run repo tasks
   config        init local config
   password      derive passwords
   help          show help
 ```
 
-Inside a project repository, `nf repo` also exposes runtime commands and repo-local aliases from `.nf/project.json`.
+Inside a project repository, `nf runtime` manages the local WordPress runtime and `nf repo tasks` lists project tasks from `.nf/project.json`.
 
 ## Repo workflow
 
@@ -105,7 +111,7 @@ Project repositories use:
 .nf/project.json
 ```
 
-This file is safe to commit. It describes project intent, theme paths, local runtime behavior, artifact naming, deploy aliases, and repo-local commands.
+This file is safe to commit. It describes project intent, theme paths, local runtime behavior, artifact naming, deploy targets, and repo tasks.
 
 It must not contain secrets, API tokens, SSH keys, live database passwords, or mutable infrastructure state.
 
@@ -167,13 +173,13 @@ Example `.nf/project.json`:
     ]
   },
   "deploy": {
-    "aliases": {
+    "targets": {
       "app1": "client-app1-production",
       "staging": "client-kinsta-staging",
       "production": "client-kinsta-production"
     }
   },
-  "commands": {
+  "tasks": {
     "composer": {
       "description": "Update theme Composer dependencies",
       "run": "composer --working-dir=theme update && composer --working-dir=theme dump-autoload -o"
@@ -198,33 +204,28 @@ Example `.nf/project.json`:
 }
 ```
 
-## Repo commands
+## Repo tasks
 
 ```sh
 nf repo init
-nf repo commands
-nf repo up
-nf repo down
-nf repo logs
-nf repo reset
-nf repo wp -- <wp-cli args>
+nf repo tasks
 nf repo package [--dry-run] [--source path] [--output path]
-nf repo <alias>
+nf repo <task>
 ```
 
-`nf repo commands` lists built-in runtime commands plus custom project aliases.
+`nf repo tasks` lists custom project tasks from `.nf/project.json`.
 
-`nf repo <alias>` runs a command defined in `.nf/project.json`.
+`nf repo <task>` runs a task defined in `.nf/project.json`.
 
-String commands run through the shell from the project root. Array commands execute directly. The underlying command is printed before execution.
+String tasks run through the shell from the project root. Array tasks execute directly. The underlying command is printed before execution.
 
 Examples:
 
 ```sh
-nf repo commands
+nf repo tasks
 nf repo build
 nf repo test
-nf repo wp -- plugin list
+nf runtime wp -- plugin list
 ```
 
 ## Local WordPress runtime
@@ -265,24 +266,26 @@ Default Docker Compose project name:
 nf_client_runtime
 ```
 
-Common workflow:
+Common runtime workflow:
 
 ```sh
-nf repo up
-nf repo logs
-nf repo wp -- plugin list
-nf repo down
+nf runtime up
+nf runtime logs
+nf runtime wp -- plugin list
+nf runtime down
 ```
+
+The top-level shortcuts `nf up`, `nf down`, `nf logs`, `nf reset`, and `nf wp` behave the same as `nf runtime ...`.
 
 Reset the local runtime:
 
 ```sh
-nf repo reset
+nf runtime reset
 ```
 
-`nf repo up` is idempotent. It starts Docker Compose, installs WordPress if needed, and ensures the mounted theme is active.
+`nf runtime up` is idempotent. It starts Docker Compose, installs WordPress if needed, and ensures the mounted theme is active.
 
-`nf repo reset` runs a volume-destroying reset and recreates the same managed runtime state.
+`nf runtime reset` runs a volume-destroying reset and recreates the same managed runtime state.
 
 ## Theme packaging
 
@@ -327,7 +330,7 @@ If neither exists, packaging fails clearly.
 
 Packaging only zips the existing theme files. It does not run Composer, npm, or asset builds first.
 
-Run the appropriate repo-local alias before packaging:
+Run the appropriate repo task before packaging:
 
 ```sh
 nf repo build
@@ -497,7 +500,7 @@ nf site show [id-or-name]
 
 `nf site show` prints the matching site record as JSON. Without an identifier, interactive mode opens a selector.
 
-When run inside a project repository, `nf site show` can resolve deploy aliases from `.nf/project.json`.
+When run inside a project repository, `nf site show` can resolve deploy targets from `.nf/project.json`.
 
 For example:
 
@@ -510,7 +513,7 @@ may resolve through:
 ```json
 {
   "deploy": {
-    "aliases": {
+    "targets": {
       "production": "client-kinsta-production"
     }
   }

@@ -8,6 +8,7 @@
 * Main command groups are:
   * `nf server ...`
   * `nf site ...`
+  * `nf runtime ...`
   * `nf repo ...`
   * `nf config ...`
   * `nf password ...`
@@ -16,17 +17,22 @@
 
 ## Command surface
 
-The current repo command surface is intentionally small:
+The current project command surface is intentionally small:
 
 * `nf repo init`
-* `nf repo commands`
+* `nf repo tasks`
 * `nf repo package`
-* `nf repo up`
-* `nf repo down`
-* `nf repo logs`
-* `nf repo reset`
-* `nf repo wp`
-* direct repo-local aliases from `.nf/project.json`
+* `nf runtime up`
+* `nf runtime down`
+* `nf runtime logs`
+* `nf runtime reset`
+* `nf runtime wp`
+* `nf up`
+* `nf down`
+* `nf logs`
+* `nf reset`
+* `nf wp`
+* direct repo tasks from `.nf/project.json`
 
 Do not re-add public routes such as:
 
@@ -169,12 +175,12 @@ Required/expected environment values:
 
 ## Repo-context behavior
 
-`nf repo ...` commands are the only local project command surface.
+`nf runtime ...` and `nf repo ...` commands are the local project command surface.
 
-Repo-local aliases come from:
+Repo tasks come from:
 
 ```text
-.nf/project.json commands
+.nf/project.json tasks
 ```
 
 They execute from the project root.
@@ -193,13 +199,13 @@ Generated metadata should default these values to `theme` unless an explicit ove
 * `wordpress.theme_slug`
 * `runtime.theme_mount_slug`
 
-String commands run through:
+String tasks run through:
 
 ```sh
 sh -lc
 ```
 
-Array commands execute directly as argv.
+Array tasks execute directly as argv.
 
 Passthrough args follow `--`.
 
@@ -239,14 +245,14 @@ Current built-ins:
 * `reset`
 * `wp`
 
-`nf repo up` should be idempotent:
+`nf runtime up` should be idempotent:
 
 * ensure the managed runtime exists
 * start Docker Compose
 * install WordPress if missing
 * ensure the mounted theme is active
 
-`nf repo reset` is destructive for the local runtime only:
+`nf runtime reset` is destructive for the local runtime only:
 
 * run Docker Compose down with volumes removed
 * recreate the runtime
@@ -277,7 +283,7 @@ It should not:
 * install dependencies
 * deploy the artifact
 
-Build/test/prep steps belong in repo-local aliases such as:
+Build/test/prep steps belong in repo tasks such as:
 
 * `nf repo build`
 * `nf repo test`
@@ -294,8 +300,8 @@ Project repos should track:
 * WordPress/theme structure
 * runtime intent
 * build/artifact recipe
-* deploy aliases
-* repo-local commands
+* deploy targets
+* repo tasks
 
 Shared state should track:
 
@@ -316,14 +322,14 @@ Shared state should track:
 
 When no identifier is supplied in interactive mode, `server show`, `site show`, and `server delete` should prefer selectors over forcing positional arguments.
 
-`nf site show` may resolve deploy aliases from `.nf/project.json`.
+`nf site show` may resolve deploy targets from `.nf/project.json`.
 
-Example placeholder alias shape:
+Example placeholder target alias shape:
 
 ```json
 {
   "deploy": {
-    "aliases": {
+    "targets": {
       "app1": "client-app1-production",
       "staging": "client-kinsta-staging",
       "production": "client-kinsta-production"
