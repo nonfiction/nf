@@ -242,27 +242,6 @@ func serverMatchesRecord(record, server map[string]any) bool {
 	return recordMatchesAnyValue(record, []string{"id", "linode_id", "_state_key", "name", "slug", "hostname", "label"}, serverIdentityValues(server))
 }
 
-func serverSummary(server map[string]any) string {
-	name := firstRecordString(server, "name", "slug", "_state_key", "hostname", "label")
-	id := firstRecordString(server, "id", "linode_id")
-	provider := recordValueString(server["provider"])
-	parts := make([]string, 0, 3)
-	if name != "" {
-		parts = append(parts, name)
-	}
-	if id != "" {
-		parts = append(parts, "id "+id)
-	}
-	if provider != "" && provider != "<nil>" {
-		parts = append(parts, provider)
-	}
-	return strings.Join(parts, " / ")
-}
-
-func siteSummary(site map[string]any) string {
-	return firstRecordString(site, "hostname", "name", "slug", "label", "server_name", "_state_key")
-}
-
 func linodeTokenEnv() (string, error) {
 	if token := envwizard.Value("LINODE_CLI_TOKEN"); token != "" {
 		return token, nil
@@ -678,32 +657,15 @@ func cmdList(kind string) int {
 		fmt.Fprintln(os.Stderr, err)
 		return 1
 	}
-	var records []map[string]any
 	switch kind {
 	case "servers":
-		records = bundle.Servers
+		return cmdListServers(bundle.Servers)
 	case "sites":
-		records = bundle.Sites
+		return cmdListSites(bundle.Sites, bundle.Servers)
 	default:
 		fmt.Fprintln(os.Stderr, "unsupported list kind")
 		return 1
 	}
-	if len(records) == 0 {
-		fmt.Printf("No %s found.\n", kind)
-		return 0
-	}
-	rows := [][]string{{"id", "name", "provider", "hostname", "status"}}
-	for _, record := range records {
-		rows = append(rows, []string{
-			firstRecordString(record, "id", "_state_key"),
-			firstRecordString(record, "name", "slug"),
-			recordValueString(record["provider"]),
-			firstRecordString(record, "hostname", "site_url"),
-			recordValueString(record["status"]),
-		})
-	}
-	fmt.Println(formatTable(rows))
-	return 0
 }
 
 func firstRecordValue(record map[string]any, keys ...string) any {
@@ -719,28 +681,287 @@ func firstRecordString(record map[string]any, keys ...string) string {
 	return recordValueString(firstRecordValue(record, keys...))
 }
 
-func cmdShow(kind, needle string) int {
+func mapValueAtPath(value any, keys ...string) any {
+	current := value
+	for _, key := range keys {
+		m, ok := current.(map[string]any)
+		if !ok {
+			return nil
+		}
+		next, ok := m[key]
+		if !ok {
+			return nil
+		}
+		current = next
+	}
+	return current
+}
+
+func mapStringAtPath(value any, keys ...string) string {
+	return recordValueString(mapValueAtPath(value, keys...))
+}
+
+func mapMapAtPath(value any, keys ...string) map[string]any {
+	nested, _ := mapValueAtPath(value, keys...).(map[string]any)
+	return nested
+}
+
+func cloneRecord(src map[string]any) map[string]any {
+	out := make(map[string]any, len(src))
+	for key, value := range src {
+		out[key] = value
+	}
+	return out
+}
+
+func serverSSHHost(server map[string]any) string {
+	sshHost := mapStringAtPath(server, "ssh", "host")
+	if sshHost != "" {
+		return sshHost
+	}
+	return firstRecordString(server, "ssh_host")
+}
+
+func serverSSHUser(server map[string]any) string {
+	sshUser := mapStringAtPath(server, "ssh", "user")
+	if sshUser != "" {
+		return sshUser
+	}
+	return firstRecordString(server, "ssh_user", "ssh_username")
+}
+
+func serverSummary(server map[string]any) string {
+	name := firstRecordString(server, "name", "slug", "_state_key", "hostname", "label")
+	id := firstRecordString(server, "id", "linode_id")
+	provider := recordValueString(server["provider"])
+	sshHost := serverSSHHost(server)
+	parts := make([]string, 0, 4)
+	if name != "" {
+		parts = append(parts, name)
+	}
+	if id != "" {
+		parts = append(parts, "id "+id)
+	}
+	if provider != "" && provider != "<nil>" {
+		parts = append(parts, provider)
+	}
+	if sshHost != "" {
+		if sshUser := serverSSHUser(server); sshUser != "" {
+			parts = append(parts, "ssh "+sshUser+"@"+sshHost)
+		} else {
+			parts = append(parts, "ssh "+sshHost)
+		}
+	}
+	return strings.Join(parts, " / ")
+}
+
+func siteSummary(site map[string]any) string {
+	return firstRecordString(site, "_state_key", "hostname", "name", "slug", "label", "server_name")
+}
+
+func siteTargetName(site map[string]any) string {
+	return firstRecordString(site, "_state_key", "target_name", "target", "hostname", "name", "slug", "label")
+}
+
+func siteServerReference(site map[string]any) string {
+	return firstRecordString(site, "server", "server_id", "server_name", "server_hostname", "server_label")
+}
+
+func siteServerSummary(site, server map[string]any) string {
+	if server != nil {
+		return serverSummary(server)
+	}
+	return siteServerReference(site)
+}
+
+func siteKinstaID(site map[string]any, key string) string {
+	if value := mapStringAtPath(site, "kinsta", key); value != "" {
+		return value
+	}
+	return firstRecordString(site, "kinsta_"+key, key)
+}
+
+func projectDeployAlias(metadata map[string]any, alias string) (string, bool, error) {
+	deploy := mapMapAtPath(metadata, "deploy")
+	if deploy == nil {
+		return "", false, nil
+	}
+	aliases := mapMapAtPath(deploy, "aliases")
+	if aliases == nil {
+		return "", false, nil
+	}
+	value, ok := aliases[alias]
+	if !ok {
+		return "", false, nil
+	}
+	resolved, ok := value.(string)
+	if !ok || strings.TrimSpace(resolved) == "" {
+		return "", false, ProjectError{Msg: fmt.Sprintf(".nf/project.json deploy.aliases.%s must be a string target name", alias)}
+	}
+	return strings.TrimSpace(resolved), true, nil
+}
+
+func resolveSiteTarget(requested string) (string, map[string]any, bool, bool, error) {
+	resolved := strings.TrimSpace(requested)
+	if resolved == "" {
+		return "", nil, false, false, ProjectError{Msg: "site show requires a target or alias"}
+	}
+	root, ok := currentGitRoot()
+	if !ok {
+		return resolved, nil, false, false, nil
+	}
+	projectFile := config.ProjectFile(root)
+	projectFileExists := false
+	if _, err := os.Stat(projectFile); err == nil {
+		projectFileExists = true
+	}
+	metadata, err := loadProjectMetadataOrError(root)
+	if err != nil {
+		return "", nil, false, false, err
+	}
+	if aliasTarget, aliasFound, err := projectDeployAlias(metadata, resolved); err != nil {
+		return "", nil, false, false, err
+	} else if aliasFound {
+		return aliasTarget, metadata, projectFileExists, true, nil
+	}
+	return resolved, metadata, projectFileExists, false, nil
+}
+
+func validateServerRecord(server map[string]any) error {
+	if strings.TrimSpace(recordValueString(server["provider"])) == "" {
+		return ProjectError{Msg: fmt.Sprintf("Server %q is missing provider.", serverSummary(server))}
+	}
+	return nil
+}
+
+func validateSiteRecord(site map[string]any) error {
+	provider := strings.ToLower(strings.TrimSpace(recordValueString(site["provider"])))
+	if provider == "" {
+		return ProjectError{Msg: fmt.Sprintf("Site %q is missing provider.", siteSummary(site))}
+	}
+	if provider == "linode" && siteServerReference(site) == "" {
+		return ProjectError{Msg: fmt.Sprintf("Linode site %q is missing a server reference.", siteSummary(site))}
+	}
+	return nil
+}
+
+func cmdListServers(records []map[string]any) int {
+	if len(records) == 0 {
+		fmt.Println("No servers found.")
+		return 0
+	}
+	rows := [][]string{{"target", "provider", "hostname", "ssh host", "status"}}
+	for _, record := range records {
+		rows = append(rows, []string{
+			firstRecordString(record, "_state_key", "target_name", "target", "name", "slug", "hostname", "label", "id"),
+			recordValueString(record["provider"]),
+			firstRecordString(record, "hostname", "host", "public_ipv4", "ip"),
+			serverSSHHost(record),
+			recordValueString(record["status"]),
+		})
+	}
+	fmt.Println(formatTable(rows))
+	return 0
+}
+
+func cmdListSites(records, servers []map[string]any) int {
+	if len(records) == 0 {
+		fmt.Println("No sites found.")
+		return 0
+	}
+	rows := [][]string{{"target", "provider", "environment", "url", "branch", "server"}}
+	for _, record := range records {
+		rows = append(rows, []string{
+			siteTargetName(record),
+			recordValueString(record["provider"]),
+			firstRecordString(record, "environment", "environment_name", "env"),
+			firstRecordString(record, "url", "site_url", "home_url", "hostname"),
+			firstRecordString(record, "branch", "git_branch"),
+			siteServerSummary(record, state.MatchingRecord(servers, siteServerReference(record))),
+		})
+	}
+	fmt.Println(formatTable(rows))
+	return 0
+}
+
+func cmdShowServer(needle string) int {
 	bundle, err := state.LoadStateBundle()
 	if err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		return 1
 	}
-	var records []map[string]any
-	switch kind {
-	case "server":
-		records = bundle.Servers
-	case "site":
-		records = bundle.Sites
-	default:
-		fmt.Fprintln(os.Stderr, "unsupported show kind")
+	record := state.MatchingRecord(bundle.Servers, needle)
+	if record == nil {
+		fmt.Fprintf(os.Stderr, "No server matched %q.\n", needle)
 		return 1
 	}
-	record := state.MatchingRecord(records, needle)
-	if record == nil {
-		fmt.Fprintf(os.Stderr, "No %s matched %q.\n", kind, needle)
+	if err := validateServerRecord(record); err != nil {
+		fmt.Fprintln(os.Stderr, err)
 		return 1
 	}
 	data, _ := json.MarshalIndent(record, "", "  ")
+	fmt.Println(string(data))
+	return 0
+}
+
+func cmdShowSite(needle string) int {
+	resolved, _, projectFileExists, aliasUsed, err := resolveSiteTarget(needle)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		return 1
+	}
+	bundle, err := state.LoadStateBundle()
+	if err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		return 1
+	}
+	record := state.MatchingRecord(bundle.Sites, resolved)
+	if record == nil {
+		if aliasUsed {
+			fmt.Fprintf(os.Stderr, "deploy.aliases.%s resolves to %q, but no site target matched that name.\n", needle, resolved)
+			return 1
+		}
+		if projectFileExists {
+			fmt.Fprintf(os.Stderr, "No site matched %q. Add deploy.aliases.%s in .nf/project.json or create a site target with that name.\n", needle, needle)
+			return 1
+		}
+		fmt.Fprintf(os.Stderr, "No site matched %q.\n", needle)
+		return 1
+	}
+	if err := validateSiteRecord(record); err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		return 1
+	}
+	provider := strings.ToLower(strings.TrimSpace(recordValueString(record["provider"])))
+	out := cloneRecord(record)
+	out["requested_target"] = needle
+	out["resolved_target"] = resolved
+	if provider == "linode" {
+		serverRef := siteServerReference(record)
+		server := state.MatchingRecord(bundle.Servers, serverRef)
+		if server == nil {
+			fmt.Fprintf(os.Stderr, "Linode site %q references server %q, but no server matched that target.\n", siteSummary(record), serverRef)
+			return 1
+		}
+		if err := validateServerRecord(server); err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			return 1
+		}
+		out["resolved_server_summary"] = serverSummary(server)
+		out["resolved_server"] = server
+	}
+	if provider == "kinsta" {
+		if value := siteKinstaID(record, "company_id"); value != "" {
+			out["kinsta_company_id"] = value
+		}
+		if value := siteKinstaID(record, "site_id"); value != "" {
+			out["kinsta_site_id"] = value
+		}
+		if value := siteKinstaID(record, "environment_id"); value != "" {
+			out["kinsta_environment_id"] = value
+		}
+	}
+	data, _ := json.MarshalIndent(out, "", "  ")
 	fmt.Println(string(data))
 	return 0
 }
@@ -751,14 +972,34 @@ func cmdProjectInit(args projectInitArgs) int {
 		fmt.Fprintln(os.Stderr, err)
 		return 1
 	}
+	themePath := firstNonEmpty(args.themeSource, "theme")
+	themeSlug := firstNonEmpty(args.themeSlug, args.projectSlug)
+	projectName := firstNonEmpty(args.projectName, slugToTitle(args.projectSlug))
+	projectSlug := args.projectSlug
 	metadata := map[string]any{
-		"project_slug":        args.projectSlug,
-		"project_name":        firstNonEmpty(args.projectName, slugToTitle(args.projectSlug)),
-		"theme_slug":          firstNonEmpty(args.themeSlug, args.projectSlug),
-		"theme_source":        firstNonEmpty(args.themeSource, "theme"),
-		"local_workbench_url": firstNonEmpty(args.localWorkbenchURL, "http://localhost:18181"),
-		"default_provider":    firstNonEmpty(args.defaultProvider, "linode"),
-		"commands":            defaultProjectCommands(),
+		"schema": 1,
+		"project": map[string]any{
+			"slug": projectSlug,
+			"name": projectName,
+			"type": "wordpress-theme",
+		},
+		"wordpress": map[string]any{
+			"deploy_unit": "theme",
+			"theme_slug":  themeSlug,
+			"theme_path":  themePath,
+		},
+		"build": map[string]any{
+			"commands": []any{"composer install", "npm run build"},
+		},
+		"artifact": map[string]any{
+			"path":    filepath.ToSlash(filepath.Join("dist", themeSlug+".zip")),
+			"include": []any{"vendor/", "assets/dist/"},
+			"exclude": []any{"node_modules/", ".git/"},
+		},
+		"deploy": map[string]any{
+			"aliases": map[string]any{},
+		},
+		"commands": defaultProjectCommands(),
 	}
 	projectPath := filepath.Join(root, ".nf", "project.json")
 	if _, err := os.Stat(projectPath); err == nil && !args.force {
@@ -779,13 +1020,11 @@ func cmdProjectInit(args projectInitArgs) int {
 }
 
 type projectInitArgs struct {
-	projectSlug       string
-	projectName       string
-	themeSlug         string
-	themeSource       string
-	localWorkbenchURL string
-	defaultProvider   string
-	force             bool
+	projectSlug string
+	projectName string
+	themeSlug   string
+	themeSource string
+	force       bool
 }
 
 func cmdPasswordDerive(slug, purpose string, nonInteractive bool) int {
@@ -817,22 +1056,22 @@ func cmdPackage(commandName, source, output string, dryRun bool) int {
 		return 1
 	}
 	if source == "" {
-		if v, ok := metadata["theme_source"].(string); ok && strings.TrimSpace(v) != "" {
-			source = v
-		} else {
-			source = "theme"
-		}
+		source = firstNonEmpty(mapStringAtPath(metadata, "wordpress", "theme_path"), "theme")
 	}
 	sourceDir := source
 	if !filepath.IsAbs(sourceDir) {
 		sourceDir = filepath.Join(root, sourceDir)
 	}
-	themeSlug := filepath.Base(sourceDir)
-	if v, ok := metadata["theme_slug"].(string); ok && strings.TrimSpace(v) != "" {
-		themeSlug = v
-	}
+	themeSlug := firstNonEmpty(mapStringAtPath(metadata, "wordpress", "theme_slug"), "theme")
 	if output == "" {
-		output = filepath.Join(root, "dist", themeSlug+".zip")
+		if artifact := mapStringAtPath(metadata, "artifact", "path"); artifact != "" {
+			output = artifact
+			if !filepath.IsAbs(output) {
+				output = filepath.Join(root, output)
+			}
+		} else {
+			output = filepath.Join(root, "dist", themeSlug+".zip")
+		}
 	} else if !filepath.IsAbs(output) {
 		if strings.HasSuffix(strings.ToLower(output), ".zip") {
 			output = filepath.Join(root, output)
@@ -1062,8 +1301,6 @@ func runRepo(argv []string) int {
 		projectName := fs.String("project-name", "", "")
 		themeSlug := fs.String("theme-slug", "", "")
 		themeSource := fs.String("theme-source", "", "")
-		localWorkbenchURL := fs.String("local-workbench-url", "http://localhost:18181", "")
-		defaultProvider := fs.String("default-provider", "linode", "")
 		force := fs.Bool("force", false, "")
 		fs.SetOutput(os.Stderr)
 		if err := fs.Parse(argv[1:]); err != nil {
@@ -1073,7 +1310,7 @@ func runRepo(argv []string) int {
 			fmt.Fprintln(os.Stderr, "--project-slug is required")
 			return 1
 		}
-		return cmdProjectInit(projectInitArgs{*projectSlug, *projectName, *themeSlug, *themeSource, *localWorkbenchURL, *defaultProvider, *force})
+		return cmdProjectInit(projectInitArgs{projectSlug: *projectSlug, projectName: *projectName, themeSlug: *themeSlug, themeSource: *themeSource, force: *force})
 	}
 	if argv[0] == "package" {
 		if err := requireProjectContext("repo package"); err != nil {
@@ -1185,7 +1422,7 @@ func runServer(argv []string) int {
 			}
 			needle = selected
 		}
-		return cmdShow("server", needle)
+		return cmdShowServer(needle)
 	case "delete":
 		needle, opts, err := parseDeleteServerArgs(argv[1:])
 		if err != nil {
@@ -1238,7 +1475,7 @@ func runSite(argv []string) int {
 			}
 			needle = selected
 		}
-		return cmdShow("site", needle)
+		return cmdShowSite(needle)
 	case "install", "delete", "deploy", "push", "pull":
 		fmt.Fprintf(os.Stderr, "site %s is not implemented yet\n", argv[0])
 		return 1

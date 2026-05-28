@@ -247,6 +247,282 @@ func TestRunServerDeleteAcceptsFlagsAfterIdentifier(t *testing.T) {
 	}
 }
 
+func TestRunSiteShowResolvesAliasAndIncludesServerSummary(t *testing.T) {
+	configHome := t.TempDir()
+	stateDir := filepath.Join(configHome, "state")
+	if err := os.MkdirAll(stateDir, 0o755); err != nil {
+		t.Fatalf("MkdirAll() error = %v", err)
+	}
+	servers := map[string]any{
+		"servers": map[string]any{
+			"app1": map[string]any{"id": 98222343, "name": "app1", "provider": "linode", "hostname": "app1.nfweb.dev", "ssh": map[string]any{"user": "nonfiction", "host": "app1.nfweb.dev"}},
+		},
+	}
+	serverData, err := json.MarshalIndent(servers, "", "  ")
+	if err != nil {
+		t.Fatalf("MarshalIndent() error = %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(stateDir, "servers.json"), append(serverData, '\n'), 0o644); err != nil {
+		t.Fatalf("WriteFile() error = %v", err)
+	}
+	sites := map[string]any{
+		"sites": map[string]any{
+			"sanjel-app1-production": map[string]any{"provider": "linode", "server": "app1", "hostname": "sanjel.app1.nfweb.dev", "url": "https://sanjel.app1.nfweb.dev/", "branch": "main", "environment": "production"},
+		},
+	}
+	siteData, err := json.MarshalIndent(sites, "", "  ")
+	if err != nil {
+		t.Fatalf("MarshalIndent() error = %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(stateDir, "sites.json"), append(siteData, '\n'), 0o644); err != nil {
+		t.Fatalf("WriteFile() error = %v", err)
+	}
+
+	workdir := t.TempDir()
+	if err := os.Mkdir(filepath.Join(workdir, ".git"), 0o755); err != nil {
+		t.Fatalf("Mkdir() error = %v", err)
+	}
+	project := map[string]any{
+		"schema":    1,
+		"project":   map[string]any{"slug": "sanjel", "name": "Sanjel", "type": "wordpress-theme"},
+		"wordpress": map[string]any{"deploy_unit": "theme", "theme_slug": "sanjel", "theme_path": "theme"},
+		"build":     map[string]any{"commands": []any{"composer install", "npm run build"}},
+		"artifact":  map[string]any{"include": []any{"vendor/", "assets/dist/"}, "exclude": []any{"node_modules/", ".git/"}},
+		"deploy":    map[string]any{"aliases": map[string]any{"app1": "sanjel-app1-production", "production": "sanjel-app1-production", "staging": "sanjel-app1-staging"}},
+	}
+	projectData, err := json.MarshalIndent(project, "", "  ")
+	if err != nil {
+		t.Fatalf("MarshalIndent() error = %v", err)
+	}
+	if err := os.MkdirAll(filepath.Join(workdir, ".nf"), 0o755); err != nil {
+		t.Fatalf("MkdirAll() error = %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(workdir, ".nf", "project.json"), append(projectData, '\n'), 0o644); err != nil {
+		t.Fatalf("WriteFile() error = %v", err)
+	}
+
+	oldConfigHome := os.Getenv("NF_CONFIG_HOME")
+	if err := os.Setenv("NF_CONFIG_HOME", configHome); err != nil {
+		t.Fatalf("Setenv() error = %v", err)
+	}
+	oldwd, err := os.Getwd()
+	if err != nil {
+		t.Fatalf("Getwd() error = %v", err)
+	}
+	if err := os.Chdir(workdir); err != nil {
+		t.Fatalf("Chdir() error = %v", err)
+	}
+	t.Cleanup(func() {
+		_ = os.Setenv("NF_CONFIG_HOME", oldConfigHome)
+		_ = os.Chdir(oldwd)
+	})
+
+	output := captureStdout(t, func() {
+		if got := Run([]string{"site", "show", "app1"}); got != 0 {
+			t.Fatalf("Run() = %d, want 0", got)
+		}
+	})
+	for _, wanted := range []string{`"requested_target": "app1"`, `"resolved_target": "sanjel-app1-production"`, `"resolved_server_summary": "app1 / id 98222343 / linode / ssh nonfiction@app1.nfweb.dev"`, `"url": "https://sanjel.app1.nfweb.dev/"`} {
+		if !strings.Contains(output, wanted) {
+			t.Fatalf("Run() output missing %q:\n%s", wanted, output)
+		}
+	}
+}
+
+func TestRunSiteShowUsesDirectTargetWithoutAlias(t *testing.T) {
+	configHome := t.TempDir()
+	stateDir := filepath.Join(configHome, "state")
+	if err := os.MkdirAll(stateDir, 0o755); err != nil {
+		t.Fatalf("MkdirAll() error = %v", err)
+	}
+	servers := map[string]any{"servers": map[string]any{"app1": map[string]any{"id": 98222343, "name": "app1", "provider": "linode", "ssh": map[string]any{"user": "nonfiction", "host": "app1.nfweb.dev"}}}}
+	serverData, err := json.MarshalIndent(servers, "", "  ")
+	if err != nil {
+		t.Fatalf("MarshalIndent() error = %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(stateDir, "servers.json"), append(serverData, '\n'), 0o644); err != nil {
+		t.Fatalf("WriteFile() error = %v", err)
+	}
+	sites := map[string]any{"sites": map[string]any{"sanjel-app1-production": map[string]any{"provider": "linode", "server": "app1", "hostname": "sanjel.app1.nfweb.dev", "branch": "main"}}}
+	siteData, err := json.MarshalIndent(sites, "", "  ")
+	if err != nil {
+		t.Fatalf("MarshalIndent() error = %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(stateDir, "sites.json"), append(siteData, '\n'), 0o644); err != nil {
+		t.Fatalf("WriteFile() error = %v", err)
+	}
+
+	workdir := t.TempDir()
+	if err := os.Mkdir(filepath.Join(workdir, ".git"), 0o755); err != nil {
+		t.Fatalf("Mkdir() error = %v", err)
+	}
+	project := map[string]any{"schema": 1, "project": map[string]any{"slug": "sanjel"}, "deploy": map[string]any{"aliases": map[string]any{"app1": "sanjel-app1-production"}}}
+	projectData, err := json.MarshalIndent(project, "", "  ")
+	if err != nil {
+		t.Fatalf("MarshalIndent() error = %v", err)
+	}
+	if err := os.MkdirAll(filepath.Join(workdir, ".nf"), 0o755); err != nil {
+		t.Fatalf("MkdirAll() error = %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(workdir, ".nf", "project.json"), append(projectData, '\n'), 0o644); err != nil {
+		t.Fatalf("WriteFile() error = %v", err)
+	}
+
+	oldConfigHome := os.Getenv("NF_CONFIG_HOME")
+	if err := os.Setenv("NF_CONFIG_HOME", configHome); err != nil {
+		t.Fatalf("Setenv() error = %v", err)
+	}
+	oldwd, err := os.Getwd()
+	if err != nil {
+		t.Fatalf("Getwd() error = %v", err)
+	}
+	if err := os.Chdir(workdir); err != nil {
+		t.Fatalf("Chdir() error = %v", err)
+	}
+	t.Cleanup(func() {
+		_ = os.Setenv("NF_CONFIG_HOME", oldConfigHome)
+		_ = os.Chdir(oldwd)
+	})
+
+	output := captureStdout(t, func() {
+		if got := Run([]string{"site", "show", "sanjel-app1-production"}); got != 0 {
+			t.Fatalf("Run() = %d, want 0", got)
+		}
+	})
+	for _, wanted := range []string{`"requested_target": "sanjel-app1-production"`, `"resolved_target": "sanjel-app1-production"`, `"server": "app1"`} {
+		if !strings.Contains(output, wanted) {
+			t.Fatalf("Run() output missing %q:\n%s", wanted, output)
+		}
+	}
+}
+
+func TestRunRepoInitWritesPortableMetadataShape(t *testing.T) {
+	workdir := t.TempDir()
+	oldwd, err := os.Getwd()
+	if err != nil {
+		t.Fatalf("Getwd() error = %v", err)
+	}
+	if err := os.Chdir(workdir); err != nil {
+		t.Fatalf("Chdir() error = %v", err)
+	}
+	t.Cleanup(func() { _ = os.Chdir(oldwd) })
+
+	if got := Run([]string{"repo", "init", "--project-slug", "sanjel", "--force"}); got != 0 {
+		t.Fatalf("Run() = %d, want 0", got)
+	}
+	data, err := os.ReadFile(filepath.Join(workdir, ".nf", "project.json"))
+	if err != nil {
+		t.Fatalf("ReadFile() error = %v", err)
+	}
+	var metadata map[string]any
+	if err := json.Unmarshal(data, &metadata); err != nil {
+		t.Fatalf("Unmarshal() error = %v", err)
+	}
+	if metadata["schema"] != float64(1) {
+		t.Fatalf("schema = %v, want 1", metadata["schema"])
+	}
+	if project, ok := metadata["project"].(map[string]any); !ok || project["slug"] != "sanjel" {
+		t.Fatalf("project block = %#v, want slug sanjel", metadata["project"])
+	}
+	if wordpress, ok := metadata["wordpress"].(map[string]any); !ok || wordpress["theme_path"] != "theme" {
+		t.Fatalf("wordpress block = %#v, want theme_path theme", metadata["wordpress"])
+	}
+	if build, ok := metadata["build"].(map[string]any); !ok {
+		t.Fatalf("build block = %#v, want commands list", metadata["build"])
+	} else if commands, ok := build["commands"].([]any); !ok || len(commands) != 2 {
+		t.Fatalf("build.commands = %#v, want two commands", build["commands"])
+	}
+	if artifact, ok := metadata["artifact"].(map[string]any); !ok || artifact["path"] != "dist/sanjel.zip" {
+		t.Fatalf("artifact block = %#v, want dist/sanjel.zip", metadata["artifact"])
+	} else if include, ok := artifact["include"].([]any); !ok || len(include) != 2 {
+		t.Fatalf("artifact.include = %#v, want include paths", artifact["include"])
+	} else if exclude, ok := artifact["exclude"].([]any); !ok || len(exclude) != 2 {
+		t.Fatalf("artifact.exclude = %#v, want exclude paths", artifact["exclude"])
+	}
+	if deploy, ok := metadata["deploy"].(map[string]any); !ok {
+		t.Fatalf("deploy block = %#v, want aliases map", metadata["deploy"])
+	} else if aliases, ok := deploy["aliases"].(map[string]any); !ok || len(aliases) != 0 {
+		t.Fatalf("deploy.aliases = %#v, want empty map", deploy["aliases"])
+	}
+	if commands, ok := metadata["commands"].(map[string]any); !ok || commands["composer"] == nil || commands["install-theme"] == nil {
+		t.Fatalf("commands block = %#v, want defaultProjectCommands output", metadata["commands"])
+	}
+	for _, legacy := range []string{"project_slug", "project_name", "theme_slug", "theme_source", "local_workbench_url", "default_provider"} {
+		if _, ok := metadata[legacy]; ok {
+			t.Fatalf("legacy field %q unexpectedly present: %#v", legacy, metadata[legacy])
+		}
+	}
+	if project, ok := metadata["project"].(map[string]any); !ok || project["type"] != "wordpress-theme" {
+		t.Fatalf("project block = %#v, want type wordpress-theme", metadata["project"])
+	}
+	if wordpress, ok := metadata["wordpress"].(map[string]any); !ok || wordpress["deploy_unit"] != "theme" {
+		t.Fatalf("wordpress block = %#v, want deploy_unit theme", metadata["wordpress"])
+	}
+	if build, ok := metadata["build"].(map[string]any); ok {
+		if _, exists := build["source"]; exists {
+			t.Fatalf("build.source unexpectedly present: %#v", metadata["build"])
+		}
+	}
+}
+
+func TestRunRepoPackageUsesNestedMetadataShape(t *testing.T) {
+	workdir := t.TempDir()
+	if err := os.Mkdir(filepath.Join(workdir, ".git"), 0o755); err != nil {
+		t.Fatalf("Mkdir() error = %v", err)
+	}
+	if err := os.MkdirAll(filepath.Join(workdir, "theme"), 0o755); err != nil {
+		t.Fatalf("MkdirAll() error = %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(workdir, "theme", "style.css"), []byte("/* demo */\n"), 0o644); err != nil {
+		t.Fatalf("WriteFile() error = %v", err)
+	}
+	if err := os.MkdirAll(filepath.Join(workdir, ".nf"), 0o755); err != nil {
+		t.Fatalf("MkdirAll() error = %v", err)
+	}
+	project := map[string]any{
+		"schema":       1,
+		"project":      map[string]any{"slug": "sanjel", "name": "Sanjel", "type": "wordpress-theme"},
+		"wordpress":    map[string]any{"deploy_unit": "theme", "theme_slug": "sanjel", "theme_path": "theme"},
+		"build":        map[string]any{"commands": []any{"composer install", "npm run build"}},
+		"artifact":     map[string]any{"path": "release/sanjel.zip", "include": []any{"vendor/", "assets/dist/"}, "exclude": []any{"node_modules/", ".git/"}},
+		"deploy":       map[string]any{"aliases": map[string]any{}},
+		"project_slug": "legacy-project",
+		"project_name": "Legacy Project",
+		"theme_slug":   "legacy-theme",
+		"theme_source": "legacy-theme",
+	}
+	projectData, err := json.MarshalIndent(project, "", "  ")
+	if err != nil {
+		t.Fatalf("MarshalIndent() error = %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(workdir, ".nf", "project.json"), append(projectData, '\n'), 0o644); err != nil {
+		t.Fatalf("WriteFile() error = %v", err)
+	}
+
+	oldwd, err := os.Getwd()
+	if err != nil {
+		t.Fatalf("Getwd() error = %v", err)
+	}
+	if err := os.Chdir(workdir); err != nil {
+		t.Fatalf("Chdir() error = %v", err)
+	}
+	t.Cleanup(func() { _ = os.Chdir(oldwd) })
+
+	output := captureStdout(t, func() {
+		if got := Run([]string{"repo", "package", "--dry-run"}); got != 0 {
+			t.Fatalf("Run() = %d, want 0", got)
+		}
+	})
+	if !strings.Contains(output, "Would package "+filepath.Join(workdir, "theme")+" -> "+filepath.Join(workdir, "release", "sanjel.zip")) {
+		t.Fatalf("Run() output = %q, want nested theme_path/theme_slug and artifact.path", output)
+	}
+	for _, unwanted := range []string{"legacy-theme", "legacy-project"} {
+		if strings.Contains(output, unwanted) {
+			t.Fatalf("Run() output unexpectedly contained %q: %s", unwanted, output)
+		}
+	}
+}
+
 func TestRunDeleteServerWithoutIDRequiresIDInNonInteractiveMode(t *testing.T) {
 	output := captureStderr(t, func() {
 		if got := Run([]string{"server", "delete", "--non-interactive"}); got != 1 {
