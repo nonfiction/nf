@@ -128,8 +128,10 @@ func inferProjectSlug(explicit string, metadata map[string]any, projectRoot stri
 	if v := strings.TrimSpace(explicit); v != "" {
 		return v
 	}
-	if v, ok := metadata["project_slug"].(string); ok && strings.TrimSpace(v) != "" {
-		return strings.TrimSpace(v)
+	if project, ok := metadata["project"].(map[string]any); ok {
+		if v, ok := project["slug"].(string); ok && strings.TrimSpace(v) != "" {
+			return strings.TrimSpace(v)
+		}
 	}
 	if strings.TrimSpace(projectRoot) != "" {
 		return filepath.Base(projectRoot)
@@ -142,8 +144,10 @@ func inferProjectSlug(explicit string, metadata map[string]any, projectRoot stri
 }
 
 func inferProjectName(metadata map[string]any, projectSlug string) string {
-	if v, ok := metadata["project_name"].(string); ok && strings.TrimSpace(v) != "" {
-		return strings.TrimSpace(v)
+	if project, ok := metadata["project"].(map[string]any); ok {
+		if v, ok := project["name"].(string); ok && strings.TrimSpace(v) != "" {
+			return strings.TrimSpace(v)
+		}
 	}
 	return slugToTitle(projectSlug)
 }

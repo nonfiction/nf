@@ -79,3 +79,17 @@ func TestBuildPlanInfersProjectDefaultsWithoutPrompting(t *testing.T) {
 		t.Fatalf("SiteDomain = %q, want %q", got, want)
 	}
 }
+
+func TestInferProjectMetadataIgnoresLegacyTopLevelFields(t *testing.T) {
+	metadata := map[string]any{
+		"project_slug": "legacy-project",
+		"project_name": "Legacy Project",
+	}
+	root := filepath.Join(t.TempDir(), "sanjel")
+	if got, want := inferProjectSlug("", metadata, root), filepath.Base(root); got != want {
+		t.Fatalf("inferProjectSlug() = %q, want %q", got, want)
+	}
+	if got, want := inferProjectName(metadata, "sanjel"), "Sanjel"; got != want {
+		t.Fatalf("inferProjectName() = %q, want %q", got, want)
+	}
+}
