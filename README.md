@@ -166,6 +166,14 @@ Example `.nf/project.json` for a Sanjel project:
     "theme_slug": "sanjel",
     "theme_path": "theme"
   },
+  "workbench": {
+    "path": "workbench",
+    "compose": "docker compose",
+    "wordpress_service": "wordpress",
+    "cli_service": "cli",
+    "theme_mount_slug": "theme",
+    "uploads_path": "uploads"
+  },
   "build": {
     "commands": [
       "composer install",
@@ -190,7 +198,28 @@ Example `.nf/project.json` for a Sanjel project:
       "production": "sanjel-kinsta-production"
     }
   },
-  "commands": {}
+  "commands": {
+    "composer": {
+      "description": "Update theme Composer dependencies",
+      "run": "composer --working-dir=theme update && composer --working-dir=theme dump-autoload -o"
+    },
+    "npm": {
+      "description": "Refresh theme development dependencies",
+      "run": "npm --prefix theme update --save-dev"
+    },
+    "build": {
+      "description": "Build the theme assets",
+      "run": "npm --prefix theme run build"
+    },
+    "watch": {
+      "description": "Watch theme assets during development",
+      "run": "npm --prefix theme start"
+    },
+    "test": {
+      "description": "Run the theme test suite",
+      "run": "composer --working-dir=theme test"
+    }
+  }
 }
 ```
 
@@ -203,16 +232,12 @@ Notes:
 - Site targets may use names like `sanjel-app1-production`, `sanjel-app1-staging`, or `app1`.
 - Kinsta targets can carry `kinsta.company_id`, `kinsta.site_id`, and `kinsta.environment_id` without SSH info.
 - The hostname `https://sanjel.app1.nfweb.dev/` is the sort of URL the shared site state should surface.
-- The generated default `commands` block uses direct project-local commands,
-  not project Makefiles. `nf` owns these workflows going forward.
+- `nf repo` workbench lifecycle commands come from `workbench` metadata.
+  The `commands` block is for custom repo-local aliases such as build/watch/test.
 - The default source layout assumes `theme/` for the theme and `workbench/`
   for the local compose environment.
-- Commands such as `install-theme` and `activate-theme` can be customized per
-  project if a repo wants named arguments instead of the default positional
-  form.
-
-The current CLI also reads an optional `commands` block from this file for
-local project command aliases and direct workbench wrappers.
+- Commands such as `install-theme` and `activate-theme` can still be customized
+  per project if a repo wants named arguments instead of the built-in defaults.
 
 ## Shared state examples
 
@@ -336,8 +361,9 @@ Non-interactive deletion remains dry-run unless explicitly run with
 
 `nf repo init` writes `.nf/project.json`, `nf repo package` writes a local zip
 artifact, and `nf server provision --execute --yes` can create a remote Linode
-and DNS records. Local repo commands are direct repo workflows owned by `nf`,
-not Makefile wrappers. They may mutate local repo or workbench files and
+and DNS records. Repo workbench lifecycle commands are built in from
+`workbench` metadata, while the `commands` block is reserved for custom
+repo-local aliases. They may mutate local repo or workbench files and
 containers when explicitly invoked. Deploy and sync workflows are still not
 implemented.
 
