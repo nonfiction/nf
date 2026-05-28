@@ -151,27 +151,46 @@ source.
 
 ## Project metadata example
 
-Example `.nf/project.json` for a client project:
+Example `.nf/project.json` for a Sanjel project:
 
 ```json
 {
-  "project_slug": "client",
-  "project_name": "Client",
-  "theme_slug": "theme",
-  "theme_source": "theme",
-  "local_workbench_url": "http://localhost:18181",
-  "default_provider": "linode",
-  "deploy_targets": {
-    "staging": {
-      "provider": "linode",
-      "server": "app1",
-      "site": "client.app1.nfweb.dev"
-    },
-    "production": {
-      "provider": "kinsta",
-      "site": "client"
+  "schema": 1,
+  "project": {
+    "slug": "sanjel",
+    "name": "Sanjel",
+    "type": "wordpress-theme"
+  },
+  "wordpress": {
+    "deploy_unit": "theme",
+    "theme_slug": "sanjel",
+    "theme_path": "theme"
+  },
+  "build": {
+    "commands": [
+      "composer install",
+      "npm run build"
+    ]
+  },
+  "artifact": {
+    "path": "dist/sanjel.zip",
+    "include": [
+      "vendor/",
+      "assets/dist/"
+    ],
+    "exclude": [
+      "node_modules/",
+      ".git/"
+    ]
+  },
+  "deploy": {
+    "aliases": {
+      "app1": "sanjel-app1-production",
+      "staging": "sanjel-kinsta-staging",
+      "production": "sanjel-kinsta-production"
     }
-  }
+  },
+  "commands": {}
 }
 ```
 
@@ -181,6 +200,9 @@ Notes:
 - It must not contain secrets.
 - It should not duplicate mutable server state.
 - It should describe intent, not replace shared nf state.
+- Site targets may use names like `sanjel-app1-production`, `sanjel-app1-staging`, or `app1`.
+- Kinsta targets can carry `kinsta.company_id`, `kinsta.site_id`, and `kinsta.environment_id` without SSH info.
+- The hostname `https://sanjel.app1.nfweb.dev/` is the sort of URL the shared site state should surface.
 - The generated default `commands` block uses direct project-local commands,
   not project Makefiles. `nf` owns these workflows going forward.
 - The default source layout assumes `theme/` for the theme and `workbench/`
@@ -192,31 +214,96 @@ Notes:
 The current CLI also reads an optional `commands` block from this file for
 local project command aliases and direct workbench wrappers.
 
+## Shared state examples
+
+`~/.config/nf/state/servers.json`
+
+```json
+{
+  "servers": {
+    "app1": {
+      "provider": "linode",
+      "hostname": "app1.nfweb.dev",
+      "ssh": {
+        "user": "nonfiction",
+        "host": "app1.nfweb.dev"
+      },
+      "linode_id": 98222343
+    }
+  }
+}
+```
+
+`~/.config/nf/state/sites.json`
+
+```json
+{
+  "sites": {
+    "sanjel-app1-staging": {
+      "provider": "linode",
+      "server": "app1",
+      "environment": "staging",
+      "hostname": "sanjel.app1.nfweb.dev",
+      "url": "https://sanjel.app1.nfweb.dev/",
+      "branch": "main"
+    },
+    "sanjel-app1-production": {
+      "provider": "linode",
+      "server": "app1",
+      "environment": "production",
+      "hostname": "sanjel.app1.nfweb.dev",
+      "url": "https://sanjel.app1.nfweb.dev/",
+      "branch": "main"
+    },
+    "sanjel-kinsta-staging": {
+      "provider": "kinsta",
+      "environment": "staging",
+      "hostname": "sanjel-staging.kinsta.cloud",
+      "url": "https://sanjel-staging.kinsta.cloud",
+      "kinsta": {
+        "company_id": "123456",
+        "site_id": "234567",
+        "environment_id": "345678"
+      }
+    },
+    "sanjel-kinsta-production": {
+      "provider": "kinsta",
+      "environment": "production",
+      "hostname": "www.sanjel.com",
+      "url": "https://www.sanjel.com",
+      "kinsta": {
+        "company_id": "123456",
+        "site_id": "234567",
+        "environment_id": "345679"
+      }
+    },
+    "sanjel-production": {
+      "provider": "kinsta",
+      "environment": "production",
+      "hostname": "www.sanjel.com",
+      "url": "https://www.sanjel.com",
+      "kinsta": {
+        "company_id": "123456",
+        "site_id": "234567",
+        "environment_id": "345679"
+      }
+    }
+  }
+}
+```
+
 ## Command design
 
-The planned command surface should include at least:
+The current command surface is grouped and should stay that way:
 
-- `nf server provision`
-- `nf import-server`
-- `nf server list`
-- `nf server show`
-- `nf server delete`
-- `nf install-site`
-- `nf site list`
-- `nf site show`
-- `nf site delete`
-- `nf build-theme`
-- `nf package-theme`
-- `nf deploy-theme`
-- `nf push db`
-- `nf pull db`
-- `nf push uploads`
-- `nf pull uploads`
-- `nf push site`
-- `nf pull site`
+- `nf server provision|list|show|delete`
+- `nf site list|show`
+- `nf repo init|commands|run <name>|package`
+- `nf config init`
+- `nf password derive <project-slug> <purpose>`
 
-The command set should stay provider-agnostic where possible and delegate to
-provider adapters when it must not.
+Provider-specific workflows should hang off those groups rather than inventing
+new top-level commands.
 
 The current CLI uses grouped commands:
 
@@ -247,12 +334,12 @@ provided, then prints a plan and asks for confirmation in interactive mode.
 Non-interactive deletion remains dry-run unless explicitly run with
 `--execute --yes`.
 
-Of those, `nf repo init` writes `.nf/project.json`, `nf repo package` writes a
-local zip artifact, and `nf server provision --execute --yes` can create a
-remote Linode and DNS records. Local repo commands are direct repo workflows
-owned by `nf`, not Makefile wrappers. They may mutate local repo or workbench
-files and containers when explicitly invoked. Deploy and sync workflows are
-still not implemented.
+`nf repo init` writes `.nf/project.json`, `nf repo package` writes a local zip
+artifact, and `nf server provision --execute --yes` can create a remote Linode
+and DNS records. Local repo commands are direct repo workflows owned by `nf`,
+not Makefile wrappers. They may mutate local repo or workbench files and
+containers when explicitly invoked. Deploy and sync workflows are still not
+implemented.
 
 ## Planned workflows
 
@@ -283,57 +370,15 @@ Required environment for actual execution:
 
 Use `nf config init` to populate `~/.config/nf/.env` interactively.
 
-### Import server
+### Shared state and site targeting
 
-`import-server` records an already-existing host into shared nf state.
+The CLI should keep shared server/site state separate from repository metadata.
+Site resolution should understand named targets like `app1`, `sanjel-app1-staging`,
+and `sanjel-app1-production`, with `app1` acting as a convenient alias for the
+current project's primary Linode site.
 
-This is needed when a server exists outside `nf` or was created manually.
-
-### Install site
-
-`install-site` creates the WordPress site on a server.
-
-For a client project on `app1`, the planned names are:
-
-- remote path: `/var/www/client`
-- database: `client`
-- database user: `client`
-
-No generic `wordpress` database or folder names should be used for that site.
-
-The resulting hostname is expected to look like `client.app1.nfweb.dev`.
-
-### Build theme
-
-`build-theme` performs the local build needed for deployment.
-
-It must include the final deploy artifact contents, especially:
-
-- `vendor/`
-- `assets/dist/`
-
-### Package theme
-
-`package-theme` creates a versioned theme archive such as `theme.zip`.
-
-The packaged artifact must match the direct deploy artifact posture.
-
-### Deploy theme
-
-`deploy-theme` syncs the built theme artifact to the selected site.
-
-The local build is the source of truth.
-Deploy should not rely on an incomplete source tree.
-
-### Push and pull database/uploads/site
-
-The CLI should support targeted sync operations:
-
-- database only
-- uploads only
-- full site bundle where appropriate
-
-These commands must be provider-aware and policy-controlled.
+Kinsta site records should store company, site, and environment IDs only; they do
+not need SSH data.
 
 ## Provider model
 
@@ -366,7 +411,7 @@ Passwords for the same project slug should match across Linode environments like
 
 Derivation should use:
 
-- `project_slug`
+- `project.slug`
 - `purpose`
 - `NF_SECRET_SALT`
 
@@ -409,10 +454,11 @@ Shared `nf` state should track:
 
 Project repos should only track:
 
-- project slug
-- theme slug
-- local workbench hints
-- optional deployment preferences
+- project slug/type
+- WordPress/theme structure
+- build/artifact recipe
+- deploy aliases
+- repo-local commands
 
 ## Initial implementation phases
 
@@ -437,21 +483,20 @@ provisioning, deploy, and sync phases stay future work.
 ### Phase 3: Linode provider
 
 - provision server
-- import server
-- list/show/remove servers
+- manage server records
 - install site
 
 ### Phase 4: theme deploy
 
-- build theme
-- package theme
-- deploy theme
+- build theme assets
+- package theme artifact
+- deploy theme artifact
 
 ### Phase 5: sync workflows
 
-- push/pull db
-- push/pull uploads
-- push/pull site
+- database sync workflows
+- uploads sync workflows
+- full site sync workflows
 - provider-safe production protections
 
 ### Phase 6: Kinsta adapter
