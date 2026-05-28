@@ -7,6 +7,11 @@
 - Main command groups are `nf server ...`, `nf site ...`, `nf repo ...`,
   `nf config ...`, and `nf password ...`; do not add old compatibility routes
   such as `provision-server`, top-level `list/show`, or top-level repo aliases.
+- Current repo command surface is intentionally small: `nf repo init`,
+  `commands`, `package`, built-in workbench commands `up`, `down`, `logs`,
+  `reset`, `wp`, and direct repo-local aliases from metadata. Do not re-add
+  public `repo run`, `setup`, `fresh`, `restart`, `install-theme`, or
+  `activate-theme` routes unless explicitly requested.
 - UI prompts/selectors live in `internal/ui` and use Bubble Tea/Bubbles/Lip
   Gloss. Interactive commands should prefer selectors over required positional
   args when the choice can be inferred from state.
@@ -31,6 +36,10 @@
   tests). `nf config init` can populate missing values interactively.
 - Shared state lives under `~/.config/nf/state` as JSON files such as
   `servers.json`, `sites.json`, and `projects.json`.
+- Local WordPress workbench runtime lives under
+  `~/.config/nf/workbenches/<project-slug>/` or the equivalent `NF_CONFIG_HOME`
+  test path. It is generated/owned by `nf`; do not scaffold Docker workbench
+  files into project repos by default.
 - Repo-local metadata is `.nf/project.json`; it is safe intent/config only. Do
   not put API tokens, SSH keys, DB credentials, live passwords, or mutable
   server/site state there.
@@ -43,13 +52,35 @@
 - `nf repo ...` commands are the only local project command surface. Repo-local
   aliases come from `.nf/project.json` `commands` and execute from the project
   root.
+- `nf repo init` defaults `project.slug` from the current git root folder. The
+  WordPress theme directory convention is `theme/`; generated metadata should
+  default `wordpress.theme_path`, `wordpress.theme_slug`, and
+  `workbench.theme_mount_slug` to `theme` unless an explicit override is given.
 - String commands run through `sh -lc`; argv-list commands execute directly;
-  passthrough args follow `--`.
+  passthrough args follow `--`. Command execution should print the underlying
+  command preview before running it.
 - Repo-context commands are hidden/rejected outside a `.git` repo. Keep that
   distinction when adding local workflow commands.
 - `nf repo package` only zips existing theme files; it does not run Composer,
   npm, or asset builds first. Deploy artifacts must include built `vendor/` and
   `assets/dist/` when present.
+- `artifact.path` may contain `{version}`. Resolve it from `theme/style.css`
+  `Version:` first, then `theme/package.json`; fail clearly if neither exists.
+
+## Current roadmap
+
+- First priority: keep the Sanjel-style local repo workflow good enough to
+  replace per-project Makefiles/scripts with `.nf/project.json` plus
+  `nf repo ...` commands.
+- Next: implement Linode site lifecycle after server provisioning: install a
+  site on an existing `app1` host, write normalized site state, and deploy the
+  packaged theme artifact.
+- Then: implement database/uploads pull-push workflows with production password
+  and sensitive-option protections.
+- Later: add Kinsta deploy/sync adapters from Kinsta IDs in site state. Kinsta
+  must not use Linode provisioning paths or require SSH server fields.
+- Keep flake/team distribution and private state-sync polish aligned with the
+  README as the command surface stabilizes.
 
 ## Safety and provider rules
 
