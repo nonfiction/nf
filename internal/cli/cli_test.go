@@ -158,7 +158,7 @@ func TestRunHelpShowsRepoCommandsInsideGit(t *testing.T) {
 	t.Cleanup(func() { _ = os.Chdir(oldwd) })
 
 	output := captureStdout(t, func() { _ = runHelp() })
-	for _, wanted := range []string{"\n  repo          init and repo-local commands\n"} {
+	for _, wanted := range []string{"\n  repo          init, workbench commands, and repo-local aliases\n"} {
 		if !strings.Contains(output, wanted) {
 			t.Fatalf("runHelp() output missing %q:\n%s", wanted, output)
 		}
@@ -185,7 +185,7 @@ func TestRunRepoHelpShowsRepoLocalCommandsInsideGit(t *testing.T) {
 	t.Cleanup(func() { _ = os.Chdir(oldwd) })
 
 	output := captureStdout(t, func() { _ = runRepoHelp() })
-	for _, wanted := range []string{"\n  init                create .nf/project.json\n", "\n  commands            list configured local repo commands\n", "\n  run <name>          run a configured local repo command\n", "\n  package [--dry-run] [--source] [--output]   package theme artifacts\n"} {
+	for _, wanted := range []string{"\n  init                create .nf/project.json\n", "\n  commands            list configured local repo commands\n", "\n  package [--dry-run] [--source] [--output]   package theme artifacts\n"} {
 		if !strings.Contains(output, wanted) {
 			t.Fatalf("runRepoHelp() output missing %q:\n%s", wanted, output)
 		}
@@ -467,11 +467,6 @@ func TestRunRepoInitWritesPortableMetadataShape(t *testing.T) {
 				t.Fatalf("commands block missing %q: %#v", want, commands)
 			}
 		}
-		for _, unwanted := range []string{"setup", "up", "down", "restart", "logs", "reset", "fresh", "wp", "install-theme", "activate-theme"} {
-			if _, ok := commands[unwanted]; ok {
-				t.Fatalf("commands block unexpectedly contained %q: %#v", unwanted, commands)
-			}
-		}
 		if len(commands) != 5 {
 			t.Fatalf("commands block len = %d, want 5", len(commands))
 		}
@@ -659,7 +654,7 @@ func TestRunRepoCommandsUsesCompactDescriptions(t *testing.T) {
 			t.Fatalf("Run(commands) = %d, want 0", got)
 		}
 	})
-	for _, want := range []string{"repo-local commands:", "composer       -- Update theme Composer dependencies", "build          -- Build the theme assets", "setup          -- Set up the local workbench"} {
+	for _, want := range []string{"repo-local commands:", "Update theme Composer dependencies", "Build the theme assets", "Start the managed workbench, install WordPress if missing, and ensure the mounted theme is active", "Nuke workbench data and recreate a clean workbench"} {
 		if !strings.Contains(output, want) {
 			t.Fatalf("Run(commands) output missing %q:\n%s", want, output)
 		}
@@ -710,6 +705,9 @@ func TestWorkbenchCommandHelpersBuildExpectedArgs(t *testing.T) {
 	if got, want := workbenchWpArgs(cfg, "plugin", "list"), []string{"docker", "compose", "run", "--rm", "cli", "wp", "plugin", "list", "--allow-root"}; !reflect.DeepEqual(got, want) {
 		t.Fatalf("workbenchWpArgs() = %#v, want %#v", got, want)
 	}
+	if got, want := workbenchWpThemeIsActiveArgs(cfg, ""), []string{"docker", "compose", "run", "--rm", "cli", "wp", "theme", "is-active", "theme", "--allow-root"}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("workbenchWpThemeIsActiveArgs() = %#v, want %#v", got, want)
+	}
 	hostPath, containerPath := workbenchThemeArchivePaths(cfg, "/tmp/theme.zip")
 	if hostPath != filepath.Join(cfg.ManagedDir, "uploads", "theme.zip") || containerPath != "/workbench/uploads/theme.zip" {
 		t.Fatalf("workbenchThemeArchivePaths() = (%q, %q), want host and container upload paths", hostPath, containerPath)
@@ -739,11 +737,11 @@ func TestWorkbenchCommandHelpersBuildExpectedArgs(t *testing.T) {
 	if got, want := workbenchRepoPath("/repo", "/tmp/theme.zip"), "/tmp/theme.zip"; got != want {
 		t.Fatalf("workbenchRepoPath() = %q, want %q", got, want)
 	}
-	if got, want := (workbenchCommandRunner{name: "setup", cfg: cfg}).Render(), "docker compose up -d; wp core install and activate theme if needed"; got != want {
-		t.Fatalf("setup Render() = %q, want %q", got, want)
+	if got, want := (workbenchCommandRunner{name: "up", cfg: cfg}).Render(), "docker compose up -d; install WordPress if missing and ensure the mounted theme is active"; got != want {
+		t.Fatalf("up Render() = %q, want %q", got, want)
 	}
-	if got, want := (workbenchCommandRunner{name: "fresh", cfg: cfg}).Render(), "docker compose down -v --remove-orphans && docker compose up -d; wp core install and activate theme if needed"; got != want {
-		t.Fatalf("fresh Render() = %q, want %q", got, want)
+	if got, want := (workbenchCommandRunner{name: "reset", cfg: cfg}).Render(), "docker compose down -v --remove-orphans; nuke workbench data and recreate it with docker compose up -d, install WordPress if missing, and ensure the mounted theme is active"; got != want {
+		t.Fatalf("reset Render() = %q, want %q", got, want)
 	}
 }
 
@@ -798,52 +796,7 @@ func TestEnsureManagedWorkbenchRuntimeWritesManagedFiles(t *testing.T) {
 	}
 }
 
-func TestRunRepoSetupCanBeOverriddenByExplicitCommand(t *testing.T) {
-	workdir := t.TempDir()
-	if err := os.Mkdir(filepath.Join(workdir, ".git"), 0o755); err != nil {
-		t.Fatalf("Mkdir() error = %v", err)
-	}
-	if err := os.MkdirAll(filepath.Join(workdir, ".nf"), 0o755); err != nil {
-		t.Fatalf("MkdirAll() error = %v", err)
-	}
-	project := map[string]any{
-		"schema":    1,
-		"project":   map[string]any{"slug": "sanjel", "name": "Sanjel", "type": "wordpress-theme"},
-		"wordpress": map[string]any{"deploy_unit": "theme", "theme_slug": "theme", "theme_path": "theme"},
-		"workbench": map[string]any{"compose": "docker compose", "wordpress_service": "wordpress", "cli_service": "cli", "theme_mount_slug": "theme", "uploads_path": "uploads"},
-		"commands":  map[string]any{"setup": map[string]any{"description": "Custom setup", "run": []any{"sh", "-lc", "printf custom > override.txt"}}},
-	}
-	data, err := json.MarshalIndent(project, "", "  ")
-	if err != nil {
-		t.Fatalf("MarshalIndent() error = %v", err)
-	}
-	if err := os.WriteFile(filepath.Join(workdir, ".nf", "project.json"), append(data, '\n'), 0o644); err != nil {
-		t.Fatalf("WriteFile() error = %v", err)
-	}
-
-	oldwd, err := os.Getwd()
-	if err != nil {
-		t.Fatalf("Getwd() error = %v", err)
-	}
-	if err := os.Chdir(workdir); err != nil {
-		t.Fatalf("Chdir() error = %v", err)
-	}
-	t.Cleanup(func() { _ = os.Chdir(oldwd) })
-
-	output := captureStdout(t, func() {
-		if got := Run([]string{"repo", "setup"}); got != 0 {
-			t.Fatalf("Run() = %d, want 0", got)
-		}
-	})
-	if !strings.Contains(output, "> sh -lc 'printf custom > override.txt'") {
-		t.Fatalf("Run() output = %q, want printed command preview", output)
-	}
-	if _, err := os.Stat(filepath.Join(workdir, "override.txt")); err != nil {
-		t.Fatalf("override.txt not created: %v", err)
-	}
-}
-
-func TestRunRepoSetupPrintsUnderlyingCommands(t *testing.T) {
+func TestRunRepoUpPrintsUnderlyingCommands(t *testing.T) {
 	repoRoot := filepath.Join(t.TempDir(), "sanjel-site")
 	if err := os.MkdirAll(filepath.Join(repoRoot, ".git"), 0o755); err != nil {
 		t.Fatalf("MkdirAll() error = %v", err)
@@ -892,7 +845,7 @@ func TestRunRepoSetupPrintsUnderlyingCommands(t *testing.T) {
 	t.Cleanup(func() { _ = os.Chdir(oldwd) })
 
 	output := captureStdout(t, func() {
-		if got := Run([]string{"repo", "setup"}); got != 0 {
+		if got := Run([]string{"repo", "up"}); got != 0 {
 			t.Fatalf("Run() = %d, want 0", got)
 		}
 	})
@@ -910,31 +863,37 @@ func TestRunRepoSetupPrintsUnderlyingCommands(t *testing.T) {
 	}
 }
 
-func TestRunRepoActivateThemeUsesMountSlugByDefault(t *testing.T) {
-	workdir := t.TempDir()
-	if err := os.Mkdir(filepath.Join(workdir, ".git"), 0o755); err != nil {
-		t.Fatalf("Mkdir() error = %v", err)
-	}
-	if err := os.MkdirAll(filepath.Join(workdir, ".nf"), 0o755); err != nil {
+func TestRunRepoUpActivatesThemeWhenAlreadyInstalled(t *testing.T) {
+	repoRoot := filepath.Join(t.TempDir(), "sanjel-site")
+	if err := os.MkdirAll(filepath.Join(repoRoot, ".git"), 0o755); err != nil {
 		t.Fatalf("MkdirAll() error = %v", err)
+	}
+	if err := os.MkdirAll(filepath.Join(repoRoot, ".nf"), 0o755); err != nil {
+		t.Fatalf("MkdirAll() error = %v", err)
+	}
+	if err := os.MkdirAll(filepath.Join(repoRoot, "theme"), 0o755); err != nil {
+		t.Fatalf("MkdirAll() error = %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(repoRoot, "theme", "style.css"), []byte("/* demo */\n"), 0o644); err != nil {
+		t.Fatalf("WriteFile() error = %v", err)
 	}
 	project := map[string]any{
 		"schema":    1,
-		"project":   map[string]any{"slug": "sanjel", "name": "Sanjel", "type": "wordpress-theme"},
-		"wordpress": map[string]any{"deploy_unit": "theme", "theme_slug": "sanjel", "theme_path": "theme"},
+		"project":   map[string]any{"slug": "sanjel-site", "name": "Sanjel Site", "type": "wordpress-theme"},
+		"wordpress": map[string]any{"deploy_unit": "theme", "theme_slug": "theme", "theme_path": "theme"},
 		"workbench": map[string]any{"compose": "docker compose", "wordpress_service": "wordpress", "cli_service": "cli", "theme_mount_slug": "theme", "uploads_path": "uploads"},
 	}
 	data, err := json.MarshalIndent(project, "", "  ")
 	if err != nil {
 		t.Fatalf("MarshalIndent() error = %v", err)
 	}
-	if err := os.WriteFile(filepath.Join(workdir, ".nf", "project.json"), append(data, '\n'), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(repoRoot, ".nf", "project.json"), append(data, '\n'), 0o644); err != nil {
 		t.Fatalf("WriteFile() error = %v", err)
 	}
 
 	dockerDir := t.TempDir()
 	logPath := filepath.Join(dockerDir, "docker-args.txt")
-	dockerScript := []byte("#!/bin/sh\nprintf '%s\\n' \"$@\" > \"$DOCKER_LOG\"\n")
+	dockerScript := []byte("#!/bin/sh\nprintf '%s\\n' \"$@\" >> \"$DOCKER_LOG\"\ncase \"$*\" in\n  *\"wp theme is-active\"*) exit 1 ;;\n  *\"wp core is-installed\"*) exit 0 ;;\nesac\nexit 0\n")
 	if err := os.WriteFile(filepath.Join(dockerDir, "docker"), dockerScript, 0o755); err != nil {
 		t.Fatalf("WriteFile(docker) error = %v", err)
 	}
@@ -947,44 +906,99 @@ func TestRunRepoActivateThemeUsesMountSlugByDefault(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Getwd() error = %v", err)
 	}
-	if err := os.Chdir(workdir); err != nil {
+	if err := os.Chdir(repoRoot); err != nil {
 		t.Fatalf("Chdir() error = %v", err)
 	}
 	t.Cleanup(func() { _ = os.Chdir(oldwd) })
 
 	output := captureStdout(t, func() {
-		if got := Run([]string{"repo", "activate-theme"}); got != 0 {
+		if got := Run([]string{"repo", "up"}); got != 0 {
 			t.Fatalf("Run() = %d, want 0", got)
 		}
 	})
-	if !strings.Contains(output, "> docker compose run --rm cli wp theme activate theme --allow-root") {
-		t.Fatalf("Run() output = %q, want printed command preview", output)
+	for _, want := range []string{
+		"> docker compose up -d",
+		"> docker compose run --rm cli wp core is-installed --allow-root",
+		"> docker compose run --rm cli wp theme is-active theme --allow-root",
+		"> docker compose run --rm cli wp theme activate theme --allow-root",
+	} {
+		if !strings.Contains(output, want) {
+			t.Fatalf("Run() output = %q, want %q", output, want)
+		}
 	}
-	data, err = os.ReadFile(logPath)
+	if strings.Contains(output, "wp core install") {
+		t.Fatalf("Run() output unexpectedly installed WordPress: %q", output)
+	}
+	if _, err := os.Stat(logPath); err != nil {
+		t.Fatalf("docker log missing: %v", err)
+	}
+}
+
+func TestRunRepoResetPrintsUnderlyingCommands(t *testing.T) {
+	repoRoot := filepath.Join(t.TempDir(), "sanjel-site")
+	if err := os.MkdirAll(filepath.Join(repoRoot, ".git"), 0o755); err != nil {
+		t.Fatalf("MkdirAll() error = %v", err)
+	}
+	if err := os.MkdirAll(filepath.Join(repoRoot, ".nf"), 0o755); err != nil {
+		t.Fatalf("MkdirAll() error = %v", err)
+	}
+	if err := os.MkdirAll(filepath.Join(repoRoot, "theme"), 0o755); err != nil {
+		t.Fatalf("MkdirAll() error = %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(repoRoot, "theme", "style.css"), []byte("/* demo */\n"), 0o644); err != nil {
+		t.Fatalf("WriteFile() error = %v", err)
+	}
+	project := map[string]any{
+		"schema":    1,
+		"project":   map[string]any{"slug": "sanjel-site", "name": "Sanjel Site", "type": "wordpress-theme"},
+		"wordpress": map[string]any{"deploy_unit": "theme", "theme_slug": "theme", "theme_path": "theme"},
+		"workbench": map[string]any{"compose": "docker compose", "wordpress_service": "wordpress", "cli_service": "cli", "theme_mount_slug": "theme", "uploads_path": "uploads"},
+	}
+	data, err := json.MarshalIndent(project, "", "  ")
 	if err != nil {
-		t.Fatalf("ReadFile(log) error = %v", err)
+		t.Fatalf("MarshalIndent() error = %v", err)
 	}
-	if got, want := strings.Split(strings.TrimSpace(string(data)), "\n"), []string{"compose", "run", "--rm", "cli", "wp", "theme", "activate", "theme", "--allow-root"}; !reflect.DeepEqual(got, want) {
-		t.Fatalf("default activate-theme args = %#v, want %#v", got, want)
+	if err := os.WriteFile(filepath.Join(repoRoot, ".nf", "project.json"), append(data, '\n'), 0o644); err != nil {
+		t.Fatalf("WriteFile() error = %v", err)
 	}
 
-	if err := os.WriteFile(logPath, nil, 0o644); err != nil {
-		t.Fatalf("Reset log error = %v", err)
+	dockerDir := t.TempDir()
+	logPath := filepath.Join(dockerDir, "docker-args.txt")
+	dockerScript := []byte("#!/bin/sh\nprintf '%s\\n' \"$@\" >> \"$DOCKER_LOG\"\ncase \"$*\" in\n  *\"wp core is-installed\"*) exit 1 ;;\nesac\nexit 0\n")
+	if err := os.WriteFile(filepath.Join(dockerDir, "docker"), dockerScript, 0o755); err != nil {
+		t.Fatalf("WriteFile(docker) error = %v", err)
 	}
-	output = captureStdout(t, func() {
-		if got := Run([]string{"repo", "activate-theme", "custom-slug"}); got != 0 {
-			t.Fatalf("Run(explicit) = %d, want 0", got)
+	configHome := t.TempDir()
+	t.Setenv("NF_CONFIG_HOME", configHome)
+	t.Setenv("DOCKER_LOG", logPath)
+	t.Setenv("PATH", dockerDir+string(os.PathListSeparator)+os.Getenv("PATH"))
+
+	oldwd, err := os.Getwd()
+	if err != nil {
+		t.Fatalf("Getwd() error = %v", err)
+	}
+	if err := os.Chdir(repoRoot); err != nil {
+		t.Fatalf("Chdir() error = %v", err)
+	}
+	t.Cleanup(func() { _ = os.Chdir(oldwd) })
+
+	output := captureStdout(t, func() {
+		if got := Run([]string{"repo", "reset"}); got != 0 {
+			t.Fatalf("Run() = %d, want 0", got)
 		}
 	})
-	if !strings.Contains(output, "> docker compose run --rm cli wp theme activate custom-slug --allow-root") {
-		t.Fatalf("Run(explicit) output = %q, want printed command preview", output)
+	for _, want := range []string{
+		"> docker compose down -v --remove-orphans",
+		"> docker compose up -d",
+		"> docker compose run --rm cli wp core is-installed --allow-root",
+		"> docker compose run --rm cli sh -lc",
+	} {
+		if !strings.Contains(output, want) {
+			t.Fatalf("Run() output = %q, want %q", output, want)
+		}
 	}
-	data, err = os.ReadFile(logPath)
-	if err != nil {
-		t.Fatalf("ReadFile(explicit log) error = %v", err)
-	}
-	if got, want := strings.Split(strings.TrimSpace(string(data)), "\n"), []string{"compose", "run", "--rm", "cli", "wp", "theme", "activate", "custom-slug", "--allow-root"}; !reflect.DeepEqual(got, want) {
-		t.Fatalf("explicit activate-theme args = %#v, want %#v", got, want)
+	if _, err := os.Stat(logPath); err != nil {
+		t.Fatalf("docker log missing: %v", err)
 	}
 }
 

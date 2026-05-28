@@ -90,6 +90,22 @@ type workbenchCommandRunner struct {
 	cfg  workbenchConfig
 }
 
+func (c workbenchCommandRunner) ensureUpInstalledActive(workbenchDir string) error {
+	if err := runCommandSpec(execSpec{Dir: workbenchDir, Args: workbenchComposeArgs(c.cfg, "up", "-d")}); err != nil {
+		return err
+	}
+	if err := runCommandSpecQuiet(execSpec{Dir: workbenchDir, Args: workbenchWpProbeArgs(c.cfg, "core", "is-installed")}); err != nil {
+		if err := runCommandSpec(execSpec{Dir: workbenchDir, Args: workbenchWpCoreInstallArgs(c.cfg)}); err != nil {
+			return err
+		}
+		return nil
+	}
+	if err := runCommandSpecQuiet(execSpec{Dir: workbenchDir, Args: workbenchWpThemeIsActiveArgs(c.cfg, "")}); err != nil {
+		return runCommandSpec(execSpec{Dir: workbenchDir, Args: workbenchWpThemeActivateArgs(c.cfg, "")})
+	}
+	return nil
+}
+
 func (c workbenchCommandRunner) Execute(root string, extraArgs []string) error {
 	if err := ensureManagedWorkbenchRuntime(c.cfg); err != nil {
 		return err
@@ -97,62 +113,18 @@ func (c workbenchCommandRunner) Execute(root string, extraArgs []string) error {
 	workbenchDir := c.cfg.ManagedDir
 	switch c.name {
 	case "up":
-		return runCommandSpec(execSpec{Dir: workbenchDir, Args: workbenchComposeArgs(c.cfg, "up", "-d")})
+		return c.ensureUpInstalledActive(workbenchDir)
 	case "down":
 		return runCommandSpec(execSpec{Dir: workbenchDir, Args: workbenchComposeArgs(c.cfg, "down")})
-	case "restart":
-		if err := runCommandSpec(execSpec{Dir: workbenchDir, Args: workbenchComposeArgs(c.cfg, "down")}); err != nil {
-			return err
-		}
-		return runCommandSpec(execSpec{Dir: workbenchDir, Args: workbenchComposeArgs(c.cfg, "up", "-d")})
 	case "logs":
 		return runCommandSpec(execSpec{Dir: workbenchDir, Args: workbenchComposeArgs(c.cfg, "logs", "-f", c.cfg.WordpressService)})
 	case "reset":
-		return runCommandSpec(execSpec{Dir: workbenchDir, Args: workbenchComposeArgs(c.cfg, "down", "-v", "--remove-orphans")})
-	case "setup":
-		if err := runCommandSpec(execSpec{Dir: workbenchDir, Args: workbenchComposeArgs(c.cfg, "up", "-d")}); err != nil {
-			return err
-		}
-		if err := runCommandSpecQuiet(execSpec{Dir: workbenchDir, Args: workbenchWpProbeArgs(c.cfg, "core", "is-installed")}); err != nil {
-			if err := runCommandSpec(execSpec{Dir: workbenchDir, Args: workbenchWpCoreInstallArgs(c.cfg)}); err != nil {
-				return err
-			}
-		}
-		return nil
-	case "fresh":
 		if err := runCommandSpec(execSpec{Dir: workbenchDir, Args: workbenchComposeArgs(c.cfg, "down", "-v", "--remove-orphans")}); err != nil {
 			return err
 		}
-		if err := runCommandSpec(execSpec{Dir: workbenchDir, Args: workbenchComposeArgs(c.cfg, "up", "-d")}); err != nil {
-			return err
-		}
-		if err := runCommandSpecQuiet(execSpec{Dir: workbenchDir, Args: workbenchWpProbeArgs(c.cfg, "core", "is-installed")}); err != nil {
-			if err := runCommandSpec(execSpec{Dir: workbenchDir, Args: workbenchWpCoreInstallArgs(c.cfg)}); err != nil {
-				return err
-			}
-		}
-		return nil
+		return c.ensureUpInstalledActive(workbenchDir)
 	case "wp":
 		return runCommandSpec(execSpec{Dir: workbenchDir, Args: workbenchWpArgs(c.cfg, extraArgs...)})
-	case "install-theme":
-		if len(extraArgs) == 0 || strings.TrimSpace(extraArgs[0]) == "" {
-			return fmt.Errorf("install-theme requires a zip path")
-		}
-		zipPath := workbenchRepoPath(root, extraArgs[0])
-		hostPath, containerPath := workbenchThemeArchivePaths(c.cfg, zipPath)
-		if err := os.MkdirAll(c.cfg.managedUploadsDir(), 0o755); err != nil {
-			return err
-		}
-		if err := copyFile(zipPath, hostPath); err != nil {
-			return err
-		}
-		return runCommandSpec(execSpec{Dir: workbenchDir, Args: workbenchWpArgs(c.cfg, "theme", "install", containerPath)})
-	case "activate-theme":
-		slug := ""
-		if len(extraArgs) > 0 && strings.TrimSpace(extraArgs[0]) != "" {
-			slug = strings.TrimSpace(extraArgs[0])
-		}
-		return runCommandSpec(execSpec{Dir: workbenchDir, Args: workbenchWpThemeActivateArgs(c.cfg, slug)})
 	default:
 		return fmt.Errorf("unsupported repo command type")
 	}
@@ -161,25 +133,15 @@ func (c workbenchCommandRunner) Execute(root string, extraArgs []string) error {
 func (c workbenchCommandRunner) Render() string {
 	switch c.name {
 	case "up":
-		return "docker compose up -d"
+		return "docker compose up -d; install WordPress if missing and ensure the mounted theme is active"
 	case "down":
 		return "docker compose down"
-	case "restart":
-		return "docker compose down && docker compose up -d"
 	case "logs":
 		return "docker compose logs -f " + c.cfg.WordpressService
 	case "reset":
-		return "docker compose down -v --remove-orphans"
-	case "setup":
-		return "docker compose up -d; wp core install and activate " + firstNonEmpty(c.cfg.ThemeMountSlug, c.cfg.ThemeSlug, "theme") + " if needed"
-	case "fresh":
-		return "docker compose down -v --remove-orphans && docker compose up -d; wp core install and activate " + firstNonEmpty(c.cfg.ThemeMountSlug, c.cfg.ThemeSlug, "theme") + " if needed"
+		return "docker compose down -v --remove-orphans; nuke workbench data and recreate it with docker compose up -d, install WordPress if missing, and ensure the mounted theme is active"
 	case "wp":
 		return "docker compose run --rm " + c.cfg.CliService + " wp ... --allow-root"
-	case "install-theme":
-		return "copy theme zip into nf-managed workbench uploads and run wp theme install"
-	case "activate-theme":
-		return "docker compose run --rm " + c.cfg.CliService + " wp theme activate <slug> --allow-root"
 	default:
 		return c.name
 	}
@@ -305,6 +267,10 @@ func workbenchWpArgs(cfg workbenchConfig, args ...string) []string {
 
 func workbenchWpProbeArgs(cfg workbenchConfig, args ...string) []string {
 	return workbenchWpArgs(cfg, args...)
+}
+
+func workbenchWpThemeIsActiveArgs(cfg workbenchConfig, slug string) []string {
+	return workbenchWpArgs(cfg, "theme", "is-active", firstNonEmpty(slug, cfg.ThemeMountSlug, cfg.ThemeSlug, "theme"))
 }
 
 func workbenchWpCoreInstallArgs(cfg workbenchConfig) []string {
@@ -757,16 +723,11 @@ func loadWorkbenchConfig(root string, metadata map[string]any) (workbenchConfig,
 
 func defaultWorkbenchCommands(cfg workbenchConfig) map[string]projectCommand {
 	return map[string]projectCommand{
-		"setup":          {Description: "Set up the local workbench", Run: workbenchCommandRunner{name: "setup", cfg: cfg}},
-		"up":             {Description: "Start the local workbench", Run: workbenchCommandRunner{name: "up", cfg: cfg}},
-		"down":           {Description: "Stop the local workbench", Run: workbenchCommandRunner{name: "down", cfg: cfg}},
-		"restart":        {Description: "Restart the local workbench", Run: workbenchCommandRunner{name: "restart", cfg: cfg}},
-		"logs":           {Description: "Show local workbench logs", Run: workbenchCommandRunner{name: "logs", cfg: cfg}},
-		"reset":          {Description: "Reset the local workbench", Run: workbenchCommandRunner{name: "reset", cfg: cfg}},
-		"fresh":          {Description: "Rebuild the local workbench from scratch", Run: workbenchCommandRunner{name: "fresh", cfg: cfg}},
-		"wp":             {Description: "Run wp-cli through the local workbench", Run: workbenchCommandRunner{name: "wp", cfg: cfg}},
-		"install-theme":  {Description: "Install the theme in the local workbench", Run: workbenchCommandRunner{name: "install-theme", cfg: cfg}},
-		"activate-theme": {Description: "Activate the theme in the local workbench", Run: workbenchCommandRunner{name: "activate-theme", cfg: cfg}},
+		"up":    {Description: "Start the managed workbench, install WordPress if missing, and ensure the mounted theme is active", Run: workbenchCommandRunner{name: "up", cfg: cfg}},
+		"down":  {Description: "Stop the managed workbench", Run: workbenchCommandRunner{name: "down", cfg: cfg}},
+		"logs":  {Description: "Tail WordPress logs", Run: workbenchCommandRunner{name: "logs", cfg: cfg}},
+		"reset": {Description: "Nuke workbench data and recreate a clean workbench", Run: workbenchCommandRunner{name: "reset", cfg: cfg}},
+		"wp":    {Description: "Run wp-cli passthrough", Run: workbenchCommandRunner{name: "wp", cfg: cfg}},
 	}
 }
 
@@ -799,33 +760,6 @@ func cmdProjectCommands() int {
 	fmt.Println("repo-local commands:")
 	for _, line := range formatProjectCommandLines(commands) {
 		fmt.Printf("  %s\n", line)
-	}
-	return 0
-}
-
-func cmdProjectRun(name string, extraArgs []string) int {
-	if err := requireProjectContext("repo run"); err != nil {
-		fmt.Fprintln(os.Stderr, err)
-		return 1
-	}
-	root, err := discoverProjectRootOrError()
-	if err != nil {
-		fmt.Fprintln(os.Stderr, err)
-		return 1
-	}
-	commands, err := loadProjectCommands(root)
-	if err != nil {
-		fmt.Fprintln(os.Stderr, err)
-		return 1
-	}
-	command, ok := commands[name]
-	if !ok {
-		fmt.Fprintf(os.Stderr, "No configured local repo command named %q. Add .nf/project.json workbench metadata or commands.%s.\n", name, name)
-		return 1
-	}
-	if err := command.Run.Execute(root, normalizePassthroughArgs(extraArgs)); err != nil {
-		fmt.Fprintln(os.Stderr, err)
-		return 1
 	}
 	return 0
 }
@@ -1759,7 +1693,6 @@ func runRepoHelp() int {
 	if projectContextAvailable() {
 		lines = append(lines,
 			"commands            list configured local repo commands",
-			"run <name>          run a configured local repo command",
 			"package [--dry-run] [--source] [--output]   package theme artifacts",
 		)
 		if root, ok := currentGitRoot(); ok {
@@ -1780,7 +1713,7 @@ func runHelp() int {
 	fmt.Println("  site          list, show, future install/delete/deploy/sync")
 	repoLine := "  repo          init repo metadata and manage workbench runtime"
 	if projectContextAvailable() {
-		repoLine = "  repo          init and repo-local commands"
+		repoLine = "  repo          init, workbench commands, and repo-local aliases"
 	}
 	fmt.Println(repoLine)
 	fmt.Println("  config        init local config")
@@ -1917,13 +1850,6 @@ func runRepo(argv []string) int {
 	}
 	if argv[0] == "commands" {
 		return cmdProjectCommands()
-	}
-	if argv[0] == "run" {
-		if len(argv) < 2 {
-			fmt.Fprintln(os.Stderr, "repo run requires a command name")
-			return 1
-		}
-		return cmdProjectRun(argv[1], argv[2:])
 	}
 	if err := requireProjectContext(argv[0]); err != nil {
 		fmt.Fprintln(os.Stderr, err)

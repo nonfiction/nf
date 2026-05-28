@@ -232,15 +232,15 @@ Notes:
 - Kinsta targets can carry `kinsta.company_id`, `kinsta.site_id`, and `kinsta.environment_id` without SSH info.
 - The hostname `https://sanjel.app1.nfweb.dev/` is the sort of URL the shared site state should surface.
 - `nf repo` workbench lifecycle commands come from `workbench` metadata.
-  The `commands` block is for custom repo-local aliases such as build/watch/test.
+  The built-ins are `up`, `down`, `logs`, `reset`, and `wp`.
+- The `commands` block is for custom repo-local aliases such as build/watch/test.
+- Custom aliases run directly as `nf repo <name>`.
 - The repo only needs the theme source and `.nf/project.json`; runtime workbench
   files are managed by `nf` under `~/.config/nf/workbenches/<project-slug>/`.
 - `artifact.path` may include `{version}`; `nf repo package` resolves it from
   `theme/style.css`'s `Version:` header first, then falls back to
   `theme/package.json`'s `version` field, and errors clearly if neither is
   available.
-- Commands such as `install-theme` and `activate-theme` can still be customized
-  per project if a repo wants named arguments instead of the built-in defaults.
 
 ## Shared state examples
 
@@ -326,7 +326,9 @@ The current command surface is grouped and should stay that way:
 
 - `nf server provision|list|show|delete`
 - `nf site list|show`
-- `nf repo init|commands|run <name>|package`
+- `nf repo init|commands|package`
+- `nf repo up|down|logs|reset|wp`
+- direct repo-local aliases: `nf repo <name>`
 - `nf config init`
 - `nf password derive <project-slug> <purpose>`
 
@@ -337,7 +339,9 @@ The current CLI uses grouped commands:
 
 - `nf server provision|list|show|delete`
 - `nf site list|show` plus future site actions as stubs
-- `nf repo init|commands|run <name>|package`
+- `nf repo init|commands|package`
+- `nf repo up|down|logs|reset|wp`
+- direct repo-local aliases: `nf repo <name>`
 - `nf config init`
 - `nf password derive <project-slug> <purpose>`
 
@@ -364,15 +368,17 @@ Non-interactive deletion remains dry-run unless explicitly run with
 
 `nf repo init` writes `.nf/project.json` and uses the current git root folder
 name as the default project slug when `--project-slug` is not provided.
-`nf repo up` and related built-ins stand up an `nf`-managed WordPress workbench outside the repo under
-`~/.config/nf/workbenches/<project-slug>/`. `nf repo package` writes a local zip
-artifact; when `artifact.path` contains `{version}`, it resolves the theme
-version from `theme/style.css` first, then `theme/package.json`. `nf server provision --execute --yes` can create a remote Linode
-and DNS records. Repo workbench lifecycle commands are built in from
-`workbench` metadata, while the `commands` block is reserved for custom
-repo-local aliases. They may mutate local repo or workbench files and containers
-when explicitly invoked. Deploy and sync workflows are still not implemented,
-and per-project Makefiles are no longer needed for the local workbench.
+`nf repo up` starts the managed WordPress workbench, installs WordPress if
+needed, and keeps the mounted theme active. `nf repo reset` wipes the managed
+workbench data and recreates it. `nf repo package` writes a local zip artifact;
+when `artifact.path` contains `{version}`, it resolves the theme version from
+`theme/style.css` first, then `theme/package.json`. `nf server provision
+--execute --yes` can create a remote Linode and DNS records. Repo workbench
+lifecycle commands are built in from `workbench` metadata, while the `commands`
+block is reserved for custom repo-local aliases. They run directly as
+`nf repo <name>` when explicitly invoked. Deploy and sync workflows are still
+not implemented, and per-project Makefiles are no longer needed for the local
+workbench.
 
 ## Planned workflows
 
