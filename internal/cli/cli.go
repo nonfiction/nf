@@ -15,6 +15,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/nonfiction/nf/internal/config"
 	"github.com/nonfiction/nf/internal/envwizard"
@@ -81,6 +82,159 @@ type runtimeConfig struct {
 	ThemeSlug        string
 }
 
+type runtimeSnapshotContents struct {
+	Database       string   `json:"database"`
+	WpContent      string   `json:"wp_content"`
+	WpContentPaths []string `json:"wp_content_paths"`
+}
+
+type runtimeSnapshotMetadata struct {
+	Schema         int                     `json:"schema"`
+	Name           string                  `json:"name"`
+	ProjectSlug    string                  `json:"project_slug"`
+	CreatedAt      string                  `json:"created_at"`
+	RuntimePath    string                  `json:"runtime_path"`
+	ComposeProject string                  `json:"compose_project"`
+	WordpressURL   string                  `json:"wordpress_url"`
+	Contents       runtimeSnapshotContents `json:"contents"`
+}
+
+type runtimeSnapshotRecord struct {
+	Metadata         runtimeSnapshotMetadata
+	Directory        string
+	DatabaseArchive  string
+	WpContentArchive string
+	DatabaseSize     int64
+	WpContentSize    int64
+	CreatedAt        time.Time
+}
+
+const runtimeSnapshotSchema = 1
+
+var (
+	runtimeSnapshotPromptString  = ui.PromptString
+	runtimeSnapshotConfirm       = ui.Confirm
+	runtimeSnapshotSelect        = ui.Select
+	runtimeSnapshotIsInteractive = runtimeSnapshotInteractive
+)
+
+func defaultRuntimeSnapshotName(now time.Time) string {
+	return now.Format("2006-01-02-150405")
+}
+
+func defaultPreRestoreSnapshotName(now time.Time) string {
+	return defaultRuntimeSnapshotName(now) + "-pre-restore"
+}
+
+func runtimeSnapshotProjectDir(cfg runtimeConfig) string {
+	return config.SnapshotProjectDir(cfg.ProjectSlug)
+}
+
+func runtimeSnapshotDir(cfg runtimeConfig, name string) string {
+	return config.SnapshotDir(cfg.ProjectSlug, name)
+}
+
+func runtimeSnapshotContainerDir(name string) string {
+	return path.Join("/runtime-snapshots", name)
+}
+
+func runtimeSnapshotContainerDatabaseArchive(name string) string {
+	return path.Join(runtimeSnapshotContainerDir(name), "database.sql.gz")
+}
+
+func runtimeSnapshotContainerWpContentArchive(name string) string {
+	return path.Join(runtimeSnapshotContainerDir(name), "wp-content.tar.gz")
+}
+
+func runtimeSnapshotHostDatabaseArchive(cfg runtimeConfig, name string) string {
+	return filepath.Join(runtimeSnapshotDir(cfg, name), "database.sql.gz")
+}
+
+func runtimeSnapshotHostWpContentArchive(cfg runtimeConfig, name string) string {
+	return filepath.Join(runtimeSnapshotDir(cfg, name), "wp-content.tar.gz")
+}
+
+func runtimeSnapshotMetadataPath(cfg runtimeConfig, name string) string {
+	return filepath.Join(runtimeSnapshotDir(cfg, name), "snapshot.json")
+}
+
+func runtimeSnapshotComposeMount(cfg runtimeConfig) string {
+	return config.SnapshotProjectDir(cfg.ProjectSlug)
+}
+
+func runtimeSnapshotContentPaths() []string {
+	return []string{"wp-content/uploads", "wp-content/plugins", "wp-content/mu-plugins", "wp-content/languages"}
+}
+
+func newRuntimeSnapshotMetadata(cfg runtimeConfig, name string, createdAt time.Time) runtimeSnapshotMetadata {
+	return runtimeSnapshotMetadata{
+		Schema:         runtimeSnapshotSchema,
+		Name:           name,
+		ProjectSlug:    cfg.ProjectSlug,
+		CreatedAt:      createdAt.Format(time.RFC3339),
+		RuntimePath:    cfg.ManagedDir,
+		ComposeProject: runtimeComposeProjectName(cfg.ProjectSlug),
+		WordpressURL:   runtimeSnapshotWordPressURL(cfg),
+		Contents: runtimeSnapshotContents{
+			Database:       "database.sql.gz",
+			WpContent:      "wp-content.tar.gz",
+			WpContentPaths: runtimeSnapshotContentPaths(),
+		},
+	}
+}
+
+func runtimeSnapshotWordPressURL(cfg runtimeConfig) string {
+	return fmt.Sprintf("http://localhost:%d", cfg.WordpressPort)
+}
+
+func runtimeSnapshotNormalizedName(input string) (string, error) {
+	name := strings.TrimSpace(input)
+	if name == "" {
+		return "", ProjectError{Msg: "runtime snapshot name cannot be empty"}
+	}
+	name = strings.Join(strings.Fields(name), "-")
+	if name == "" {
+		return "", ProjectError{Msg: "runtime snapshot name cannot be empty"}
+	}
+	if filepath.IsAbs(name) {
+		return "", ProjectError{Msg: fmt.Sprintf("runtime snapshot name %q must not be absolute", input)}
+	}
+	if strings.ContainsAny(name, "/\\") {
+		return "", ProjectError{Msg: fmt.Sprintf("runtime snapshot name %q must not contain path separators", input)}
+	}
+	if strings.Contains(name, "..") {
+		return "", ProjectError{Msg: fmt.Sprintf("runtime snapshot name %q must not contain path traversal", input)}
+	}
+	for _, r := range name {
+		if r >= 'a' && r <= 'z' || r >= 'A' && r <= 'Z' || r >= '0' && r <= '9' || r == '-' || r == '_' {
+			continue
+		}
+		return "", ProjectError{Msg: fmt.Sprintf("runtime snapshot name %q contains unsafe characters", input)}
+	}
+	return name, nil
+}
+
+func runtimeSnapshotExists(cfg runtimeConfig, name string) bool {
+	_, err := os.Stat(runtimeSnapshotDir(cfg, name))
+	return err == nil
+}
+
+func runtimeSnapshotInteractive() bool {
+	info, err := os.Stdin.Stat()
+	if err != nil {
+		return false
+	}
+	return info.Mode()&os.ModeCharDevice != 0
+}
+
+func runtimeSnapshotMetadataJSON(meta runtimeSnapshotMetadata) (string, error) {
+	data, err := json.MarshalIndent(meta, "", "  ")
+	if err != nil {
+		return "", err
+	}
+	return string(append(data, '\n')), nil
+}
+
 func (c runtimeConfig) managedUploadsDir() string {
 	return filepath.Join(c.ManagedDir, firstNonEmpty(c.UploadsPath, "uploads"))
 }
@@ -142,6 +296,16 @@ func (c runtimeCommandRunner) ensureUpInstalledActive(runtimeDir string) error {
 	return nil
 }
 
+func (c runtimeCommandRunner) runtimeReadyForSnapshot(runtimeDir string) bool {
+	if err := runCommandSpecQuiet(execSpec{Dir: runtimeDir, Args: runtimeWpProbeArgs(c.cfg, "core", "is-installed")}); err != nil {
+		return false
+	}
+	if err := runCommandSpecQuiet(execSpec{Dir: runtimeDir, Args: runtimeWpThemeIsActiveArgs(c.cfg, "")}); err != nil {
+		return false
+	}
+	return true
+}
+
 func (c runtimeCommandRunner) Execute(root string, extraArgs []string) error {
 	if err := ensureManagedRuntime(c.cfg); err != nil {
 		return err
@@ -185,6 +349,423 @@ func (c runtimeCommandRunner) Render() string {
 	default:
 		return c.name
 	}
+}
+
+func ensureRuntimeReadyForSnapshot(cfg runtimeConfig) error {
+	if err := ensureManagedRuntime(cfg); err != nil {
+		return err
+	}
+	runner := runtimeCommandRunner{name: "up", cfg: cfg}
+	if runner.runtimeReadyForSnapshot(cfg.ManagedDir) {
+		return nil
+	}
+	return runner.ensureUpInstalledActive(cfg.ManagedDir)
+}
+
+func runtimeSnapshotCreateScript(name string) string {
+	containerDir := runtimeSnapshotContainerDir(name)
+	wpContentArchive := runtimeSnapshotContainerWpContentArchive(name)
+	return fmt.Sprintf(`set -eu
+mkdir -p "%s"
+wp db export "%s/database.sql" --allow-root
+gzip -f "%s/database.sql"
+dirs=""
+for dir in wp-content/uploads wp-content/plugins wp-content/mu-plugins wp-content/languages; do
+  if [ -e "/var/www/html/$dir" ]; then
+    dirs="$dirs $dir"
+  fi
+done
+if [ -n "$dirs" ]; then
+  # shellcheck disable=SC2086
+  tar -C /var/www/html -czf "%s" $dirs
+else
+  tar -C /var/www/html -czf "%s" --files-from /dev/null
+fi
+`, containerDir, containerDir, containerDir, wpContentArchive, wpContentArchive)
+}
+
+func runtimeSnapshotRestoreScript(name string) string {
+	databaseArchive := runtimeSnapshotContainerDatabaseArchive(name)
+	wpContentArchive := runtimeSnapshotContainerWpContentArchive(name)
+	return fmt.Sprintf(`set -eu
+tmpdir="$(mktemp -d)"
+trap 'rm -rf "$tmpdir"' EXIT
+gzip -cd "%s" > "$tmpdir/database.sql"
+wp db import "$tmpdir/database.sql" --allow-root
+if [ -f "%s" ]; then
+  rm -rf /var/www/html/wp-content/uploads /var/www/html/wp-content/plugins /var/www/html/wp-content/mu-plugins /var/www/html/wp-content/languages
+  tar -xzf "%s" -C /var/www/html
+fi
+`, databaseArchive, wpContentArchive, wpContentArchive)
+}
+
+func runtimeSnapshotComposeArgs(cfg runtimeConfig, args ...string) []string {
+	return append(runtimeComposeArgs(cfg, "run", "--rm", firstNonEmpty(cfg.CliService, "cli"), "sh", "-lc"), args...)
+}
+
+func runCommandSpecNoPreview(spec execSpec) error {
+	if len(spec.Args) == 0 {
+		return fmt.Errorf("unsupported repo command type")
+	}
+	cmd := exec.Command(spec.Args[0], spec.Args[1:]...)
+	cmd.Dir = spec.Dir
+	cmd.Stdout = os.Stdout
+	cmd.Stderr = os.Stderr
+	cmd.Stdin = os.Stdin
+	return cmd.Run()
+}
+
+func runtimeSnapshotCreateArchives(cfg runtimeConfig, name string) error {
+	if err := os.MkdirAll(runtimeSnapshotDir(cfg, name), 0o755); err != nil {
+		return err
+	}
+	if err := os.Chmod(runtimeSnapshotDir(cfg, name), 0o777); err != nil {
+		return err
+	}
+	if err := runCommandSpecNoPreview(execSpec{Dir: cfg.ManagedDir, Args: runtimeSnapshotComposeArgs(cfg, runtimeSnapshotCreateScript(name))}); err != nil {
+		return err
+	}
+	return nil
+}
+
+func runtimeSnapshotRestoreArchives(cfg runtimeConfig, name string) error {
+	if err := runCommandSpecNoPreview(execSpec{Dir: cfg.ManagedDir, Args: runtimeSnapshotComposeArgs(cfg, runtimeSnapshotRestoreScript(name))}); err != nil {
+		return err
+	}
+	return nil
+}
+
+func runtimeSnapshotMetadataFromFile(path string) (runtimeSnapshotMetadata, error) {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return runtimeSnapshotMetadata{}, err
+	}
+	var meta runtimeSnapshotMetadata
+	if err := json.Unmarshal(data, &meta); err != nil {
+		return runtimeSnapshotMetadata{}, err
+	}
+	return meta, nil
+}
+
+func runtimeSnapshotArchiveSize(path string) int64 {
+	info, err := os.Stat(path)
+	if err != nil {
+		return -1
+	}
+	return info.Size()
+}
+
+func runtimeSnapshotCreatedAt(meta runtimeSnapshotMetadata) time.Time {
+	if meta.CreatedAt == "" {
+		return time.Time{}
+	}
+	if parsed, err := time.Parse(time.RFC3339, meta.CreatedAt); err == nil {
+		return parsed
+	}
+	return time.Time{}
+}
+
+func loadRuntimeSnapshots(cfg runtimeConfig) ([]runtimeSnapshotRecord, error) {
+	dir := runtimeSnapshotProjectDir(cfg)
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil, nil
+		}
+		return nil, err
+	}
+	records := make([]runtimeSnapshotRecord, 0, len(entries))
+	for _, entry := range entries {
+		if !entry.IsDir() {
+			continue
+		}
+		name := entry.Name()
+		meta, err := runtimeSnapshotMetadataFromFile(runtimeSnapshotMetadataPath(cfg, name))
+		if err != nil {
+			continue
+		}
+		record := runtimeSnapshotRecord{
+			Metadata:         meta,
+			Directory:        runtimeSnapshotDir(cfg, name),
+			DatabaseArchive:  runtimeSnapshotHostDatabaseArchive(cfg, name),
+			WpContentArchive: runtimeSnapshotHostWpContentArchive(cfg, name),
+			DatabaseSize:     runtimeSnapshotArchiveSize(runtimeSnapshotHostDatabaseArchive(cfg, name)),
+			WpContentSize:    runtimeSnapshotArchiveSize(runtimeSnapshotHostWpContentArchive(cfg, name)),
+			CreatedAt:        runtimeSnapshotCreatedAt(meta),
+		}
+		records = append(records, record)
+	}
+	sort.Slice(records, func(i, j int) bool {
+		left := records[i]
+		right := records[j]
+		if !left.CreatedAt.IsZero() && !right.CreatedAt.IsZero() && !left.CreatedAt.Equal(right.CreatedAt) {
+			return left.CreatedAt.After(right.CreatedAt)
+		}
+		if left.Metadata.CreatedAt != right.Metadata.CreatedAt {
+			return left.Metadata.CreatedAt > right.Metadata.CreatedAt
+		}
+		return left.Metadata.Name < right.Metadata.Name
+	})
+	return records, nil
+}
+
+func formatRuntimeSnapshotTime(value string) string {
+	if value == "" {
+		return "-"
+	}
+	if parsed, err := time.Parse(time.RFC3339, value); err == nil {
+		return parsed.UTC().Format("2006-01-02 15:04:05")
+	}
+	return value
+}
+
+func formatRuntimeSnapshotSize(size int64) string {
+	if size < 0 {
+		return "-"
+	}
+	if size < 1024 {
+		return fmt.Sprintf("%d B", size)
+	}
+	units := []string{"KiB", "MiB", "GiB", "TiB"}
+	value := float64(size)
+	unit := 0
+	for value >= 1024 && unit < len(units)-1 {
+		value /= 1024
+		unit++
+	}
+	if value >= 10 {
+		return fmt.Sprintf("%.0f %s", value, units[unit])
+	}
+	return fmt.Sprintf("%.1f %s", value, units[unit])
+}
+
+func runtimeSnapshotRows(records []runtimeSnapshotRecord) [][]string {
+	rows := [][]string{{"name", "created", "database", "wp-content", "path"}}
+	for _, record := range records {
+		rows = append(rows, []string{
+			firstNonEmpty(record.Metadata.Name, filepath.Base(record.Directory)),
+			formatRuntimeSnapshotTime(record.Metadata.CreatedAt),
+			formatRuntimeSnapshotSize(record.DatabaseSize),
+			formatRuntimeSnapshotSize(record.WpContentSize),
+			record.Directory,
+		})
+	}
+	return rows
+}
+
+func chooseRuntimeSnapshot(records []runtimeSnapshotRecord, action string) (runtimeSnapshotRecord, error) {
+	options := make([]ui.SelectOption, 0, len(records))
+	for _, record := range records {
+		name := firstNonEmpty(record.Metadata.Name, filepath.Base(record.Directory))
+		if name == "" {
+			continue
+		}
+		label := fmt.Sprintf("%s / %s / %s / %s", name, formatRuntimeSnapshotTime(record.Metadata.CreatedAt), formatRuntimeSnapshotSize(record.DatabaseSize), formatRuntimeSnapshotSize(record.WpContentSize))
+		options = append(options, ui.SelectOption{Label: label, Value: name})
+	}
+	if len(options) == 0 {
+		return runtimeSnapshotRecord{}, fmt.Errorf("No runtime snapshots found.")
+	}
+	selected, err := runtimeSnapshotSelect(fmt.Sprintf("Choose a runtime snapshot to %s", action), options)
+	if err != nil {
+		return runtimeSnapshotRecord{}, err
+	}
+	for _, record := range records {
+		if firstNonEmpty(record.Metadata.Name, filepath.Base(record.Directory)) == selected {
+			return record, nil
+		}
+	}
+	return runtimeSnapshotRecord{}, fmt.Errorf("runtime snapshot %q was not found", selected)
+}
+
+func cmdRuntimeSnapshotCreate(cfg runtimeConfig, name string, nonInteractive bool) int {
+	if strings.TrimSpace(name) == "" {
+		if nonInteractive || !runtimeSnapshotIsInteractive() {
+			fmt.Fprintln(os.Stderr, "runtime snapshot create requires a name when stdin is not interactive")
+			return 1
+		}
+		defaultName := defaultRuntimeSnapshotName(time.Now())
+		prompted, err := runtimeSnapshotPromptString("Snapshot name", defaultName, false)
+		if err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			return 1
+		}
+		name = prompted
+	}
+	normalized, err := runtimeSnapshotNormalizedName(name)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		return 1
+	}
+	if runtimeSnapshotExists(cfg, normalized) {
+		fmt.Fprintf(os.Stderr, "runtime snapshot %q already exists.\n", normalized)
+		return 1
+	}
+	if err := ensureRuntimeReadyForSnapshot(cfg); err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		return 1
+	}
+	if err := runtimeSnapshotCreateArchives(cfg, normalized); err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		return 1
+	}
+	meta := newRuntimeSnapshotMetadata(cfg, normalized, time.Now())
+	jsonText, err := runtimeSnapshotMetadataJSON(meta)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		return 1
+	}
+	if err := os.WriteFile(runtimeSnapshotMetadataPath(cfg, normalized), []byte(jsonText), 0o644); err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		return 1
+	}
+	fmt.Printf("Snapshot created.\n\nSnapshot:\n  project: %s\n  name: %s\n  path: %s\n  database: database.sql.gz\n  wp-content: wp-content.tar.gz\n", cfg.ProjectSlug, normalized, runtimeSnapshotDir(cfg, normalized))
+	return 0
+}
+
+func cmdRuntimeSnapshotList(cfg runtimeConfig) int {
+	records, err := loadRuntimeSnapshots(cfg)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		return 1
+	}
+	if len(records) == 0 {
+		fmt.Println("No runtime snapshots found.")
+		return 0
+	}
+	fmt.Println(formatTable(runtimeSnapshotRows(records)))
+	return 0
+}
+
+func cmdRuntimeSnapshotDelete(cfg runtimeConfig, name string, nonInteractive bool) int {
+	records, err := loadRuntimeSnapshots(cfg)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		return 1
+	}
+	selectedName := strings.TrimSpace(name)
+	if selectedName == "" {
+		if nonInteractive || !runtimeSnapshotIsInteractive() {
+			fmt.Fprintln(os.Stderr, "runtime snapshot delete requires a name when stdin is not interactive")
+			return 1
+		}
+		record, err := chooseRuntimeSnapshot(records, "delete")
+		if err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			return 1
+		}
+		selectedName = firstNonEmpty(record.Metadata.Name, filepath.Base(record.Directory))
+	}
+	normalized, err := runtimeSnapshotNormalizedName(selectedName)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		return 1
+	}
+	path := runtimeSnapshotDir(cfg, normalized)
+	if _, err := os.Stat(path); err != nil {
+		if os.IsNotExist(err) {
+			fmt.Fprintf(os.Stderr, "No runtime snapshot matched %q.\n", normalized)
+			return 1
+		}
+		fmt.Fprintln(os.Stderr, err)
+		return 1
+	}
+	if nonInteractive || !runtimeSnapshotIsInteractive() {
+		fmt.Fprintln(os.Stderr, "runtime snapshot delete requires an interactive terminal for confirmation")
+		return 1
+	}
+	confirmed, err := runtimeSnapshotConfirm(fmt.Sprintf("Delete runtime snapshot %q? This removes %s.", normalized, path), false)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		return 1
+	}
+	if !confirmed {
+		fmt.Fprintln(os.Stderr, "Aborted.")
+		return 1
+	}
+	if err := os.RemoveAll(path); err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		return 1
+	}
+	fmt.Printf("Deleted runtime snapshot.\n\nDeleted:\n  name: %s\n  path: %s\n", normalized, path)
+	return 0
+}
+
+func cmdRuntimeSnapshotRestore(cfg runtimeConfig, name string, nonInteractive bool) int {
+	records, err := loadRuntimeSnapshots(cfg)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		return 1
+	}
+	selectedName := strings.TrimSpace(name)
+	if selectedName == "" {
+		if nonInteractive || !runtimeSnapshotIsInteractive() {
+			fmt.Fprintln(os.Stderr, "runtime snapshot restore requires a name when stdin is not interactive")
+			return 1
+		}
+		record, err := chooseRuntimeSnapshot(records, "restore")
+		if err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			return 1
+		}
+		selectedName = firstNonEmpty(record.Metadata.Name, filepath.Base(record.Directory))
+	}
+	normalized, err := runtimeSnapshotNormalizedName(selectedName)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		return 1
+	}
+	path := runtimeSnapshotDir(cfg, normalized)
+	if _, err := os.Stat(path); err != nil {
+		if os.IsNotExist(err) {
+			fmt.Fprintf(os.Stderr, "No runtime snapshot matched %q.\n", normalized)
+			return 1
+		}
+		fmt.Fprintln(os.Stderr, err)
+		return 1
+	}
+	if nonInteractive || !runtimeSnapshotIsInteractive() {
+		fmt.Fprintln(os.Stderr, "runtime snapshot restore requires an interactive terminal for confirmation")
+		return 1
+	}
+	confirmed, err := runtimeSnapshotConfirm(fmt.Sprintf("Restore runtime snapshot %q? This will overwrite the current runtime database and mutable wp-content.", normalized), false)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		return 1
+	}
+	if !confirmed {
+		fmt.Fprintln(os.Stderr, "Aborted.")
+		return 1
+	}
+	if err := ensureRuntimeReadyForSnapshot(cfg); err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		return 1
+	}
+	safetyName := defaultPreRestoreSnapshotName(time.Now())
+	if runtimeSnapshotExists(cfg, safetyName) {
+		fmt.Fprintf(os.Stderr, "runtime snapshot %q already exists.\n", safetyName)
+		return 1
+	}
+	if err := runtimeSnapshotCreateArchives(cfg, safetyName); err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		return 1
+	}
+	safetyMeta := newRuntimeSnapshotMetadata(cfg, safetyName, time.Now())
+	jsonText, err := runtimeSnapshotMetadataJSON(safetyMeta)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		return 1
+	}
+	if err := os.WriteFile(runtimeSnapshotMetadataPath(cfg, safetyName), []byte(jsonText), 0o644); err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		return 1
+	}
+	if err := runtimeSnapshotRestoreArchives(cfg, normalized); err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		return 1
+	}
+	fmt.Printf("Snapshot restored.\n\nRestored:\n  project: %s\n  name: %s\n\nSafety snapshot:\n  name: %s\n  path: %s\n", cfg.ProjectSlug, normalized, safetyName, runtimeSnapshotDir(cfg, safetyName))
+	return 0
 }
 
 type execSpec struct {
@@ -257,6 +838,12 @@ func ensureManagedRuntime(cfg runtimeConfig) error {
 		return fmt.Errorf("missing managed runtime directory")
 	}
 	if err := os.MkdirAll(cfg.ManagedDir, 0o755); err != nil {
+		return err
+	}
+	if err := os.MkdirAll(runtimeSnapshotProjectDir(cfg), 0o755); err != nil {
+		return err
+	}
+	if err := os.Chmod(runtimeSnapshotProjectDir(cfg), 0o777); err != nil {
 		return err
 	}
 	files := map[string]string{
@@ -1593,6 +2180,7 @@ func renderRuntimeCompose(cfg runtimeConfig) string {
       - wp_data:/var/www/html
       - %s:/var/www/html/wp-content/themes/%s
       - ./%s:%s
+      - %s:/runtime-snapshots
 
   mailpit:
     image: axllent/mailpit
@@ -1602,7 +2190,7 @@ func renderRuntimeCompose(cfg runtimeConfig) string {
 volumes:
   db_data:
   wp_data:
-`, wordpressService, themePath, themeMountSlug, cliService, wordpressService, themePath, themeMountSlug, uploadsPath, path.Join("/", "runtime", uploadsPath))
+`, wordpressService, themePath, themeMountSlug, cliService, wordpressService, themePath, themeMountSlug, uploadsPath, path.Join("/", "runtime", uploadsPath), runtimeSnapshotComposeMount(cfg))
 }
 
 func renderRuntimeEnv(cfg runtimeConfig) string {
@@ -1872,6 +2460,7 @@ func runRuntimeHelp() int {
 		"reset               destroy and recreate the local runtime",
 		"shell               open a shell in the WordPress container",
 		"wp -- <args>        run wp-cli in the local runtime",
+		"snapshot            manage runtime snapshots",
 		"info                show local runtime paths, ports, and URLs",
 	})
 	fmt.Println("\nShortcuts:")
@@ -1920,10 +2509,13 @@ func runRuntime(argv []string) int {
 	}
 	name := argv[0]
 	switch name {
-	case "info", "up", "down", "logs", "reset", "shell", "wp":
+	case "info", "up", "down", "logs", "reset", "shell", "wp", "snapshot":
 	default:
 		fmt.Fprintln(os.Stderr, "unsupported runtime command")
 		return 1
+	}
+	if name == "snapshot" {
+		return runRuntimeSnapshot(argv[1:])
 	}
 	if name == "info" && len(argv) != 1 {
 		fmt.Fprintln(os.Stderr, "runtime info takes no arguments")
@@ -1991,6 +2583,79 @@ func runRuntime(argv []string) int {
 		fmt.Println(renderRuntimeInfo(cfg, false))
 	}
 	return 0
+}
+
+func runRuntimeSnapshot(argv []string) int {
+	if len(argv) == 0 || argv[0] == "help" {
+		printGroupHelp("runtime snapshot", []string{
+			"create [name]       create a runtime snapshot",
+			"list                list runtime snapshots",
+			"ls                  alias for list",
+			"restore [name]      restore a runtime snapshot",
+			"delete [name]       delete a runtime snapshot",
+		})
+		return 0
+	}
+	cmd := argv[0]
+	args := argv[1:]
+	switch cmd {
+	case "list", "ls":
+		if len(args) != 0 {
+			fmt.Fprintln(os.Stderr, "runtime snapshot list takes no arguments")
+			return 1
+		}
+	case "create", "restore", "delete":
+		if len(args) > 1 {
+			fmt.Fprintln(os.Stderr, "runtime snapshot command takes at most one name")
+			return 1
+		}
+	default:
+		fmt.Fprintln(os.Stderr, "unsupported runtime snapshot command")
+		return 1
+	}
+	if err := requireProjectContext("runtime snapshot " + cmd); err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		return 1
+	}
+	root, err := discoverProjectRootOrError()
+	if err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		return 1
+	}
+	metadata, err := loadProjectMetadataOrError(root)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		return 1
+	}
+	cfg, ok := loadRuntimeConfig(root, metadata)
+	if !ok {
+		fmt.Fprintln(os.Stderr, "Missing runtime metadata in .nf/project.json. Run nf runtime up first.")
+		return 1
+	}
+	switch cmd {
+	case "list", "ls":
+		return cmdRuntimeSnapshotList(cfg)
+	case "create":
+		name := ""
+		if len(args) == 1 {
+			name = args[0]
+		}
+		return cmdRuntimeSnapshotCreate(cfg, name, false)
+	case "restore":
+		name := ""
+		if len(args) == 1 {
+			name = args[0]
+		}
+		return cmdRuntimeSnapshotRestore(cfg, name, false)
+	case "delete":
+		name := ""
+		if len(args) == 1 {
+			name = args[0]
+		}
+		return cmdRuntimeSnapshotDelete(cfg, name, false)
+	default:
+		return 1
+	}
 }
 
 func runHelp() int {

@@ -11,6 +11,7 @@ import (
 	"reflect"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/nonfiction/nf/internal/config"
 )
@@ -137,7 +138,7 @@ func TestRunHelpShowsRepoMetadataOutsideGit(t *testing.T) {
 			t.Fatalf("runHelp() output missing %q:\n%s", wanted, output)
 		}
 	}
-	for _, unwanted := range []string{"\n  theme         package theme artifacts\n", "Shortcuts:", "nf up", "nf shell", "\n  commands\n", "\n  run <name>\n", "\n  build\n"} {
+	for _, unwanted := range []string{"\n  theme         package theme artifacts\n", "Shortcuts:", "nf up", "nf shell", "snapshot create", "\n  commands\n", "\n  run <name>\n", "\n  build\n"} {
 		if strings.Contains(output, unwanted) {
 			t.Fatalf("runHelp() output unexpectedly contained %q:\n%s", unwanted, output)
 		}
@@ -164,7 +165,7 @@ func TestRunHelpShowsRepoCommandsInsideGit(t *testing.T) {
 			t.Fatalf("runHelp() output missing %q:\n%s", wanted, output)
 		}
 	}
-	for _, unwanted := range []string{"Shortcuts:", "nf up", "nf shell", "\n  theme         package theme artifacts\n", "\n  commands\n", "\n  run <name>\n", "\n  build\n"} {
+	for _, unwanted := range []string{"Shortcuts:", "nf up", "nf shell", "snapshot create", "\n  theme         package theme artifacts\n", "\n  commands\n", "\n  run <name>\n", "\n  build\n"} {
 		if strings.Contains(output, unwanted) {
 			t.Fatalf("runHelp() output unexpectedly contained %q:\n%s", unwanted, output)
 		}
@@ -173,13 +174,369 @@ func TestRunHelpShowsRepoCommandsInsideGit(t *testing.T) {
 
 func TestRunRuntimeHelpShowsCommandsAndShortcuts(t *testing.T) {
 	output := captureStdout(t, func() { _ = runRuntimeHelp() })
-	for _, wanted := range []string{"runtime\n\nCommands:\n", "\n  info                show local runtime paths, ports, and URLs\n", "\n  up                  start the local runtime\n", "\n  down                stop the local runtime\n", "\n  shell               open a shell in the WordPress container\n", "\n  wp -- <args>        run wp-cli in the local runtime\n", "\nShortcuts:\n", "\n  nf info             shortcut for nf runtime info\n", "\n  nf up               shortcut for nf runtime up\n", "\n  nf shell            shortcut for nf runtime shell\n", "\n  nf wp -- <args>     shortcut for nf runtime wp -- <args>\n"} {
+	for _, wanted := range []string{"runtime\n\nCommands:\n", "\n  info                show local runtime paths, ports, and URLs\n", "\n  up                  start the local runtime\n", "\n  down                stop the local runtime\n", "\n  shell               open a shell in the WordPress container\n", "\n  wp -- <args>        run wp-cli in the local runtime\n", "\n  snapshot            manage runtime snapshots\n", "\nShortcuts:\n", "\n  nf info             shortcut for nf runtime info\n", "\n  nf up               shortcut for nf runtime up\n", "\n  nf shell            shortcut for nf runtime shell\n", "\n  nf wp -- <args>     shortcut for nf runtime wp -- <args>\n"} {
 		if !strings.Contains(output, wanted) {
 			t.Fatalf("runRuntimeHelp() output missing %q:\n%s", wanted, output)
 		}
 	}
+	for _, unwanted := range []string{"snapshot create", "snapshot list", "snapshot restore", "snapshot delete", "nf runtime snapshots"} {
+		if strings.Contains(output, unwanted) {
+			t.Fatalf("runRuntimeHelp() output unexpectedly contained %q:\n%s", unwanted, output)
+		}
+	}
 	if strings.Contains(output, "repo tasks") {
 		t.Fatalf("runRuntimeHelp() output unexpectedly mentioned repo tasks:\n%s", output)
+	}
+}
+
+func TestRunRuntimeSnapshotHelpShowsAlias(t *testing.T) {
+	output := captureStdout(t, func() { _ = runRuntimeSnapshot([]string{"help"}) })
+	for _, want := range []string{"runtime snapshot\n\nCommands:\n", "\n  create [name]       create a runtime snapshot\n", "\n  list                list runtime snapshots\n", "\n  ls                  alias for list\n", "\n  restore [name]      restore a runtime snapshot\n", "\n  delete [name]       delete a runtime snapshot\n"} {
+		if !strings.Contains(output, want) {
+			t.Fatalf("runRuntimeSnapshot(help) output missing %q:\n%s", want, output)
+		}
+	}
+	if strings.Contains(output, "nf runtime snapshots") || strings.Contains(output, "shortcut for snapshot list") {
+		t.Fatalf("runRuntimeSnapshot(help) output unexpectedly mentioned removed alias:\n%s", output)
+	}
+}
+
+func TestRunRuntimeSnapshotLsRoutesToList(t *testing.T) {
+	configHome := t.TempDir()
+	t.Setenv("NF_CONFIG_HOME", configHome)
+	repoRoot := t.TempDir()
+	if err := os.Mkdir(filepath.Join(repoRoot, ".git"), 0o755); err != nil {
+		t.Fatalf("Mkdir() error = %v", err)
+	}
+	if err := os.MkdirAll(filepath.Join(repoRoot, ".nf"), 0o755); err != nil {
+		t.Fatalf("MkdirAll() error = %v", err)
+	}
+	project := map[string]any{"schema": 1, "project": map[string]any{"slug": "client", "name": "Client"}, "wordpress": map[string]any{"theme_path": "theme", "theme_slug": "theme"}, "runtime": map[string]any{"compose": "docker compose", "wordpress_service": "wordpress", "cli_service": "cli", "theme_mount_slug": "theme", "uploads_path": "uploads"}}
+	data, err := json.MarshalIndent(project, "", "  ")
+	if err != nil {
+		t.Fatalf("MarshalIndent() error = %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(repoRoot, ".nf", "project.json"), append(data, '\n'), 0o644); err != nil {
+		t.Fatalf("WriteFile() error = %v", err)
+	}
+	oldwd, err := os.Getwd()
+	if err != nil {
+		t.Fatalf("Getwd() error = %v", err)
+	}
+	if err := os.Chdir(repoRoot); err != nil {
+		t.Fatalf("Chdir() error = %v", err)
+	}
+	t.Cleanup(func() { _ = os.Chdir(oldwd) })
+
+	output := captureStdout(t, func() {
+		if got := Run([]string{"runtime", "snapshot", "ls"}); got != 0 {
+			t.Fatalf("Run() = %d, want 0", got)
+		}
+	})
+	if !strings.Contains(output, "No runtime snapshots found.") {
+		t.Fatalf("Run() output = %q, want empty snapshot message", output)
+	}
+}
+
+func TestRunRuntimeSnapshotCreateSkipsComposeUpWhenReady(t *testing.T) {
+	configHome := t.TempDir()
+	t.Setenv("NF_CONFIG_HOME", configHome)
+	repoRoot := t.TempDir()
+	if err := os.Mkdir(filepath.Join(repoRoot, ".git"), 0o755); err != nil {
+		t.Fatalf("Mkdir() error = %v", err)
+	}
+	if err := os.MkdirAll(filepath.Join(repoRoot, ".nf"), 0o755); err != nil {
+		t.Fatalf("MkdirAll() error = %v", err)
+	}
+	if err := os.MkdirAll(filepath.Join(repoRoot, "theme"), 0o755); err != nil {
+		t.Fatalf("MkdirAll(theme) error = %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(repoRoot, "theme", "style.css"), []byte("/* demo */\n"), 0o644); err != nil {
+		t.Fatalf("WriteFile(style.css) error = %v", err)
+	}
+	project := map[string]any{"schema": 1, "project": map[string]any{"slug": "client", "name": "Client"}, "wordpress": map[string]any{"theme_path": "theme", "theme_slug": "theme"}, "runtime": map[string]any{"compose": "docker compose", "wordpress_service": "wordpress", "cli_service": "cli", "theme_mount_slug": "theme", "uploads_path": "uploads"}}
+	data, err := json.MarshalIndent(project, "", "  ")
+	if err != nil {
+		t.Fatalf("MarshalIndent() error = %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(repoRoot, ".nf", "project.json"), append(data, '\n'), 0o644); err != nil {
+		t.Fatalf("WriteFile() error = %v", err)
+	}
+	snapshotDir := filepath.Join(configHome, "snapshots", "client", "demo-snapshot")
+	dockerDir := t.TempDir()
+	dockerScript := []byte("#!/bin/sh\nexit 0\n")
+	if err := os.WriteFile(filepath.Join(dockerDir, "docker"), dockerScript, 0o755); err != nil {
+		t.Fatalf("WriteFile(docker) error = %v", err)
+	}
+	t.Setenv("PATH", dockerDir+string(os.PathListSeparator)+os.Getenv("PATH"))
+
+	oldwd, err := os.Getwd()
+	if err != nil {
+		t.Fatalf("Getwd() error = %v", err)
+	}
+	if err := os.Chdir(repoRoot); err != nil {
+		t.Fatalf("Chdir() error = %v", err)
+	}
+	t.Cleanup(func() { _ = os.Chdir(oldwd) })
+
+	output := captureStdout(t, func() {
+		if got := Run([]string{"runtime", "snapshot", "create", "demo-snapshot"}); got != 0 {
+			t.Fatalf("Run() = %d, want 0", got)
+		}
+	})
+	for _, want := range []string{"Snapshot created.", "project: client", "name: demo-snapshot", "> docker compose run --rm cli wp core is-installed --allow-root", "> docker compose run --rm cli wp theme is-active theme --allow-root"} {
+		if !strings.Contains(output, want) {
+			t.Fatalf("Run() output missing %q:\n%s", want, output)
+		}
+	}
+	if strings.Contains(output, "> docker compose up -d") {
+		t.Fatalf("Run() output unexpectedly included compose up:\n%s", output)
+	}
+	if strings.Contains(output, "> docker compose run --rm cli sh -lc") {
+		t.Fatalf("Run() output unexpectedly exposed snapshot shell script preview:\n%s", output)
+	}
+	if _, err := os.Stat(filepath.Join(snapshotDir, "snapshot.json")); err != nil {
+		t.Fatalf("snapshot metadata missing: %v", err)
+	}
+}
+
+func TestRunRuntimeSnapshotListShowsSnapshots(t *testing.T) {
+	configHome := t.TempDir()
+	t.Setenv("NF_CONFIG_HOME", configHome)
+	repoRoot := t.TempDir()
+	if err := os.Mkdir(filepath.Join(repoRoot, ".git"), 0o755); err != nil {
+		t.Fatalf("Mkdir() error = %v", err)
+	}
+	if err := os.MkdirAll(filepath.Join(repoRoot, ".nf"), 0o755); err != nil {
+		t.Fatalf("MkdirAll() error = %v", err)
+	}
+	project := map[string]any{"schema": 1, "project": map[string]any{"slug": "client", "name": "Client"}, "wordpress": map[string]any{"theme_path": "theme", "theme_slug": "theme"}, "runtime": map[string]any{"compose": "docker compose", "wordpress_service": "wordpress", "cli_service": "cli", "theme_mount_slug": "theme", "uploads_path": "uploads"}}
+	data, err := json.MarshalIndent(project, "", "  ")
+	if err != nil {
+		t.Fatalf("MarshalIndent() error = %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(repoRoot, ".nf", "project.json"), append(data, '\n'), 0o644); err != nil {
+		t.Fatalf("WriteFile() error = %v", err)
+	}
+	if err := os.MkdirAll(filepath.Join(repoRoot, "theme"), 0o755); err != nil {
+		t.Fatalf("MkdirAll(theme) error = %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(repoRoot, "theme", "style.css"), []byte("/* demo */\n"), 0o644); err != nil {
+		t.Fatalf("WriteFile(style.css) error = %v", err)
+	}
+	snapshotDir := filepath.Join(configHome, "snapshots", "client", "2026-05-28-093012")
+	if err := os.MkdirAll(snapshotDir, 0o755); err != nil {
+		t.Fatalf("MkdirAll(snapshotDir) error = %v", err)
+	}
+	meta := runtimeSnapshotMetadata{
+		Schema:         runtimeSnapshotSchema,
+		Name:           "2026-05-28-093012",
+		ProjectSlug:    "client",
+		CreatedAt:      "2026-05-28T09:30:12Z",
+		RuntimePath:    filepath.Join(configHome, "runtimes", "client"),
+		ComposeProject: "nf_client_runtime",
+		WordpressURL:   "http://localhost:18432",
+		Contents:       runtimeSnapshotContents{Database: "database.sql.gz", WpContent: "wp-content.tar.gz", WpContentPaths: runtimeSnapshotContentPaths()},
+	}
+	metaJSON, err := runtimeSnapshotMetadataJSON(meta)
+	if err != nil {
+		t.Fatalf("runtimeSnapshotMetadataJSON() error = %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(snapshotDir, "snapshot.json"), []byte(metaJSON), 0o644); err != nil {
+		t.Fatalf("WriteFile(snapshot.json) error = %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(snapshotDir, "database.sql.gz"), []byte("db"), 0o644); err != nil {
+		t.Fatalf("WriteFile(database.sql.gz) error = %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(snapshotDir, "wp-content.tar.gz"), []byte("content"), 0o644); err != nil {
+		t.Fatalf("WriteFile(wp-content.tar.gz) error = %v", err)
+	}
+	oldwd, err := os.Getwd()
+	if err != nil {
+		t.Fatalf("Getwd() error = %v", err)
+	}
+	if err := os.Chdir(repoRoot); err != nil {
+		t.Fatalf("Chdir() error = %v", err)
+	}
+	t.Cleanup(func() { _ = os.Chdir(oldwd) })
+
+	output := captureStdout(t, func() {
+		if got := Run([]string{"runtime", "snapshot", "list"}); got != 0 {
+			t.Fatalf("Run() = %d, want 0", got)
+		}
+	})
+	for _, want := range []string{"2026-05-28-093012", "2026-05-28 09:30:12", "2 B", "7 B", snapshotDir} {
+		if !strings.Contains(output, want) {
+			t.Fatalf("Run() output missing %q:\n%s", want, output)
+		}
+	}
+}
+
+func TestRunRuntimeSnapshotRestoreSkipsComposeUpWhenReady(t *testing.T) {
+	configHome := t.TempDir()
+	t.Setenv("NF_CONFIG_HOME", configHome)
+	repoRoot := t.TempDir()
+	if err := os.Mkdir(filepath.Join(repoRoot, ".git"), 0o755); err != nil {
+		t.Fatalf("Mkdir() error = %v", err)
+	}
+	if err := os.MkdirAll(filepath.Join(repoRoot, ".nf"), 0o755); err != nil {
+		t.Fatalf("MkdirAll() error = %v", err)
+	}
+	if err := os.MkdirAll(filepath.Join(repoRoot, "theme"), 0o755); err != nil {
+		t.Fatalf("MkdirAll(theme) error = %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(repoRoot, "theme", "style.css"), []byte("/* demo */\n"), 0o644); err != nil {
+		t.Fatalf("WriteFile(style.css) error = %v", err)
+	}
+	project := map[string]any{"schema": 1, "project": map[string]any{"slug": "client", "name": "Client"}, "wordpress": map[string]any{"theme_path": "theme", "theme_slug": "theme"}, "runtime": map[string]any{"compose": "docker compose", "wordpress_service": "wordpress", "cli_service": "cli", "theme_mount_slug": "theme", "uploads_path": "uploads"}}
+	projectData, err := json.MarshalIndent(project, "", "  ")
+	if err != nil {
+		t.Fatalf("MarshalIndent() error = %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(repoRoot, ".nf", "project.json"), append(projectData, '\n'), 0o644); err != nil {
+		t.Fatalf("WriteFile(project.json) error = %v", err)
+	}
+	sourceSnapshotDir := filepath.Join(configHome, "snapshots", "client", "restore-source")
+	if err := os.MkdirAll(sourceSnapshotDir, 0o755); err != nil {
+		t.Fatalf("MkdirAll(sourceSnapshotDir) error = %v", err)
+	}
+	sourceMeta := runtimeSnapshotMetadata{
+		Schema:         runtimeSnapshotSchema,
+		Name:           "restore-source",
+		ProjectSlug:    "client",
+		CreatedAt:      "2026-05-28T09:30:12Z",
+		RuntimePath:    filepath.Join(configHome, "runtimes", "client"),
+		ComposeProject: "nf_client_runtime",
+		WordpressURL:   "http://localhost:18432",
+		Contents:       runtimeSnapshotContents{Database: "database.sql.gz", WpContent: "wp-content.tar.gz", WpContentPaths: runtimeSnapshotContentPaths()},
+	}
+	sourceMetaJSON, err := runtimeSnapshotMetadataJSON(sourceMeta)
+	if err != nil {
+		t.Fatalf("runtimeSnapshotMetadataJSON() error = %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(sourceSnapshotDir, "snapshot.json"), []byte(sourceMetaJSON), 0o644); err != nil {
+		t.Fatalf("WriteFile(snapshot.json) error = %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(sourceSnapshotDir, "database.sql.gz"), []byte("db"), 0o644); err != nil {
+		t.Fatalf("WriteFile(database.sql.gz) error = %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(sourceSnapshotDir, "wp-content.tar.gz"), []byte("content"), 0o644); err != nil {
+		t.Fatalf("WriteFile(wp-content.tar.gz) error = %v", err)
+	}
+	dockerDir := t.TempDir()
+	logPath := filepath.Join(dockerDir, "docker-args.txt")
+	dockerScript := []byte("#!/bin/sh\nprintf '%s\\n' \"$@\" >> \"$DOCKER_LOG\"\nexit 0\n")
+	if err := os.WriteFile(filepath.Join(dockerDir, "docker"), dockerScript, 0o755); err != nil {
+		t.Fatalf("WriteFile(docker) error = %v", err)
+	}
+	t.Setenv("DOCKER_LOG", logPath)
+	t.Setenv("PATH", dockerDir+string(os.PathListSeparator)+os.Getenv("PATH"))
+	oldIsInteractive := runtimeSnapshotIsInteractive
+	oldConfirm := runtimeSnapshotConfirm
+	runtimeSnapshotIsInteractive = func() bool { return true }
+	runtimeSnapshotConfirm = func(prompt string, defaultYes bool) (bool, error) { return true, nil }
+	t.Cleanup(func() {
+		runtimeSnapshotIsInteractive = oldIsInteractive
+		runtimeSnapshotConfirm = oldConfirm
+	})
+	oldwd, err := os.Getwd()
+	if err != nil {
+		t.Fatalf("Getwd() error = %v", err)
+	}
+	if err := os.Chdir(repoRoot); err != nil {
+		t.Fatalf("Chdir() error = %v", err)
+	}
+	t.Cleanup(func() { _ = os.Chdir(oldwd) })
+
+	output := captureStdout(t, func() {
+		if got := Run([]string{"runtime", "snapshot", "restore", "restore-source"}); got != 0 {
+			t.Fatalf("Run() = %d, want 0", got)
+		}
+	})
+	for _, want := range []string{"Snapshot restored.", "name: restore-source", "Safety snapshot:", "> docker compose run --rm cli wp core is-installed --allow-root", "> docker compose run --rm cli wp theme is-active theme --allow-root"} {
+		if !strings.Contains(output, want) {
+			t.Fatalf("Run() output missing %q:\n%s", want, output)
+		}
+	}
+	if strings.Contains(output, "> docker compose up -d") {
+		t.Fatalf("Run() output unexpectedly included compose up:\n%s", output)
+	}
+	if strings.Contains(output, "> docker compose run --rm cli sh -lc") {
+		t.Fatalf("Run() output unexpectedly exposed snapshot shell script preview:\n%s", output)
+	}
+	logData, err := os.ReadFile(logPath)
+	if err != nil {
+		t.Fatalf("ReadFile(docker log) error = %v", err)
+	}
+	logText := string(logData)
+	if strings.Index(logText, "wp db export") == -1 || strings.Index(logText, "wp db import") == -1 || strings.Index(logText, "wp db export") > strings.Index(logText, "wp db import") {
+		t.Fatalf("restore command order looks wrong:\n%s", logText)
+	}
+}
+
+func TestRunRuntimeSnapshotDeleteRemovesSnapshotAfterConfirmation(t *testing.T) {
+	configHome := t.TempDir()
+	t.Setenv("NF_CONFIG_HOME", configHome)
+	repoRoot := t.TempDir()
+	if err := os.Mkdir(filepath.Join(repoRoot, ".git"), 0o755); err != nil {
+		t.Fatalf("Mkdir() error = %v", err)
+	}
+	if err := os.MkdirAll(filepath.Join(repoRoot, ".nf"), 0o755); err != nil {
+		t.Fatalf("MkdirAll() error = %v", err)
+	}
+	project := map[string]any{"schema": 1, "project": map[string]any{"slug": "client", "name": "Client"}, "wordpress": map[string]any{"theme_path": "theme", "theme_slug": "theme"}, "runtime": map[string]any{"compose": "docker compose", "wordpress_service": "wordpress", "cli_service": "cli", "theme_mount_slug": "theme", "uploads_path": "uploads"}}
+	projectData, err := json.MarshalIndent(project, "", "  ")
+	if err != nil {
+		t.Fatalf("MarshalIndent() error = %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(repoRoot, ".nf", "project.json"), append(projectData, '\n'), 0o644); err != nil {
+		t.Fatalf("WriteFile(project.json) error = %v", err)
+	}
+	snapshotDir := filepath.Join(configHome, "snapshots", "client", "delete-me")
+	if err := os.MkdirAll(snapshotDir, 0o755); err != nil {
+		t.Fatalf("MkdirAll(snapshotDir) error = %v", err)
+	}
+	meta := runtimeSnapshotMetadata{Schema: runtimeSnapshotSchema, Name: "delete-me", ProjectSlug: "client", CreatedAt: "2026-05-28T09:30:12Z", RuntimePath: filepath.Join(configHome, "runtimes", "client"), ComposeProject: "nf_client_runtime", WordpressURL: "http://localhost:18432", Contents: runtimeSnapshotContents{Database: "database.sql.gz", WpContent: "wp-content.tar.gz", WpContentPaths: runtimeSnapshotContentPaths()}}
+	metaJSON, err := runtimeSnapshotMetadataJSON(meta)
+	if err != nil {
+		t.Fatalf("runtimeSnapshotMetadataJSON() error = %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(snapshotDir, "snapshot.json"), []byte(metaJSON), 0o644); err != nil {
+		t.Fatalf("WriteFile(snapshot.json) error = %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(snapshotDir, "database.sql.gz"), []byte("db"), 0o644); err != nil {
+		t.Fatalf("WriteFile(database.sql.gz) error = %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(snapshotDir, "wp-content.tar.gz"), []byte("content"), 0o644); err != nil {
+		t.Fatalf("WriteFile(wp-content.tar.gz) error = %v", err)
+	}
+	oldIsInteractive := runtimeSnapshotIsInteractive
+	oldConfirm := runtimeSnapshotConfirm
+	runtimeSnapshotIsInteractive = func() bool { return true }
+	runtimeSnapshotConfirm = func(prompt string, defaultYes bool) (bool, error) { return true, nil }
+	t.Cleanup(func() {
+		runtimeSnapshotIsInteractive = oldIsInteractive
+		runtimeSnapshotConfirm = oldConfirm
+	})
+	oldwd, err := os.Getwd()
+	if err != nil {
+		t.Fatalf("Getwd() error = %v", err)
+	}
+	if err := os.Chdir(repoRoot); err != nil {
+		t.Fatalf("Chdir() error = %v", err)
+	}
+	t.Cleanup(func() { _ = os.Chdir(oldwd) })
+
+	output := captureStdout(t, func() {
+		if got := Run([]string{"runtime", "snapshot", "delete", "delete-me"}); got != 0 {
+			t.Fatalf("Run() = %d, want 0", got)
+		}
+	})
+	if !strings.Contains(output, "Deleted runtime snapshot.") || !strings.Contains(output, "name: delete-me") || !strings.Contains(output, snapshotDir) {
+		t.Fatalf("Run() output = %q, want delete confirmation", output)
+	}
+	if _, err := os.Stat(snapshotDir); !os.IsNotExist(err) {
+		t.Fatalf("snapshot dir still exists: %v", err)
 	}
 }
 
@@ -652,13 +1009,54 @@ func TestRenderRuntimeComposeUsesMetadataDefaults(t *testing.T) {
 		t.Fatalf("loadRuntimeConfig() = false, want true")
 	}
 	compose := renderRuntimeCompose(cfg)
-	for _, want := range []string{"wp-app:", "wp-cli:", "condition: service_healthy", "depends_on:\n      wp-app:", "working_dir: /var/www/html", filepath.Join(root, "theme-src") + ":/var/www/html/wp-content/themes/theme-slot"} {
+	for _, want := range []string{"wp-app:", "wp-cli:", "condition: service_healthy", "depends_on:\n      wp-app:", "working_dir: /var/www/html", filepath.Join(root, "theme-src") + ":/var/www/html/wp-content/themes/theme-slot", config.SnapshotProjectDir("client") + ":/runtime-snapshots"} {
 		if !strings.Contains(compose, want) {
 			t.Fatalf("renderRuntimeCompose() missing %q:\n%s", want, compose)
 		}
 	}
 	if strings.Contains(compose, "\t") {
 		t.Fatalf("renderRuntimeCompose() contains a tab character:\n%s", compose)
+	}
+}
+
+func TestRuntimeSnapshotHelpersValidateNamesAndRenderMetadata(t *testing.T) {
+	if got, want := defaultRuntimeSnapshotName(time.Date(2026, 5, 28, 9, 30, 12, 0, time.UTC)), "2026-05-28-093012"; got != want {
+		t.Fatalf("defaultRuntimeSnapshotName() = %q, want %q", got, want)
+	}
+	if got, want := defaultPreRestoreSnapshotName(time.Date(2026, 5, 28, 9, 30, 12, 0, time.UTC)), "2026-05-28-093012-pre-restore"; got != want {
+		t.Fatalf("defaultPreRestoreSnapshotName() = %q, want %q", got, want)
+	}
+	for input, want := range map[string]string{"demo snapshot": "demo-snapshot", "  demo   snapshot  ": "demo-snapshot", "snapshot-1": "snapshot-1"} {
+		got, err := runtimeSnapshotNormalizedName(input)
+		if err != nil {
+			t.Fatalf("runtimeSnapshotNormalizedName(%q) error = %v", input, err)
+		}
+		if got != want {
+			t.Fatalf("runtimeSnapshotNormalizedName(%q) = %q, want %q", input, got, want)
+		}
+	}
+	for _, input := range []string{"", "../snapshot", "/tmp/snapshot", "snapshot/name", "snapshot\\name", "snapshot..name", "snapshot.name", "snapshot?name"} {
+		if got, err := runtimeSnapshotNormalizedName(input); err == nil {
+			t.Fatalf("runtimeSnapshotNormalizedName(%q) = %q, want error", input, got)
+		}
+	}
+	meta := runtimeSnapshotMetadata{
+		Schema:         runtimeSnapshotSchema,
+		Name:           "2026-05-28-093012",
+		ProjectSlug:    "client",
+		CreatedAt:      "2026-05-28T09:30:12Z",
+		RuntimePath:    "/config/nf/runtimes/client",
+		ComposeProject: "nf_client_runtime",
+		WordpressURL:   "http://localhost:18432",
+		Contents:       runtimeSnapshotContents{Database: "database.sql.gz", WpContent: "wp-content.tar.gz", WpContentPaths: runtimeSnapshotContentPaths()},
+	}
+	gotJSON, err := runtimeSnapshotMetadataJSON(meta)
+	if err != nil {
+		t.Fatalf("runtimeSnapshotMetadataJSON() error = %v", err)
+	}
+	wantJSON := "{\n  \"schema\": 1,\n  \"name\": \"2026-05-28-093012\",\n  \"project_slug\": \"client\",\n  \"created_at\": \"2026-05-28T09:30:12Z\",\n  \"runtime_path\": \"/config/nf/runtimes/client\",\n  \"compose_project\": \"nf_client_runtime\",\n  \"wordpress_url\": \"http://localhost:18432\",\n  \"contents\": {\n    \"database\": \"database.sql.gz\",\n    \"wp_content\": \"wp-content.tar.gz\",\n    \"wp_content_paths\": [\n      \"wp-content/uploads\",\n      \"wp-content/plugins\",\n      \"wp-content/mu-plugins\",\n      \"wp-content/languages\"\n    ]\n  }\n}\n"
+	if gotJSON != wantJSON {
+		t.Fatalf("runtimeSnapshotMetadataJSON() =\n%s\nwant=\n%s", gotJSON, wantJSON)
 	}
 }
 
