@@ -764,6 +764,57 @@ func upsertStateRecord(path string, candidate map[string]any) error {
 	return saveStatePayload(path, records)
 }
 
+func serverStateRecord(effectivePlan Plan, linodeID, linodeIP, dnsZone, createdAt string) map[string]any {
+	record := map[string]any{
+		"id":         linodeID,
+		"provider":   effectivePlan.Provider,
+		"project":    effectivePlan.ProjectSlug,
+		"name":       effectivePlan.ServerName,
+		"label":      effectivePlan.Label,
+		"hostname":   effectivePlan.SiteDomain,
+		"status":     "provisioned",
+		"linode_id":  linodeID,
+		"ipv4":       linodeIP,
+		"region":     effectivePlan.Region,
+		"type":       effectivePlan.LinodeType,
+		"image":      effectivePlan.Image,
+		"ssh":        map[string]any{"host": effectivePlan.SiteDomain, "user": effectivePlan.SshUser, "port": 22},
+		"dns_zone":   dnsZone,
+		"created_at": createdAt,
+	}
+	services := map[string]any{}
+	if strings.TrimSpace(effectivePlan.PhpFpmSocket) != "" {
+		services["php_fpm"] = phpFpmServiceName(effectivePlan.PhpFpmSocket)
+	}
+	if len(services) > 0 {
+		record["services"] = services
+	}
+	if linodeID != "" {
+		record["linode"] = map[string]any{"instance_id": linodeID}
+	}
+	return record
+}
+
+func siteStateRecord(effectivePlan Plan, dnsZone, createdAt string) map[string]any {
+	return map[string]any{
+		"provider":      effectivePlan.Provider,
+		"project":       effectivePlan.ProjectSlug,
+		"slug":          effectivePlan.ProjectSlug,
+		"name":          effectivePlan.ProjectSlug,
+		"hostname":      effectivePlan.SiteDomain,
+		"url":           "https://" + effectivePlan.SiteDomain,
+		"server":        effectivePlan.ServerName,
+		"label":         effectivePlan.Label,
+		"status":        "provisioned",
+		"remote_path":   effectivePlan.RemoteWpPath,
+		"wordpress":     map[string]any{"wp_path": effectivePlan.RemoteWpPath},
+		"database":      map[string]any{"name": effectivePlan.DbName, "user": effectivePlan.DbUser},
+		"wp_admin_user": effectivePlan.WpAdminUser,
+		"dns_zone":      dnsZone,
+		"created_at":    createdAt,
+	}
+}
+
 func ProvisionServer(plan Plan) (*struct{ LinodeID, IPv4, DnsZone, ServerStatePath, SiteStatePath string }, error) {
 	if plan.Provider != "linode" {
 		return nil, Error{Msg: fmt.Sprintf("Unsupported provider %q. Only linode is available in this slice.", plan.Provider)}
@@ -840,41 +891,8 @@ func ProvisionServer(plan Plan) (*struct{ LinodeID, IPv4, DnsZone, ServerStatePa
 	serverStatePath := filepath.Join(config.StateDir(), "servers.json")
 	siteStatePath := filepath.Join(config.StateDir(), "sites.json")
 	now := time.Now().UTC().Format(time.RFC3339)
-	serverRecord := map[string]any{
-		"id":             linodeID,
-		"provider":       effectivePlan.Provider,
-		"project_slug":   effectivePlan.ProjectSlug,
-		"name":           effectivePlan.ServerName,
-		"label":          effectivePlan.Label,
-		"hostname":       effectivePlan.SiteDomain,
-		"status":         "provisioned",
-		"linode_id":      linodeID,
-		"ipv4":           linodeIP,
-		"region":         effectivePlan.Region,
-		"type":           effectivePlan.LinodeType,
-		"image":          effectivePlan.Image,
-		"ssh_user":       effectivePlan.SshUser,
-		"remote_wp_path": effectivePlan.RemoteWpPath,
-		"dns_zone":       dnsZone,
-		"created_at":     now,
-	}
-	siteRecord := map[string]any{
-		"provider":       effectivePlan.Provider,
-		"project_slug":   effectivePlan.ProjectSlug,
-		"slug":           effectivePlan.ProjectSlug,
-		"name":           effectivePlan.ProjectSlug,
-		"hostname":       effectivePlan.SiteDomain,
-		"site_url":       "https://" + effectivePlan.SiteDomain,
-		"server":         effectivePlan.ServerName,
-		"label":          effectivePlan.Label,
-		"status":         "provisioned",
-		"remote_wp_path": effectivePlan.RemoteWpPath,
-		"db_name":        effectivePlan.DbName,
-		"db_user":        effectivePlan.DbUser,
-		"wp_admin_user":  effectivePlan.WpAdminUser,
-		"dns_zone":       dnsZone,
-		"created_at":     now,
-	}
+	serverRecord := serverStateRecord(effectivePlan, linodeID, linodeIP, dnsZone, now)
+	siteRecord := siteStateRecord(effectivePlan, dnsZone, now)
 	if err := upsertStateRecord(serverStatePath, serverRecord); err != nil {
 		return nil, err
 	}
