@@ -35,6 +35,7 @@ type repoCommandRunner interface {
 type shellCommandRunner string
 
 func (c shellCommandRunner) Execute(root string, extraArgs []string) error {
+	printShellCommand(string(c), extraArgs)
 	cmd := exec.Command("sh", append([]string{"-lc", string(c), "sh"}, extraArgs...)...)
 	cmd.Dir = root
 	cmd.Stdout = os.Stdout
@@ -51,6 +52,7 @@ func (c argvCommandRunner) Execute(root string, extraArgs []string) error {
 	if len(c) == 0 {
 		return fmt.Errorf("unsupported repo command type")
 	}
+	printCommandArgs(append(append([]string{}, c...), extraArgs...))
 	cmd := exec.Command(c[0], append(c[1:], extraArgs...)...)
 	cmd.Dir = root
 	cmd.Stdout = os.Stdout
@@ -146,7 +148,7 @@ func (c workbenchCommandRunner) Execute(root string, extraArgs []string) error {
 		}
 		return runCommandSpec(execSpec{Dir: workbenchDir, Args: workbenchWpArgs(c.cfg, "theme", "install", containerPath)})
 	case "activate-theme":
-		slug := firstNonEmpty(c.cfg.ThemeSlug, c.cfg.ThemeMountSlug, "theme")
+		slug := ""
 		if len(extraArgs) > 0 && strings.TrimSpace(extraArgs[0]) != "" {
 			slug = strings.TrimSpace(extraArgs[0])
 		}
@@ -169,9 +171,9 @@ func (c workbenchCommandRunner) Render() string {
 	case "reset":
 		return "docker compose down -v --remove-orphans"
 	case "setup":
-		return "docker compose up -d; wp core install and activate " + firstNonEmpty(c.cfg.ThemeSlug, c.cfg.ThemeMountSlug, "theme") + " if needed"
+		return "docker compose up -d; wp core install and activate " + firstNonEmpty(c.cfg.ThemeMountSlug, c.cfg.ThemeSlug, "theme") + " if needed"
 	case "fresh":
-		return "docker compose down -v --remove-orphans && docker compose up -d; wp core install and activate " + firstNonEmpty(c.cfg.ThemeSlug, c.cfg.ThemeMountSlug, "theme") + " if needed"
+		return "docker compose down -v --remove-orphans && docker compose up -d; wp core install and activate " + firstNonEmpty(c.cfg.ThemeMountSlug, c.cfg.ThemeSlug, "theme") + " if needed"
 	case "wp":
 		return "docker compose run --rm " + c.cfg.CliService + " wp ... --allow-root"
 	case "install-theme":
@@ -192,6 +194,7 @@ func runCommandSpec(spec execSpec) error {
 	if len(spec.Args) == 0 {
 		return fmt.Errorf("unsupported repo command type")
 	}
+	printCommandArgs(spec.Args)
 	cmd := exec.Command(spec.Args[0], spec.Args[1:]...)
 	cmd.Dir = spec.Dir
 	cmd.Stdout = os.Stdout
@@ -204,12 +207,43 @@ func runCommandSpecQuiet(spec execSpec) error {
 	if len(spec.Args) == 0 {
 		return fmt.Errorf("unsupported repo command type")
 	}
+	printCommandArgs(spec.Args)
 	cmd := exec.Command(spec.Args[0], spec.Args[1:]...)
 	cmd.Dir = spec.Dir
 	cmd.Stdout = io.Discard
 	cmd.Stderr = io.Discard
 	cmd.Stdin = os.Stdin
 	return cmd.Run()
+}
+
+func printShellCommand(command string, extraArgs []string) {
+	if len(extraArgs) == 0 {
+		fmt.Printf("> %s\n", command)
+		return
+	}
+	fmt.Printf("> %s -- %s\n", command, renderCommandArgs(extraArgs))
+}
+
+func printCommandArgs(args []string) {
+	fmt.Printf("> %s\n", renderCommandArgs(args))
+}
+
+func renderCommandArgs(args []string) string {
+	parts := make([]string, 0, len(args))
+	for _, arg := range args {
+		parts = append(parts, shellQuoteArg(arg))
+	}
+	return strings.Join(parts, " ")
+}
+
+func shellQuoteArg(arg string) string {
+	if arg == "" {
+		return "''"
+	}
+	if !strings.ContainsAny(arg, " \t\n\r'\"$`\\!&|;<>(){}[]*?~") {
+		return arg
+	}
+	return "'" + strings.ReplaceAll(arg, "'", "'\\''") + "'"
 }
 
 func workbenchCommandDir(cfg workbenchConfig) string {
@@ -274,12 +308,12 @@ func workbenchWpProbeArgs(cfg workbenchConfig, args ...string) []string {
 }
 
 func workbenchWpCoreInstallArgs(cfg workbenchConfig) []string {
-	slug := firstNonEmpty(cfg.ThemeSlug, cfg.ThemeMountSlug, "theme")
+	slug := firstNonEmpty(cfg.ThemeMountSlug, cfg.ThemeSlug, "theme")
 	return append(workbenchComposeArgs(cfg, "run", "--rm", firstNonEmpty(cfg.CliService, "cli"), "sh", "-lc"), `wp core install --url="$WP_URL" --title="$WP_TITLE" --admin_user="$ADMIN_USER" --admin_password="$ADMIN_PASSWORD" --admin_email="$ADMIN_EMAIL" --skip-email --allow-root && wp theme activate `+slug+` --allow-root`)
 }
 
 func workbenchWpThemeActivateArgs(cfg workbenchConfig, slug string) []string {
-	return workbenchWpArgs(cfg, "theme", "activate", firstNonEmpty(slug, cfg.ThemeSlug, cfg.ThemeMountSlug, "theme"))
+	return workbenchWpArgs(cfg, "theme", "activate", firstNonEmpty(slug, cfg.ThemeMountSlug, cfg.ThemeSlug, "theme"))
 }
 
 func workbenchThemeArchivePaths(cfg workbenchConfig, sourcePath string) (string, string) {
@@ -358,6 +392,18 @@ func currentGitRoot() (string, bool) {
 		return "", false
 	}
 	return discoverGitRoot(wd)
+}
+
+func currentGitRootBase() (string, error) {
+	root, ok := currentGitRoot()
+	if !ok {
+		return "", ProjectError{Msg: "repo init requires a .git repository above the current directory when --project-slug is not set"}
+	}
+	base := filepath.Base(filepath.Clean(root))
+	if base == "" || base == "." || base == string(filepath.Separator) {
+		return "", ProjectError{Msg: fmt.Sprintf("repo init could not derive a project slug from git root %q; pass --project-slug", root)}
+	}
+	return base, nil
 }
 
 func discoverGitRoot(start string) (string, bool) {
@@ -632,18 +678,17 @@ func loadProjectMetadataOrError(root string) (map[string]any, error) {
 	return theme.LoadProjectMetadata(root)
 }
 
-func loadProjectCommands(root string) (map[string]struct {
+type projectCommand struct {
 	Description string
 	Run         repoCommandRunner
-}, error) {
+}
+
+func loadProjectCommands(root string) (map[string]projectCommand, error) {
 	metadata, err := loadProjectMetadataOrError(root)
 	if err != nil {
 		return nil, err
 	}
-	parsed := map[string]struct {
-		Description string
-		Run         repoCommandRunner
-	}{}
+	parsed := map[string]projectCommand{}
 	if cfg, ok := loadWorkbenchConfig(root, metadata); ok {
 		for name, command := range defaultWorkbenchCommands(cfg) {
 			parsed[name] = command
@@ -658,12 +703,29 @@ func loadProjectCommands(root string) (map[string]struct {
 		if err != nil {
 			return nil, err
 		}
-		parsed[name] = struct {
-			Description string
-			Run         repoCommandRunner
-		}{Description: desc, Run: run}
+		parsed[name] = projectCommand{Description: desc, Run: run}
 	}
 	return parsed, nil
+}
+
+func formatProjectCommandLines(commands map[string]projectCommand) []string {
+	keys := make([]string, 0, len(commands))
+	for name := range commands {
+		keys = append(keys, name)
+	}
+	sort.Strings(keys)
+	width := 0
+	for _, name := range keys {
+		if len(name) > width {
+			width = len(name)
+		}
+	}
+	lines := make([]string, 0, len(keys))
+	for _, name := range keys {
+		command := commands[name]
+		lines = append(lines, fmt.Sprintf("%-*s -- %s", width, name, command.Description))
+	}
+	return lines
 }
 
 func loadWorkbenchConfig(root string, metadata map[string]any) (workbenchConfig, bool) {
@@ -693,14 +755,8 @@ func loadWorkbenchConfig(root string, metadata map[string]any) (workbenchConfig,
 	}, true
 }
 
-func defaultWorkbenchCommands(cfg workbenchConfig) map[string]struct {
-	Description string
-	Run         repoCommandRunner
-} {
-	return map[string]struct {
-		Description string
-		Run         repoCommandRunner
-	}{
+func defaultWorkbenchCommands(cfg workbenchConfig) map[string]projectCommand {
+	return map[string]projectCommand{
 		"setup":          {Description: "Set up the local workbench", Run: workbenchCommandRunner{name: "setup", cfg: cfg}},
 		"up":             {Description: "Start the local workbench", Run: workbenchCommandRunner{name: "up", cfg: cfg}},
 		"down":           {Description: "Stop the local workbench", Run: workbenchCommandRunner{name: "down", cfg: cfg}},
@@ -740,17 +796,10 @@ func cmdProjectCommands() int {
 		fmt.Fprintln(os.Stderr, "No local repo commands configured. Add .nf/project.json workbench metadata or commands.<name>.")
 		return 1
 	}
-	rows := [][]string{{"name", "description", "run"}}
-	keys := make([]string, 0, len(commands))
-	for name := range commands {
-		keys = append(keys, name)
+	fmt.Println("repo-local commands:")
+	for _, line := range formatProjectCommandLines(commands) {
+		fmt.Printf("  %s\n", line)
 	}
-	sort.Strings(keys)
-	for _, name := range keys {
-		command := commands[name]
-		rows = append(rows, []string{name, command.Description, renderCommandRun(command.Run)})
-	}
-	fmt.Println(formatTable(rows))
 	return 0
 }
 
@@ -1305,7 +1354,7 @@ func cmdProjectInit(args projectInitArgs) int {
 
 func repoInitMetadata(args projectInitArgs) map[string]any {
 	themePath := firstNonEmpty(args.themeSource, "theme")
-	themeSlug := firstNonEmpty(args.themeSlug, args.projectSlug)
+	themeSlug := firstNonEmpty(args.themeSlug, "theme")
 	projectName := firstNonEmpty(args.projectName, slugToTitle(args.projectSlug))
 	projectSlug := args.projectSlug
 	metadata := map[string]any{
@@ -1331,7 +1380,7 @@ func repoInitMetadata(args projectInitArgs) map[string]any {
 			"commands": []any{"composer install", "npm run build"},
 		},
 		"artifact": map[string]any{
-			"path":    filepath.ToSlash(filepath.Join("dist", themeSlug+".zip")),
+			"path":    filepath.ToSlash(filepath.Join("dist", projectSlug+"-v{version}.zip")),
 			"include": []any{"vendor/", "assets/dist/"},
 			"exclude": []any{"node_modules/", ".git/"},
 		},
@@ -1445,7 +1494,7 @@ volumes:
 
 func renderWorkbenchEnv(cfg workbenchConfig) string {
 	wpTitle := firstNonEmpty(cfg.ProjectName, slugToTitle(cfg.ProjectSlug))
-	return fmt.Sprintf(`COMPOSE_PROJECT_NAME=%s_workbench
+	return fmt.Sprintf(`COMPOSE_PROJECT_NAME=%s
 WP_PORT=18080
 MAILPIT_PORT=8026
 DB_NAME=%s
@@ -1457,7 +1506,28 @@ WP_TITLE=%s
 ADMIN_USER=admin
 ADMIN_PASSWORD=admin
 ADMIN_EMAIL=web@nonfiction.ca
-`, cfg.ProjectSlug, cfg.ProjectSlug, cfg.ProjectSlug, wpTitle)
+`, workbenchComposeProjectName(cfg.ProjectSlug), cfg.ProjectSlug, cfg.ProjectSlug, wpTitle)
+}
+
+func workbenchComposeProjectName(projectSlug string) string {
+	cleaned := strings.ToLower(strings.TrimSpace(projectSlug))
+	var b strings.Builder
+	b.Grow(len(cleaned) + len("nf__workbench"))
+	for _, r := range cleaned {
+		switch {
+		case r >= 'a' && r <= 'z', r >= '0' && r <= '9', r == '_', r == '-':
+			b.WriteRune(r)
+		case r == ' ':
+			b.WriteByte('_')
+		default:
+			b.WriteByte('_')
+		}
+	}
+	slug := strings.Trim(b.String(), "_-")
+	if slug == "" {
+		slug = "project"
+	}
+	return "nf_" + slug + "_workbench"
 }
 
 func renderWorkbenchUploadsINI() string {
@@ -1525,21 +1595,22 @@ func cmdPackage(commandName, source, output string, dryRun bool) int {
 	if !filepath.IsAbs(sourceDir) {
 		sourceDir = filepath.Join(root, sourceDir)
 	}
-	themeSlug := firstNonEmpty(mapStringAtPath(metadata, "wordpress", "theme_slug"), "theme")
-	if output == "" {
-		if artifact := mapStringAtPath(metadata, "artifact", "path"); artifact != "" {
-			output = artifact
-			if !filepath.IsAbs(output) {
-				output = filepath.Join(root, output)
-			}
-		} else {
-			output = filepath.Join(root, "dist", themeSlug+".zip")
-		}
-	} else if !filepath.IsAbs(output) {
+	projectSlug := firstNonEmpty(mapStringAtPath(metadata, "project", "slug"), "project")
+	versionedOutput := output
+	if versionedOutput == "" {
+		versionedOutput = firstNonEmpty(mapStringAtPath(metadata, "artifact", "path"), filepath.ToSlash(filepath.Join("dist", projectSlug+"-v{version}.zip")))
+	}
+	versionedOutput, err = resolveVersionedArtifactPath(sourceDir, versionedOutput)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		return 1
+	}
+	output = versionedOutput
+	if !filepath.IsAbs(output) {
 		if strings.HasSuffix(strings.ToLower(output), ".zip") {
 			output = filepath.Join(root, output)
 		} else {
-			output = filepath.Join(root, output, themeSlug+".zip")
+			output = filepath.Join(root, output, projectSlug+".zip")
 		}
 	}
 	result, err := theme.PackageTheme(sourceDir, output, dryRun)
@@ -1553,6 +1624,78 @@ func cmdPackage(commandName, source, output string, dryRun bool) int {
 		fmt.Printf("Wrote %s (%d files)\n", result.OutputPath, result.FileCount)
 	}
 	return 0
+}
+
+func resolveVersionedArtifactPath(sourceDir, template string) (string, error) {
+	if !strings.Contains(template, "{version}") {
+		return template, nil
+	}
+	version, err := readThemeVersion(sourceDir)
+	if err != nil {
+		return "", err
+	}
+	return strings.ReplaceAll(template, "{version}", version), nil
+}
+
+func readThemeVersion(sourceDir string) (string, error) {
+	stylePath := filepath.Join(sourceDir, "style.css")
+	if version, found, err := readThemeStyleVersion(stylePath); err != nil {
+		return "", err
+	} else if found {
+		return version, nil
+	}
+
+	packagePath := filepath.Join(sourceDir, "package.json")
+	if version, found, err := readThemePackageVersion(packagePath); err != nil {
+		return "", err
+	} else if found {
+		return version, nil
+	}
+
+	return "", fmt.Errorf("theme version not found: no Version header in %s and no version field in %s", stylePath, packagePath)
+}
+
+func readThemeStyleVersion(stylePath string) (string, bool, error) {
+	data, err := os.ReadFile(stylePath)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return "", false, nil
+		}
+		return "", false, err
+	}
+	for _, line := range strings.Split(string(data), "\n") {
+		trimmed := strings.TrimSpace(strings.TrimPrefix(strings.TrimSpace(line), "*"))
+		key, value, ok := strings.Cut(trimmed, ":")
+		if !ok || !strings.EqualFold(strings.TrimSpace(key), "version") {
+			continue
+		}
+		version := strings.TrimSpace(strings.TrimSuffix(strings.TrimSpace(value), "*/"))
+		if version != "" {
+			return version, true, nil
+		}
+	}
+	return "", false, nil
+}
+
+func readThemePackageVersion(packagePath string) (string, bool, error) {
+	data, err := os.ReadFile(packagePath)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return "", false, nil
+		}
+		return "", false, err
+	}
+	var payload struct {
+		Version string `json:"version"`
+	}
+	if err := json.Unmarshal(data, &payload); err != nil {
+		return "", false, err
+	}
+	version := strings.TrimSpace(payload.Version)
+	if version == "" {
+		return "", false, nil
+	}
+	return version, true, nil
 }
 
 func normalizePassthroughArgs(args []string) []string {
@@ -1622,14 +1765,7 @@ func runRepoHelp() int {
 		if root, ok := currentGitRoot(); ok {
 			if commands, err := loadProjectCommands(root); err == nil && len(commands) > 0 {
 				lines = append(lines, "repo-local commands:")
-				keys := make([]string, 0, len(commands))
-				for name := range commands {
-					keys = append(keys, name)
-				}
-				sort.Strings(keys)
-				for _, name := range keys {
-					lines = append(lines, fmt.Sprintf("%s - %s", name, commands[name].Description))
-				}
+				lines = append(lines, formatProjectCommandLines(commands)...)
 			}
 		}
 	}
@@ -1755,8 +1891,12 @@ func runRepo(argv []string) int {
 			return 1
 		}
 		if strings.TrimSpace(*projectSlug) == "" {
-			fmt.Fprintln(os.Stderr, "--project-slug is required")
-			return 1
+			derivedSlug, err := currentGitRootBase()
+			if err != nil {
+				fmt.Fprintln(os.Stderr, err)
+				return 1
+			}
+			projectSlug = &derivedSlug
 		}
 		return cmdProjectInit(projectInitArgs{projectSlug: *projectSlug, projectName: *projectName, themeSlug: *themeSlug, themeSource: *themeSource, force: *force})
 	}
