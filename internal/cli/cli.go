@@ -5,8 +5,10 @@ import (
 	"encoding/json"
 	"flag"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
+	"path"
 	"path/filepath"
 	"sort"
 	"strconv"
@@ -25,6 +27,240 @@ type ProjectError struct{ Msg string }
 
 func (e ProjectError) Error() string { return e.Msg }
 
+type repoCommandRunner interface {
+	Execute(root string, extraArgs []string) error
+	Render() string
+}
+
+type shellCommandRunner string
+
+func (c shellCommandRunner) Execute(root string, extraArgs []string) error {
+	cmd := exec.Command("sh", append([]string{"-lc", string(c), "sh"}, extraArgs...)...)
+	cmd.Dir = root
+	cmd.Stdout = os.Stdout
+	cmd.Stderr = os.Stderr
+	cmd.Stdin = os.Stdin
+	return cmd.Run()
+}
+
+func (c shellCommandRunner) Render() string { return string(c) }
+
+type argvCommandRunner []string
+
+func (c argvCommandRunner) Execute(root string, extraArgs []string) error {
+	if len(c) == 0 {
+		return fmt.Errorf("unsupported repo command type")
+	}
+	cmd := exec.Command(c[0], append(c[1:], extraArgs...)...)
+	cmd.Dir = root
+	cmd.Stdout = os.Stdout
+	cmd.Stderr = os.Stderr
+	cmd.Stdin = os.Stdin
+	return cmd.Run()
+}
+
+func (c argvCommandRunner) Render() string { return strings.Join(c, " ") }
+
+type workbenchConfig struct {
+	Path             string
+	Compose          string
+	WordpressService string
+	CliService       string
+	ThemeMountSlug   string
+	UploadsPath      string
+	ThemeSlug        string
+}
+
+type workbenchCommandRunner struct {
+	name string
+	cfg  workbenchConfig
+}
+
+func (c workbenchCommandRunner) Execute(root string, extraArgs []string) error {
+	workbenchDir := filepath.Join(root, c.cfg.Path)
+	switch c.name {
+	case "up":
+		return runCommandSpec(execSpec{Dir: workbenchDir, Args: workbenchComposeArgs(c.cfg, "up", "-d")})
+	case "down":
+		return runCommandSpec(execSpec{Dir: workbenchDir, Args: workbenchComposeArgs(c.cfg, "down")})
+	case "restart":
+		if err := runCommandSpec(execSpec{Dir: workbenchDir, Args: workbenchComposeArgs(c.cfg, "down")}); err != nil {
+			return err
+		}
+		return runCommandSpec(execSpec{Dir: workbenchDir, Args: workbenchComposeArgs(c.cfg, "up", "-d")})
+	case "logs":
+		return runCommandSpec(execSpec{Dir: workbenchDir, Args: workbenchComposeArgs(c.cfg, "logs", "-f", c.cfg.WordpressService)})
+	case "reset":
+		return runCommandSpec(execSpec{Dir: workbenchDir, Args: workbenchComposeArgs(c.cfg, "down", "-v", "--remove-orphans")})
+	case "setup":
+		if err := runCommandSpec(execSpec{Dir: workbenchDir, Args: workbenchComposeArgs(c.cfg, "up", "-d")}); err != nil {
+			return err
+		}
+		if err := runCommandSpecQuiet(execSpec{Dir: workbenchDir, Args: workbenchWpProbeArgs(c.cfg, "core", "is-installed")}); err != nil {
+			if err := runCommandSpec(execSpec{Dir: workbenchDir, Args: workbenchWpCoreInstallArgs(c.cfg)}); err != nil {
+				return err
+			}
+		}
+		return nil
+	case "fresh":
+		if err := runCommandSpec(execSpec{Dir: workbenchDir, Args: workbenchComposeArgs(c.cfg, "down", "-v", "--remove-orphans")}); err != nil {
+			return err
+		}
+		if err := runCommandSpec(execSpec{Dir: workbenchDir, Args: workbenchComposeArgs(c.cfg, "up", "-d")}); err != nil {
+			return err
+		}
+		if err := runCommandSpecQuiet(execSpec{Dir: workbenchDir, Args: workbenchWpProbeArgs(c.cfg, "core", "is-installed")}); err != nil {
+			if err := runCommandSpec(execSpec{Dir: workbenchDir, Args: workbenchWpCoreInstallArgs(c.cfg)}); err != nil {
+				return err
+			}
+		}
+		return nil
+	case "wp":
+		return runCommandSpec(execSpec{Dir: workbenchDir, Args: workbenchWpArgs(c.cfg, extraArgs...)})
+	case "install-theme":
+		if len(extraArgs) == 0 || strings.TrimSpace(extraArgs[0]) == "" {
+			return fmt.Errorf("install-theme requires a zip path")
+		}
+		zipPath := workbenchRepoPath(root, extraArgs[0])
+		hostPath, containerPath := workbenchThemeArchivePaths(root, c.cfg, zipPath)
+		if err := os.MkdirAll(filepath.Join(workbenchDir, c.cfg.UploadsPath), 0o755); err != nil {
+			return err
+		}
+		if err := copyFile(zipPath, hostPath); err != nil {
+			return err
+		}
+		return runCommandSpec(execSpec{Dir: workbenchDir, Args: workbenchWpArgs(c.cfg, "theme", "install", containerPath)})
+	case "activate-theme":
+		slug := firstNonEmpty(c.cfg.ThemeSlug, c.cfg.ThemeMountSlug, "theme")
+		if len(extraArgs) > 0 && strings.TrimSpace(extraArgs[0]) != "" {
+			slug = strings.TrimSpace(extraArgs[0])
+		}
+		return runCommandSpec(execSpec{Dir: workbenchDir, Args: workbenchWpThemeActivateArgs(c.cfg, slug)})
+	default:
+		return fmt.Errorf("unsupported repo command type")
+	}
+}
+
+func (c workbenchCommandRunner) Render() string {
+	switch c.name {
+	case "up":
+		return "docker compose up -d"
+	case "down":
+		return "docker compose down"
+	case "restart":
+		return "docker compose down && docker compose up -d"
+	case "logs":
+		return "docker compose logs -f " + c.cfg.WordpressService
+	case "reset":
+		return "docker compose down -v --remove-orphans"
+	case "setup":
+		return "docker compose up -d; wp core install and activate " + firstNonEmpty(c.cfg.ThemeSlug, c.cfg.ThemeMountSlug, "theme") + " if needed"
+	case "fresh":
+		return "docker compose down -v --remove-orphans && docker compose up -d; wp core install and activate " + firstNonEmpty(c.cfg.ThemeSlug, c.cfg.ThemeMountSlug, "theme") + " if needed"
+	case "wp":
+		return "docker compose run --rm " + c.cfg.CliService + " wp ... --allow-root"
+	case "install-theme":
+		return "copy theme zip into workbench uploads and run wp theme install"
+	case "activate-theme":
+		return "docker compose run --rm " + c.cfg.CliService + " wp theme activate <slug> --allow-root"
+	default:
+		return c.name
+	}
+}
+
+type execSpec struct {
+	Dir  string
+	Args []string
+}
+
+func runCommandSpec(spec execSpec) error {
+	if len(spec.Args) == 0 {
+		return fmt.Errorf("unsupported repo command type")
+	}
+	cmd := exec.Command(spec.Args[0], spec.Args[1:]...)
+	cmd.Dir = spec.Dir
+	cmd.Stdout = os.Stdout
+	cmd.Stderr = os.Stderr
+	cmd.Stdin = os.Stdin
+	return cmd.Run()
+}
+
+func runCommandSpecQuiet(spec execSpec) error {
+	if len(spec.Args) == 0 {
+		return fmt.Errorf("unsupported repo command type")
+	}
+	cmd := exec.Command(spec.Args[0], spec.Args[1:]...)
+	cmd.Dir = spec.Dir
+	cmd.Stdout = io.Discard
+	cmd.Stderr = io.Discard
+	cmd.Stdin = os.Stdin
+	return cmd.Run()
+}
+
+func workbenchCommandDir(root string, cfg workbenchConfig) string {
+	return filepath.Join(root, cfg.Path)
+}
+
+func workbenchComposeArgs(cfg workbenchConfig, args ...string) []string {
+	fields := strings.Fields(firstNonEmpty(cfg.Compose, "docker compose"))
+	return append(fields, args...)
+}
+
+func workbenchCliArgs(cfg workbenchConfig, args ...string) []string {
+	return append(workbenchComposeArgs(cfg, "run", "--rm", firstNonEmpty(cfg.CliService, "cli")), args...)
+}
+
+func workbenchWpArgs(cfg workbenchConfig, args ...string) []string {
+	return append(workbenchCliArgs(cfg, "wp"), append(args, "--allow-root")...)
+}
+
+func workbenchWpProbeArgs(cfg workbenchConfig, args ...string) []string {
+	return workbenchWpArgs(cfg, args...)
+}
+
+func workbenchWpCoreInstallArgs(cfg workbenchConfig) []string {
+	slug := firstNonEmpty(cfg.ThemeSlug, cfg.ThemeMountSlug, "theme")
+	return append(workbenchComposeArgs(cfg, "run", "--rm", firstNonEmpty(cfg.CliService, "cli"), "sh", "-lc"), `wp core install --url="$WP_URL" --title="$WP_TITLE" --admin_user="$ADMIN_USER" --admin_password="$ADMIN_PASSWORD" --admin_email="$ADMIN_EMAIL" --skip-email --allow-root && wp theme activate `+slug+` --allow-root`)
+}
+
+func workbenchWpThemeActivateArgs(cfg workbenchConfig, slug string) []string {
+	return workbenchWpArgs(cfg, "theme", "activate", firstNonEmpty(slug, cfg.ThemeSlug, cfg.ThemeMountSlug, "theme"))
+}
+
+func workbenchThemeArchivePaths(root string, cfg workbenchConfig, sourcePath string) (string, string) {
+	base := filepath.Base(sourcePath)
+	host := filepath.Join(workbenchCommandDir(root, cfg), firstNonEmpty(cfg.UploadsPath, "uploads"), base)
+	container := path.Join("/", firstNonEmpty(cfg.Path, "workbench"), firstNonEmpty(cfg.UploadsPath, "uploads"), base)
+	return host, container
+}
+
+func workbenchRepoPath(root, sourcePath string) string {
+	if filepath.IsAbs(sourcePath) {
+		return sourcePath
+	}
+	return filepath.Join(root, sourcePath)
+}
+
+func copyFile(sourcePath, destinationPath string) error {
+	input, err := os.Open(sourcePath)
+	if err != nil {
+		return err
+	}
+	defer input.Close()
+	if err := os.MkdirAll(filepath.Dir(destinationPath), 0o755); err != nil {
+		return err
+	}
+	output, err := os.Create(destinationPath)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = output.Close() }()
+	if _, err := io.Copy(output, input); err != nil {
+		return err
+	}
+	return nil
+}
+
 func configInitRequirements() []envwizard.Requirement {
 	return []envwizard.Requirement{
 		{Keys: []string{"NF_SECRET_SALT"}, Prompt: "NF_SECRET_SALT (used for derived passwords): ", Secret: true, WriteKey: "NF_SECRET_SALT", Required: true},
@@ -39,8 +275,6 @@ func passwordRequirements() []envwizard.Requirement {
 		{Keys: []string{"NF_SECRET_SALT"}, Prompt: "NF_SECRET_SALT (used for derived passwords): ", Secret: true, WriteKey: "NF_SECRET_SALT", Required: true},
 	}
 }
-
-var localProjectCommands = []string{"composer", "npm", "build", "watch", "test", "setup", "up", "down", "restart", "logs", "reset", "fresh", "wp", "install-theme", "activate-theme"}
 
 func slugToTitle(value string) string {
 	parts := strings.Split(strings.ReplaceAll(value, "_", "-"), "-")
@@ -144,6 +378,8 @@ func renderCommandRun(run any) string {
 		return typed
 	case []string:
 		return strings.Join(typed, " ")
+	case repoCommandRunner:
+		return typed.Render()
 	default:
 		return fmt.Sprint(run)
 	}
@@ -285,28 +521,18 @@ func isLinodeNotFoundError(err error) bool {
 
 func defaultProjectCommands() map[string]map[string]any {
 	return map[string]map[string]any{
-		"composer":       map[string]any{"description": "Update theme Composer dependencies", "run": "composer --working-dir=theme update && composer --working-dir=theme dump-autoload -o"},
-		"npm":            map[string]any{"description": "Refresh theme development dependencies", "run": "npm --prefix theme update --save-dev"},
-		"build":          map[string]any{"description": "Build the theme assets", "run": "npm --prefix theme run build"},
-		"watch":          map[string]any{"description": "Watch theme assets during development", "run": "npm --prefix theme start"},
-		"test":           map[string]any{"description": "Run the theme test suite", "run": "composer --working-dir=theme test"},
-		"setup":          map[string]any{"description": "Set up the local workbench", "run": "cd workbench && docker compose up -d && docker compose run --rm cli sh -lc 'wp core is-installed --allow-root || wp core install --url=\"$WP_URL\" --title=\"$WP_TITLE\" --admin_user=\"$ADMIN_USER\" --admin_password=\"$ADMIN_PASSWORD\" --admin_email=\"$ADMIN_EMAIL\" --skip-email --allow-root'"},
-		"up":             map[string]any{"description": "Start the local workbench", "run": "cd workbench && docker compose up -d"},
-		"down":           map[string]any{"description": "Stop the local workbench", "run": "cd workbench && docker compose down"},
-		"restart":        map[string]any{"description": "Restart the local workbench", "run": "cd workbench && docker compose down && docker compose up -d"},
-		"logs":           map[string]any{"description": "Show local workbench logs", "run": "cd workbench && docker compose logs -f wordpress"},
-		"reset":          map[string]any{"description": "Reset the local workbench", "run": "cd workbench && docker compose down -v --remove-orphans"},
-		"fresh":          map[string]any{"description": "Rebuild the local workbench from scratch", "run": "cd workbench && docker compose down -v --remove-orphans && docker compose up -d && docker compose run --rm cli sh -lc 'wp core is-installed --allow-root || wp core install --url=\"$WP_URL\" --title=\"$WP_TITLE\" --admin_user=\"$ADMIN_USER\" --admin_password=\"$ADMIN_PASSWORD\" --admin_email=\"$ADMIN_EMAIL\" --skip-email --allow-root'"},
-		"wp":             map[string]any{"description": "Run wp-cli through the local workbench", "run": "cd workbench && docker compose run --rm cli sh -lc 'wp \"$@\" --allow-root' sh \"$@\""},
-		"install-theme":  map[string]any{"description": "Install the theme in the local workbench", "run": "cd workbench && docker compose run --rm cli sh -lc 'theme_zip=\"${1:?theme zip path required}\"; wp theme install \"$theme_zip\" --activate --allow-root' sh \"$@\""},
-		"activate-theme": map[string]any{"description": "Activate the theme in the local workbench", "run": "cd workbench && docker compose run --rm cli sh -lc 'theme_slug=\"${1:?theme slug required}\"; wp theme activate \"$theme_slug\" --allow-root' sh \"$@\""},
+		"composer": map[string]any{"description": "Update theme Composer dependencies", "run": "composer --working-dir=theme update && composer --working-dir=theme dump-autoload -o"},
+		"npm":      map[string]any{"description": "Refresh theme development dependencies", "run": "npm --prefix theme update --save-dev"},
+		"build":    map[string]any{"description": "Build the theme assets", "run": "npm --prefix theme run build"},
+		"watch":    map[string]any{"description": "Watch theme assets during development", "run": "npm --prefix theme start"},
+		"test":     map[string]any{"description": "Run the theme test suite", "run": "composer --working-dir=theme test"},
 	}
 }
 
-func parseProjectCommand(name string, value any) (string, string, any, error) {
+func parseProjectCommand(name string, value any) (string, string, repoCommandRunner, error) {
 	switch typed := value.(type) {
 	case string:
-		return name, typed, typed, nil
+		return name, typed, shellCommandRunner(typed), nil
 	case []any:
 		parts := make([]string, 0, len(typed))
 		for _, item := range typed {
@@ -316,7 +542,7 @@ func parseProjectCommand(name string, value any) (string, string, any, error) {
 			}
 			parts = append(parts, s)
 		}
-		return name, strings.Join(parts, " "), parts, nil
+		return name, strings.Join(parts, " "), argvCommandRunner(parts), nil
 	case map[string]any:
 		desc, _ := typed["description"].(string)
 		if strings.TrimSpace(desc) == "" {
@@ -325,7 +551,7 @@ func parseProjectCommand(name string, value any) (string, string, any, error) {
 		run := typed["run"]
 		switch rr := run.(type) {
 		case string:
-			return name, desc, rr, nil
+			return name, desc, shellCommandRunner(rr), nil
 		case []any:
 			parts := make([]string, 0, len(rr))
 			for _, item := range rr {
@@ -335,7 +561,7 @@ func parseProjectCommand(name string, value any) (string, string, any, error) {
 				}
 				parts = append(parts, s)
 			}
-			return name, desc, parts, nil
+			return name, desc, argvCommandRunner(parts), nil
 		default:
 			return "", "", nil, ProjectError{Msg: fmt.Sprintf(".nf/project.json commands.%s.run must be a string or array of strings", name)}
 		}
@@ -353,23 +579,25 @@ func loadProjectMetadataOrError(root string) (map[string]any, error) {
 
 func loadProjectCommands(root string) (map[string]struct {
 	Description string
-	Run         any
+	Run         repoCommandRunner
 }, error) {
 	metadata, err := loadProjectMetadataOrError(root)
 	if err != nil {
 		return nil, err
 	}
-	commands, ok := metadata["commands"].(map[string]any)
-	if !ok || commands == nil {
-		return map[string]struct {
-			Description string
-			Run         any
-		}{}, nil
-	}
 	parsed := map[string]struct {
 		Description string
-		Run         any
+		Run         repoCommandRunner
 	}{}
+	if cfg, ok := loadWorkbenchConfig(metadata); ok {
+		for name, command := range defaultWorkbenchCommands(cfg) {
+			parsed[name] = command
+		}
+	}
+	commands, ok := metadata["commands"].(map[string]any)
+	if !ok || commands == nil {
+		return parsed, nil
+	}
 	for name, value := range commands {
 		_, desc, run, err := parseProjectCommand(name, value)
 		if err != nil {
@@ -377,38 +605,55 @@ func loadProjectCommands(root string) (map[string]struct {
 		}
 		parsed[name] = struct {
 			Description string
-			Run         any
+			Run         repoCommandRunner
 		}{Description: desc, Run: run}
 	}
 	return parsed, nil
+}
+
+func loadWorkbenchConfig(metadata map[string]any) (workbenchConfig, bool) {
+	raw, ok := metadata["workbench"].(map[string]any)
+	if !ok || raw == nil {
+		return workbenchConfig{}, false
+	}
+	wordpress := mapMapAtPath(metadata, "wordpress")
+	return workbenchConfig{
+		Path:             firstNonEmpty(mapStringAtPath(raw, "path"), "workbench"),
+		Compose:          firstNonEmpty(mapStringAtPath(raw, "compose"), "docker compose"),
+		WordpressService: firstNonEmpty(mapStringAtPath(raw, "wordpress_service"), "wordpress"),
+		CliService:       firstNonEmpty(mapStringAtPath(raw, "cli_service"), "cli"),
+		ThemeMountSlug:   firstNonEmpty(mapStringAtPath(raw, "theme_mount_slug"), "theme"),
+		UploadsPath:      firstNonEmpty(mapStringAtPath(raw, "uploads_path"), "uploads"),
+		ThemeSlug:        firstNonEmpty(recordValueString(wordpress["theme_slug"]), "theme"),
+	}, true
+}
+
+func defaultWorkbenchCommands(cfg workbenchConfig) map[string]struct {
+	Description string
+	Run         repoCommandRunner
+} {
+	return map[string]struct {
+		Description string
+		Run         repoCommandRunner
+	}{
+		"setup":          {Description: "Set up the local workbench", Run: workbenchCommandRunner{name: "setup", cfg: cfg}},
+		"up":             {Description: "Start the local workbench", Run: workbenchCommandRunner{name: "up", cfg: cfg}},
+		"down":           {Description: "Stop the local workbench", Run: workbenchCommandRunner{name: "down", cfg: cfg}},
+		"restart":        {Description: "Restart the local workbench", Run: workbenchCommandRunner{name: "restart", cfg: cfg}},
+		"logs":           {Description: "Show local workbench logs", Run: workbenchCommandRunner{name: "logs", cfg: cfg}},
+		"reset":          {Description: "Reset the local workbench", Run: workbenchCommandRunner{name: "reset", cfg: cfg}},
+		"fresh":          {Description: "Rebuild the local workbench from scratch", Run: workbenchCommandRunner{name: "fresh", cfg: cfg}},
+		"wp":             {Description: "Run wp-cli through the local workbench", Run: workbenchCommandRunner{name: "wp", cfg: cfg}},
+		"install-theme":  {Description: "Install the theme in the local workbench", Run: workbenchCommandRunner{name: "install-theme", cfg: cfg}},
+		"activate-theme": {Description: "Activate the theme in the local workbench", Run: workbenchCommandRunner{name: "activate-theme", cfg: cfg}},
+	}
 }
 
 func discoverProjectRootOrError() (string, error) {
 	if root, ok := config.DiscoverProjectRoot(""); ok {
 		return root, nil
 	}
-	return "", ProjectError{Msg: "No repo metadata found above the current directory. Add .nf/project.json with commands.<name>."}
-}
-
-func executeProjectCommand(root string, run any, extraArgs []string) error {
-	switch typed := run.(type) {
-	case string:
-		cmd := exec.Command("sh", append([]string{"-lc", typed, "sh"}, extraArgs...)...)
-		cmd.Dir = root
-		cmd.Stdout = os.Stdout
-		cmd.Stderr = os.Stderr
-		cmd.Stdin = os.Stdin
-		return cmd.Run()
-	case []string:
-		cmd := exec.Command(typed[0], append(typed[1:], extraArgs...)...)
-		cmd.Dir = root
-		cmd.Stdout = os.Stdout
-		cmd.Stderr = os.Stderr
-		cmd.Stdin = os.Stdin
-		return cmd.Run()
-	default:
-		return fmt.Errorf("unsupported repo command type")
-	}
+	return "", ProjectError{Msg: "No repo metadata found above the current directory. Add .nf/project.json with workbench metadata or commands.<name>."}
 }
 
 func cmdProjectCommands() int {
@@ -427,7 +672,7 @@ func cmdProjectCommands() int {
 		return 1
 	}
 	if len(commands) == 0 {
-		fmt.Fprintln(os.Stderr, "No local repo commands configured. Add .nf/project.json commands.<name>.")
+		fmt.Fprintln(os.Stderr, "No local repo commands configured. Add .nf/project.json workbench metadata or commands.<name>.")
 		return 1
 	}
 	rows := [][]string{{"name", "description", "run"}}
@@ -461,17 +706,15 @@ func cmdProjectRun(name string, extraArgs []string) int {
 	}
 	command, ok := commands[name]
 	if !ok {
-		fmt.Fprintf(os.Stderr, "No configured local repo command named %q. Add .nf/project.json commands.%s.\n", name, name)
+		fmt.Fprintf(os.Stderr, "No configured local repo command named %q. Add .nf/project.json workbench metadata or commands.%s.\n", name, name)
 		return 1
 	}
-	if err := executeProjectCommand(root, command.Run, normalizePassthroughArgs(extraArgs)); err != nil {
+	if err := command.Run.Execute(root, normalizePassthroughArgs(extraArgs)); err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		return 1
 	}
 	return 0
 }
-
-func cmdProjectAlias(name string, extraArgs []string) int { return cmdProjectRun(name, extraArgs) }
 
 func cmdDeleteServer(needle string, dryRun, execute, yes, nonInteractive bool) int {
 	servers, err := state.LoadStateRecords("servers")
@@ -988,6 +1231,14 @@ func cmdProjectInit(args projectInitArgs) int {
 			"theme_slug":  themeSlug,
 			"theme_path":  themePath,
 		},
+		"workbench": map[string]any{
+			"path":              "workbench",
+			"compose":           "docker compose",
+			"wordpress_service": "wordpress",
+			"cli_service":       "cli",
+			"theme_mount_slug":  "theme",
+			"uploads_path":      "uploads",
+		},
 		"build": map[string]any{
 			"commands": []any{"composer install", "npm run build"},
 		},
@@ -1168,21 +1419,6 @@ func runRepoHelp() int {
 					lines = append(lines, fmt.Sprintf("%s - %s", name, commands[name].Description))
 				}
 			}
-			lines = append(lines,
-				"build               repo alias",
-				"watch               repo alias",
-				"test                repo alias",
-				"setup               repo alias",
-				"up                  repo alias",
-				"down                repo alias",
-				"restart             repo alias",
-				"logs                repo alias",
-				"reset               repo alias",
-				"fresh               repo alias",
-				"wp                  repo alias",
-				"install-theme       repo alias",
-				"activate-theme      repo alias",
-			)
 		}
 	}
 	printGroupHelp("repo", lines)
@@ -1327,15 +1563,6 @@ func runRepo(argv []string) int {
 		}
 		return cmdRepoPackage(*source, *output, *dryRun)
 	}
-	for _, name := range localProjectCommands {
-		if argv[0] == name {
-			if err := requireProjectContext(name); err != nil {
-				fmt.Fprintln(os.Stderr, err)
-				return 1
-			}
-			return cmdProjectAlias(name, argv[1:])
-		}
-	}
 	if argv[0] == "commands" {
 		return cmdProjectCommands()
 	}
@@ -1345,6 +1572,27 @@ func runRepo(argv []string) int {
 			return 1
 		}
 		return cmdProjectRun(argv[1], argv[2:])
+	}
+	if err := requireProjectContext(argv[0]); err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		return 1
+	}
+	root, err := discoverProjectRootOrError()
+	if err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		return 1
+	}
+	commands, err := loadProjectCommands(root)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		return 1
+	}
+	if command, ok := commands[argv[0]]; ok {
+		if err := command.Run.Execute(root, normalizePassthroughArgs(argv[1:])); err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			return 1
+		}
+		return 0
 	}
 	fmt.Fprintln(os.Stderr, "unsupported repo command")
 	return 1
