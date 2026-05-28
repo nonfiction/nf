@@ -1,39 +1,40 @@
 {
-  description = "nf safe local CLI skeleton";
+  description = "agency CLI for provisioning WordPress hosts, deploying themes, and syncing site data across nonfiction projects";
 
   inputs = {
-    nixpkgs.url = "github:NixOS/nixpkgs/nixos-24.11";
+    nixpkgs.url = "github:NixOS/nixpkgs/nixpkgs-unstable";
     flake-utils.url = "github:numtide/flake-utils";
   };
 
-  outputs = { self, nixpkgs, flake-utils }:
-    flake-utils.lib.eachDefaultSystem (system:
-      let
-        pkgs = import nixpkgs { inherit system; };
-        nfPackage = pkgs.buildGoModule {
+  outputs = inputs:
+    inputs.flake-utils.lib.eachDefaultSystem (
+      system: let
+        inherit (inputs.flake-utils.lib) mkApp;
+        pkgs = import inputs.nixpkgs {inherit system;};
+        nf = pkgs.buildGoModule {
           pname = "nf";
           version = "0.1.0";
           src = ./.;
           modRoot = ".";
-          subPackages = [ "cmd/nf" ];
+          subPackages = ["cmd/nf"];
           vendorHash = "sha256-JGQ/UHaGj8t8G/stfcTTnGtifw8ZfbxCzByzH5METyo=";
         };
       in {
-        packages.default = nfPackage;
-        packages.nf = nfPackage;
+        packages.default = nf;
+        packages.nf = nf;
 
-        apps.default = flake-utils.lib.mkApp {
-          drv = nfPackage;
+        apps.default = mkApp {
+          drv = nf;
           exePath = "/bin/nf";
         };
 
-        apps.nf = flake-utils.lib.mkApp {
-          drv = nfPackage;
+        apps.nf = mkApp {
+          drv = nf;
           exePath = "/bin/nf";
         };
 
         devShells.default = pkgs.mkShell {
-          packages = [ pkgs.go pkgs.gotools nfPackage ];
+          packages = [pkgs.go pkgs.gotools nf];
         };
       }
     );
