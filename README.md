@@ -167,7 +167,6 @@ Example `.nf/project.json` for a Sanjel project:
     "theme_path": "theme"
   },
   "workbench": {
-    "path": "workbench",
     "compose": "docker compose",
     "wordpress_service": "wordpress",
     "cli_service": "cli",
@@ -234,8 +233,8 @@ Notes:
 - The hostname `https://sanjel.app1.nfweb.dev/` is the sort of URL the shared site state should surface.
 - `nf repo` workbench lifecycle commands come from `workbench` metadata.
   The `commands` block is for custom repo-local aliases such as build/watch/test.
-- The default source layout assumes `theme/` for the theme and `workbench/`
-  for the local compose environment.
+- The repo only needs the theme source and `.nf/project.json`; runtime workbench
+  files are managed by `nf` under `~/.config/nf/workbenches/<project-slug>/`.
 - Commands such as `install-theme` and `activate-theme` can still be customized
   per project if a repo wants named arguments instead of the built-in defaults.
 
@@ -359,13 +358,15 @@ provided, then prints a plan and asks for confirmation in interactive mode.
 Non-interactive deletion remains dry-run unless explicitly run with
 `--execute --yes`.
 
-`nf repo init` writes `.nf/project.json`, `nf repo package` writes a local zip
+`nf repo init` writes `.nf/project.json`. `nf repo up` and related built-ins
+stand up an `nf`-managed WordPress workbench outside the repo under
+`~/.config/nf/workbenches/<project-slug>/`. `nf repo package` writes a local zip
 artifact, and `nf server provision --execute --yes` can create a remote Linode
 and DNS records. Repo workbench lifecycle commands are built in from
 `workbench` metadata, while the `commands` block is reserved for custom
-repo-local aliases. They may mutate local repo or workbench files and
-containers when explicitly invoked. Deploy and sync workflows are still not
-implemented.
+repo-local aliases. They may mutate local repo or workbench files and containers
+when explicitly invoked. Deploy and sync workflows are still not implemented,
+and per-project Makefiles are no longer needed for the local workbench.
 
 ## Planned workflows
 
@@ -555,7 +556,7 @@ provisioning, deploy, and sync phases stay future work.
 
 - Client repo: `/home/jon/src/nonfiction/client`
 - Client runtime lives in `theme/`
-- Local workbench lives in `workbench/`
+- Local workbench runtime lives in `~/.config/nf/workbenches/client/`
 - Local URL: `http://localhost:18181`
 - Theme source: `theme`
 - Theme slug likely: `theme`
