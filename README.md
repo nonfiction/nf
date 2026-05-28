@@ -19,6 +19,10 @@ Working now:
 * `nf runtime info`
 * `nf runtime shell`
 * `nf runtime wp`
+* `nf runtime snapshot create [name]`
+* `nf runtime snapshot list`
+* `nf runtime snapshot restore [name]`
+* `nf runtime snapshot delete [name]`
 * `nf up`
 * `nf down`
 * `nf logs`
@@ -314,6 +318,41 @@ nf runtime reset
 `nf runtime up` is idempotent. It starts Docker Compose, installs WordPress if needed, and ensures the mounted theme is active.
 
 `nf runtime reset` runs a volume-destroying reset and recreates the same managed runtime state.
+
+## Runtime snapshots
+
+Runtime snapshots are stored under:
+
+```text
+~/.config/nf/snapshots/<project-slug>/<snapshot-name>/
+```
+
+For the placeholder project:
+
+```text
+~/.config/nf/snapshots/client/<snapshot-name>/
+```
+
+Each snapshot contains:
+
+* `snapshot.json`
+* `database.sql.gz`
+* `wp-content.tar.gz`
+
+The `wp-content` archive includes only `uploads/`, `plugins/`, `mu-plugins/`, and `languages/`. It skips themes.
+
+Commands:
+
+```sh
+nf runtime snapshot create [name]
+nf runtime snapshot list
+nf runtime snapshot restore [name]
+nf runtime snapshot delete [name]
+```
+
+Snapshot names default to `YYYY-MM-DD-HHMMSS`. Spaces become dashes. Empty names, path traversal, separators, and unsafe characters are rejected.
+
+`nf runtime snapshot restore` creates a safety snapshot named `YYYY-MM-DD-HHMMSS-pre-restore` before restoring the selected snapshot.
 
 ## Theme packaging
 

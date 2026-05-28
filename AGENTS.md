@@ -29,6 +29,10 @@ The current project command surface is intentionally small:
 * `nf runtime info`
 * `nf runtime shell`
 * `nf runtime wp`
+* `nf runtime snapshot create [name]`
+* `nf runtime snapshot list`
+* `nf runtime snapshot restore [name]`
+* `nf runtime snapshot delete [name]`
 * `nf up`
 * `nf down`
 * `nf logs`
@@ -272,6 +276,18 @@ Runtime ports are derived deterministically from the project slug. `runtime.port
 * ensure the mounted theme is active
 
 Runtime-generated files should stay under `~/.config/nf/runtimes/<project-slug>/`.
+
+Runtime snapshots should stay under `~/.config/nf/snapshots/<project-slug>/<snapshot-name>/`.
+
+Snapshot contents:
+
+* `snapshot.json`
+* `database.sql.gz`
+* `wp-content.tar.gz`
+
+The `wp-content` archive should include only `uploads/`, `plugins/`, `mu-plugins/`, and `languages/`. Do not include themes.
+
+`nf runtime snapshot restore` should create a safety snapshot named `YYYY-MM-DD-HHMMSS-pre-restore` before importing the selected snapshot.
 
 Do not write generated runtime scaffolding into project repos unless the user explicitly changes that design.
 
