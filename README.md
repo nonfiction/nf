@@ -1,171 +1,140 @@
-# nf planning spec
+# nf
 
-`nf` is the planned agency-level CLI for nonfiction WordPress infrastructure,
-deployment, and shared operational state.
+`nf` is nonfiction’s internal CLI for agency WordPress theme work.
 
-This repository now includes the first useful executable CLI slices.
-It can initialize repo metadata, run repo-local aliases, manage an `nf`-owned
-local WordPress workbench, package a theme zip, inspect shared server/site
-state, and run guarded `nf server provision` / `nf server delete` slices.
-`nf server provision` is interactive-first through Bubble Tea/Bubbles/Lip Gloss;
-flags are shortcuts, and `--non-interactive` is available for scripting and tests.
-Remote deploy, sync, and destructive workflows remain policy-gated work.
+It gives the team one command surface for project metadata, local WordPress workbenches, repo-local build/test commands, theme packaging, shared server/site state, password derivation, and guarded infrastructure operations.
 
-The intended packaging path for `nf` is a `flake.nix` in this repository that
-builds and distributes the Go CLI to the nonfiction team and lets WordPress
-project flakes consume it as an input.
+This is an internal agency tool, not a general-purpose public WordPress framework.
 
-## Try it
+## Status
 
-- `nix run .#nf -- --help`
-- `nix develop -c nf --help`
-- Grouped commands: `nf server ...`, `nf site ...`, `nf repo ...`
-- With direnv: run `direnv allow` once, then enter the repo to auto-load the
-  flake dev shell.
+Working now:
 
-## Problem
+* `nf repo init`
+* `nf repo commands`
+* `nf repo up`
+* `nf repo down`
+* `nf repo logs`
+* `nf repo reset`
+* `nf repo wp`
+* `nf repo package`
+* `nf server list`
+* `nf server show`
+* `nf server provision`
+* `nf server delete`
+* `nf site list`
+* `nf site show`
+* `nf config init`
+* `nf password derive`
 
-nonfiction needs one shared tool for provisioning, installing, deploying, and
-synchronizing WordPress sites across providers and environments.
+Reserved but not implemented yet:
 
-The tool must not be project-specific.
-It should capture the lessons currently embedded in the `siafintech`
-deployment scripts without carrying over project-only assumptions.
+* `nf site install`
+* `nf site delete`
+* `nf site deploy`
+* `nf site push`
+* `nf site pull`
 
-## Goals
+Linode is the first implemented remote provider. Kinsta site records can be represented in shared state, but Kinsta deploy/sync workflows are future adapter work.
 
-- One command surface for agency-level WordPress operations.
-- Shared server/site state across a small team.
-- Provider abstraction for Linode now and Kinsta later.
-- Safe deployment workflows for theme, database, and uploads sync.
-- Clear separation between project repos and shared infrastructure state.
-- Human-reviewable configuration and recovery-friendly operations.
+Remote infrastructure workflows are intentionally guarded. Provisioning and deletion default toward dry-run/planning behavior unless explicitly executed.
 
-## Non-goals
+## Install and run
 
-- Project-specific deployment scripts.
-- A generic WordPress management framework for the public.
-- Automatic secret generation and secret storage in git.
-- Full remote deploy/sync implementation in this repo today.
-- Replacing WordPress itself or project-level content workflows.
+From this repository:
 
-## Terminology
-
-- **Project**: a client or site codebase, such as a client project.
-- **Server**: a reusable host target, such as `app1.nfweb.dev`.
-- **Site**: a WordPress install on a server, such as `client.app1.nfweb.dev`.
-- **Environment**: a deployment target like staging or production.
-- **Provider**: infrastructure back end such as Linode or Kinsta.
-- **State repo**: the shared private git repo that stores synced nf state.
-- **Project metadata**: safe repository-local metadata, such as
-  `.nf/project.json`.
-
-## High-level architecture
-
-`nf` should be split into three layers:
-
-1. **Local config layer**
-   - `~/.config/nf/.env` for local secrets and static account values.
-   - `~/.config/nf/config.*` for non-secret defaults.
-
-2. **Shared state layer**
-   - `~/.config/nf/state` as a private git checkout, or a config pointing to a
-     private checkout.
-   - Stores synced server records, site records, environment mappings, and
-     derived operational metadata.
-
-3. **Project metadata layer**
-   - Repository-local safe metadata only.
-   - Example path: `.nf/project.json`.
-   - Contains project identity and deployment hints, not secrets.
-
-The CLI should read from local config, then shared state, then project metadata.
-It should never require project repos to contain sensitive operational state.
-
-## Flake packaging and distribution
-
-`nf` should eventually be packaged with `flake.nix` in this repository.
-
-The flake should:
-
-- expose `packages.${system}.default` containing the `nf` executable
-- optionally expose `devShells.default` for `nf` development
-
-WordPress project repositories should consume `nf` as a flake input in their own
-`flake.nix` files. They should not vendor or copy `nf` scripts into project
-repos.
-
-Team install and use options should include:
-
-- using `nf` from a project dev shell input
-- checking out this repo directly for local development
-- optionally installing the package into a Nix profile
-
-This packaging path is separate from the private `nf` state repo and from
-`~/.config/nf/.env`, which remain local secrets and machine state.
-
-## Config and state layout
-
-Planned home layout:
-
-```text
-~/.config/nf/
-  .env
-  config.json
-  state/
-    servers.json
-    sites.json
-    projects.json
-    providers/
-      linode.json
-      kinsta.json
-  workbenches/
-    sanjel/
-      docker-compose.yml
-      .env
-      php/uploads.ini
-      wordpress/Dockerfile
+```sh
+nix run .#nf -- --help
+nix develop -c nf --help
+go run ./cmd/nf -- --help
 ```
 
-The exact file split can evolve, but the separation must stay:
+Build and test:
 
-- secrets in `.env`
-- shared machine state in `state/`
-- generated local workbench runtime in `workbenches/`
-- project-safe metadata in project repos
+```sh
+nix build .#nf -L
+go test ./...
+```
 
-### Secrets file
+The flake exposes:
 
-`~/.config/nf/.env` is manual setup only.
+* `packages.default`
+* `packages.nf`
+* `apps.default`
+* `apps.nf`
+* `devShells.default`
 
-It may include values such as:
+When developing with Nix flakes, remember that Nix builds from the git source snapshot. Stage newly added source files before trusting `nix run` or `nix build`.
 
-- API credentials for Linode
-- DNSimple credentials
-- GitHub auth for state sync automation
-- `NF_SECRET_SALT`
+## Requirements
 
-It must never be committed.
+For normal development:
 
-### State sync
+* Nix with flakes enabled
+* Go, when working outside the Nix dev shell
+* Docker with Docker Compose, for local workbenches
 
-Shared state should live in a private git repo so a team of two to three people
-can match server and site state.
+For remote Linode provisioning:
 
-The repo can be checked out at `~/.config/nf/state` or referenced through a
-config option, but the model is the same: one shared, private, versioned state
-source.
+* `linode-cli`
+* Linode API token
+* DNSimple API token
+* an SSH public key
 
-## Project metadata example
+## Command overview
 
-Example `.nf/project.json` for a Sanjel project:
+```text
+nf
+
+Commands:
+  server        provision, list, show, delete servers
+  site          list, show, future install/delete/deploy/sync
+  repo          init repo metadata and manage workbench runtime
+  config        init local config
+  password      derive passwords
+  help          show help
+```
+
+Inside a project repository, `nf repo` also exposes workbench commands and repo-local aliases from `.nf/project.json`.
+
+## Repo workflow
+
+Project repositories use:
+
+```text
+.nf/project.json
+```
+
+This file is safe to commit. It describes project intent, theme paths, local workbench behavior, artifact naming, deploy aliases, and repo-local commands.
+
+It must not contain secrets, API tokens, SSH keys, live database passwords, or mutable infrastructure state.
+
+Create it with:
+
+```sh
+nf repo init
+```
+
+Common flags:
+
+```sh
+nf repo init \
+  --project-slug client \
+  --project-name "Client" \
+  --theme-slug theme \
+  --theme-source theme
+```
+
+By default, `nf repo init` derives the project slug from the current git root folder and assumes the WordPress theme lives in `theme/`.
+
+Example `.nf/project.json`:
 
 ```json
 {
   "schema": 1,
   "project": {
-    "slug": "sanjel",
-    "name": "Sanjel",
+    "slug": "client",
+    "name": "Client",
     "type": "wordpress-theme"
   },
   "wordpress": {
@@ -187,7 +156,7 @@ Example `.nf/project.json` for a Sanjel project:
     ]
   },
   "artifact": {
-    "path": "dist/sanjel-v{version}.zip",
+    "path": "dist/client-v{version}.zip",
     "include": [
       "vendor/",
       "assets/dist/"
@@ -199,9 +168,9 @@ Example `.nf/project.json` for a Sanjel project:
   },
   "deploy": {
     "aliases": {
-      "app1": "sanjel-app1-production",
-      "staging": "sanjel-kinsta-staging",
-      "production": "sanjel-kinsta-production"
+      "app1": "client-app1-production",
+      "staging": "client-kinsta-staging",
+      "production": "client-kinsta-production"
     }
   },
   "commands": {
@@ -229,29 +198,228 @@ Example `.nf/project.json` for a Sanjel project:
 }
 ```
 
-Notes:
+## Repo commands
 
-- This file is safe to store in the project repo.
-- It must not contain secrets.
-- It should not duplicate mutable server state.
-- It should describe intent, not replace shared nf state.
-- Site targets may use names like `sanjel-app1-production`, `sanjel-app1-staging`, or `app1`.
-- Kinsta targets can carry `kinsta.company_id`, `kinsta.site_id`, and `kinsta.environment_id` without SSH info.
-- The hostname `https://sanjel.app1.nfweb.dev/` is the sort of URL the shared site state should surface.
-- `nf repo` workbench lifecycle commands come from `workbench` metadata.
-  The built-ins are `up`, `down`, `logs`, `reset`, and `wp`.
-- The `commands` block is for custom repo-local aliases such as build/watch/test.
-- Custom aliases run directly as `nf repo <name>`.
-- The repo only needs the theme source and `.nf/project.json`; runtime workbench
-  files are managed by `nf` under `~/.config/nf/workbenches/<project-slug>/`.
-- `artifact.path` may include `{version}`; `nf repo package` resolves it from
-  `theme/style.css`'s `Version:` header first, then falls back to
-  `theme/package.json`'s `version` field, and errors clearly if neither is
-  available.
+```sh
+nf repo init
+nf repo commands
+nf repo up
+nf repo down
+nf repo logs
+nf repo reset
+nf repo wp -- <wp-cli args>
+nf repo package [--dry-run] [--source path] [--output path]
+nf repo <alias>
+```
 
-## Shared state examples
+`nf repo commands` lists built-in workbench commands plus custom project aliases.
 
-`~/.config/nf/state/servers.json`
+`nf repo <alias>` runs a command defined in `.nf/project.json`.
+
+String commands run through the shell from the project root. Array commands execute directly. The underlying command is printed before execution.
+
+Examples:
+
+```sh
+nf repo commands
+nf repo build
+nf repo test
+nf repo wp -- plugin list
+```
+
+## Local WordPress workbench
+
+The workbench is generated and owned by `nf`.
+
+Project repositories should contain the theme source and `.nf/project.json`. They should not need committed Docker workbench scaffolding.
+
+Generated runtime files live under:
+
+```text
+~/.config/nf/workbenches/<project-slug>/
+```
+
+For the placeholder project:
+
+```text
+~/.config/nf/workbenches/client/
+```
+
+Default local URL:
+
+```text
+http://localhost:18080
+```
+
+Default local WordPress credentials:
+
+```text
+admin / admin
+```
+
+Default Docker Compose project name:
+
+```text
+nf_client_workbench
+```
+
+Common workflow:
+
+```sh
+nf repo up
+nf repo logs
+nf repo wp -- plugin list
+nf repo down
+```
+
+Reset the workbench database and WordPress runtime:
+
+```sh
+nf repo reset
+```
+
+`nf repo up` is idempotent. It starts Docker Compose, installs WordPress if needed, and ensures the mounted theme is active.
+
+`nf repo reset` runs a volume-destroying reset and recreates the same managed workbench state.
+
+## Theme packaging
+
+Package the current theme:
+
+```sh
+nf repo package
+```
+
+Preview packaging:
+
+```sh
+nf repo package --dry-run
+```
+
+Use explicit paths:
+
+```sh
+nf repo package --source theme --output dist/client.zip
+```
+
+The default source is `wordpress.theme_path` from `.nf/project.json`, falling back to `theme`.
+
+The default output comes from `artifact.path`, falling back to:
+
+```text
+dist/<project-slug>-v{version}.zip
+```
+
+For the placeholder project:
+
+```text
+dist/client-v{version}.zip
+```
+
+When the output path contains `{version}`, `nf` resolves it from:
+
+1. `style.css` `Version:` header
+2. `package.json` `version`
+
+If neither exists, packaging fails clearly.
+
+Packaging only zips the existing theme files. It does not run Composer, npm, or asset builds first.
+
+Run the appropriate repo-local alias before packaging:
+
+```sh
+nf repo build
+nf repo package
+```
+
+The packager skips common non-theme paths such as:
+
+* `.git`
+* `.DS_Store`
+* `node_modules`
+* the output ZIP itself
+
+## Local config
+
+By default, `nf` uses:
+
+```text
+~/.config/nf/
+```
+
+If `XDG_CONFIG_HOME` is set, `nf` uses:
+
+```text
+$XDG_CONFIG_HOME/nf
+```
+
+For tests or isolated runs, override the config home with:
+
+```sh
+NF_CONFIG_HOME=/path/to/nf-config
+```
+
+Expected layout:
+
+```text
+~/.config/nf/
+  .env
+  state/
+    servers.json
+    sites.json
+    projects.json
+  workbenches/
+    <project-slug>/
+```
+
+## Secrets
+
+Local secrets and account-specific values live in:
+
+```text
+~/.config/nf/.env
+```
+
+Expected values include:
+
+```env
+NF_SECRET_SALT=
+DNSIMPLE_TOKEN=
+LINODE_CLI_TOKEN=
+DNSIMPLE_ACCOUNT_ID=14
+```
+
+`LINODE_TOKEN` is also accepted where Linode credentials are needed.
+
+Use:
+
+```sh
+nf config init
+```
+
+to create the file or fill missing values.
+
+The `.env` file is local machine state and must not be committed.
+
+## Shared state
+
+Shared state lives in JSON files under:
+
+```text
+~/.config/nf/state/
+```
+
+Current state files:
+
+```text
+servers.json
+sites.json
+projects.json
+```
+
+`nf` supports simple arrays as well as keyed object shapes.
+
+Example `servers.json`:
 
 ```json
 {
@@ -269,54 +437,24 @@ Notes:
 }
 ```
 
-`~/.config/nf/state/sites.json`
+Example `sites.json`:
 
 ```json
 {
   "sites": {
-    "sanjel-app1-staging": {
-      "provider": "linode",
-      "server": "app1",
-      "environment": "staging",
-      "hostname": "sanjel.app1.nfweb.dev",
-      "url": "https://sanjel.app1.nfweb.dev/",
-      "branch": "main"
-    },
-    "sanjel-app1-production": {
+    "client-app1-production": {
       "provider": "linode",
       "server": "app1",
       "environment": "production",
-      "hostname": "sanjel.app1.nfweb.dev",
-      "url": "https://sanjel.app1.nfweb.dev/",
+      "hostname": "client.app1.nfweb.dev",
+      "url": "https://client.app1.nfweb.dev/",
       "branch": "main"
     },
-    "sanjel-kinsta-staging": {
-      "provider": "kinsta",
-      "environment": "staging",
-      "hostname": "sanjel-staging.kinsta.cloud",
-      "url": "https://sanjel-staging.kinsta.cloud",
-      "kinsta": {
-        "company_id": "123456",
-        "site_id": "234567",
-        "environment_id": "345678"
-      }
-    },
-    "sanjel-kinsta-production": {
+    "client-kinsta-production": {
       "provider": "kinsta",
       "environment": "production",
-      "hostname": "www.sanjel.com",
-      "url": "https://www.sanjel.com",
-      "kinsta": {
-        "company_id": "123456",
-        "site_id": "234567",
-        "environment_id": "345679"
-      }
-    },
-    "sanjel-production": {
-      "provider": "kinsta",
-      "environment": "production",
-      "hostname": "www.sanjel.com",
-      "url": "https://www.sanjel.com",
+      "hostname": "www.example.com",
+      "url": "https://www.example.com",
       "kinsta": {
         "company_id": "123456",
         "site_id": "234567",
@@ -327,294 +465,303 @@ Notes:
 }
 ```
 
-## Command design
+Project repositories should not duplicate this mutable state.
 
-The current command surface is grouped and should stay that way:
+## Server commands
 
-- `nf server provision|list|show|delete`
-- `nf site list|show`
-- `nf repo init|commands|package`
-- `nf repo up|down|logs|reset|wp`
-- direct repo-local aliases: `nf repo <name>`
-- `nf config init`
-- `nf password derive <project-slug> <purpose>`
+```sh
+nf server list
+nf server show [id-or-name]
+nf server provision [flags]
+nf server delete [flags] [id-or-name]
+```
 
-Provider-specific workflows should hang off those groups rather than inventing
-new top-level commands.
+`nf server list` reads shared server state and prints a table.
 
-Repo-context commands only appear when `nf` is run inside a `.git`
-repository.
-Interactive commands prefer pickers over required positional arguments where a
-safe choice can be made from known state; for example, `nf server show`,
-`nf site show`, and `nf server delete` open a selector when no identifier is
-provided.
+`nf server show` prints the matching server record as JSON. Without an identifier, interactive mode opens a selector.
 
-The first guarded remote slice is `nf server provision`.
-It defaults to dry-run, guides interactive use through Bubble Tea/Bubbles/Lip Gloss,
-prints a reviewable plan, and can write a redacted cloud-init preview locally.
-Flags act as shortcuts for prompts, and `--non-interactive` supports
-scripted/test usage.
-Actual remote execution is Linode-only for now and requires both `--execute`
-and `--yes` plus the required local credentials.
-Basic auth is not included in this first slice.
+`nf server provision` builds a guarded provisioning plan and can create a Linode-backed WordPress host.
 
-`nf server delete [id-or-name]` opens a server picker when no identifier is
-provided, then prints a plan and asks for confirmation in interactive mode.
-Non-interactive deletion remains dry-run unless explicitly run with
-`--execute --yes`.
+`nf server delete` prints a deletion plan first. In non-interactive mode it remains dry-run unless `--execute --yes` is supplied.
 
-`nf repo init` writes `.nf/project.json` and uses the current git root folder
-name as the default project slug when `--project-slug` is not provided.
-`nf repo up` starts the managed WordPress workbench, installs WordPress if
-needed, and keeps the mounted theme active. `nf repo reset` wipes the managed
-workbench data and recreates it. `nf repo package` writes a local zip artifact;
-when `artifact.path` contains `{version}`, it resolves the theme version from
-`theme/style.css` first, then `theme/package.json`. `nf server provision
---execute --yes` can create a remote Linode and DNS records. Repo workbench
-lifecycle commands are built in from `workbench` metadata, while the `commands`
-block is reserved for custom repo-local aliases. They run directly as
-`nf repo <name>` when explicitly invoked. Deploy and sync workflows are still
-not implemented, and per-project Makefiles are no longer needed for the local
-workbench.
+## Site commands
 
-## Where we are now
+```sh
+nf site list
+nf site show [id-or-name]
+```
 
-Implemented and expected to keep working:
+`nf site list` reads shared site state and prints a table.
 
-- Go CLI entrypoint only: `cmd/nf/main.go` -> `internal/cli.Run`.
-- Grouped command hierarchy; no old top-level compatibility commands.
-- `nf repo init` writes safe `.nf/project.json` metadata. By default it derives
-  `project.slug` from the current git root folder, uses `theme` for
-  `wordpress.theme_path`, `wordpress.theme_slug`, and the local workbench mount,
-  and writes `dist/<project-slug>-v{version}.zip` as the artifact template.
-- `nf repo up|down|logs|reset|wp` provide the local WordPress workbench. The
-  workbench runtime is generated under `~/.config/nf/workbenches/<project-slug>/`,
-  not copied into project repos. `up` is idempotent: it starts Docker Compose,
-  installs WordPress if needed, and keeps the mounted theme active. `reset`
-  removes volumes and recreates the same state.
-- `nf repo commands` lists built-ins plus custom aliases compactly. Custom
-  aliases live in `.nf/project.json` `commands` and run as `nf repo <name>`.
-  Execution prints the underlying command first.
-- `nf repo package` zips the existing theme files only. It does not run Composer,
-  npm, or asset builds. If `artifact.path` contains `{version}`, the version is
-  read from `theme/style.css` first, then `theme/package.json`.
-- `nf server list|show` and `nf site list|show` read shared state. `site show`
-  resolves deploy aliases from `.nf/project.json` and can surface Linode server
-  summaries or Kinsta IDs.
-- `nf server provision` and `nf server delete` are guarded remote slices.
-  Provisioning is Linode/DNSimple-focused and dry-run by default; actual remote
-  execution requires `--execute --yes` and credentials.
+`nf site show` prints the matching site record as JSON. Without an identifier, interactive mode opens a selector.
 
-## What's next
+When run inside a project repository, `nf site show` can resolve deploy aliases from `.nf/project.json`.
 
-Near-term work should stay in this order:
+For example:
 
-1. Make Sanjel-style repos fully comfortable on `nf repo ...`: tighten metadata,
-   command output, packaging, and managed workbench behavior as real projects use
-   it.
-2. Implement the Linode site lifecycle after server provisioning: install a site
-   on an existing `app1` host, write normalized site state, and deploy a packaged
-   theme artifact.
-3. Add safe pull/push workflows for database and uploads, with production
-   password and sensitive-option protection before any production push path.
-4. Add Kinsta deploy/sync adapters using Kinsta IDs from site state. Kinsta must
-   not reuse Linode provisioning paths or require SSH server state.
-5. Finish team distribution and state-sync polish: flake consumption from client
-   repos, private shared state workflow, and clearer provider policy boundaries.
+```sh
+nf site show production
+```
 
-## Planned workflows
+may resolve through:
 
-### Provision server
+```json
+{
+  "deploy": {
+    "aliases": {
+      "production": "client-kinsta-production"
+    }
+  }
+}
+```
 
-`nf server provision` creates a reusable host target such as `app1.nfweb.dev`.
+Future site lifecycle commands are reserved but not implemented yet:
 
-For Linode, this includes Linode API provisioning, DNSimple A records, and TLS
-challenge support for `nfweb.dev`.
+```sh
+nf site install
+nf site delete
+nf site deploy
+nf site push
+nf site pull
+```
 
-The guarded first slice behaves as follows:
+## Server provisioning
 
-- default mode is dry-run
-- `--execute` enables real remote work
-- `--execute` must be paired with `--yes` for actual changes
-- `--provider` currently accepts only `linode`
-- DNSimple zone discovery happens only during actual execution
-- `NF_SECRET_SALT` is used for derived passwords
-- basic auth is intentionally omitted in this slice
+Provisioning currently targets Linode and DNSimple.
 
-Required environment for actual execution:
+Dry-run plan:
 
-- `LINODE_CLI_TOKEN` or `LINODE_TOKEN`
-- `DNSIMPLE_TOKEN`
-- `NF_SECRET_SALT`
+```sh
+nf server provision \
+  --non-interactive \
+  --project-slug client \
+  --server-name app1 \
+  --site-domain app1.nfweb.dev
+```
 
-`DNSIMPLE_ACCOUNT_ID` defaults to `14` unless overridden.
+Actual execution requires both:
 
-Use `nf config init` to populate `~/.config/nf/.env` interactively.
+```text
+--execute --yes
+```
 
-### Shared state and site targeting
+Example execution:
 
-The CLI should keep shared server/site state separate from repository metadata.
-Site resolution should understand named targets like `app1`, `sanjel-app1-staging`,
-and `sanjel-app1-production`, with `app1` acting as a convenient alias for the
-current project's primary Linode site.
+```sh
+nf server provision \
+  --non-interactive \
+  --project-slug client \
+  --server-name app1 \
+  --site-domain app1.nfweb.dev \
+  --execute \
+  --yes
+```
 
-Kinsta site records should store company, site, and environment IDs only; they do
-not need SSH data.
+Useful flags:
+
+```text
+--provider
+--project-slug
+--server-name
+--site-domain
+--label
+--region
+--type
+--image
+--ssh-user
+--ssh-public-key-file
+--remote-wp-path
+--php-fpm-socket
+--db-name
+--db-user
+--wp-admin-user
+--wp-admin-email
+--site-title
+--dns-zone
+--dnsimple-account-id
+--write-cloud-init
+--show-cloud-init
+--non-interactive
+--dry-run
+--execute
+--yes
+```
+
+Defaults include:
+
+```text
+provider: linode
+server name: app1
+server domain: app1.nfweb.dev
+region: ca-central
+type: g6-standard-1
+image: linode/ubuntu24.04
+ssh user: nonfiction
+ssh public key: ~/.ssh/id_ed25519.pub
+remote WordPress path: /var/www/<project-slug>
+PHP-FPM socket: /var/run/php/php8.3-fpm.sock
+DNSimple account ID: 14
+```
+
+Required environment for execution:
+
+```env
+NF_SECRET_SALT=
+DNSIMPLE_TOKEN=
+LINODE_CLI_TOKEN=
+```
+
+or:
+
+```env
+LINODE_TOKEN=
+```
+
+Provisioning prints a reviewable plan. It can also write or display the generated cloud-init preview.
+
+Write cloud-init preview:
+
+```sh
+nf server provision \
+  --project-slug client \
+  --server-name app1 \
+  --site-domain app1.nfweb.dev \
+  --write-cloud-init /tmp/app1-cloud-init.yml
+```
+
+Show cloud-init preview in the terminal:
+
+```sh
+nf server provision \
+  --project-slug client \
+  --server-name app1 \
+  --site-domain app1.nfweb.dev \
+  --show-cloud-init
+```
+
+## Server deletion
+
+Preview deletion:
+
+```sh
+nf server delete app1 --non-interactive
+```
+
+Execute deletion:
+
+```sh
+nf server delete app1 --non-interactive --execute --yes
+```
+
+Without an identifier, interactive mode opens a server picker.
+
+Deletion prints a plan, shows related sites, and only performs the remote Linode deletion when execution is explicitly requested or confirmed.
+
+If the remote Linode is already gone, `nf` treats that as stale local state and can still clean matching local records.
+
+## Password derivation
+
+Derive a password:
+
+```sh
+nf password derive <project-slug> <purpose>
+```
+
+Example:
+
+```sh
+nf password derive client db-password
+```
+
+Password derivation uses:
+
+* project slug
+* purpose
+* `NF_SECRET_SALT`
+
+It does not use the server hostname, so derived passwords can remain stable across related environments.
+
+`NF_SECRET_SALT` must be present in the environment or in:
+
+```text
+~/.config/nf/.env
+```
 
 ## Provider model
 
 ### Linode
 
-Linode is the first provider.
+Implemented now:
 
-Expected responsibilities:
-
-- create server instances
-- support server inventory and metadata
-- integrate with DNSimple for `nfweb.dev` hostnames
-- support site installation on the created host
+* server provisioning
+* server inventory from shared state
+* server deletion
+* DNSimple-backed hostnames for `nfweb.dev`
+* state records for provisioned servers and sites
 
 ### Kinsta
 
-Kinsta is a future provider.
+Future adapter work:
 
-Important implications:
+* deploy packaged theme artifacts
+* pull/push database and uploads where supported
+* inspect and target environments by Kinsta IDs
 
-- no Linode provisioning step
-- deploy and sync workflows must still work
-- push/pull behavior should be expressed through provider adapters
-- production behavior may differ from Linode staging/light production
+Kinsta records should store Kinsta IDs and provider metadata. They should not require Linode SSH fields or reuse Linode provisioning paths.
 
-## Password derivation
+## Production safety
 
-Passwords for the same project slug should match across Linode environments like
-`app1` and `app2`.
+Database and uploads sync are future workflows and should be treated as high risk.
 
-Derivation should use:
+Rules for future implementation:
 
-- `project.slug`
-- `purpose`
-- `NF_SECRET_SALT`
+* require explicit environment selection
+* separate staging and production behavior
+* preserve production passwords
+* preserve sensitive options and users where possible
+* never silently push local/staging credentials back to production
+* make destructive actions confirmable and auditable
 
-It should not use `server_host`.
+## Development notes
 
-This keeps cross-environment testing and workflows predictable.
+Primary entrypoint:
 
-Kinsta production is different and may use unique real passwords.
+```text
+cmd/nf/main.go
+```
 
-## Production database safety
+Main packages:
 
-Database pushes toward production or Kinsta must be treated as high risk.
+```text
+internal/cli
+internal/config
+internal/envwizard
+internal/passwords
+internal/provision
+internal/state
+internal/theme
+internal/ui
+```
 
-The design should include guardrails such as:
+Common checks:
 
-- explicit environment selection
-- provider policy checks
-- confirmation for destructive actions
-- safe exclusion or preservation of sensitive options and users where possible
-- no silent password replacement on push-back flows
+```sh
+go test ./...
+go test ./internal/cli
+go run ./cmd/nf --help
+nix run .#nf -- --help
+nix build .#nf -L
+```
 
-The key rule is that a database sync must not clobber passwords when pushing
-back to production.
+Keep `README.md` and `AGENTS.md` aligned when command names, state layout, safety posture, or provider behavior changes.
 
-If the source database contains local or staging credentials, the push flow must
-preserve or remap them according to provider policy.
+## Roadmap
 
-## Suggested state responsibilities
+Near-term order:
 
-Shared `nf` state should track:
-
-- providers
-- servers
-- sites
-- server-to-site relationships
-- environment labels
-- hostnames
-- derived identifiers
-- last known sync metadata
-
-Project repos should only track:
-
-- project slug/type
-- WordPress/theme structure
-- build/artifact recipe
-- deploy aliases
-- repo-local commands
-
-## Initial implementation phases
-
-### Phase 1: spec and state model
-
-- finalize terminology
-- finalize shared state schema
-- finalize project metadata schema
-- define provider policy interfaces
-- define flake packaging and distribution shape
-
-### Phase 2: safe local CLI skeleton
-
-- add command parsing
-- add config loading
-- add state loading
-- add read-only inspection commands
-
-This phase is implemented enough to support the current repo, state, and
-workbench slices. The remaining deploy and sync phases stay future work.
-
-### Phase 3: Linode provider
-
-- provision server
-- manage server records
-- install site
-
-### Phase 4: theme deploy
-
-- build theme assets
-- package theme artifact
-- deploy theme artifact
-
-### Phase 5: sync workflows
-
-- database sync workflows
-- uploads sync workflows
-- full site sync workflows
-- provider-safe production protections
-
-### Phase 6: Kinsta adapter
-
-- provider-specific deploy and sync behavior
-- no Linode assumptions in shared command layer
-
-### Phase 7: flake-based distribution
-
-- publish the `nf` executable through `flake.nix`
-- support consumption from WordPress project flakes
-- support optional local dev shells and Nix profile install workflows
-
-## Open questions
-
-- Exact shared state file format.
-- Whether state sync should use one repo or multiple private repos.
-- Final provider policy shape for destructive operations.
-- How to represent environments that share a project slug but differ by
-  provider.
-- Whether package naming should be standardized across all projects or allow
-  project overrides.
-- How much push/pull automation should be allowed for production compared with
-  staging.
-- How server inventory should record externally managed hosts.
-- How the initial `flake.nix` should structure package, app, and dev shell
-  outputs.
-
-## Current source of truth for examples
-
-- Example project repo: `/home/jon/src/nonfiction/sanjel`
-- Theme source convention: `theme/`
-- Local workbench runtime: `~/.config/nf/workbenches/<project-slug>/`
-- Sanjel local workbench URL: `http://localhost:18080`
-- Sanjel managed compose project name: `nf_sanjel_workbench`
-- Linode example server: `app1.nfweb.dev`, SSH user `nonfiction`
-- Linode example site URL: `https://sanjel.app1.nfweb.dev/`
-
-Keep this README and `AGENTS.md` aligned when command names, state shape, safety
-posture, or the Sanjel-derived workbench model changes.
+1. Keep the standard agency WordPress theme repo workflow comfortable enough to replace per-project scripts.
+2. Implement Linode site lifecycle after server provisioning.
+3. Add theme artifact deployment.
+4. Add database/uploads pull-push workflows with production protections.
+5. Add Kinsta deploy/sync adapters.
+6. Polish team distribution and shared state sync.
