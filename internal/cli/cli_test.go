@@ -630,6 +630,67 @@ func TestRenderRuntimeComposeUsesMetadataDefaults(t *testing.T) {
 			t.Fatalf("renderRuntimeCompose() missing %q:\n%s", want, compose)
 		}
 	}
+	if strings.Contains(compose, "\t") {
+		t.Fatalf("renderRuntimeCompose() contains a tab character:\n%s", compose)
+	}
+}
+
+func TestRunRepoUpAutoInitializesProjectMetadata(t *testing.T) {
+	repoRoot := filepath.Join(t.TempDir(), "client-site")
+	if err := os.MkdirAll(filepath.Join(repoRoot, ".git"), 0o755); err != nil {
+		t.Fatalf("MkdirAll() error = %v", err)
+	}
+	if err := os.MkdirAll(filepath.Join(repoRoot, "work"), 0o755); err != nil {
+		t.Fatalf("MkdirAll() error = %v", err)
+	}
+	dockerDir := t.TempDir()
+	logPath := filepath.Join(dockerDir, "docker-args.txt")
+	dockerScript := []byte("#!/bin/sh\nprintf '%s\\n' \"$@\" >> \"$DOCKER_LOG\"\ncase \"$*\" in\n  *\"wp core is-installed\"*) exit 1 ;;\nesac\nexit 0\n")
+	if err := os.WriteFile(filepath.Join(dockerDir, "docker"), dockerScript, 0o755); err != nil {
+		t.Fatalf("WriteFile(docker) error = %v", err)
+	}
+	configHome := t.TempDir()
+	t.Setenv("NF_CONFIG_HOME", configHome)
+	t.Setenv("DOCKER_LOG", logPath)
+	t.Setenv("PATH", dockerDir+string(os.PathListSeparator)+os.Getenv("PATH"))
+
+	oldwd, err := os.Getwd()
+	if err != nil {
+		t.Fatalf("Getwd() error = %v", err)
+	}
+	if err := os.Chdir(filepath.Join(repoRoot, "work")); err != nil {
+		t.Fatalf("Chdir() error = %v", err)
+	}
+	t.Cleanup(func() { _ = os.Chdir(oldwd) })
+
+	projectPath := filepath.Join(repoRoot, ".nf", "project.json")
+	output := captureStdout(t, func() {
+		if got := Run([]string{"repo", "up"}); got != 0 {
+			t.Fatalf("Run() = %d, want 0", got)
+		}
+	})
+	for _, want := range []string{
+		"Wrote " + projectPath,
+		"> docker compose up -d",
+		"> docker compose run --rm cli wp core is-installed --allow-root",
+		"> docker compose run --rm cli sh -lc",
+	} {
+		if !strings.Contains(output, want) {
+			t.Fatalf("Run() output missing %q:\n%s", want, output)
+		}
+	}
+	data, err := os.ReadFile(projectPath)
+	if err != nil {
+		t.Fatalf("ReadFile(project.json) error = %v", err)
+	}
+	var metadata map[string]any
+	if err := json.Unmarshal(data, &metadata); err != nil {
+		t.Fatalf("Unmarshal() error = %v", err)
+	}
+	project, _ := metadata["project"].(map[string]any)
+	if got, want := project["slug"], "client-site"; got != want {
+		t.Fatalf("project.slug = %v, want %v", got, want)
+	}
 }
 
 func TestLoadRuntimeConfigUsesRuntimeBlock(t *testing.T) {

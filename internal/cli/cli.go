@@ -1263,27 +1263,49 @@ func cmdProjectInit(args projectInitArgs) int {
 		fmt.Fprintln(os.Stderr, err)
 		return 1
 	}
+	if err := writeProjectInit(root, args); err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		return 1
+	}
+	return 0
+}
+
+func writeProjectInit(root string, args projectInitArgs) error {
 	metadata := repoInitMetadata(args)
-	projectPath := filepath.Join(root, ".nf", "project.json")
+	projectPath := config.ProjectFile(root)
 	if !args.force {
 		if _, err := os.Stat(projectPath); err == nil {
-			fmt.Fprintf(os.Stderr, "%s already exists; use --force to overwrite.\n", projectPath)
-			return 1
+			return ProjectError{Msg: fmt.Sprintf("%s already exists; use --force to overwrite.", projectPath)}
 		} else if !os.IsNotExist(err) {
-			fmt.Fprintln(os.Stderr, err)
-			return 1
+			return err
 		}
 	}
 	if err := os.MkdirAll(filepath.Dir(projectPath), 0o755); err != nil {
-		fmt.Fprintln(os.Stderr, err)
-		return 1
+		return err
 	}
 	if err := os.WriteFile(projectPath, []byte(repoInitJSON(metadata)), 0o644); err != nil {
-		fmt.Fprintln(os.Stderr, err)
-		return 1
+		return err
 	}
 	fmt.Printf("Wrote %s\n", projectPath)
-	return 0
+	return nil
+}
+
+func ensureRepoProjectMetadata() error {
+	root, ok := currentGitRoot()
+	if !ok {
+		return ProjectError{Msg: "repo up requires a .git repository above the current directory"}
+	}
+	projectPath := config.ProjectFile(root)
+	if _, err := os.Stat(projectPath); err == nil {
+		return nil
+	} else if !os.IsNotExist(err) {
+		return err
+	}
+	slug, err := currentGitRootBase()
+	if err != nil {
+		return err
+	}
+	return writeProjectInit(root, projectInitArgs{projectSlug: slug})
 }
 
 func repoInitMetadata(args projectInitArgs) map[string]any {
@@ -1423,7 +1445,7 @@ func renderRuntimeCompose(cfg runtimeConfig) string {
 volumes:
   db_data:
   wp_data:
-	`, wordpressService, themePath, themeMountSlug, cliService, wordpressService, themePath, themeMountSlug, uploadsPath, path.Join("/", "runtime", uploadsPath))
+`, wordpressService, themePath, themeMountSlug, cliService, wordpressService, themePath, themeMountSlug, uploadsPath, path.Join("/", "runtime", uploadsPath))
 }
 
 func renderRuntimeEnv(cfg runtimeConfig) string {
@@ -1832,6 +1854,16 @@ func runRepo(argv []string) int {
 			projectSlug = &derivedSlug
 		}
 		return cmdProjectInit(projectInitArgs{projectSlug: *projectSlug, projectName: *projectName, themeSlug: *themeSlug, themeSource: *themeSource, force: *force})
+	}
+	if argv[0] == "up" {
+		if err := requireProjectContext("repo up"); err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			return 1
+		}
+		if err := ensureRepoProjectMetadata(); err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			return 1
+		}
 	}
 	if argv[0] == "package" {
 		if err := requireProjectContext("repo package"); err != nil {
