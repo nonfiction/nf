@@ -10,6 +10,8 @@ import (
 	"reflect"
 	"strings"
 	"testing"
+
+	"github.com/nonfiction/nf/internal/config"
 )
 
 func TestSlugToTitle(t *testing.T) {
@@ -129,7 +131,7 @@ func TestRunHelpShowsRepoMetadataOutsideGit(t *testing.T) {
 	t.Cleanup(func() { _ = os.Chdir(oldwd) })
 
 	output := captureStdout(t, func() { _ = runHelp() })
-	for _, wanted := range []string{"\n  server        provision, list, show, delete servers\n", "\n  site          list, show, future install/delete/deploy/sync\n", "\n  repo          init repo metadata\n", "\n  config        init local config\n", "\n  password      derive passwords\n", "\n  help          show help\n"} {
+	for _, wanted := range []string{"\n  server        provision, list, show, delete servers\n", "\n  site          list, show, future install/delete/deploy/sync\n", "\n  repo          init repo metadata and manage workbench runtime\n", "\n  config        init local config\n", "\n  password      derive passwords\n", "\n  help          show help\n"} {
 		if !strings.Contains(output, wanted) {
 			t.Fatalf("runHelp() output missing %q:\n%s", wanted, output)
 		}
@@ -431,10 +433,13 @@ func TestRunRepoInitWritesPortableMetadataShape(t *testing.T) {
 	if workbench, ok := metadata["workbench"].(map[string]any); !ok {
 		t.Fatalf("workbench block = %#v, want workbench config", metadata["workbench"])
 	} else {
-		for key, want := range map[string]string{"path": "workbench", "compose": "docker compose", "wordpress_service": "wordpress", "cli_service": "cli", "theme_mount_slug": "theme", "uploads_path": "uploads"} {
+		for key, want := range map[string]string{"compose": "docker compose", "wordpress_service": "wordpress", "cli_service": "cli", "theme_mount_slug": "theme", "uploads_path": "uploads"} {
 			if got := workbench[key]; got != want {
 				t.Fatalf("workbench.%s = %#v, want %q", key, got, want)
 			}
+		}
+		if _, exists := workbench["path"]; exists {
+			t.Fatalf("workbench.path unexpectedly present: %#v", workbench)
 		}
 	}
 	if build, ok := metadata["build"].(map[string]any); !ok {
@@ -487,11 +492,73 @@ func TestRunRepoInitWritesPortableMetadataShape(t *testing.T) {
 			t.Fatalf("build.source unexpectedly present: %#v", metadata["build"])
 		}
 	}
+	if _, err := os.Stat(filepath.Join(workdir, "workbench")); !os.IsNotExist(err) {
+		t.Fatalf("workbench scaffold unexpectedly created: %v", err)
+	}
+}
+
+func TestRunRepoInitWithoutForceRejectsExistingProjectJson(t *testing.T) {
+	workdir := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(workdir, ".nf"), 0o755); err != nil {
+		t.Fatalf("MkdirAll() error = %v", err)
+	}
+	projectPath := filepath.Join(workdir, ".nf", "project.json")
+	if err := os.WriteFile(projectPath, []byte("{\n}\n"), 0o644); err != nil {
+		t.Fatalf("WriteFile() error = %v", err)
+	}
+
+	oldwd, err := os.Getwd()
+	if err != nil {
+		t.Fatalf("Getwd() error = %v", err)
+	}
+	if err := os.Chdir(workdir); err != nil {
+		t.Fatalf("Chdir() error = %v", err)
+	}
+	t.Cleanup(func() { _ = os.Chdir(oldwd) })
+
+	output := captureStderr(t, func() {
+		if got := Run([]string{"repo", "init", "--project-slug", "sanjel"}); got != 1 {
+			t.Fatalf("Run() = %d, want 1", got)
+		}
+	})
+	if !strings.Contains(output, projectPath+" already exists; use --force to overwrite.") {
+		t.Fatalf("Run() stderr = %q, want existing-file warning", output)
+	}
+	data, err := os.ReadFile(projectPath)
+	if err != nil {
+		t.Fatalf("ReadFile() error = %v", err)
+	}
+	if string(data) != "{\n}\n" {
+		t.Fatalf("project.json changed unexpectedly: %q", string(data))
+	}
+}
+
+func TestRenderWorkbenchComposeUsesMetadataDefaults(t *testing.T) {
+	root := t.TempDir()
+	metadata := map[string]any{
+		"project":   map[string]any{"slug": "sanjel"},
+		"wordpress": map[string]any{"theme_path": "theme-src"},
+		"workbench": map[string]any{"compose": "docker compose", "wordpress_service": "wp-app", "cli_service": "wp-cli", "theme_mount_slug": "theme-slot", "uploads_path": "uploads"},
+	}
+	cfg, ok := loadWorkbenchConfig(root, metadata)
+	if !ok {
+		t.Fatalf("loadWorkbenchConfig() = false, want true")
+	}
+	compose := renderWorkbenchCompose(cfg)
+	for _, want := range []string{"wp-app:", "wp-cli:", "condition: service_healthy", "depends_on:\n      wp-app:", "working_dir: /var/www/html", filepath.Join(root, "theme-src") + ":/var/www/html/wp-content/themes/theme-slot"} {
+		if !strings.Contains(compose, want) {
+			t.Fatalf("renderWorkbenchCompose() missing %q:\n%s", want, compose)
+		}
+	}
 }
 
 func TestWorkbenchCommandHelpersBuildExpectedArgs(t *testing.T) {
 	cfg := workbenchConfig{
-		Path:             "workbench",
+		ProjectSlug:      "sanjel",
+		ProjectName:      "Sanjel",
+		RepoRoot:         "/repo",
+		ThemePath:        "/repo/theme",
+		ManagedDir:       filepath.Join("/config", "workbenches", "sanjel"),
 		Compose:          "docker compose",
 		WordpressService: "wordpress",
 		CliService:       "cli",
@@ -506,9 +573,12 @@ func TestWorkbenchCommandHelpersBuildExpectedArgs(t *testing.T) {
 	if got, want := workbenchWpArgs(cfg, "plugin", "list"), []string{"docker", "compose", "run", "--rm", "cli", "wp", "plugin", "list", "--allow-root"}; !reflect.DeepEqual(got, want) {
 		t.Fatalf("workbenchWpArgs() = %#v, want %#v", got, want)
 	}
-	hostPath, containerPath := workbenchThemeArchivePaths("/repo", cfg, "/tmp/theme.zip")
-	if hostPath != filepath.Join("/repo", "workbench", "uploads", "theme.zip") || containerPath != "/workbench/uploads/theme.zip" {
+	hostPath, containerPath := workbenchThemeArchivePaths(cfg, "/tmp/theme.zip")
+	if hostPath != filepath.Join(cfg.ManagedDir, "uploads", "theme.zip") || containerPath != "/workbench/uploads/theme.zip" {
 		t.Fatalf("workbenchThemeArchivePaths() = (%q, %q), want host and container upload paths", hostPath, containerPath)
+	}
+	if got, want := workbenchCommandDir(cfg), cfg.ManagedDir; got != want {
+		t.Fatalf("workbenchCommandDir() = %q, want %q", got, want)
 	}
 	if got, want := workbenchWpThemeActivateArgs(cfg, ""), []string{"docker", "compose", "run", "--rm", "cli", "wp", "theme", "activate", "sanjel", "--allow-root"}; !reflect.DeepEqual(got, want) {
 		t.Fatalf("workbenchWpThemeActivateArgs() = %#v, want %#v", got, want)
@@ -537,6 +607,57 @@ func TestWorkbenchCommandHelpersBuildExpectedArgs(t *testing.T) {
 	}
 }
 
+func TestEnsureManagedWorkbenchRuntimeWritesManagedFiles(t *testing.T) {
+	configHome := t.TempDir()
+	t.Setenv("NF_CONFIG_HOME", configHome)
+	root := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(root, "theme"), 0o755); err != nil {
+		t.Fatalf("MkdirAll() error = %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(root, "theme", "style.css"), []byte("/* demo */\n"), 0o644); err != nil {
+		t.Fatalf("WriteFile() error = %v", err)
+	}
+	metadata := map[string]any{
+		"project":   map[string]any{"slug": "sanjel", "name": "Sanjel"},
+		"wordpress": map[string]any{"theme_slug": "sanjel", "theme_path": "theme"},
+		"workbench": map[string]any{"compose": "docker compose", "wordpress_service": "wordpress", "cli_service": "cli", "theme_mount_slug": "theme", "uploads_path": "uploads"},
+	}
+	cfg, ok := loadWorkbenchConfig(root, metadata)
+	if !ok {
+		t.Fatalf("loadWorkbenchConfig() = false, want true")
+	}
+	if got, want := cfg.ManagedDir, config.WorkbenchDir("sanjel"); got != want {
+		t.Fatalf("ManagedDir = %q, want %q", got, want)
+	}
+	if err := ensureManagedWorkbenchRuntime(cfg); err != nil {
+		t.Fatalf("ensureManagedWorkbenchRuntime() error = %v", err)
+	}
+	checks := map[string][]string{
+		filepath.Join(cfg.ManagedDir, "docker-compose.yml"):                   {filepath.Join(root, "theme") + ":/var/www/html/wp-content/themes/theme", "mailpit", "wordpress:cli-php8.4"},
+		filepath.Join(cfg.ManagedDir, ".env"):                                 {"COMPOSE_PROJECT_NAME=sanjel_workbench", "WP_TITLE=Sanjel"},
+		filepath.Join(cfg.ManagedDir, "php", "uploads.ini"):                   {"upload_max_filesize=128M", "max_execution_time=120"},
+		filepath.Join(cfg.ManagedDir, "wordpress", "Dockerfile"):              {"FROM wordpress:7.0-php8.4-apache", "COPY wordpress/wordpress-rewrites.conf"},
+		filepath.Join(cfg.ManagedDir, "wordpress", "wordpress-rewrites.conf"): {"RewriteRule . /index.php [L]"},
+	}
+	for path, wants := range checks {
+		data, err := os.ReadFile(path)
+		if err != nil {
+			t.Fatalf("ReadFile(%s) error = %v", path, err)
+		}
+		text := string(data)
+		for _, want := range wants {
+			if !strings.Contains(text, want) {
+				t.Fatalf("%s missing %q:\n%s", path, want, text)
+			}
+		}
+	}
+	if data, err := os.ReadFile(filepath.Join(cfg.ManagedDir, "uploads", ".gitkeep")); err != nil {
+		t.Fatalf("ReadFile(.gitkeep) error = %v", err)
+	} else if len(data) != 0 {
+		t.Fatalf("uploads/.gitkeep = %q, want empty file", string(data))
+	}
+}
+
 func TestRunRepoSetupCanBeOverriddenByExplicitCommand(t *testing.T) {
 	workdir := t.TempDir()
 	if err := os.Mkdir(filepath.Join(workdir, ".git"), 0o755); err != nil {
@@ -549,7 +670,7 @@ func TestRunRepoSetupCanBeOverriddenByExplicitCommand(t *testing.T) {
 		"schema":    1,
 		"project":   map[string]any{"slug": "sanjel", "name": "Sanjel", "type": "wordpress-theme"},
 		"wordpress": map[string]any{"deploy_unit": "theme", "theme_slug": "sanjel", "theme_path": "theme"},
-		"workbench": map[string]any{"path": "workbench", "compose": "docker compose", "wordpress_service": "wordpress", "cli_service": "cli", "theme_mount_slug": "theme", "uploads_path": "uploads"},
+		"workbench": map[string]any{"compose": "docker compose", "wordpress_service": "wordpress", "cli_service": "cli", "theme_mount_slug": "theme", "uploads_path": "uploads"},
 		"commands":  map[string]any{"setup": map[string]any{"description": "Custom setup", "run": []any{"sh", "-lc", "printf custom > override.txt"}}},
 	}
 	data, err := json.MarshalIndent(project, "", "  ")
