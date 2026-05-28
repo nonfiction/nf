@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"net"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -136,7 +137,7 @@ func TestRunHelpShowsRepoMetadataOutsideGit(t *testing.T) {
 			t.Fatalf("runHelp() output missing %q:\n%s", wanted, output)
 		}
 	}
-	for _, unwanted := range []string{"\n  theme         package theme artifacts\n", "Shortcuts:", "nf up", "\n  commands\n", "\n  run <name>\n", "\n  build\n"} {
+	for _, unwanted := range []string{"\n  theme         package theme artifacts\n", "Shortcuts:", "nf up", "nf shell", "\n  commands\n", "\n  run <name>\n", "\n  build\n"} {
 		if strings.Contains(output, unwanted) {
 			t.Fatalf("runHelp() output unexpectedly contained %q:\n%s", unwanted, output)
 		}
@@ -163,7 +164,7 @@ func TestRunHelpShowsRepoCommandsInsideGit(t *testing.T) {
 			t.Fatalf("runHelp() output missing %q:\n%s", wanted, output)
 		}
 	}
-	for _, unwanted := range []string{"Shortcuts:", "nf up", "\n  theme         package theme artifacts\n", "\n  commands\n", "\n  run <name>\n", "\n  build\n"} {
+	for _, unwanted := range []string{"Shortcuts:", "nf up", "nf shell", "\n  theme         package theme artifacts\n", "\n  commands\n", "\n  run <name>\n", "\n  build\n"} {
 		if strings.Contains(output, unwanted) {
 			t.Fatalf("runHelp() output unexpectedly contained %q:\n%s", unwanted, output)
 		}
@@ -172,7 +173,7 @@ func TestRunHelpShowsRepoCommandsInsideGit(t *testing.T) {
 
 func TestRunRuntimeHelpShowsCommandsAndShortcuts(t *testing.T) {
 	output := captureStdout(t, func() { _ = runRuntimeHelp() })
-	for _, wanted := range []string{"runtime\n\nCommands:\n", "\n  up                  start the local runtime\n", "\n  down                stop the local runtime\n", "\n  wp -- <args>        run wp-cli in the local runtime\n", "\nShortcuts:\n", "\n  nf up               shortcut for nf runtime up\n", "\n  nf wp -- <args>     shortcut for nf runtime wp\n"} {
+	for _, wanted := range []string{"runtime\n\nCommands:\n", "\n  info                show local runtime paths, ports, and URLs\n", "\n  up                  start the local runtime\n", "\n  down                stop the local runtime\n", "\n  shell               open a shell in the WordPress container\n", "\n  wp -- <args>        run wp-cli in the local runtime\n", "\nShortcuts:\n", "\n  nf info             shortcut for nf runtime info\n", "\n  nf up               shortcut for nf runtime up\n", "\n  nf shell            shortcut for nf runtime shell\n", "\n  nf wp -- <args>     shortcut for nf runtime wp -- <args>\n"} {
 		if !strings.Contains(output, wanted) {
 			t.Fatalf("runRuntimeHelp() output missing %q:\n%s", wanted, output)
 		}
@@ -460,6 +461,9 @@ func TestRunRepoInitWritesPortableMetadataShape(t *testing.T) {
 			if got := runtime[key]; got != want {
 				t.Fatalf("runtime.%s = %#v, want %q", key, got, want)
 			}
+		}
+		if _, exists := runtime["ports"]; exists {
+			t.Fatalf("runtime.ports unexpectedly present: %#v", runtime["ports"])
 		}
 		if _, exists := runtime["path"]; exists {
 			t.Fatalf("runtime.path unexpectedly present: %#v", runtime)
@@ -793,11 +797,165 @@ func TestRuntimeComposeProjectName(t *testing.T) {
 	}
 }
 
+func TestRuntimeDerivedPortsUseCleanedSlug(t *testing.T) {
+	wpA, mailpitA := runtimeDerivedPorts(" Client Site ")
+	wpB, mailpitB := runtimeDerivedPorts("client_site")
+	if wpA != wpB || mailpitA != mailpitB {
+		t.Fatalf("runtimeDerivedPorts() = (%d, %d) and (%d, %d), want matching ports", wpA, mailpitA, wpB, mailpitB)
+	}
+	if mailpitA != wpA+1 {
+		t.Fatalf("runtimeDerivedPorts() mailpit = %d, want wordpress+1 (%d)", mailpitA, wpA+1)
+	}
+	if wpA < 18000 || mailpitA > 21999 {
+		t.Fatalf("runtimeDerivedPorts() = (%d, %d), want ports in 18000-21999 block", wpA, mailpitA)
+	}
+}
+
 func TestRenderRuntimeEnvUsesComposeProjectName(t *testing.T) {
-	cfg := runtimeConfig{ProjectSlug: "client", ProjectName: "Client"}
-	want := "COMPOSE_PROJECT_NAME=nf_client_runtime\nWP_PORT=18080\nMAILPIT_PORT=8026\nDB_NAME=client\nDB_USER=client\nDB_PASSWORD=wordpress\nDB_ROOT_PASSWORD=root\nWP_URL=http://localhost:18080\nWP_TITLE=Client\nADMIN_USER=admin\nADMIN_PASSWORD=admin\nADMIN_EMAIL=web@nonfiction.ca\n"
+	wpPort, mailpitPort := runtimeDerivedPorts("client")
+	cfg := runtimeConfig{ProjectSlug: "client", ProjectName: "Client", WordpressPort: wpPort, MailpitPort: mailpitPort}
+	want := fmt.Sprintf("COMPOSE_PROJECT_NAME=nf_client_runtime\nWP_PORT=%d\nMAILPIT_PORT=%d\nDB_NAME=client\nDB_USER=client\nDB_PASSWORD=wordpress\nDB_ROOT_PASSWORD=root\nWP_URL=http://localhost:%d\nWP_TITLE=Client\nADMIN_USER=admin\nADMIN_PASSWORD=admin\nADMIN_EMAIL=web@nonfiction.ca\n", wpPort, mailpitPort, wpPort)
 	if got := renderRuntimeEnv(cfg); got != want {
 		t.Fatalf("renderRuntimeEnv() = %q, want %q", got, want)
+	}
+}
+
+func TestRenderRuntimeInfoUsesEffectivePorts(t *testing.T) {
+	cfg := runtimeConfig{ProjectSlug: "client", ProjectName: "Client", ManagedDir: filepath.Join("/config", "runtimes", "client"), WordpressPort: 18432, MailpitPort: 18433}
+	want := "Runtime:\n  project: client\n  path: /config/runtimes/client\n  compose project: nf_client_runtime\n  WordPress: http://localhost:18432\n  Mailpit:   http://localhost:18433"
+	if got := renderRuntimeInfo(cfg, true); got != want {
+		t.Fatalf("renderRuntimeInfo(full) = %q, want %q", got, want)
+	}
+	want = "Runtime:\n  project: client\n  path: /config/runtimes/client\n  compose project: nf_client_runtime"
+	if got := renderRuntimeInfo(cfg, false); got != want {
+		t.Fatalf("renderRuntimeInfo(short) = %q, want %q", got, want)
+	}
+}
+
+func TestLoadRuntimeConfigAppliesPortOverrides(t *testing.T) {
+	root := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(root, "theme"), 0o755); err != nil {
+		t.Fatalf("MkdirAll() error = %v", err)
+	}
+	metadata := map[string]any{
+		"project":   map[string]any{"slug": "client", "name": "Client"},
+		"wordpress": map[string]any{"theme_slug": "theme", "theme_path": "theme"},
+		"runtime": map[string]any{
+			"compose":           "docker compose",
+			"wordpress_service": "wordpress",
+			"cli_service":       "cli",
+			"theme_mount_slug":  "theme",
+			"uploads_path":      "uploads",
+			"ports": map[string]any{
+				"wordpress": 19111,
+				"mailpit":   19112,
+			},
+		},
+	}
+	cfg, ok := loadRuntimeConfig(root, metadata)
+	if !ok {
+		t.Fatalf("loadRuntimeConfig() = false, want true")
+	}
+	if cfg.WordpressPort != 19111 || cfg.MailpitPort != 19112 {
+		t.Fatalf("effective ports = (%d, %d), want overrides (19111, 19112)", cfg.WordpressPort, cfg.MailpitPort)
+	}
+}
+
+func TestLoadRuntimeConfigFallsBackPerPortIndependently(t *testing.T) {
+	root := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(root, "theme"), 0o755); err != nil {
+		t.Fatalf("MkdirAll() error = %v", err)
+	}
+	derivedWordpress, derivedMailpit := runtimeDerivedPorts("client")
+	for _, tc := range []struct {
+		name          string
+		runtimePorts  map[string]any
+		wantWordpress int
+		wantMailpit   int
+	}{
+		{name: "wordpress override only", runtimePorts: map[string]any{"wordpress": 19111, "mailpit": 0}, wantWordpress: 19111, wantMailpit: derivedMailpit},
+		{name: "mailpit override only", runtimePorts: map[string]any{"wordpress": 0, "mailpit": 19112}, wantWordpress: derivedWordpress, wantMailpit: 19112},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			metadata := map[string]any{
+				"project":   map[string]any{"slug": "client", "name": "Client"},
+				"wordpress": map[string]any{"theme_slug": "theme", "theme_path": "theme"},
+				"runtime": map[string]any{
+					"compose":           "docker compose",
+					"wordpress_service": "wordpress",
+					"cli_service":       "cli",
+					"theme_mount_slug":  "theme",
+					"uploads_path":      "uploads",
+					"ports":             tc.runtimePorts,
+				},
+			}
+			cfg, ok := loadRuntimeConfig(root, metadata)
+			if !ok {
+				t.Fatalf("loadRuntimeConfig() = false, want true")
+			}
+			if cfg.WordpressPort != tc.wantWordpress || cfg.MailpitPort != tc.wantMailpit {
+				t.Fatalf("effective ports = (%d, %d), want (%d, %d)", cfg.WordpressPort, cfg.MailpitPort, tc.wantWordpress, tc.wantMailpit)
+			}
+		})
+	}
+}
+
+func openAdjacentPortPair(t *testing.T) (int, net.Listener, net.Listener) {
+	t.Helper()
+	for i := 0; i < 20; i++ {
+		first, err := net.Listen("tcp", ":0")
+		if err != nil {
+			t.Fatalf("net.Listen() error = %v", err)
+		}
+		port := first.Addr().(*net.TCPAddr).Port
+		second, err := net.Listen("tcp", fmt.Sprintf(":%d", port+1))
+		if err == nil {
+			return port, first, second
+		}
+		_ = first.Close()
+	}
+	t.Fatal("could not reserve two adjacent ports")
+	return 0, nil, nil
+}
+
+func TestPreflightRuntimePortsDetectsSingleCollision(t *testing.T) {
+	wpPort, mailpitPort := runtimeDerivedPorts("client")
+	listener, err := net.Listen("tcp", fmt.Sprintf(":%d", wpPort))
+	if err != nil {
+		t.Fatalf("net.Listen() error = %v", err)
+	}
+	t.Cleanup(func() { _ = listener.Close() })
+
+	cfg := runtimeConfig{ProjectSlug: "client", ManagedDir: filepath.Join("/config", "runtimes", "client"), WordpressPort: wpPort, MailpitPort: mailpitPort}
+	err = preflightRuntimePorts(cfg)
+	if err == nil {
+		t.Fatal("preflightRuntimePorts() error = nil, want collision")
+	}
+	message := err.Error()
+	for _, want := range []string{fmt.Sprintf("Port %d is already in use.", wpPort), fmt.Sprintf("WordPress: http://localhost:%d", wpPort), fmt.Sprintf("Mailpit:   http://localhost:%d", mailpitPort)} {
+		if !strings.Contains(message, want) {
+			t.Fatalf("preflightRuntimePorts() error = %q, want %q", message, want)
+		}
+	}
+}
+
+func TestPreflightRuntimePortsDetectsBothCollisions(t *testing.T) {
+	wpPort, first, second := openAdjacentPortPair(t)
+	t.Cleanup(func() {
+		_ = first.Close()
+		_ = second.Close()
+	})
+
+	cfg := runtimeConfig{ProjectSlug: "client", ManagedDir: filepath.Join("/config", "runtimes", "client"), WordpressPort: wpPort, MailpitPort: wpPort + 1}
+	err := preflightRuntimePorts(cfg)
+	if err == nil {
+		t.Fatal("preflightRuntimePorts() error = nil, want collision")
+	}
+	message := err.Error()
+	for _, want := range []string{fmt.Sprintf("Ports %d and %d are already in use.", wpPort, wpPort+1), fmt.Sprintf("WordPress: http://localhost:%d", wpPort), fmt.Sprintf("Mailpit:   http://localhost:%d", wpPort+1)} {
+		if !strings.Contains(message, want) {
+			t.Fatalf("preflightRuntimePorts() error = %q, want %q", message, want)
+		}
 	}
 }
 
@@ -821,6 +979,9 @@ func TestRuntimeCommandHelpersBuildExpectedArgs(t *testing.T) {
 	}
 	if got, want := runtimeWpArgs(cfg, "plugin", "list"), []string{"docker", "compose", "run", "--rm", "cli", "wp", "plugin", "list", "--allow-root"}; !reflect.DeepEqual(got, want) {
 		t.Fatalf("runtimeWpArgs() = %#v, want %#v", got, want)
+	}
+	if got, want := runtimeShellArgs(cfg), []string{"docker", "compose", "exec", "wordpress", "sh"}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("runtimeShellArgs() = %#v, want %#v", got, want)
 	}
 	if got, want := runtimeWpThemeIsActiveArgs(cfg, ""), []string{"docker", "compose", "run", "--rm", "cli", "wp", "theme", "is-active", "theme", "--allow-root"}; !reflect.DeepEqual(got, want) {
 		t.Fatalf("runtimeWpThemeIsActiveArgs() = %#v, want %#v", got, want)
@@ -860,6 +1021,9 @@ func TestRuntimeCommandHelpersBuildExpectedArgs(t *testing.T) {
 	if got, want := (runtimeCommandRunner{name: "reset", cfg: cfg}).Render(), "docker compose down -v --remove-orphans; nuke runtime data and recreate it with docker compose up -d, install WordPress if missing, and ensure the mounted theme is active"; got != want {
 		t.Fatalf("reset Render() = %q, want %q", got, want)
 	}
+	if got, want := (runtimeCommandRunner{name: "shell", cfg: cfg}).Render(), "docker compose exec wordpress sh"; got != want {
+		t.Fatalf("shell Render() = %q, want %q", got, want)
+	}
 }
 
 func TestEnsureManagedRuntimeWritesManagedFiles(t *testing.T) {
@@ -884,12 +1048,13 @@ func TestEnsureManagedRuntimeWritesManagedFiles(t *testing.T) {
 	if got, want := cfg.ManagedDir, config.RuntimeDir("client"); got != want {
 		t.Fatalf("ManagedDir = %q, want %q", got, want)
 	}
+	wpPort, mailpitPort := runtimeDerivedPorts("client")
 	if err := ensureManagedRuntime(cfg); err != nil {
 		t.Fatalf("ensureManagedRuntime() error = %v", err)
 	}
 	checks := map[string][]string{
 		filepath.Join(cfg.ManagedDir, "docker-compose.yml"):                   {filepath.Join(root, "theme") + ":/var/www/html/wp-content/themes/theme", "mailpit", "wordpress:cli-php8.4"},
-		filepath.Join(cfg.ManagedDir, ".env"):                                 {"COMPOSE_PROJECT_NAME=nf_client_runtime", "WP_TITLE=Client"},
+		filepath.Join(cfg.ManagedDir, ".env"):                                 {"COMPOSE_PROJECT_NAME=nf_client_runtime", fmt.Sprintf("WP_PORT=%d", wpPort), fmt.Sprintf("MAILPIT_PORT=%d", mailpitPort), fmt.Sprintf("WP_URL=http://localhost:%d", wpPort), "WP_TITLE=Client"},
 		filepath.Join(cfg.ManagedDir, "php", "uploads.ini"):                   {"upload_max_filesize=128M", "max_execution_time=120"},
 		filepath.Join(cfg.ManagedDir, "wordpress", "Dockerfile"):              {"FROM wordpress:7.0-php8.4-apache", "COPY wordpress/wordpress-rewrites.conf"},
 		filepath.Join(cfg.ManagedDir, "wordpress", "wordpress-rewrites.conf"): {"RewriteRule . /index.php [L]"},
@@ -1340,6 +1505,143 @@ func TestRunRuntimeShortcutRoutesToRuntimeCommand(t *testing.T) {
 	}
 	if !strings.Contains(shortcut, "runtime up requires a .git repository") {
 		t.Fatalf("Run(up) stderr = %q, want runtime project context message", shortcut)
+	}
+}
+
+func TestRunShellShortcutRoutesToRuntimeShell(t *testing.T) {
+	workdir := t.TempDir()
+	oldwd, err := os.Getwd()
+	if err != nil {
+		t.Fatalf("Getwd() error = %v", err)
+	}
+	if err := os.Chdir(workdir); err != nil {
+		t.Fatalf("Chdir() error = %v", err)
+	}
+	t.Cleanup(func() { _ = os.Chdir(oldwd) })
+
+	shortcut := captureStderr(t, func() {
+		if got := Run([]string{"shell"}); got != 1 {
+			t.Fatalf("Run(shell) = %d, want 1", got)
+		}
+	})
+	canonical := captureStderr(t, func() {
+		if got := Run([]string{"runtime", "shell"}); got != 1 {
+			t.Fatalf("Run(runtime shell) = %d, want 1", got)
+		}
+	})
+	if shortcut != canonical {
+		t.Fatalf("shortcut and canonical output differed:\nshortcut: %q\ncanonical: %q", shortcut, canonical)
+	}
+	if !strings.Contains(shortcut, "runtime shell requires a .git repository") {
+		t.Fatalf("Run(shell) stderr = %q, want runtime project context message", shortcut)
+	}
+}
+
+func TestRunInfoShortcutRoutesToRuntimeInfo(t *testing.T) {
+	workdir := t.TempDir()
+	if err := os.Mkdir(filepath.Join(workdir, ".git"), 0o755); err != nil {
+		t.Fatalf("Mkdir() error = %v", err)
+	}
+	if err := os.MkdirAll(filepath.Join(workdir, ".nf"), 0o755); err != nil {
+		t.Fatalf("MkdirAll() error = %v", err)
+	}
+	project := map[string]any{"schema": 1, "project": map[string]any{"slug": "client", "name": "Client"}, "runtime": map[string]any{"compose": "docker compose", "wordpress_service": "wordpress", "cli_service": "cli", "theme_mount_slug": "theme", "uploads_path": "uploads"}}
+	projectData, err := json.MarshalIndent(project, "", "  ")
+	if err != nil {
+		t.Fatalf("MarshalIndent() error = %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(workdir, ".nf", "project.json"), append(projectData, '\n'), 0o644); err != nil {
+		t.Fatalf("WriteFile() error = %v", err)
+	}
+
+	oldwd, err := os.Getwd()
+	if err != nil {
+		t.Fatalf("Getwd() error = %v", err)
+	}
+	if err := os.Chdir(workdir); err != nil {
+		t.Fatalf("Chdir() error = %v", err)
+	}
+	t.Cleanup(func() { _ = os.Chdir(oldwd) })
+
+	shortcut := captureStdout(t, func() {
+		if got := Run([]string{"info"}); got != 0 {
+			t.Fatalf("Run(info) = %d, want 0", got)
+		}
+	})
+	canonical := captureStdout(t, func() {
+		if got := Run([]string{"runtime", "info"}); got != 0 {
+			t.Fatalf("Run(runtime info) = %d, want 0", got)
+		}
+	})
+	if shortcut != canonical {
+		t.Fatalf("shortcut and canonical output differed:\nshortcut: %q\ncanonical: %q", shortcut, canonical)
+	}
+	wpPort, mailpitPort := runtimeDerivedPorts("client")
+	for _, want := range []string{"Runtime:\n", "  project: client\n", "  compose project: nf_client_runtime\n", fmt.Sprintf("  WordPress: http://localhost:%d\n", wpPort), fmt.Sprintf("  Mailpit:   http://localhost:%d", mailpitPort)} {
+		if !strings.Contains(shortcut, want) {
+			t.Fatalf("Run(info) output missing %q:\n%s", want, shortcut)
+		}
+	}
+}
+
+func TestRunShellShortcutExecutesWordpressShell(t *testing.T) {
+	configHome := t.TempDir()
+	t.Setenv("NF_CONFIG_HOME", configHome)
+
+	workdir := t.TempDir()
+	if err := os.Mkdir(filepath.Join(workdir, ".git"), 0o755); err != nil {
+		t.Fatalf("Mkdir() error = %v", err)
+	}
+	if err := os.MkdirAll(filepath.Join(workdir, ".nf"), 0o755); err != nil {
+		t.Fatalf("MkdirAll() error = %v", err)
+	}
+	if err := os.MkdirAll(filepath.Join(workdir, "theme"), 0o755); err != nil {
+		t.Fatalf("MkdirAll() error = %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(workdir, "theme", "style.css"), []byte("/* demo */\n"), 0o644); err != nil {
+		t.Fatalf("WriteFile() error = %v", err)
+	}
+	project := map[string]any{"schema": 1, "project": map[string]any{"slug": "client", "name": "Client"}, "wordpress": map[string]any{"theme_path": "theme", "theme_slug": "theme"}, "runtime": map[string]any{"compose": "docker compose", "wordpress_service": "wordpress", "cli_service": "cli", "theme_mount_slug": "theme", "uploads_path": "uploads"}}
+	projectData, err := json.MarshalIndent(project, "", "  ")
+	if err != nil {
+		t.Fatalf("MarshalIndent() error = %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(workdir, ".nf", "project.json"), append(projectData, '\n'), 0o644); err != nil {
+		t.Fatalf("WriteFile() error = %v", err)
+	}
+
+	binDir := t.TempDir()
+	capturePath := filepath.Join(t.TempDir(), "docker-args.txt")
+	script := "#!/bin/sh\nprintf '%s\\n' \"$@\" > \"$CAPTURE_FILE\"\n"
+	if err := os.WriteFile(filepath.Join(binDir, "docker"), []byte(script), 0o755); err != nil {
+		t.Fatalf("WriteFile() error = %v", err)
+	}
+	t.Setenv("CAPTURE_FILE", capturePath)
+	t.Setenv("PATH", binDir+string(os.PathListSeparator)+os.Getenv("PATH"))
+
+	oldwd, err := os.Getwd()
+	if err != nil {
+		t.Fatalf("Getwd() error = %v", err)
+	}
+	if err := os.Chdir(workdir); err != nil {
+		t.Fatalf("Chdir() error = %v", err)
+	}
+	t.Cleanup(func() { _ = os.Chdir(oldwd) })
+
+	output := captureStdout(t, func() {
+		if got := Run([]string{"shell"}); got != 0 {
+			t.Fatalf("Run(shell) = %d, want 0", got)
+		}
+	})
+	if !strings.Contains(output, "> docker compose exec wordpress sh") {
+		t.Fatalf("Run(shell) stdout = %q, want compose exec preview", output)
+	}
+	args, err := os.ReadFile(capturePath)
+	if err != nil {
+		t.Fatalf("ReadFile() error = %v", err)
+	}
+	if got, want := strings.Split(strings.TrimSpace(string(args)), "\n"), []string{"compose", "exec", "wordpress", "sh"}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("docker args = %#v, want %#v", got, want)
 	}
 }
 

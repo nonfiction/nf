@@ -5,7 +5,9 @@ import (
 	"encoding/json"
 	"flag"
 	"fmt"
+	"hash/fnv"
 	"io"
+	"net"
 	"os"
 	"os/exec"
 	"path"
@@ -69,6 +71,8 @@ type runtimeConfig struct {
 	RepoRoot         string
 	ThemePath        string
 	ManagedDir       string
+	WordpressPort    int
+	MailpitPort      int
 	Compose          string
 	WordpressService string
 	CliService       string
@@ -83,6 +87,38 @@ func (c runtimeConfig) managedUploadsDir() string {
 
 func (c runtimeConfig) uploadsContainerPath() string {
 	return path.Join("/", "runtime", firstNonEmpty(c.UploadsPath, "uploads"))
+}
+
+func runtimePortBlockStart(projectSlug string) int {
+	h := fnv.New32a()
+	_, _ = h.Write([]byte(cleanRuntimeSlug(projectSlug)))
+	return 18000 + int(h.Sum32()%1000)*4
+}
+
+func runtimeDerivedPorts(projectSlug string) (int, int) {
+	base := runtimePortBlockStart(projectSlug)
+	return base, base + 1
+}
+
+func cleanRuntimeSlug(projectSlug string) string {
+	cleaned := strings.ToLower(strings.TrimSpace(projectSlug))
+	var b strings.Builder
+	b.Grow(len(cleaned) + len("nf__runtime"))
+	for _, r := range cleaned {
+		switch {
+		case r >= 'a' && r <= 'z', r >= '0' && r <= '9', r == '_', r == '-':
+			b.WriteRune(r)
+		case r == ' ':
+			b.WriteByte('_')
+		default:
+			b.WriteByte('_')
+		}
+	}
+	slug := strings.Trim(b.String(), "_-")
+	if slug == "" {
+		slug = "project"
+	}
+	return slug
 }
 
 type runtimeCommandRunner struct {
@@ -123,6 +159,8 @@ func (c runtimeCommandRunner) Execute(root string, extraArgs []string) error {
 			return err
 		}
 		return c.ensureUpInstalledActive(runtimeDir)
+	case "shell":
+		return runCommandSpec(execSpec{Dir: runtimeDir, Args: runtimeShellArgs(c.cfg)})
 	case "wp":
 		return runCommandSpec(execSpec{Dir: runtimeDir, Args: runtimeWpArgs(c.cfg, extraArgs...)})
 	default:
@@ -140,6 +178,8 @@ func (c runtimeCommandRunner) Render() string {
 		return "docker compose logs -f " + c.cfg.WordpressService
 	case "reset":
 		return "docker compose down -v --remove-orphans; nuke runtime data and recreate it with docker compose up -d, install WordPress if missing, and ensure the mounted theme is active"
+	case "shell":
+		return "docker compose exec " + firstNonEmpty(c.cfg.WordpressService, "wordpress") + " sh"
 	case "wp":
 		return "docker compose run --rm " + c.cfg.CliService + " wp ... --allow-root"
 	default:
@@ -252,6 +292,53 @@ func writeManagedFile(path, contents string, mode os.FileMode) error {
 	return nil
 }
 
+func runtimePortInUse(port int) bool {
+	if port <= 0 || port > 65535 {
+		return true
+	}
+	listener, err := net.Listen("tcp", fmt.Sprintf(":%d", port))
+	if err != nil {
+		return true
+	}
+	_ = listener.Close()
+	return false
+}
+
+func runtimePortsInUse(cfg runtimeConfig) []int {
+	occupied := make([]int, 0, 2)
+	for _, port := range []int{cfg.WordpressPort, cfg.MailpitPort} {
+		if runtimePortInUse(port) {
+			occupied = append(occupied, port)
+		}
+	}
+	return occupied
+}
+
+func runtimePortCollisionMessage(cfg runtimeConfig, occupied []int) string {
+	if len(occupied) == 0 {
+		return ""
+	}
+	ports := append([]int(nil), occupied...)
+	sort.Ints(ports)
+	projectLabel := firstNonEmpty(cfg.ProjectSlug, "project")
+	block := fmt.Sprintf("The %s runtime wants:\n  WordPress: http://localhost:%d\n  Mailpit:   http://localhost:%d\n\nSet runtime.ports.wordpress and runtime.ports.mailpit in .nf/project.json to override.", projectLabel, cfg.WordpressPort, cfg.MailpitPort)
+	if len(ports) == 1 {
+		return fmt.Sprintf("Port %d is already in use.\n\n%s", ports[0], block)
+	}
+	parts := make([]string, 0, len(ports))
+	for _, port := range ports {
+		parts = append(parts, strconv.Itoa(port))
+	}
+	return fmt.Sprintf("Ports %s are already in use.\n\n%s", strings.Join(parts, " and "), block)
+}
+
+func preflightRuntimePorts(cfg runtimeConfig) error {
+	if occupied := runtimePortsInUse(cfg); len(occupied) > 0 {
+		return fmt.Errorf("%s", runtimePortCollisionMessage(cfg, occupied))
+	}
+	return nil
+}
+
 func runtimeComposeArgs(cfg runtimeConfig, args ...string) []string {
 	fields := strings.Fields(firstNonEmpty(cfg.Compose, "docker compose"))
 	return append(fields, args...)
@@ -263,6 +350,10 @@ func runtimeCliArgs(cfg runtimeConfig, args ...string) []string {
 
 func runtimeWpArgs(cfg runtimeConfig, args ...string) []string {
 	return append(runtimeCliArgs(cfg, "wp"), append(args, "--allow-root")...)
+}
+
+func runtimeShellArgs(cfg runtimeConfig) []string {
+	return runtimeComposeArgs(cfg, "exec", firstNonEmpty(cfg.WordpressService, "wordpress"), "sh")
 }
 
 func runtimeWpProbeArgs(cfg runtimeConfig, args ...string) []string {
@@ -707,6 +798,8 @@ func loadRuntimeConfig(root string, metadata map[string]any) (runtimeConfig, boo
 		RepoRoot:         root,
 		ThemePath:        themePath,
 		ManagedDir:       config.RuntimeDir(projectSlug),
+		WordpressPort:    firstRuntimePort(raw, "wordpress", projectSlug),
+		MailpitPort:      firstRuntimePort(raw, "mailpit", projectSlug),
 		Compose:          firstNonEmpty(mapStringAtPath(raw, "compose"), "docker compose"),
 		WordpressService: firstNonEmpty(mapStringAtPath(raw, "wordpress_service"), "wordpress"),
 		CliService:       firstNonEmpty(mapStringAtPath(raw, "cli_service"), "cli"),
@@ -716,12 +809,81 @@ func loadRuntimeConfig(root string, metadata map[string]any) (runtimeConfig, boo
 	}, true
 }
 
+func firstRuntimePort(raw map[string]any, name, projectSlug string) int {
+	derivedWordpress, derivedMailpit := runtimeDerivedPorts(projectSlug)
+	derived := derivedWordpress
+	if name == "mailpit" {
+		derived = derivedMailpit
+	}
+	ports := mapMapAtPath(raw, "ports")
+	if ports == nil {
+		return derived
+	}
+	value, ok := ports[name]
+	if !ok {
+		return derived
+	}
+	port, parsed := parseRuntimePort(value)
+	if !parsed || port == 0 {
+		return derived
+	}
+	return port
+}
+
+func parseRuntimePort(value any) (int, bool) {
+	switch typed := value.(type) {
+	case nil:
+		return 0, false
+	case int:
+		return typed, true
+	case int8:
+		return int(typed), true
+	case int16:
+		return int(typed), true
+	case int32:
+		return int(typed), true
+	case int64:
+		return int(typed), true
+	case uint:
+		return int(typed), true
+	case uint8:
+		return int(typed), true
+	case uint16:
+		return int(typed), true
+	case uint32:
+		return int(typed), true
+	case uint64:
+		return int(typed), true
+	case float32:
+		return int(typed), true
+	case float64:
+		return int(typed), true
+	case json.Number:
+		if n, err := typed.Int64(); err == nil {
+			return int(n), true
+		}
+		return 0, false
+	case string:
+		if strings.TrimSpace(typed) == "" {
+			return 0, false
+		}
+		n, err := strconv.Atoi(strings.TrimSpace(typed))
+		if err != nil {
+			return 0, false
+		}
+		return n, true
+	default:
+		return 0, false
+	}
+}
+
 func defaultRuntimeCommands(cfg runtimeConfig) map[string]projectCommand {
 	return map[string]projectCommand{
 		"up":    {Description: "Start the managed runtime, install WordPress if missing, and ensure the mounted theme is active", Run: runtimeCommandRunner{name: "up", cfg: cfg}},
 		"down":  {Description: "Stop the managed runtime", Run: runtimeCommandRunner{name: "down", cfg: cfg}},
 		"logs":  {Description: "Tail WordPress logs", Run: runtimeCommandRunner{name: "logs", cfg: cfg}},
 		"reset": {Description: "Destroy and recreate the local runtime", Run: runtimeCommandRunner{name: "reset", cfg: cfg}},
+		"shell": {Description: "Open a shell in the WordPress container", Run: runtimeCommandRunner{name: "shell", cfg: cfg}},
 		"wp":    {Description: "Run wp-cli passthrough", Run: runtimeCommandRunner{name: "wp", cfg: cfg}},
 	}
 }
@@ -1446,39 +1608,38 @@ volumes:
 func renderRuntimeEnv(cfg runtimeConfig) string {
 	wpTitle := firstNonEmpty(cfg.ProjectName, slugToTitle(cfg.ProjectSlug))
 	return fmt.Sprintf(`COMPOSE_PROJECT_NAME=%s
-WP_PORT=18080
-MAILPIT_PORT=8026
+WP_PORT=%d
+MAILPIT_PORT=%d
 DB_NAME=%s
 DB_USER=%s
 DB_PASSWORD=wordpress
 DB_ROOT_PASSWORD=root
-WP_URL=http://localhost:18080
+WP_URL=http://localhost:%d
 WP_TITLE=%s
 ADMIN_USER=admin
 ADMIN_PASSWORD=admin
 ADMIN_EMAIL=web@nonfiction.ca
-`, runtimeComposeProjectName(cfg.ProjectSlug), cfg.ProjectSlug, cfg.ProjectSlug, wpTitle)
+`, runtimeComposeProjectName(cfg.ProjectSlug), cfg.WordpressPort, cfg.MailpitPort, cfg.ProjectSlug, cfg.ProjectSlug, cfg.WordpressPort, wpTitle)
 }
 
 func runtimeComposeProjectName(projectSlug string) string {
-	cleaned := strings.ToLower(strings.TrimSpace(projectSlug))
-	var b strings.Builder
-	b.Grow(len(cleaned) + len("nf__runtime"))
-	for _, r := range cleaned {
-		switch {
-		case r >= 'a' && r <= 'z', r >= '0' && r <= '9', r == '_', r == '-':
-			b.WriteRune(r)
-		case r == ' ':
-			b.WriteByte('_')
-		default:
-			b.WriteByte('_')
-		}
+	return "nf_" + cleanRuntimeSlug(projectSlug) + "_runtime"
+}
+
+func renderRuntimeInfo(cfg runtimeConfig, includeURLs bool) string {
+	lines := []string{
+		"Runtime:",
+		"  project: " + cfg.ProjectSlug,
+		"  path: " + cfg.ManagedDir,
+		"  compose project: " + runtimeComposeProjectName(cfg.ProjectSlug),
 	}
-	slug := strings.Trim(b.String(), "_-")
-	if slug == "" {
-		slug = "project"
+	if includeURLs {
+		lines = append(lines,
+			fmt.Sprintf("  WordPress: http://localhost:%d", cfg.WordpressPort),
+			fmt.Sprintf("  Mailpit:   http://localhost:%d", cfg.MailpitPort),
+		)
 	}
-	return "nf_" + slug + "_runtime"
+	return strings.Join(lines, "\n")
 }
 
 func renderRuntimeUploadsINI() string {
@@ -1709,7 +1870,9 @@ func runRuntimeHelp() int {
 		"down                stop the local runtime",
 		"logs                tail WordPress logs",
 		"reset               destroy and recreate the local runtime",
+		"shell               open a shell in the WordPress container",
 		"wp -- <args>        run wp-cli in the local runtime",
+		"info                show local runtime paths, ports, and URLs",
 	})
 	fmt.Println("\nShortcuts:")
 	for _, line := range []string{
@@ -1717,7 +1880,9 @@ func runRuntimeHelp() int {
 		"nf down             shortcut for nf runtime down",
 		"nf logs             shortcut for nf runtime logs",
 		"nf reset            shortcut for nf runtime reset",
-		"nf wp -- <args>     shortcut for nf runtime wp",
+		"nf shell            shortcut for nf runtime shell",
+		"nf wp -- <args>     shortcut for nf runtime wp -- <args>",
+		"nf info             shortcut for nf runtime info",
 	} {
 		fmt.Printf("  %s\n", line)
 	}
@@ -1755,9 +1920,17 @@ func runRuntime(argv []string) int {
 	}
 	name := argv[0]
 	switch name {
-	case "up", "down", "logs", "reset", "wp":
+	case "info", "up", "down", "logs", "reset", "shell", "wp":
 	default:
 		fmt.Fprintln(os.Stderr, "unsupported runtime command")
+		return 1
+	}
+	if name == "info" && len(argv) != 1 {
+		fmt.Fprintln(os.Stderr, "runtime info takes no arguments")
+		return 1
+	}
+	if name == "shell" && len(argv) != 1 {
+		fmt.Fprintln(os.Stderr, "runtime shell takes no arguments")
 		return 1
 	}
 	if err := requireProjectContext("runtime " + name); err != nil {
@@ -1785,6 +1958,16 @@ func runRuntime(argv []string) int {
 		fmt.Fprintln(os.Stderr, "Missing runtime metadata in .nf/project.json. Run nf runtime up first.")
 		return 1
 	}
+	if name == "info" {
+		fmt.Println(renderRuntimeInfo(cfg, true))
+		return 0
+	}
+	if name == "up" {
+		if err := preflightRuntimePorts(cfg); err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			return 1
+		}
+	}
 	extraArgs := argv[1:]
 	if name == "wp" {
 		extraArgs = normalizePassthroughArgs(extraArgs)
@@ -1792,6 +1975,20 @@ func runRuntime(argv []string) int {
 	if err := (runtimeCommandRunner{name: name, cfg: cfg}).Execute(root, extraArgs); err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		return 1
+	}
+	switch name {
+	case "up":
+		fmt.Println("Runtime started.")
+		fmt.Println()
+		fmt.Println(renderRuntimeInfo(cfg, true))
+	case "reset":
+		fmt.Println("Runtime reset.")
+		fmt.Println()
+		fmt.Println(renderRuntimeInfo(cfg, true))
+	case "down":
+		fmt.Println("Runtime stopped.")
+		fmt.Println()
+		fmt.Println(renderRuntimeInfo(cfg, false))
 	}
 	return 0
 }
@@ -1871,7 +2068,9 @@ func Run(argv []string) int {
 		return runConfig(argv[1:])
 	case "password":
 		return runPassword(argv[1:])
-	case "up", "down", "logs", "reset", "wp":
+	case "info":
+		return runRuntime([]string{"info"})
+	case "up", "down", "logs", "reset", "shell", "wp":
 		return runRuntime(argv)
 	default:
 		fmt.Fprintf(os.Stderr, "unsupported command: %s\n", argv[0])
