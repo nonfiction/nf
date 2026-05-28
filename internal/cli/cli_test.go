@@ -131,12 +131,12 @@ func TestRunHelpShowsRepoMetadataOutsideGit(t *testing.T) {
 	t.Cleanup(func() { _ = os.Chdir(oldwd) })
 
 	output := captureStdout(t, func() { _ = runHelp() })
-	for _, wanted := range []string{"\n  server        provision, list, show, delete servers\n", "\n  site          list, show, future install/delete/deploy/sync\n", "\n  repo          init repo metadata and manage runtime\n", "\n  config        init local config\n", "\n  password      derive passwords\n", "\n  help          show help\n"} {
+	for _, wanted := range []string{"\n  server        provision, list, show, delete servers\n", "\n  site          list, show, deploy/sync remote sites\n", "\n  runtime       manage the local WordPress runtime\n", "\n  repo          init metadata, package artifacts, run repo tasks\n", "\n  config        init local config\n", "\n  password      derive passwords\n", "\n  help          show help\n"} {
 		if !strings.Contains(output, wanted) {
 			t.Fatalf("runHelp() output missing %q:\n%s", wanted, output)
 		}
 	}
-	for _, unwanted := range []string{"\n  theme         package theme artifacts\n", "\n  commands\n", "\n  run <name>\n", "\n  build\n"} {
+	for _, unwanted := range []string{"\n  theme         package theme artifacts\n", "Shortcuts:", "nf up", "\n  commands\n", "\n  run <name>\n", "\n  build\n"} {
 		if strings.Contains(output, unwanted) {
 			t.Fatalf("runHelp() output unexpectedly contained %q:\n%s", unwanted, output)
 		}
@@ -158,15 +158,27 @@ func TestRunHelpShowsRepoCommandsInsideGit(t *testing.T) {
 	t.Cleanup(func() { _ = os.Chdir(oldwd) })
 
 	output := captureStdout(t, func() { _ = runHelp() })
-	for _, wanted := range []string{"\n  repo          init, runtime commands, and repo-local aliases\n"} {
+	for _, wanted := range []string{"\n  runtime       manage the local WordPress runtime\n", "\n  repo          init metadata, package artifacts, run repo tasks\n"} {
 		if !strings.Contains(output, wanted) {
 			t.Fatalf("runHelp() output missing %q:\n%s", wanted, output)
 		}
 	}
-	for _, unwanted := range []string{"\n  theme         package theme artifacts\n", "\n  commands\n", "\n  run <name>\n", "\n  build\n"} {
+	for _, unwanted := range []string{"Shortcuts:", "nf up", "\n  theme         package theme artifacts\n", "\n  commands\n", "\n  run <name>\n", "\n  build\n"} {
 		if strings.Contains(output, unwanted) {
 			t.Fatalf("runHelp() output unexpectedly contained %q:\n%s", unwanted, output)
 		}
+	}
+}
+
+func TestRunRuntimeHelpShowsCommandsAndShortcuts(t *testing.T) {
+	output := captureStdout(t, func() { _ = runRuntimeHelp() })
+	for _, wanted := range []string{"runtime\n\nCommands:\n", "\n  up                  start the local runtime\n", "\n  down                stop the local runtime\n", "\n  wp -- <args>        run wp-cli in the local runtime\n", "\nShortcuts:\n", "\n  nf up               shortcut for nf runtime up\n", "\n  nf wp -- <args>     shortcut for nf runtime wp\n"} {
+		if !strings.Contains(output, wanted) {
+			t.Fatalf("runRuntimeHelp() output missing %q:\n%s", wanted, output)
+		}
+	}
+	if strings.Contains(output, "repo tasks") {
+		t.Fatalf("runRuntimeHelp() output unexpectedly mentioned repo tasks:\n%s", output)
 	}
 }
 
@@ -174,6 +186,17 @@ func TestRunRepoHelpShowsRepoLocalCommandsInsideGit(t *testing.T) {
 	workdir := t.TempDir()
 	if err := os.Mkdir(filepath.Join(workdir, ".git"), 0o755); err != nil {
 		t.Fatalf("Mkdir() error = %v", err)
+	}
+	if err := os.MkdirAll(filepath.Join(workdir, ".nf"), 0o755); err != nil {
+		t.Fatalf("MkdirAll() error = %v", err)
+	}
+	project := map[string]any{"schema": 1, "project": map[string]any{"slug": "client"}, "tasks": map[string]any{"build": map[string]any{"description": "Build the theme assets", "run": "npm run build"}}}
+	projectData, err := json.MarshalIndent(project, "", "  ")
+	if err != nil {
+		t.Fatalf("MarshalIndent() error = %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(workdir, ".nf", "project.json"), append(projectData, '\n'), 0o644); err != nil {
+		t.Fatalf("WriteFile() error = %v", err)
 	}
 	oldwd, err := os.Getwd()
 	if err != nil {
@@ -185,7 +208,7 @@ func TestRunRepoHelpShowsRepoLocalCommandsInsideGit(t *testing.T) {
 	t.Cleanup(func() { _ = os.Chdir(oldwd) })
 
 	output := captureStdout(t, func() { _ = runRepoHelp() })
-	for _, wanted := range []string{"\n  init                create .nf/project.json\n", "\n  commands            list configured local repo commands\n", "\n  package [--dry-run] [--source] [--output]   package theme artifacts\n"} {
+	for _, wanted := range []string{"\n  init                create .nf/project.json\n", "\n  tasks               list configured repo tasks\n", "\n  package [--dry-run] [--source] [--output]   package theme artifacts\n", "\nRepo tasks:\n"} {
 		if !strings.Contains(output, wanted) {
 			t.Fatalf("runRepoHelp() output missing %q:\n%s", wanted, output)
 		}
@@ -207,7 +230,7 @@ func TestRunRepoHelpShowsInitOnlyOutsideGit(t *testing.T) {
 	if !strings.Contains(output, "\n  init                create .nf/project.json\n") {
 		t.Fatalf("runRepoHelp() output missing init:\n%s", output)
 	}
-	for _, unwanted := range []string{"\n  commands\n", "\n  run <name>\n", "\n  package [--dry-run] [--source] [--output]\n", "repo-local commands:"} {
+	for _, unwanted := range []string{"\n  tasks\n", "\n  run <name>\n", "\n  package [--dry-run] [--source] [--output]\n", "Repo tasks:"} {
 		if strings.Contains(output, unwanted) {
 			t.Fatalf("runRepoHelp() output unexpectedly contained %q:\n%s", unwanted, output)
 		}
@@ -291,7 +314,7 @@ func TestRunSiteShowResolvesAliasAndIncludesServerSummary(t *testing.T) {
 		"wordpress": map[string]any{"deploy_unit": "theme", "theme_slug": "theme", "theme_path": "theme"},
 		"build":     map[string]any{"commands": []any{"composer install", "npm run build"}},
 		"artifact":  map[string]any{"include": []any{"vendor/", "assets/dist/"}, "exclude": []any{"node_modules/", ".git/"}},
-		"deploy":    map[string]any{"aliases": map[string]any{"app1": "client-app1-production", "production": "client-app1-production", "staging": "client-app1-staging"}},
+		"deploy":    map[string]any{"targets": map[string]any{"app1": "client-app1-production", "production": "client-app1-production", "staging": "client-app1-staging"}},
 	}
 	projectData, err := json.MarshalIndent(project, "", "  ")
 	if err != nil {
@@ -359,7 +382,7 @@ func TestRunSiteShowUsesDirectTargetWithoutAlias(t *testing.T) {
 	if err := os.Mkdir(filepath.Join(workdir, ".git"), 0o755); err != nil {
 		t.Fatalf("Mkdir() error = %v", err)
 	}
-	project := map[string]any{"schema": 1, "project": map[string]any{"slug": "client"}, "deploy": map[string]any{"aliases": map[string]any{"app1": "client-app1-production"}}}
+	project := map[string]any{"schema": 1, "project": map[string]any{"slug": "client"}, "deploy": map[string]any{"targets": map[string]any{"app1": "client-app1-production"}}}
 	projectData, err := json.MarshalIndent(project, "", "  ")
 	if err != nil {
 		t.Fatalf("MarshalIndent() error = %v", err)
@@ -455,20 +478,20 @@ func TestRunRepoInitWritesPortableMetadataShape(t *testing.T) {
 		t.Fatalf("artifact.exclude = %#v, want exclude paths", artifact["exclude"])
 	}
 	if deploy, ok := metadata["deploy"].(map[string]any); !ok {
-		t.Fatalf("deploy block = %#v, want aliases map", metadata["deploy"])
-	} else if aliases, ok := deploy["aliases"].(map[string]any); !ok || len(aliases) != 0 {
-		t.Fatalf("deploy.aliases = %#v, want empty map", deploy["aliases"])
+		t.Fatalf("deploy block = %#v, want targets map", metadata["deploy"])
+	} else if targets, ok := deploy["targets"].(map[string]any); !ok || len(targets) != 0 {
+		t.Fatalf("deploy.targets = %#v, want empty map", deploy["targets"])
 	}
-	if commands, ok := metadata["commands"].(map[string]any); !ok {
-		t.Fatalf("commands block = %#v, want command map", metadata["commands"])
+	if tasks, ok := metadata["tasks"].(map[string]any); !ok {
+		t.Fatalf("tasks block = %#v, want task map", metadata["tasks"])
 	} else {
 		for _, want := range []string{"composer", "npm", "build", "watch", "test"} {
-			if commands[want] == nil {
-				t.Fatalf("commands block missing %q: %#v", want, commands)
+			if tasks[want] == nil {
+				t.Fatalf("tasks block missing %q: %#v", want, tasks)
 			}
 		}
-		if len(commands) != 5 {
-			t.Fatalf("commands block len = %d, want 5", len(commands))
+		if len(tasks) != 5 {
+			t.Fatalf("tasks block len = %d, want 5", len(tasks))
 		}
 	}
 	for _, legacy := range []string{"project_slug", "project_name", "theme_slug", "theme_source", "default_provider"} {
@@ -635,7 +658,7 @@ func TestRenderRuntimeComposeUsesMetadataDefaults(t *testing.T) {
 	}
 }
 
-func TestRunRepoUpAutoInitializesProjectMetadata(t *testing.T) {
+func TestRunRuntimeUpAutoInitializesProjectMetadata(t *testing.T) {
 	repoRoot := filepath.Join(t.TempDir(), "client-site")
 	if err := os.MkdirAll(filepath.Join(repoRoot, ".git"), 0o755); err != nil {
 		t.Fatalf("MkdirAll() error = %v", err)
@@ -665,7 +688,7 @@ func TestRunRepoUpAutoInitializesProjectMetadata(t *testing.T) {
 
 	projectPath := filepath.Join(repoRoot, ".nf", "project.json")
 	output := captureStdout(t, func() {
-		if got := Run([]string{"repo", "up"}); got != 0 {
+		if got := Run([]string{"runtime", "up"}); got != 0 {
 			t.Fatalf("Run() = %d, want 0", got)
 		}
 	})
@@ -721,7 +744,7 @@ func TestLoadRuntimeConfigUsesRuntimeBlock(t *testing.T) {
 	}
 }
 
-func TestRunRepoCommandsUsesCompactDescriptions(t *testing.T) {
+func TestRunRepoTasksUsesCompactDescriptions(t *testing.T) {
 	repoRoot := filepath.Join(t.TempDir(), "client-site")
 	if err := os.MkdirAll(filepath.Join(repoRoot, ".git"), 0o755); err != nil {
 		t.Fatalf("MkdirAll() error = %v", err)
@@ -739,17 +762,22 @@ func TestRunRepoCommandsUsesCompactDescriptions(t *testing.T) {
 		t.Fatalf("Run(init) = %d, want 0", got)
 	}
 	output := captureStdout(t, func() {
-		if got := Run([]string{"repo", "commands"}); got != 0 {
-			t.Fatalf("Run(commands) = %d, want 0", got)
+		if got := Run([]string{"repo", "tasks"}); got != 0 {
+			t.Fatalf("Run(tasks) = %d, want 0", got)
 		}
 	})
-	for _, want := range []string{"repo-local commands:", "Update theme Composer dependencies", "Build the theme assets", "Start the managed runtime, install WordPress if missing, and ensure the mounted theme is active", "Destroy and recreate the local runtime"} {
+	for _, want := range []string{"Repo tasks:", "Update theme Composer dependencies", "Build the theme assets", "Watch theme assets during development", "Run the theme test suite"} {
 		if !strings.Contains(output, want) {
-			t.Fatalf("Run(commands) output missing %q:\n%s", want, output)
+			t.Fatalf("Run(tasks) output missing %q:\n%s", want, output)
+		}
+	}
+	for _, unwanted := range []string{"start the managed runtime", "run wp-cli passthrough"} {
+		if strings.Contains(output, unwanted) {
+			t.Fatalf("Run(tasks) output unexpectedly contained %q:\n%s", unwanted, output)
 		}
 	}
 	if strings.Contains(output, "name  description  run") || strings.Contains(output, "\n  run ") {
-		t.Fatalf("Run(commands) output still looks wide:\n%s", output)
+		t.Fatalf("Run(tasks) output still looks wide:\n%s", output)
 	}
 }
 
@@ -885,7 +913,7 @@ func TestEnsureManagedRuntimeWritesManagedFiles(t *testing.T) {
 	}
 }
 
-func TestRunRepoUpPrintsUnderlyingCommands(t *testing.T) {
+func TestRunRuntimeUpPrintsUnderlyingCommands(t *testing.T) {
 	repoRoot := filepath.Join(t.TempDir(), "client-site")
 	if err := os.MkdirAll(filepath.Join(repoRoot, ".git"), 0o755); err != nil {
 		t.Fatalf("MkdirAll() error = %v", err)
@@ -934,7 +962,7 @@ func TestRunRepoUpPrintsUnderlyingCommands(t *testing.T) {
 	t.Cleanup(func() { _ = os.Chdir(oldwd) })
 
 	output := captureStdout(t, func() {
-		if got := Run([]string{"repo", "up"}); got != 0 {
+		if got := Run([]string{"runtime", "up"}); got != 0 {
 			t.Fatalf("Run() = %d, want 0", got)
 		}
 	})
@@ -952,7 +980,7 @@ func TestRunRepoUpPrintsUnderlyingCommands(t *testing.T) {
 	}
 }
 
-func TestRunRepoUpActivatesThemeWhenAlreadyInstalled(t *testing.T) {
+func TestRunRuntimeUpActivatesThemeWhenAlreadyInstalled(t *testing.T) {
 	repoRoot := filepath.Join(t.TempDir(), "client-site")
 	if err := os.MkdirAll(filepath.Join(repoRoot, ".git"), 0o755); err != nil {
 		t.Fatalf("MkdirAll() error = %v", err)
@@ -1001,7 +1029,7 @@ func TestRunRepoUpActivatesThemeWhenAlreadyInstalled(t *testing.T) {
 	t.Cleanup(func() { _ = os.Chdir(oldwd) })
 
 	output := captureStdout(t, func() {
-		if got := Run([]string{"repo", "up"}); got != 0 {
+		if got := Run([]string{"runtime", "up"}); got != 0 {
 			t.Fatalf("Run() = %d, want 0", got)
 		}
 	})
@@ -1023,7 +1051,7 @@ func TestRunRepoUpActivatesThemeWhenAlreadyInstalled(t *testing.T) {
 	}
 }
 
-func TestRunRepoResetPrintsUnderlyingCommands(t *testing.T) {
+func TestRunRuntimeResetPrintsUnderlyingCommands(t *testing.T) {
 	repoRoot := filepath.Join(t.TempDir(), "client-site")
 	if err := os.MkdirAll(filepath.Join(repoRoot, ".git"), 0o755); err != nil {
 		t.Fatalf("MkdirAll() error = %v", err)
@@ -1072,7 +1100,7 @@ func TestRunRepoResetPrintsUnderlyingCommands(t *testing.T) {
 	t.Cleanup(func() { _ = os.Chdir(oldwd) })
 
 	output := captureStdout(t, func() {
-		if got := Run([]string{"repo", "reset"}); got != 0 {
+		if got := Run([]string{"runtime", "reset"}); got != 0 {
 			t.Fatalf("Run() = %d, want 0", got)
 		}
 	})
@@ -1114,7 +1142,7 @@ func TestRunRepoPackageUsesThemeStyleVersionWhenPresent(t *testing.T) {
 		"wordpress":    map[string]any{"deploy_unit": "theme", "theme_slug": "theme", "theme_path": "theme"},
 		"build":        map[string]any{"commands": []any{"composer install", "npm run build"}},
 		"artifact":     map[string]any{"path": "release/client-v{version}.zip", "include": []any{"vendor/", "assets/dist/"}, "exclude": []any{"node_modules/", ".git/"}},
-		"deploy":       map[string]any{"aliases": map[string]any{}},
+		"deploy":       map[string]any{"targets": map[string]any{}},
 		"project_slug": "legacy-project",
 		"project_name": "Legacy Project",
 		"theme_slug":   "legacy-theme",
@@ -1265,7 +1293,7 @@ func TestRunDeleteServerWithoutIDRequiresIDInNonInteractiveMode(t *testing.T) {
 	}
 }
 
-func TestRunRejectsRepoCommandsOutsideGit(t *testing.T) {
+func TestRunRejectsRepoTasksOutsideGit(t *testing.T) {
 	workdir := t.TempDir()
 	oldwd, err := os.Getwd()
 	if err != nil {
@@ -1277,12 +1305,41 @@ func TestRunRejectsRepoCommandsOutsideGit(t *testing.T) {
 	t.Cleanup(func() { _ = os.Chdir(oldwd) })
 
 	output := captureStderr(t, func() {
-		if got := Run([]string{"repo", "commands"}); got != 1 {
+		if got := Run([]string{"repo", "tasks"}); got != 1 {
 			t.Fatalf("Run() = %d, want 1", got)
 		}
 	})
 	if !strings.Contains(output, ".git repository") {
 		t.Fatalf("Run() stderr = %q, want .git repository message", output)
+	}
+}
+
+func TestRunRuntimeShortcutRoutesToRuntimeCommand(t *testing.T) {
+	workdir := t.TempDir()
+	oldwd, err := os.Getwd()
+	if err != nil {
+		t.Fatalf("Getwd() error = %v", err)
+	}
+	if err := os.Chdir(workdir); err != nil {
+		t.Fatalf("Chdir() error = %v", err)
+	}
+	t.Cleanup(func() { _ = os.Chdir(oldwd) })
+
+	shortcut := captureStderr(t, func() {
+		if got := Run([]string{"up"}); got != 1 {
+			t.Fatalf("Run(up) = %d, want 1", got)
+		}
+	})
+	canonical := captureStderr(t, func() {
+		if got := Run([]string{"runtime", "up"}); got != 1 {
+			t.Fatalf("Run(runtime up) = %d, want 1", got)
+		}
+	})
+	if shortcut != canonical {
+		t.Fatalf("shortcut and canonical output differed:\nshortcut: %q\ncanonical: %q", shortcut, canonical)
+	}
+	if !strings.Contains(shortcut, "runtime up requires a .git repository") {
+		t.Fatalf("Run(up) stderr = %q, want runtime project context message", shortcut)
 	}
 }
 
@@ -1296,6 +1353,12 @@ func TestRunRejectsRemovedTopLevelCompatibilityRoutes(t *testing.T) {
 		{"list", "servers"},
 		{"show", "server", "app1"},
 		{"delete", "server", "app1"},
+		{"repo", "commands"},
+		{"repo", "up"},
+		{"repo", "down"},
+		{"repo", "logs"},
+		{"repo", "reset"},
+		{"repo", "wp"},
 		{"build"},
 	} {
 		argv := argv

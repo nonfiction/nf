@@ -586,7 +586,7 @@ func isLinodeNotFoundError(err error) bool {
 	return strings.Contains(message, "request failed: 404") || strings.Contains(message, "not found")
 }
 
-func defaultProjectCommands() map[string]map[string]any {
+func defaultProjectTasks() map[string]map[string]any {
 	return map[string]map[string]any{
 		"composer": map[string]any{"description": "Update theme Composer dependencies", "run": "composer --working-dir=theme update && composer --working-dir=theme dump-autoload -o"},
 		"npm":      map[string]any{"description": "Refresh theme development dependencies", "run": "npm --prefix theme update --save-dev"},
@@ -596,7 +596,7 @@ func defaultProjectCommands() map[string]map[string]any {
 	}
 }
 
-func parseProjectCommand(name string, value any) (string, string, repoCommandRunner, error) {
+func parseProjectTask(name string, value any) (string, string, repoCommandRunner, error) {
 	switch typed := value.(type) {
 	case string:
 		return name, typed, shellCommandRunner(typed), nil
@@ -605,7 +605,7 @@ func parseProjectCommand(name string, value any) (string, string, repoCommandRun
 		for _, item := range typed {
 			s, ok := item.(string)
 			if !ok {
-				return "", "", nil, ProjectError{Msg: fmt.Sprintf(".nf/project.json commands.%s.run must be a string or array of strings", name)}
+				return "", "", nil, ProjectError{Msg: fmt.Sprintf(".nf/project.json tasks.%s.run must be a string or array of strings", name)}
 			}
 			parts = append(parts, s)
 		}
@@ -613,7 +613,7 @@ func parseProjectCommand(name string, value any) (string, string, repoCommandRun
 	case map[string]any:
 		desc, _ := typed["description"].(string)
 		if strings.TrimSpace(desc) == "" {
-			return "", "", nil, ProjectError{Msg: fmt.Sprintf(".nf/project.json commands.%s must include a description string", name)}
+			return "", "", nil, ProjectError{Msg: fmt.Sprintf(".nf/project.json tasks.%s must include a description string", name)}
 		}
 		run := typed["run"]
 		switch rr := run.(type) {
@@ -624,16 +624,16 @@ func parseProjectCommand(name string, value any) (string, string, repoCommandRun
 			for _, item := range rr {
 				s, ok := item.(string)
 				if !ok {
-					return "", "", nil, ProjectError{Msg: fmt.Sprintf(".nf/project.json commands.%s.run must be a string or array of strings", name)}
+					return "", "", nil, ProjectError{Msg: fmt.Sprintf(".nf/project.json tasks.%s.run must be a string or array of strings", name)}
 				}
 				parts = append(parts, s)
 			}
 			return name, desc, argvCommandRunner(parts), nil
 		default:
-			return "", "", nil, ProjectError{Msg: fmt.Sprintf(".nf/project.json commands.%s.run must be a string or array of strings", name)}
+			return "", "", nil, ProjectError{Msg: fmt.Sprintf(".nf/project.json tasks.%s.run must be a string or array of strings", name)}
 		}
 	default:
-		return "", "", nil, ProjectError{Msg: fmt.Sprintf(".nf/project.json commands.%s must be a string, array, or object", name)}
+		return "", "", nil, ProjectError{Msg: fmt.Sprintf(".nf/project.json tasks.%s must be a string, array, or object", name)}
 	}
 }
 
@@ -649,23 +649,18 @@ type projectCommand struct {
 	Run         repoCommandRunner
 }
 
-func loadProjectCommands(root string) (map[string]projectCommand, error) {
+func loadProjectTasks(root string) (map[string]projectCommand, error) {
 	metadata, err := loadProjectMetadataOrError(root)
 	if err != nil {
 		return nil, err
 	}
 	parsed := map[string]projectCommand{}
-	if cfg, ok := loadRuntimeConfig(root, metadata); ok {
-		for name, command := range defaultRuntimeCommands(cfg) {
-			parsed[name] = command
-		}
-	}
-	commands, ok := metadata["commands"].(map[string]any)
-	if !ok || commands == nil {
+	tasks, ok := metadata["tasks"].(map[string]any)
+	if !ok || tasks == nil {
 		return parsed, nil
 	}
-	for name, value := range commands {
-		_, desc, run, err := parseProjectCommand(name, value)
+	for name, value := range tasks {
+		_, desc, run, err := parseProjectTask(name, value)
 		if err != nil {
 			return nil, err
 		}
@@ -674,9 +669,9 @@ func loadProjectCommands(root string) (map[string]projectCommand, error) {
 	return parsed, nil
 }
 
-func formatProjectCommandLines(commands map[string]projectCommand) []string {
-	keys := make([]string, 0, len(commands))
-	for name := range commands {
+func formatProjectTaskLines(tasks map[string]projectCommand) []string {
+	keys := make([]string, 0, len(tasks))
+	for name := range tasks {
 		keys = append(keys, name)
 	}
 	sort.Strings(keys)
@@ -688,8 +683,8 @@ func formatProjectCommandLines(commands map[string]projectCommand) []string {
 	}
 	lines := make([]string, 0, len(keys))
 	for _, name := range keys {
-		command := commands[name]
-		lines = append(lines, fmt.Sprintf("%-*s -- %s", width, name, command.Description))
+		task := tasks[name]
+		lines = append(lines, fmt.Sprintf("%-*s -- %s", width, name, task.Description))
 	}
 	return lines
 }
@@ -735,11 +730,11 @@ func discoverProjectRootOrError() (string, error) {
 	if root, ok := config.DiscoverProjectRoot(""); ok {
 		return root, nil
 	}
-	return "", ProjectError{Msg: "No repo metadata found above the current directory. Add .nf/project.json with runtime metadata or commands.<name>."}
+	return "", ProjectError{Msg: "No repo metadata found above the current directory. Add .nf/project.json with runtime metadata or tasks.<name>."}
 }
 
-func cmdProjectCommands() int {
-	if err := requireProjectContext("repo commands"); err != nil {
+func cmdProjectTasks() int {
+	if err := requireProjectContext("repo tasks"); err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		return 1
 	}
@@ -748,17 +743,17 @@ func cmdProjectCommands() int {
 		fmt.Fprintln(os.Stderr, err)
 		return 1
 	}
-	commands, err := loadProjectCommands(root)
+	tasks, err := loadProjectTasks(root)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		return 1
 	}
-	if len(commands) == 0 {
-		fmt.Fprintln(os.Stderr, "No local repo commands configured. Add .nf/project.json runtime metadata or commands.<name>.")
+	if len(tasks) == 0 {
+		fmt.Fprintln(os.Stderr, "No local repo tasks configured. Add .nf/project.json tasks.<name>.")
 		return 1
 	}
-	fmt.Println("repo-local commands:")
-	for _, line := range formatProjectCommandLines(commands) {
+	fmt.Println("Repo tasks:")
+	for _, line := range formatProjectTaskLines(tasks) {
 		fmt.Printf("  %s\n", line)
 	}
 	return 0
@@ -1072,22 +1067,22 @@ func siteKinstaID(site map[string]any, key string) string {
 	return firstRecordString(site, "kinsta_"+key, key)
 }
 
-func projectDeployAlias(metadata map[string]any, alias string) (string, bool, error) {
+func projectDeployTargetAlias(metadata map[string]any, targetAlias string) (string, bool, error) {
 	deploy := mapMapAtPath(metadata, "deploy")
 	if deploy == nil {
 		return "", false, nil
 	}
-	aliases := mapMapAtPath(deploy, "aliases")
-	if aliases == nil {
+	targets := mapMapAtPath(deploy, "targets")
+	if targets == nil {
 		return "", false, nil
 	}
-	value, ok := aliases[alias]
+	value, ok := targets[targetAlias]
 	if !ok {
 		return "", false, nil
 	}
 	resolved, ok := value.(string)
 	if !ok || strings.TrimSpace(resolved) == "" {
-		return "", false, ProjectError{Msg: fmt.Sprintf(".nf/project.json deploy.aliases.%s must be a string target name", alias)}
+		return "", false, ProjectError{Msg: fmt.Sprintf(".nf/project.json deploy.targets.%s must be a string target alias", targetAlias)}
 	}
 	return strings.TrimSpace(resolved), true, nil
 }
@@ -1095,7 +1090,7 @@ func projectDeployAlias(metadata map[string]any, alias string) (string, bool, er
 func resolveSiteTarget(requested string) (string, map[string]any, bool, bool, error) {
 	resolved := strings.TrimSpace(requested)
 	if resolved == "" {
-		return "", nil, false, false, ProjectError{Msg: "site show requires a target or alias"}
+		return "", nil, false, false, ProjectError{Msg: "site show requires a target or target alias"}
 	}
 	root, ok := currentGitRoot()
 	if !ok {
@@ -1110,10 +1105,10 @@ func resolveSiteTarget(requested string) (string, map[string]any, bool, bool, er
 	if err != nil {
 		return "", nil, false, false, err
 	}
-	if aliasTarget, aliasFound, err := projectDeployAlias(metadata, resolved); err != nil {
+	if targetAlias, targetAliasFound, err := projectDeployTargetAlias(metadata, resolved); err != nil {
 		return "", nil, false, false, err
-	} else if aliasFound {
-		return aliasTarget, metadata, projectFileExists, true, nil
+	} else if targetAliasFound {
+		return targetAlias, metadata, projectFileExists, true, nil
 	}
 	return resolved, metadata, projectFileExists, false, nil
 }
@@ -1196,7 +1191,7 @@ func cmdShowServer(needle string) int {
 }
 
 func cmdShowSite(needle string) int {
-	resolved, _, projectFileExists, aliasUsed, err := resolveSiteTarget(needle)
+	resolved, _, projectFileExists, targetAliasUsed, err := resolveSiteTarget(needle)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		return 1
@@ -1208,12 +1203,12 @@ func cmdShowSite(needle string) int {
 	}
 	record := state.MatchingRecord(bundle.Sites, resolved)
 	if record == nil {
-		if aliasUsed {
-			fmt.Fprintf(os.Stderr, "deploy.aliases.%s resolves to %q, but no site target matched that name.\n", needle, resolved)
+		if targetAliasUsed {
+			fmt.Fprintf(os.Stderr, "deploy.targets.%s resolves to %q, but no site target matched that name.\n", needle, resolved)
 			return 1
 		}
 		if projectFileExists {
-			fmt.Fprintf(os.Stderr, "No site matched %q. Add deploy.aliases.%s in .nf/project.json or create a site target with that name.\n", needle, needle)
+			fmt.Fprintf(os.Stderr, "No site matched %q. Add deploy.targets.%s in .nf/project.json or create a site target with that name.\n", needle, needle)
 			return 1
 		}
 		fmt.Fprintf(os.Stderr, "No site matched %q.\n", needle)
@@ -1290,10 +1285,10 @@ func writeProjectInit(root string, args projectInitArgs) error {
 	return nil
 }
 
-func ensureRepoProjectMetadata() error {
+func ensureRuntimeProjectMetadata() error {
 	root, ok := currentGitRoot()
 	if !ok {
-		return ProjectError{Msg: "repo up requires a .git repository above the current directory"}
+		return ProjectError{Msg: "runtime up requires a .git repository above the current directory"}
 	}
 	projectPath := config.ProjectFile(root)
 	if _, err := os.Stat(projectPath); err == nil {
@@ -1341,9 +1336,9 @@ func repoInitMetadata(args projectInitArgs) map[string]any {
 			"exclude": []any{"node_modules/", ".git/"},
 		},
 		"deploy": map[string]any{
-			"aliases": map[string]any{},
+			"targets": map[string]any{},
 		},
-		"commands": defaultProjectCommands(),
+		"tasks": defaultProjectTasks(),
 	}
 	return metadata
 }
@@ -1708,23 +1703,96 @@ func runPasswordHelp() int {
 	return 0
 }
 
+func runRuntimeHelp() int {
+	printGroupHelp("runtime", []string{
+		"up                  start the local runtime",
+		"down                stop the local runtime",
+		"logs                tail WordPress logs",
+		"reset               destroy and recreate the local runtime",
+		"wp -- <args>        run wp-cli in the local runtime",
+	})
+	fmt.Println("\nShortcuts:")
+	for _, line := range []string{
+		"nf up               shortcut for nf runtime up",
+		"nf down             shortcut for nf runtime down",
+		"nf logs             shortcut for nf runtime logs",
+		"nf reset            shortcut for nf runtime reset",
+		"nf wp -- <args>     shortcut for nf runtime wp",
+	} {
+		fmt.Printf("  %s\n", line)
+	}
+	return 0
+}
+
 func runRepoHelp() int {
 	lines := []string{
 		"init                create .nf/project.json",
 	}
-	if projectContextAvailable() {
+	showTasks := projectContextAvailable()
+	if showTasks {
 		lines = append(lines,
-			"commands            list configured local repo commands",
+			"tasks               list configured repo tasks",
 			"package [--dry-run] [--source] [--output]   package theme artifacts",
 		)
+	}
+	printGroupHelp("repo", lines)
+	if showTasks {
 		if root, ok := currentGitRoot(); ok {
-			if commands, err := loadProjectCommands(root); err == nil && len(commands) > 0 {
-				lines = append(lines, "repo-local commands:")
-				lines = append(lines, formatProjectCommandLines(commands)...)
+			if tasks, err := loadProjectTasks(root); err == nil && len(tasks) > 0 {
+				fmt.Println("\nRepo tasks:")
+				for _, line := range formatProjectTaskLines(tasks) {
+					fmt.Printf("  %s\n", line)
+				}
 			}
 		}
 	}
-	printGroupHelp("repo", lines)
+	return 0
+}
+
+func runRuntime(argv []string) int {
+	if len(argv) == 0 || argv[0] == "help" {
+		return runRuntimeHelp()
+	}
+	name := argv[0]
+	switch name {
+	case "up", "down", "logs", "reset", "wp":
+	default:
+		fmt.Fprintln(os.Stderr, "unsupported runtime command")
+		return 1
+	}
+	if err := requireProjectContext("runtime " + name); err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		return 1
+	}
+	if name == "up" {
+		if err := ensureRuntimeProjectMetadata(); err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			return 1
+		}
+	}
+	root, err := discoverProjectRootOrError()
+	if err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		return 1
+	}
+	metadata, err := loadProjectMetadataOrError(root)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		return 1
+	}
+	cfg, ok := loadRuntimeConfig(root, metadata)
+	if !ok {
+		fmt.Fprintln(os.Stderr, "Missing runtime metadata in .nf/project.json. Run nf runtime up first.")
+		return 1
+	}
+	extraArgs := argv[1:]
+	if name == "wp" {
+		extraArgs = normalizePassthroughArgs(extraArgs)
+	}
+	if err := (runtimeCommandRunner{name: name, cfg: cfg}).Execute(root, extraArgs); err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		return 1
+	}
 	return 0
 }
 
@@ -1732,12 +1800,9 @@ func runHelp() int {
 	fmt.Println("nf")
 	fmt.Println("\nCommands:")
 	fmt.Println("  server        provision, list, show, delete servers")
-	fmt.Println("  site          list, show, future install/delete/deploy/sync")
-	repoLine := "  repo          init repo metadata and manage runtime"
-	if projectContextAvailable() {
-		repoLine = "  repo          init, runtime commands, and repo-local aliases"
-	}
-	fmt.Println(repoLine)
+	fmt.Println("  site          list, show, deploy/sync remote sites")
+	fmt.Println("  runtime       manage the local WordPress runtime")
+	fmt.Println("  repo          init metadata, package artifacts, run repo tasks")
 	fmt.Println("  config        init local config")
 	fmt.Println("  password      derive passwords")
 	fmt.Println("  help          show help")
@@ -1798,12 +1863,16 @@ func Run(argv []string) int {
 		return runServer(argv[1:])
 	case "site":
 		return runSite(argv[1:])
+	case "runtime":
+		return runRuntime(argv[1:])
 	case "repo":
 		return runRepo(argv[1:])
 	case "config":
 		return runConfig(argv[1:])
 	case "password":
 		return runPassword(argv[1:])
+	case "up", "down", "logs", "reset", "wp":
+		return runRuntime(argv)
 	default:
 		fmt.Fprintf(os.Stderr, "unsupported command: %s\n", argv[0])
 		return 1
@@ -1819,6 +1888,8 @@ func runTopicHelp(argv []string) int {
 		return runServerHelp()
 	case "site":
 		return runSiteHelp()
+	case "runtime":
+		return runRuntimeHelp()
 	case "repo":
 		return runRepoHelp()
 	case "config":
@@ -1855,15 +1926,8 @@ func runRepo(argv []string) int {
 		}
 		return cmdProjectInit(projectInitArgs{projectSlug: *projectSlug, projectName: *projectName, themeSlug: *themeSlug, themeSource: *themeSource, force: *force})
 	}
-	if argv[0] == "up" {
-		if err := requireProjectContext("repo up"); err != nil {
-			fmt.Fprintln(os.Stderr, err)
-			return 1
-		}
-		if err := ensureRepoProjectMetadata(); err != nil {
-			fmt.Fprintln(os.Stderr, err)
-			return 1
-		}
+	if argv[0] == "tasks" {
+		return cmdProjectTasks()
 	}
 	if argv[0] == "package" {
 		if err := requireProjectContext("repo package"); err != nil {
@@ -1880,9 +1944,6 @@ func runRepo(argv []string) int {
 		}
 		return cmdRepoPackage(*source, *output, *dryRun)
 	}
-	if argv[0] == "commands" {
-		return cmdProjectCommands()
-	}
 	if err := requireProjectContext(argv[0]); err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		return 1
@@ -1892,13 +1953,13 @@ func runRepo(argv []string) int {
 		fmt.Fprintln(os.Stderr, err)
 		return 1
 	}
-	commands, err := loadProjectCommands(root)
+	tasks, err := loadProjectTasks(root)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		return 1
 	}
-	if command, ok := commands[argv[0]]; ok {
-		if err := command.Run.Execute(root, normalizePassthroughArgs(argv[1:])); err != nil {
+	if task, ok := tasks[argv[0]]; ok {
+		if err := task.Run.Execute(root, normalizePassthroughArgs(argv[1:])); err != nil {
 			fmt.Fprintln(os.Stderr, err)
 			return 1
 		}
