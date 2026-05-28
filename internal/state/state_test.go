@@ -89,7 +89,7 @@ func TestLoadStateRecordsSupportsWrappedObjectShapes(t *testing.T) {
 	}
 	sites := map[string]any{
 		"sites": map[string]any{
-			"sanjel-app1-production": map[string]any{"provider": "linode", "server": "app1", "hostname": "sanjel.app1.nfweb.dev"},
+			"client-app1-production": map[string]any{"provider": "linode", "server": "app1", "hostname": "client.app1.nfweb.dev"},
 		},
 	}
 	siteData, err := json.MarshalIndent(sites, "", "  ")
@@ -111,7 +111,7 @@ func TestLoadStateRecordsSupportsWrappedObjectShapes(t *testing.T) {
 	if err != nil {
 		t.Fatalf("LoadStateRecords(sites) error = %v", err)
 	}
-	if len(loadedSites) != 1 || loadedSites[0]["_state_key"] != "sanjel-app1-production" {
-		t.Fatalf("LoadStateRecords(sites) = %#v, want wrapped sanjel-app1-production record", loadedSites)
+	if len(loadedSites) != 1 || loadedSites[0]["_state_key"] != "client-app1-production" {
+		t.Fatalf("LoadStateRecords(sites) = %#v, want wrapped client-app1-production record", loadedSites)
 	}
 }

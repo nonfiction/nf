@@ -85,11 +85,11 @@ func TestInferProjectMetadataIgnoresLegacyTopLevelFields(t *testing.T) {
 		"project_slug": "legacy-project",
 		"project_name": "Legacy Project",
 	}
-	root := filepath.Join(t.TempDir(), "sanjel")
+	root := filepath.Join(t.TempDir(), "client")
 	if got, want := inferProjectSlug("", metadata, root), filepath.Base(root); got != want {
 		t.Fatalf("inferProjectSlug() = %q, want %q", got, want)
 	}
-	if got, want := inferProjectName(metadata, "sanjel"), "Sanjel"; got != want {
+	if got, want := inferProjectName(metadata, "client"), "Client"; got != want {
 		t.Fatalf("inferProjectName() = %q, want %q", got, want)
 	}
 }
@@ -97,19 +97,19 @@ func TestInferProjectMetadataIgnoresLegacyTopLevelFields(t *testing.T) {
 func TestStateRecordsUseNestedFields(t *testing.T) {
 	plan := Plan{
 		Provider:     "linode",
-		ProjectSlug:  "sanjel",
+		ProjectSlug:  "client",
 		ServerName:   "app1",
-		Label:        "sanjel-app1-production",
-		SiteDomain:   "sanjel.app1.nfweb.dev",
+		Label:        "client-app1-production",
+		SiteDomain:   "client.app1.nfweb.dev",
 		Region:       "us-east",
 		LinodeType:   "g6-standard-1",
 		Image:        "linode/ubuntu24.04",
 		SshUser:      "nonfiction",
-		RemoteWpPath: "/var/www/sanjel",
+		RemoteWpPath: "/var/www/client",
 		PhpFpmSocket: "/run/php/php8.3-fpm.sock",
-		DbName:       "sanjel",
-		DbUser:       "sanjel",
-		WpAdminUser:  "nf-sanjel",
+		DbName:       "client",
+		DbUser:       "client",
+		WpAdminUser:  "nf-client",
 	}
 
 	server := serverStateRecord(plan, "12345", "198.51.100.10", "nfweb.dev", "2026-05-27T00:00:00Z")
