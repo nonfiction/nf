@@ -16,11 +16,15 @@ Working now:
 * `nf runtime down`
 * `nf runtime logs`
 * `nf runtime reset`
+* `nf runtime info`
+* `nf runtime shell`
 * `nf runtime wp`
 * `nf up`
 * `nf down`
 * `nf logs`
 * `nf reset`
+* `nf info`
+* `nf shell`
 * `nf wp`
 * `nf repo package`
 * `nf server list`
@@ -153,7 +157,11 @@ Example `.nf/project.json`:
     "wordpress_service": "wordpress",
     "cli_service": "cli",
     "theme_mount_slug": "theme",
-    "uploads_path": "uploads"
+    "uploads_path": "uploads",
+    "ports": {
+      "wordpress": 18432,
+      "mailpit": 18433
+    }
   },
   "build": {
     "commands": [
@@ -225,6 +233,8 @@ Examples:
 nf repo tasks
 nf repo build
 nf repo test
+nf runtime shell
+nf shell
 nf runtime wp -- plugin list
 ```
 
@@ -235,6 +245,8 @@ A runtime is `nf`'s generated local WordPress environment for a project. It cont
 The runtime is generated and owned by `nf`.
 
 Project repositories should contain the theme source and `.nf/project.json` runtime definition. They should not need committed Docker runtime scaffolding.
+
+Runtime ports are derived deterministically from the project slug. Set `runtime.ports.wordpress` and `runtime.ports.mailpit` in `.nf/project.json` to override them individually; zero or missing values fall back to the derived ports.
 
 Generated runtime files live under:
 
@@ -248,11 +260,25 @@ For the placeholder project:
 ~/.config/nf/runtimes/client/
 ```
 
-Default local URL:
+Derived local URLs:
 
 ```text
-http://localhost:18080
+WordPress: http://localhost:<wordpress-port>
+Mailpit:   http://localhost:<mailpit-port>
 ```
+
+Runtime info and startup output include both WordPress and Mailpit URLs, for example:
+
+```text
+Runtime:
+  project: client
+  path: ~/.config/nf/runtimes/client
+  compose project: nf_client_runtime
+  WordPress: http://localhost:<wordpress-port>
+  Mailpit:   http://localhost:<mailpit-port>
+```
+
+`nf runtime up` and `nf runtime reset` print a success line followed by the full runtime info block. `nf runtime down` prints a success line followed by the short runtime info block.
 
 Default local WordPress credentials:
 
@@ -270,12 +296,14 @@ Common runtime workflow:
 
 ```sh
 nf runtime up
+nf runtime info
 nf runtime logs
+nf runtime shell
 nf runtime wp -- plugin list
 nf runtime down
 ```
 
-The top-level shortcuts `nf up`, `nf down`, `nf logs`, `nf reset`, and `nf wp` behave the same as `nf runtime ...`.
+The top-level shortcuts `nf up`, `nf down`, `nf logs`, `nf reset`, `nf info`, `nf shell`, and `nf wp` behave the same as `nf runtime ...`.
 
 Reset the local runtime:
 

@@ -26,11 +26,15 @@ The current project command surface is intentionally small:
 * `nf runtime down`
 * `nf runtime logs`
 * `nf runtime reset`
+* `nf runtime info`
+* `nf runtime shell`
 * `nf runtime wp`
 * `nf up`
 * `nf down`
 * `nf logs`
 * `nf reset`
+* `nf info`
+* `nf shell`
 * `nf wp`
 * direct repo tasks from `.nf/project.json`
 
@@ -243,7 +247,11 @@ Current built-ins:
 * `down`
 * `logs`
 * `reset`
+* `info`
+* `shell`
 * `wp`
+
+Runtime ports are derived deterministically from the project slug. `runtime.ports.wordpress` and `runtime.ports.mailpit` may override them individually; zero or missing values fall back to the derived ports.
 
 `nf runtime up` should be idempotent:
 
@@ -251,6 +259,10 @@ Current built-ins:
 * start Docker Compose
 * install WordPress if missing
 * ensure the mounted theme is active
+
+`nf runtime up` should preflight the WordPress and Mailpit host ports before Docker Compose starts. `nf runtime info` should print the local runtime paths, compose project name, and URLs without starting Docker.
+
+`nf runtime up` and `nf runtime reset` should print a success line followed by the full runtime info block. `nf runtime down` should print a success line followed by the short runtime info block.
 
 `nf runtime reset` is destructive for the local runtime only:
 
