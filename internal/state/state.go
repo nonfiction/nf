@@ -64,6 +64,23 @@ func recordsFromPayload(payload any, key string) ([]map[string]any, error) {
 				}
 				return records, nil
 			}
+			if nested, ok := value.(map[string]any); ok {
+				records := make([]map[string]any, 0, len(nested))
+				allMaps := true
+				for name, item := range nested {
+					m, ok := item.(map[string]any)
+					if !ok {
+						allMaps = false
+						break
+					}
+					record := cloneMap(m)
+					record["_state_key"] = name
+					records = append(records, record)
+				}
+				if allMaps {
+					return records, nil
+				}
+			}
 		}
 		allMaps := true
 		for _, value := range typed {
