@@ -7,6 +7,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 )
@@ -427,6 +428,15 @@ func TestRunRepoInitWritesPortableMetadataShape(t *testing.T) {
 	if wordpress, ok := metadata["wordpress"].(map[string]any); !ok || wordpress["theme_path"] != "theme" {
 		t.Fatalf("wordpress block = %#v, want theme_path theme", metadata["wordpress"])
 	}
+	if workbench, ok := metadata["workbench"].(map[string]any); !ok {
+		t.Fatalf("workbench block = %#v, want workbench config", metadata["workbench"])
+	} else {
+		for key, want := range map[string]string{"path": "workbench", "compose": "docker compose", "wordpress_service": "wordpress", "cli_service": "cli", "theme_mount_slug": "theme", "uploads_path": "uploads"} {
+			if got := workbench[key]; got != want {
+				t.Fatalf("workbench.%s = %#v, want %q", key, got, want)
+			}
+		}
+	}
 	if build, ok := metadata["build"].(map[string]any); !ok {
 		t.Fatalf("build block = %#v, want commands list", metadata["build"])
 	} else if commands, ok := build["commands"].([]any); !ok || len(commands) != 2 {
@@ -444,8 +454,22 @@ func TestRunRepoInitWritesPortableMetadataShape(t *testing.T) {
 	} else if aliases, ok := deploy["aliases"].(map[string]any); !ok || len(aliases) != 0 {
 		t.Fatalf("deploy.aliases = %#v, want empty map", deploy["aliases"])
 	}
-	if commands, ok := metadata["commands"].(map[string]any); !ok || commands["composer"] == nil || commands["install-theme"] == nil {
-		t.Fatalf("commands block = %#v, want defaultProjectCommands output", metadata["commands"])
+	if commands, ok := metadata["commands"].(map[string]any); !ok {
+		t.Fatalf("commands block = %#v, want command map", metadata["commands"])
+	} else {
+		for _, want := range []string{"composer", "npm", "build", "watch", "test"} {
+			if commands[want] == nil {
+				t.Fatalf("commands block missing %q: %#v", want, commands)
+			}
+		}
+		for _, unwanted := range []string{"setup", "up", "down", "restart", "logs", "reset", "fresh", "wp", "install-theme", "activate-theme"} {
+			if _, ok := commands[unwanted]; ok {
+				t.Fatalf("commands block unexpectedly contained %q: %#v", unwanted, commands)
+			}
+		}
+		if len(commands) != 5 {
+			t.Fatalf("commands block len = %d, want 5", len(commands))
+		}
 	}
 	for _, legacy := range []string{"project_slug", "project_name", "theme_slug", "theme_source", "local_workbench_url", "default_provider"} {
 		if _, ok := metadata[legacy]; ok {
@@ -462,6 +486,94 @@ func TestRunRepoInitWritesPortableMetadataShape(t *testing.T) {
 		if _, exists := build["source"]; exists {
 			t.Fatalf("build.source unexpectedly present: %#v", metadata["build"])
 		}
+	}
+}
+
+func TestWorkbenchCommandHelpersBuildExpectedArgs(t *testing.T) {
+	cfg := workbenchConfig{
+		Path:             "workbench",
+		Compose:          "docker compose",
+		WordpressService: "wordpress",
+		CliService:       "cli",
+		ThemeMountSlug:   "theme",
+		UploadsPath:      "uploads",
+		ThemeSlug:        "sanjel",
+	}
+
+	if got, want := workbenchComposeArgs(cfg, "up", "-d"), []string{"docker", "compose", "up", "-d"}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("workbenchComposeArgs() = %#v, want %#v", got, want)
+	}
+	if got, want := workbenchWpArgs(cfg, "plugin", "list"), []string{"docker", "compose", "run", "--rm", "cli", "wp", "plugin", "list", "--allow-root"}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("workbenchWpArgs() = %#v, want %#v", got, want)
+	}
+	hostPath, containerPath := workbenchThemeArchivePaths("/repo", cfg, "/tmp/theme.zip")
+	if hostPath != filepath.Join("/repo", "workbench", "uploads", "theme.zip") || containerPath != "/workbench/uploads/theme.zip" {
+		t.Fatalf("workbenchThemeArchivePaths() = (%q, %q), want host and container upload paths", hostPath, containerPath)
+	}
+	if got, want := workbenchWpThemeActivateArgs(cfg, ""), []string{"docker", "compose", "run", "--rm", "cli", "wp", "theme", "activate", "sanjel", "--allow-root"}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("workbenchWpThemeActivateArgs() = %#v, want %#v", got, want)
+	}
+	installArgs := workbenchWpCoreInstallArgs(cfg)
+	joined := strings.Join(installArgs, " ")
+	for _, wanted := range []string{"docker compose run --rm cli sh -lc", "WP_URL", "WP_TITLE", "ADMIN_USER", "ADMIN_PASSWORD", "ADMIN_EMAIL", "wp theme activate sanjel --allow-root"} {
+		if !strings.Contains(joined, wanted) {
+			t.Fatalf("workbenchWpCoreInstallArgs() missing %q in %#v", wanted, installArgs)
+		}
+	}
+	if strings.Contains(joined, "wp core is-installed") {
+		t.Fatalf("workbenchWpCoreInstallArgs() unexpectedly probes install state: %#v", installArgs)
+	}
+	if got, want := workbenchRepoPath("/repo", "dist/theme.zip"), filepath.Join("/repo", "dist", "theme.zip"); got != want {
+		t.Fatalf("workbenchRepoPath() = %q, want %q", got, want)
+	}
+	if got, want := workbenchRepoPath("/repo", "/tmp/theme.zip"), "/tmp/theme.zip"; got != want {
+		t.Fatalf("workbenchRepoPath() = %q, want %q", got, want)
+	}
+	if got, want := (workbenchCommandRunner{name: "setup", cfg: cfg}).Render(), "docker compose up -d; wp core install and activate sanjel if needed"; got != want {
+		t.Fatalf("setup Render() = %q, want %q", got, want)
+	}
+	if got, want := (workbenchCommandRunner{name: "fresh", cfg: cfg}).Render(), "docker compose down -v --remove-orphans && docker compose up -d; wp core install and activate sanjel if needed"; got != want {
+		t.Fatalf("fresh Render() = %q, want %q", got, want)
+	}
+}
+
+func TestRunRepoSetupCanBeOverriddenByExplicitCommand(t *testing.T) {
+	workdir := t.TempDir()
+	if err := os.Mkdir(filepath.Join(workdir, ".git"), 0o755); err != nil {
+		t.Fatalf("Mkdir() error = %v", err)
+	}
+	if err := os.MkdirAll(filepath.Join(workdir, ".nf"), 0o755); err != nil {
+		t.Fatalf("MkdirAll() error = %v", err)
+	}
+	project := map[string]any{
+		"schema":    1,
+		"project":   map[string]any{"slug": "sanjel", "name": "Sanjel", "type": "wordpress-theme"},
+		"wordpress": map[string]any{"deploy_unit": "theme", "theme_slug": "sanjel", "theme_path": "theme"},
+		"workbench": map[string]any{"path": "workbench", "compose": "docker compose", "wordpress_service": "wordpress", "cli_service": "cli", "theme_mount_slug": "theme", "uploads_path": "uploads"},
+		"commands":  map[string]any{"setup": map[string]any{"description": "Custom setup", "run": []any{"sh", "-lc", "printf custom > override.txt"}}},
+	}
+	data, err := json.MarshalIndent(project, "", "  ")
+	if err != nil {
+		t.Fatalf("MarshalIndent() error = %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(workdir, ".nf", "project.json"), append(data, '\n'), 0o644); err != nil {
+		t.Fatalf("WriteFile() error = %v", err)
+	}
+
+	oldwd, err := os.Getwd()
+	if err != nil {
+		t.Fatalf("Getwd() error = %v", err)
+	}
+	if err := os.Chdir(workdir); err != nil {
+		t.Fatalf("Chdir() error = %v", err)
+	}
+	t.Cleanup(func() { _ = os.Chdir(oldwd) })
+
+	if got := Run([]string{"repo", "setup"}); got != 0 {
+		t.Fatalf("Run() = %d, want 0", got)
+	}
+	if _, err := os.Stat(filepath.Join(workdir, "override.txt")); err != nil {
+		t.Fatalf("override.txt not created: %v", err)
 	}
 }
 
