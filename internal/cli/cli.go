@@ -62,7 +62,11 @@ func (c argvCommandRunner) Execute(root string, extraArgs []string) error {
 func (c argvCommandRunner) Render() string { return strings.Join(c, " ") }
 
 type workbenchConfig struct {
-	Path             string
+	ProjectSlug      string
+	ProjectName      string
+	RepoRoot         string
+	ThemePath        string
+	ManagedDir       string
 	Compose          string
 	WordpressService string
 	CliService       string
@@ -71,13 +75,24 @@ type workbenchConfig struct {
 	ThemeSlug        string
 }
 
+func (c workbenchConfig) managedUploadsDir() string {
+	return filepath.Join(c.ManagedDir, firstNonEmpty(c.UploadsPath, "uploads"))
+}
+
+func (c workbenchConfig) uploadsContainerPath() string {
+	return path.Join("/", "workbench", firstNonEmpty(c.UploadsPath, "uploads"))
+}
+
 type workbenchCommandRunner struct {
 	name string
 	cfg  workbenchConfig
 }
 
 func (c workbenchCommandRunner) Execute(root string, extraArgs []string) error {
-	workbenchDir := filepath.Join(root, c.cfg.Path)
+	if err := ensureManagedWorkbenchRuntime(c.cfg); err != nil {
+		return err
+	}
+	workbenchDir := c.cfg.ManagedDir
 	switch c.name {
 	case "up":
 		return runCommandSpec(execSpec{Dir: workbenchDir, Args: workbenchComposeArgs(c.cfg, "up", "-d")})
@@ -122,8 +137,8 @@ func (c workbenchCommandRunner) Execute(root string, extraArgs []string) error {
 			return fmt.Errorf("install-theme requires a zip path")
 		}
 		zipPath := workbenchRepoPath(root, extraArgs[0])
-		hostPath, containerPath := workbenchThemeArchivePaths(root, c.cfg, zipPath)
-		if err := os.MkdirAll(filepath.Join(workbenchDir, c.cfg.UploadsPath), 0o755); err != nil {
+		hostPath, containerPath := workbenchThemeArchivePaths(c.cfg, zipPath)
+		if err := os.MkdirAll(c.cfg.managedUploadsDir(), 0o755); err != nil {
 			return err
 		}
 		if err := copyFile(zipPath, hostPath); err != nil {
@@ -160,7 +175,7 @@ func (c workbenchCommandRunner) Render() string {
 	case "wp":
 		return "docker compose run --rm " + c.cfg.CliService + " wp ... --allow-root"
 	case "install-theme":
-		return "copy theme zip into workbench uploads and run wp theme install"
+		return "copy theme zip into nf-managed workbench uploads and run wp theme install"
 	case "activate-theme":
 		return "docker compose run --rm " + c.cfg.CliService + " wp theme activate <slug> --allow-root"
 	default:
@@ -197,8 +212,48 @@ func runCommandSpecQuiet(spec execSpec) error {
 	return cmd.Run()
 }
 
-func workbenchCommandDir(root string, cfg workbenchConfig) string {
-	return filepath.Join(root, cfg.Path)
+func workbenchCommandDir(cfg workbenchConfig) string {
+	return cfg.ManagedDir
+}
+
+func ensureManagedWorkbenchRuntime(cfg workbenchConfig) error {
+	if strings.TrimSpace(cfg.ManagedDir) == "" {
+		return fmt.Errorf("missing managed workbench directory")
+	}
+	if err := os.MkdirAll(cfg.ManagedDir, 0o755); err != nil {
+		return err
+	}
+	files := map[string]string{
+		filepath.Join(cfg.ManagedDir, "docker-compose.yml"):                                  renderWorkbenchCompose(cfg),
+		filepath.Join(cfg.ManagedDir, ".env"):                                                renderWorkbenchEnv(cfg),
+		filepath.Join(cfg.ManagedDir, "php", "uploads.ini"):                                  renderWorkbenchUploadsINI(),
+		filepath.Join(cfg.ManagedDir, "wordpress", "Dockerfile"):                             renderWorkbenchDockerfile(),
+		filepath.Join(cfg.ManagedDir, "wordpress", "wordpress-rewrites.conf"):                renderWorkbenchRewritesConf(),
+		filepath.Join(cfg.ManagedDir, firstNonEmpty(cfg.UploadsPath, "uploads"), ".gitkeep"): "",
+	}
+	for path, contents := range files {
+		if err := writeManagedFile(path, contents, 0o644); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func writeManagedFile(path, contents string, mode os.FileMode) error {
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		return err
+	}
+	if existing, err := os.ReadFile(path); err == nil {
+		if string(existing) == contents {
+			return os.Chmod(path, mode)
+		}
+	} else if !os.IsNotExist(err) {
+		return err
+	}
+	if err := os.WriteFile(path, []byte(contents), mode); err != nil {
+		return err
+	}
+	return nil
 }
 
 func workbenchComposeArgs(cfg workbenchConfig, args ...string) []string {
@@ -227,10 +282,10 @@ func workbenchWpThemeActivateArgs(cfg workbenchConfig, slug string) []string {
 	return workbenchWpArgs(cfg, "theme", "activate", firstNonEmpty(slug, cfg.ThemeSlug, cfg.ThemeMountSlug, "theme"))
 }
 
-func workbenchThemeArchivePaths(root string, cfg workbenchConfig, sourcePath string) (string, string) {
+func workbenchThemeArchivePaths(cfg workbenchConfig, sourcePath string) (string, string) {
 	base := filepath.Base(sourcePath)
-	host := filepath.Join(workbenchCommandDir(root, cfg), firstNonEmpty(cfg.UploadsPath, "uploads"), base)
-	container := path.Join("/", firstNonEmpty(cfg.Path, "workbench"), firstNonEmpty(cfg.UploadsPath, "uploads"), base)
+	host := filepath.Join(workbenchCommandDir(cfg), firstNonEmpty(cfg.UploadsPath, "uploads"), base)
+	container := path.Join("/", "workbench", firstNonEmpty(cfg.UploadsPath, "uploads"), base)
 	return host, container
 }
 
@@ -589,7 +644,7 @@ func loadProjectCommands(root string) (map[string]struct {
 		Description string
 		Run         repoCommandRunner
 	}{}
-	if cfg, ok := loadWorkbenchConfig(metadata); ok {
+	if cfg, ok := loadWorkbenchConfig(root, metadata); ok {
 		for name, command := range defaultWorkbenchCommands(cfg) {
 			parsed[name] = command
 		}
@@ -611,14 +666,24 @@ func loadProjectCommands(root string) (map[string]struct {
 	return parsed, nil
 }
 
-func loadWorkbenchConfig(metadata map[string]any) (workbenchConfig, bool) {
+func loadWorkbenchConfig(root string, metadata map[string]any) (workbenchConfig, bool) {
 	raw, ok := metadata["workbench"].(map[string]any)
 	if !ok || raw == nil {
 		return workbenchConfig{}, false
 	}
+	projectSlug := firstNonEmpty(mapStringAtPath(metadata, "project", "slug"), "project")
+	projectName := firstNonEmpty(mapStringAtPath(metadata, "project", "name"), slugToTitle(projectSlug))
+	themePath := firstNonEmpty(mapStringAtPath(metadata, "wordpress", "theme_path"), "theme")
+	if !filepath.IsAbs(themePath) {
+		themePath = filepath.Join(root, themePath)
+	}
 	wordpress := mapMapAtPath(metadata, "wordpress")
 	return workbenchConfig{
-		Path:             firstNonEmpty(mapStringAtPath(raw, "path"), "workbench"),
+		ProjectSlug:      projectSlug,
+		ProjectName:      projectName,
+		RepoRoot:         root,
+		ThemePath:        themePath,
+		ManagedDir:       config.WorkbenchDir(projectSlug),
 		Compose:          firstNonEmpty(mapStringAtPath(raw, "compose"), "docker compose"),
 		WordpressService: firstNonEmpty(mapStringAtPath(raw, "wordpress_service"), "wordpress"),
 		CliService:       firstNonEmpty(mapStringAtPath(raw, "cli_service"), "cli"),
@@ -1215,6 +1280,30 @@ func cmdProjectInit(args projectInitArgs) int {
 		fmt.Fprintln(os.Stderr, err)
 		return 1
 	}
+	metadata := repoInitMetadata(args)
+	projectPath := filepath.Join(root, ".nf", "project.json")
+	if !args.force {
+		if _, err := os.Stat(projectPath); err == nil {
+			fmt.Fprintf(os.Stderr, "%s already exists; use --force to overwrite.\n", projectPath)
+			return 1
+		} else if !os.IsNotExist(err) {
+			fmt.Fprintln(os.Stderr, err)
+			return 1
+		}
+	}
+	if err := os.MkdirAll(filepath.Dir(projectPath), 0o755); err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		return 1
+	}
+	if err := os.WriteFile(projectPath, []byte(repoInitJSON(metadata)), 0o644); err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		return 1
+	}
+	fmt.Printf("Wrote %s\n", projectPath)
+	return 0
+}
+
+func repoInitMetadata(args projectInitArgs) map[string]any {
 	themePath := firstNonEmpty(args.themeSource, "theme")
 	themeSlug := firstNonEmpty(args.themeSlug, args.projectSlug)
 	projectName := firstNonEmpty(args.projectName, slugToTitle(args.projectSlug))
@@ -1232,7 +1321,6 @@ func cmdProjectInit(args projectInitArgs) int {
 			"theme_path":  themePath,
 		},
 		"workbench": map[string]any{
-			"path":              "workbench",
 			"compose":           "docker compose",
 			"wordpress_service": "wordpress",
 			"cli_service":       "cli",
@@ -1252,22 +1340,7 @@ func cmdProjectInit(args projectInitArgs) int {
 		},
 		"commands": defaultProjectCommands(),
 	}
-	projectPath := filepath.Join(root, ".nf", "project.json")
-	if _, err := os.Stat(projectPath); err == nil && !args.force {
-		fmt.Fprintf(os.Stderr, "%s already exists; use --force to overwrite.\n", projectPath)
-		return 1
-	}
-	if err := os.MkdirAll(filepath.Dir(projectPath), 0o755); err != nil {
-		fmt.Fprintln(os.Stderr, err)
-		return 1
-	}
-	data, _ := json.MarshalIndent(metadata, "", "  ")
-	if err := os.WriteFile(projectPath, append(data, '\n'), 0o644); err != nil {
-		fmt.Fprintln(os.Stderr, err)
-		return 1
-	}
-	fmt.Printf("Wrote %s\n", projectPath)
-	return 0
+	return metadata
 }
 
 type projectInitArgs struct {
@@ -1276,6 +1349,145 @@ type projectInitArgs struct {
 	themeSlug   string
 	themeSource string
 	force       bool
+}
+
+func repoInitJSON(metadata map[string]any) string {
+	data, _ := json.MarshalIndent(metadata, "", "  ")
+	return string(append(data, '\n'))
+}
+
+func renderWorkbenchCompose(cfg workbenchConfig) string {
+	themeMountSlug := firstNonEmpty(cfg.ThemeMountSlug, "theme")
+	wordpressService := firstNonEmpty(cfg.WordpressService, "wordpress")
+	cliService := firstNonEmpty(cfg.CliService, "cli")
+	themePath := cfg.ThemePath
+	uploadsPath := firstNonEmpty(cfg.UploadsPath, "uploads")
+	return fmt.Sprintf(`services:
+  db:
+    image: mariadb:11
+    command: --character-set-server=utf8mb4 --collation-server=utf8mb4_unicode_ci
+    environment:
+      MARIADB_DATABASE: ${DB_NAME}
+      MARIADB_USER: ${DB_USER}
+      MARIADB_PASSWORD: ${DB_PASSWORD}
+      MARIADB_ROOT_PASSWORD: ${DB_ROOT_PASSWORD}
+    healthcheck:
+      test: ["CMD", "healthcheck.sh", "--connect", "--innodb_initialized"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+    volumes:
+      - db_data:/var/lib/mysql
+
+  %s:
+    build:
+      context: .
+      dockerfile: wordpress/Dockerfile
+    depends_on:
+      db:
+        condition: service_healthy
+    ports:
+      - "${WP_PORT}:80"
+    environment:
+      WORDPRESS_DB_HOST: db:3306
+      WORDPRESS_DB_NAME: ${DB_NAME}
+      WORDPRESS_DB_USER: ${DB_USER}
+      WORDPRESS_DB_PASSWORD: ${DB_PASSWORD}
+      WP_URL: ${WP_URL}
+      WP_TITLE: ${WP_TITLE}
+      ADMIN_USER: ${ADMIN_USER}
+      ADMIN_PASSWORD: ${ADMIN_PASSWORD}
+      ADMIN_EMAIL: ${ADMIN_EMAIL}
+      WORDPRESS_CONFIG_EXTRA: |
+        define('WP_HOME', getenv('WP_URL'));
+        define('WP_SITEURL', getenv('WP_URL'));
+        define('FS_METHOD', 'direct');
+        if ( ! defined('WP_DEBUG') ) define('WP_DEBUG', true);
+        if ( ! defined('WP_DEBUG_LOG') ) define('WP_DEBUG_LOG', true);
+        if ( ! defined('WP_DEBUG_DISPLAY') ) define('WP_DEBUG_DISPLAY', false);
+    volumes:
+      - wp_data:/var/www/html
+      - %s:/var/www/html/wp-content/themes/%s
+      - ./php/uploads.ini:/usr/local/etc/php/conf.d/uploads.ini:ro
+
+  %s:
+    image: wordpress:cli-php8.4
+    depends_on:
+      %s:
+        condition: service_started
+    working_dir: /var/www/html
+    user: "33:33"
+    environment:
+      WORDPRESS_DB_HOST: db:3306
+      WORDPRESS_DB_NAME: ${DB_NAME}
+      WORDPRESS_DB_USER: ${DB_USER}
+      WORDPRESS_DB_PASSWORD: ${DB_PASSWORD}
+      WP_URL: ${WP_URL}
+      WP_TITLE: ${WP_TITLE}
+      ADMIN_USER: ${ADMIN_USER}
+      ADMIN_PASSWORD: ${ADMIN_PASSWORD}
+      ADMIN_EMAIL: ${ADMIN_EMAIL}
+    volumes:
+      - wp_data:/var/www/html
+      - %s:/var/www/html/wp-content/themes/%s
+      - ./%s:%s
+
+  mailpit:
+    image: axllent/mailpit
+    ports:
+      - "${MAILPIT_PORT}:8025"
+
+volumes:
+  db_data:
+  wp_data:
+`, wordpressService, themePath, themeMountSlug, cliService, wordpressService, themePath, themeMountSlug, uploadsPath, path.Join("/", "workbench", uploadsPath))
+}
+
+func renderWorkbenchEnv(cfg workbenchConfig) string {
+	wpTitle := firstNonEmpty(cfg.ProjectName, slugToTitle(cfg.ProjectSlug))
+	return fmt.Sprintf(`COMPOSE_PROJECT_NAME=%s_workbench
+WP_PORT=18080
+MAILPIT_PORT=8026
+DB_NAME=%s
+DB_USER=%s
+DB_PASSWORD=wordpress
+DB_ROOT_PASSWORD=root
+WP_URL=http://localhost:18080
+WP_TITLE=%s
+ADMIN_USER=admin
+ADMIN_PASSWORD=admin
+ADMIN_EMAIL=web@nonfiction.ca
+`, cfg.ProjectSlug, cfg.ProjectSlug, cfg.ProjectSlug, wpTitle)
+}
+
+func renderWorkbenchUploadsINI() string {
+	return "file_uploads=On\nmemory_limit=256M\nupload_max_filesize=128M\npost_max_size=128M\nmax_execution_time=120\nmax_input_time=120\n"
+}
+
+func renderWorkbenchDockerfile() string {
+	return `FROM wordpress:7.0-php8.4-apache
+
+RUN a2enmod rewrite \
+  && sed -ri 's/AllowOverride None/AllowOverride All/g' /etc/apache2/apache2.conf
+
+COPY wordpress/wordpress-rewrites.conf /etc/apache2/conf-enabled/wordpress-rewrites.conf
+`
+}
+
+func renderWorkbenchRewritesConf() string {
+	return `<Directory /var/www/html>
+  Options FollowSymLinks
+  AllowOverride All
+  Require all granted
+
+  RewriteEngine On
+  RewriteBase /
+  RewriteRule ^index\.php$ - [L]
+  RewriteCond %{REQUEST_FILENAME} !-f
+  RewriteCond %{REQUEST_FILENAME} !-d
+  RewriteRule . /index.php [L]
+</Directory>
+`
 }
 
 func cmdPasswordDerive(slug, purpose string, nonInteractive bool) int {
@@ -1430,7 +1642,7 @@ func runHelp() int {
 	fmt.Println("\nCommands:")
 	fmt.Println("  server        provision, list, show, delete servers")
 	fmt.Println("  site          list, show, future install/delete/deploy/sync")
-	repoLine := "  repo          init repo metadata"
+	repoLine := "  repo          init repo metadata and manage workbench runtime"
 	if projectContextAvailable() {
 		repoLine = "  repo          init and repo-local commands"
 	}

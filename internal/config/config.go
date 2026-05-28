@@ -3,6 +3,7 @@ package config
 import (
 	"os"
 	"path/filepath"
+	"strings"
 )
 
 func homeDir() string {
@@ -39,6 +40,16 @@ func ConfigHome() string {
 func StateDir() string { return filepath.Join(ConfigHome(), "state") }
 
 func EnvFile() string { return filepath.Join(ConfigHome(), ".env") }
+
+func WorkbenchesDir() string { return filepath.Join(ConfigHome(), "workbenches") }
+
+func WorkbenchDir(projectSlug string) string {
+	projectSlug = strings.TrimSpace(projectSlug)
+	if projectSlug == "" {
+		projectSlug = "project"
+	}
+	return filepath.Join(WorkbenchesDir(), projectSlug)
+}
 
 func ProjectFile(root string) string {
 	if root == "" {
