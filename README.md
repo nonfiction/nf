@@ -163,7 +163,7 @@ Example `.nf/project.json` for a Sanjel project:
   },
   "wordpress": {
     "deploy_unit": "theme",
-    "theme_slug": "sanjel",
+    "theme_slug": "theme",
     "theme_path": "theme"
   },
   "workbench": {
@@ -180,7 +180,7 @@ Example `.nf/project.json` for a Sanjel project:
     ]
   },
   "artifact": {
-    "path": "dist/sanjel.zip",
+    "path": "dist/sanjel-v{version}.zip",
     "include": [
       "vendor/",
       "assets/dist/"
@@ -235,6 +235,10 @@ Notes:
   The `commands` block is for custom repo-local aliases such as build/watch/test.
 - The repo only needs the theme source and `.nf/project.json`; runtime workbench
   files are managed by `nf` under `~/.config/nf/workbenches/<project-slug>/`.
+- `artifact.path` may include `{version}`; `nf repo package` resolves it from
+  `theme/style.css`'s `Version:` header first, then falls back to
+  `theme/package.json`'s `version` field, and errors clearly if neither is
+  available.
 - Commands such as `install-theme` and `activate-theme` can still be customized
   per project if a repo wants named arguments instead of the built-in defaults.
 
@@ -358,10 +362,12 @@ provided, then prints a plan and asks for confirmation in interactive mode.
 Non-interactive deletion remains dry-run unless explicitly run with
 `--execute --yes`.
 
-`nf repo init` writes `.nf/project.json`. `nf repo up` and related built-ins
-stand up an `nf`-managed WordPress workbench outside the repo under
+`nf repo init` writes `.nf/project.json` and uses the current git root folder
+name as the default project slug when `--project-slug` is not provided.
+`nf repo up` and related built-ins stand up an `nf`-managed WordPress workbench outside the repo under
 `~/.config/nf/workbenches/<project-slug>/`. `nf repo package` writes a local zip
-artifact, and `nf server provision --execute --yes` can create a remote Linode
+artifact; when `artifact.path` contains `{version}`, it resolves the theme
+version from `theme/style.css` first, then `theme/package.json`. `nf server provision --execute --yes` can create a remote Linode
 and DNS records. Repo workbench lifecycle commands are built in from
 `workbench` metadata, while the `commands` block is reserved for custom
 repo-local aliases. They may mutate local repo or workbench files and containers
