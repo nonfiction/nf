@@ -1,10 +1,15 @@
 package provision
 
 import (
+	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
+
+	"github.com/nonfiction/nf/internal/ui"
 )
 
 func TestSlugToTitle(t *testing.T) {
@@ -26,130 +31,1305 @@ func TestSlugToTitle(t *testing.T) {
 	}
 }
 
-func TestCloudInitTemplateIncludesRuncmd(t *testing.T) {
-	plan := Plan{
-		SshUser:      "ubuntu",
-		ServerName:   "demo",
-		SiteDomain:   "demo.example.test",
-		RemoteWpPath: "/var/www/demo",
-		PhpFpmSocket: "/run/php/php8.3-fpm.sock",
+func TestRelativeRecordName(t *testing.T) {
+	tests := map[string]string{
+		relativeRecordName("app1.nfweb.dev", "nfweb.dev"):   "app1",
+		relativeRecordName("*.app1.nfweb.dev", "nfweb.dev"): "*.app1",
+		relativeRecordName("nfweb.dev", "nfweb.dev"):        "",
+		relativeRecordName("example.org", "nfweb.dev"):      "example.org",
 	}
 
-	rendered, err := renderCloudInit(plan, false, "", "", "")
-	if err != nil {
-		t.Fatalf("renderCloudInit() error = %v", err)
-	}
-	if !strings.Contains(rendered, "\nruncmd:\n") {
-		t.Fatalf("renderCloudInit() output missing runcmd key:\n%s", rendered)
-	}
-	if !strings.Contains(rendered, "\n  - mkdir -p /var/www/demo\n") {
-		t.Fatalf("renderCloudInit() output missing mkdir command:\n%s", rendered)
+	for got, want := range tests {
+		if got != want {
+			t.Fatalf("relativeRecordName() = %q, want %q", got, want)
+		}
 	}
 }
 
-func TestBuildPlanInfersProjectDefaultsWithoutPrompting(t *testing.T) {
-	t.Setenv("NF_CONFIG_HOME", t.TempDir())
-	workdir := t.TempDir()
-	oldwd, err := os.Getwd()
-	if err != nil {
-		t.Fatalf("Getwd() error = %v", err)
+func TestAPIIDString(t *testing.T) {
+	tests := []struct {
+		name  string
+		value any
+		want  string
+	}{
+		{name: "json.Number", value: json.Number("77496734"), want: "77496734"},
+		{name: "float64", value: float64(77496734), want: "77496734"},
+		{name: "string", value: "77496734", want: "77496734"},
+		{name: "scientific string", value: "7.7496734e+07", want: "77496734"},
 	}
-	if err := os.Chdir(workdir); err != nil {
-		t.Fatalf("Chdir() error = %v", err)
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, err := apiIDString(tt.value)
+			if err != nil {
+				t.Fatalf("apiIDString() error = %v", err)
+			}
+			if got != tt.want {
+				t.Fatalf("apiIDString() = %q, want %q", got, tt.want)
+			}
+		})
 	}
-	t.Cleanup(func() { _ = os.Chdir(oldwd) })
+}
 
+func TestDNSimpleEndpointPathAndExcerpt(t *testing.T) {
+	if got, want := dnsimpleEndpointPath("https://api.dnsimple.com/v2/14/zones/example.test/records/77496734"), "/v2/14/zones/example.test/records/77496734"; got != want {
+		t.Fatalf("dnsimpleEndpointPath() = %q, want %q", got, want)
+	}
+	if got, want := dnsimpleResponseExcerpt([]byte("<html>\n  <body>  not found  </body>\n</html>")), "<html> <body> not found </body> </html>"; got != want {
+		t.Fatalf("dnsimpleResponseExcerpt() = %q, want %q", got, want)
+	}
+}
+
+func TestParseLinodeSSHKeysPayload(t *testing.T) {
+	keys, err := parseLinodeSSHKeysPayload([]any{
+		map[string]any{"id": float64(77496734), "label": "team-a", "fingerprint": "fp-a", "created": "2026-05-29", "ssh_key": "ssh-rsa AAAA"},
+		map[string]any{"id": json.Number("77496735"), "label": "team-b", "fingerprint": "fp-b", "created": "2026-05-29", "ssh_key": "ssh-ed25519 BBBB"},
+	})
+	if err != nil {
+		t.Fatalf("parseLinodeSSHKeysPayload() error = %v", err)
+	}
+	if len(keys) != 2 {
+		t.Fatalf("parseLinodeSSHKeysPayload() len = %d, want 2", len(keys))
+	}
+	if got, want := keys[0].ID, "77496734"; got != want {
+		t.Fatalf("key[0].ID = %q, want %q", got, want)
+	}
+	if got, want := keys[1].ID, "77496735"; got != want {
+		t.Fatalf("key[1].ID = %q, want %q", got, want)
+	}
+}
+
+func TestUbuntuReleaseMatrix(t *testing.T) {
+	tests := []struct {
+		ubuntu string
+		image  string
+		php    string
+		label  string
+	}{
+		{"26.04", "linode/ubuntu26.04", "8.5", "Ubuntu 26.04 LTS"},
+		{"24.04", "linode/ubuntu24.04", "8.3", "Ubuntu 24.04 LTS"},
+		{"22.04", "linode/ubuntu22.04", "8.1", "Ubuntu 22.04 LTS"},
+		{"20.04", "linode/ubuntu20.04", "7.4", "Ubuntu 20.04 LTS legacy/ESM"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.ubuntu, func(t *testing.T) {
+			release, err := releaseForUbuntu(tt.ubuntu)
+			if err != nil {
+				t.Fatalf("releaseForUbuntu() error = %v", err)
+			}
+			if release.image != tt.image || release.php != tt.php || release.label != tt.label {
+				t.Fatalf("releaseForUbuntu() = %#v, want image %q php %q label %q", release, tt.image, tt.php, tt.label)
+			}
+		})
+	}
+}
+
+func TestBuildPlanDefaults(t *testing.T) {
+	t.Setenv("DNSIMPLE_ZONE_NAME", "example.test")
 	plan, err := BuildPlan(Args{NonInteractive: true})
 	if err != nil {
 		t.Fatalf("BuildPlan() error = %v", err)
 	}
-	if got, want := plan.ProjectSlug, filepath.Base(workdir); got != want {
-		t.Fatalf("ProjectSlug = %q, want %q", got, want)
+	if got, want := plan.Provider, "linode"; got != want {
+		t.Fatalf("Provider = %q, want %q", got, want)
 	}
-	if got, want := plan.RemoteWpPath, "/var/www/"+filepath.Base(workdir); got != want {
-		t.Fatalf("RemoteWpPath = %q, want %q", got, want)
+	if got, want := plan.DnsProvider, "dnsimple"; got != want {
+		t.Fatalf("DnsProvider = %q, want %q", got, want)
 	}
-	if got, want := plan.DbName, filepath.Base(workdir); got != want {
-		t.Fatalf("DbName = %q, want %q", got, want)
+	if got, want := plan.DnsZone, "example.test"; got != want {
+		t.Fatalf("DnsZone = %q, want %q", got, want)
 	}
-	if got, want := plan.WpAdminUser, "nf-"+filepath.Base(workdir); got != want {
-		t.Fatalf("WpAdminUser = %q, want %q", got, want)
+	if got, want := plan.UbuntuVersion, "24.04"; got != want {
+		t.Fatalf("UbuntuVersion = %q, want %q", got, want)
 	}
-	if got, want := plan.SiteDomain, "app1.nfweb.dev"; got != want {
-		t.Fatalf("SiteDomain = %q, want %q", got, want)
+	if got, want := plan.PHPVersion, "8.3"; got != want {
+		t.Fatalf("PHPVersion = %q, want %q", got, want)
+	}
+	if got, want := plan.Name, "app1"; got != want {
+		t.Fatalf("Name = %q, want %q", got, want)
+	}
+	if got, want := plan.Hostname, "app1.nfweb.dev"; got != want {
+		t.Fatalf("Hostname = %q, want %q", got, want)
+	}
+	if got, want := plan.Label, "app1"; got != want {
+		t.Fatalf("Label = %q, want %q", got, want)
+	}
+	if got, want := plan.Region, "ca-central"; got != want {
+		t.Fatalf("Region = %q, want %q", got, want)
+	}
+	if got, want := plan.LinodeType, "g6-standard-1"; got != want {
+		t.Fatalf("LinodeType = %q, want %q", got, want)
+	}
+	if got, want := plan.Image, "linode/ubuntu24.04"; got != want {
+		t.Fatalf("Image = %q, want %q", got, want)
+	}
+	if got, want := plan.OS.Label, "Ubuntu 24.04 LTS"; got != want {
+		t.Fatalf("OS.Label = %q, want %q", got, want)
+	}
+	if got, want := plan.OS.Image, "linode/ubuntu24.04"; got != want {
+		t.Fatalf("OS.Image = %q, want %q", got, want)
+	}
+	if got, want := plan.OS.PackageSource, packageSourceUbuntuNative; got != want {
+		t.Fatalf("OS.PackageSource = %q, want %q", got, want)
+	}
+	if got, want := plan.PHP.Version, "8.3"; got != want {
+		t.Fatalf("PHP.Version = %q, want %q", got, want)
+	}
+	if got, want := plan.PHP.Service, "php8.3-fpm"; got != want {
+		t.Fatalf("PHP.Service = %q, want %q", got, want)
+	}
+	if got, want := plan.PHP.Socket, filepath.Clean("/run/php/php8.3-fpm.sock"); got != want {
+		t.Fatalf("PHP.Socket = %q, want %q", got, want)
+	}
+	if got, want := plan.PHP.PackageSource, packageSourceUbuntuNative; got != want {
+		t.Fatalf("PHP.PackageSource = %q, want %q", got, want)
+	}
+	for _, want := range []string{"php8.3-fpm", "php8.3-cli", "php8.3-imagick", "php8.3-opcache"} {
+		if !containsString(plan.PHP.Packages, want) {
+			t.Fatalf("PHP.Packages missing %q: %#v", want, plan.PHP.Packages)
+		}
+	}
+	if containsString(plan.PHP.Packages, "php8.3-xdebug") {
+		t.Fatalf("PHP.Packages unexpectedly included xdebug: %#v", plan.PHP.Packages)
+	}
+	if got, want := plan.SshUser, "nonfiction"; got != want {
+		t.Fatalf("SshUser = %q, want %q", got, want)
+	}
+	if got, want := plan.SshKeySource, "linode-profile"; got != want {
+		t.Fatalf("SshKeySource = %q, want %q", got, want)
+	}
+	if got, want := plan.SshPublicKeyFile, ""; got != want {
+		t.Fatalf("SshPublicKeyFile = %q, want %q", got, want)
+	}
+	if got, want := plan.DnsimpleAccountID, "14"; got != want {
+		t.Fatalf("DnsimpleAccountID = %q, want %q", got, want)
 	}
 }
 
-func TestInferProjectMetadataIgnoresLegacyTopLevelFields(t *testing.T) {
-	metadata := map[string]any{
-		"project_slug": "legacy-project",
-		"project_name": "Legacy Project",
+func TestBuildPlanInteractiveUsesSelectForUbuntuPHPStack(t *testing.T) {
+	oldSelect := selectVersionFn
+	oldPrompt := promptStringFn
+	t.Cleanup(func() { selectVersionFn = oldSelect })
+	t.Cleanup(func() { promptStringFn = oldPrompt })
+
+	var calls []string
+	selectVersionFn = func(title string, options []ui.SelectOption) (string, error) {
+		calls = append(calls, title)
+		switch title {
+		case "Choose an Ubuntu/PHP stack":
+			if len(options) != 4 || options[1].Value != "24.04" || options[1].Label != "Ubuntu 24.04 LTS / PHP 8.3 recommended/default" || !options[1].Default {
+				t.Fatalf("ubuntu select options = %#v", options)
+			}
+			return "22.04", nil
+		default:
+			t.Fatalf("unexpected select title %q", title)
+			return "", nil
+		}
 	}
-	root := filepath.Join(t.TempDir(), "client")
-	if got, want := inferProjectSlug("", metadata, root), filepath.Base(root); got != want {
-		t.Fatalf("inferProjectSlug() = %q, want %q", got, want)
+	promptStringFn = func(prompt, defaultValue string, allowBlank bool) (string, error) {
+		t.Fatalf("unexpected prompt %q with default %q", prompt, defaultValue)
+		return "", nil
 	}
-	if got, want := inferProjectName(metadata, "client"), "Client"; got != want {
-		t.Fatalf("inferProjectName() = %q, want %q", got, want)
+
+	plan, err := BuildPlan(Args{
+		Provider:          "linode",
+		DnsProvider:       "dnsimple",
+		DnsZone:           "example.test",
+		Name:              "app1",
+		Hostname:          "app1.nfweb.dev",
+		Label:             "app1",
+		Region:            "ca-central",
+		Type:              "g6-standard-1",
+		SshUser:           "nonfiction",
+		DnsimpleAccountID: "14",
+	})
+	if err != nil {
+		t.Fatalf("BuildPlan() error = %v", err)
+	}
+	if got, want := plan.UbuntuVersion, "22.04"; got != want {
+		t.Fatalf("UbuntuVersion = %q, want %q", got, want)
+	}
+	if got, want := plan.PHPVersion, "8.1"; got != want {
+		t.Fatalf("PHPVersion = %q, want %q", got, want)
+	}
+	if got, want := plan.Image, "linode/ubuntu22.04"; got != want {
+		t.Fatalf("Image = %q, want %q", got, want)
+	}
+	if got, want := plan.PHP.Service, "php8.1-fpm"; got != want {
+		t.Fatalf("PHP.Service = %q, want %q", got, want)
+	}
+	if got, want := plan.SshKeySource, "linode-profile"; got != want {
+		t.Fatalf("SshKeySource = %q, want %q", got, want)
+	}
+	if got, want := plan.SshPublicKeyFile, ""; got != want {
+		t.Fatalf("SshPublicKeyFile = %q, want %q", got, want)
+	}
+	if len(calls) != 1 {
+		t.Fatalf("select calls = %#v, want 1 call", calls)
 	}
 }
 
-func TestStateRecordsUseNestedFields(t *testing.T) {
-	plan := Plan{
-		Provider:     "linode",
-		ProjectSlug:  "client",
-		ServerName:   "app1",
-		Label:        "client-app1-production",
-		SiteDomain:   "client.app1.nfweb.dev",
-		Region:       "us-east",
-		LinodeType:   "g6-standard-1",
-		Image:        "linode/ubuntu24.04",
-		SshUser:      "nonfiction",
-		RemoteWpPath: "/var/www/client",
-		PhpFpmSocket: "/run/php/php8.3-fpm.sock",
-		DbName:       "client",
-		DbUser:       "client",
-		WpAdminUser:  "nf-client",
+func TestBuildPlanInteractiveFileSSHSourcePromptsForKeyPath(t *testing.T) {
+	oldSelect := selectVersionFn
+	oldPrompt := promptStringFn
+	t.Cleanup(func() { selectVersionFn = oldSelect })
+	t.Cleanup(func() { promptStringFn = oldPrompt })
+
+	var selectCalls []string
+	selectVersionFn = func(title string, options []ui.SelectOption) (string, error) {
+		selectCalls = append(selectCalls, title)
+		return "24.04", nil
+	}
+	var promptTitle, promptDefault string
+	promptStringFn = func(prompt, defaultValue string, allowBlank bool) (string, error) {
+		promptTitle = prompt
+		promptDefault = defaultValue
+		return defaultValue, nil
 	}
 
-	server := serverStateRecord(plan, "12345", "198.51.100.10", "nfweb.dev", "2026-05-27T00:00:00Z")
-	for _, legacy := range []string{"project_slug", "ssh_user", "remote_wp_path"} {
-		if _, ok := server[legacy]; ok {
-			t.Fatalf("server record unexpectedly contains legacy field %q: %#v", legacy, server[legacy])
+	plan, err := BuildPlan(Args{
+		Provider:          "linode",
+		DnsProvider:       "dnsimple",
+		DnsZone:           "example.test",
+		Name:              "app1",
+		Hostname:          "app1.nfweb.dev",
+		Label:             "app1",
+		Region:            "ca-central",
+		Type:              "g6-standard-1",
+		SshUser:           "nonfiction",
+		SshKeySource:      "file",
+		DnsimpleAccountID: "14",
+	})
+	if err != nil {
+		t.Fatalf("BuildPlan() error = %v", err)
+	}
+	if got, want := promptTitle, "SSH public key file: "; got != want {
+		t.Fatalf("prompt title = %q, want %q", got, want)
+	}
+	if got, want := promptDefault, "~/.ssh/id_ed25519.pub"; got != want {
+		t.Fatalf("prompt default = %q, want %q", got, want)
+	}
+	if got, want := plan.SshKeySource, "file"; got != want {
+		t.Fatalf("SshKeySource = %q, want %q", got, want)
+	}
+	home, err := os.UserHomeDir()
+	if err != nil {
+		t.Fatalf("UserHomeDir() error = %v", err)
+	}
+	if got, want := plan.SshPublicKeyFile, filepath.Join(home, ".ssh", "id_ed25519.pub"); got != want {
+		t.Fatalf("SshPublicKeyFile = %q, want %q", got, want)
+	}
+	if len(selectCalls) != 1 {
+		t.Fatalf("select calls = %#v, want 1 call", selectCalls)
+	}
+}
+
+func TestPreparePlanInteractiveExecutePromptsForKeysBeforeConfirmAndReusesThem(t *testing.T) {
+	configHome := t.TempDir()
+	t.Setenv("NF_CONFIG_HOME", configHome)
+	t.Setenv("NF_SECRET_SALT", "test-salt")
+	t.Setenv("DNSIMPLE_TOKEN", "dns-token")
+	t.Setenv("LINODE_CLI_TOKEN", "linode-token")
+	t.Setenv("DNSIMPLE_ZONE_NAME", "example.test")
+
+	oldRunLinode := runLinodeCLICommand
+	oldRunLinodeValue := runLinodeCLIValueFn
+	oldZoneLookup := dnsimpleZoneLookup
+	oldUpsert := dnsimpleUpsertARecordRun
+	oldSalt := secretSaltFn
+	oldNow := currentTime
+	oldConfirm := confirmFn
+	oldMultiSelect := multiSelectFn
+	t.Cleanup(func() {
+		runLinodeCLICommand = oldRunLinode
+		runLinodeCLIValueFn = oldRunLinodeValue
+		dnsimpleZoneLookup = oldZoneLookup
+		dnsimpleUpsertARecordRun = oldUpsert
+		secretSaltFn = oldSalt
+		currentTime = oldNow
+		confirmFn = oldConfirm
+		multiSelectFn = oldMultiSelect
+	})
+
+	var events []string
+	runLinodeCLIValueFn = func(args []string) (any, error) {
+		if len(args) >= 2 && args[0] == "sshkeys" && args[1] == "list" {
+			return []any{
+				map[string]any{"id": json.Number("77496734"), "label": "team-a", "fingerprint": "fp-a", "created": "2026-05-29", "ssh_key": "ssh-rsa AAAA team-a"},
+				map[string]any{"id": json.Number("77496735"), "label": "team-b", "fingerprint": "fp-b", "created": "2026-05-29", "ssh_key": "ssh-ed25519 BBBB team-b"},
+			}, nil
 		}
+		t.Fatalf("unexpected linode-cli value args: %v", args)
+		return nil, nil
 	}
-	if got, ok := server["project"].(string); !ok || got != plan.ProjectSlug {
-		t.Fatalf("server project = %#v, want %q", server["project"], plan.ProjectSlug)
+	multiSelectFn = func(title string, options []ui.SelectOption) ([]string, error) {
+		events = append(events, "multi:"+title)
+		if len(options) != 2 {
+			t.Fatalf("multiSelect options = %#v, want 2", options)
+		}
+		return []string{"77496734", "77496735"}, nil
 	}
-	if linode, ok := server["linode"].(map[string]any); !ok || linode["instance_id"] != "12345" {
-		t.Fatalf("server linode = %#v, want instance_id 12345", server["linode"])
+	confirmFn = func(prompt string, defaultYes bool) (bool, error) {
+		events = append(events, "confirm:"+prompt)
+		if defaultYes {
+			t.Fatalf("confirm defaultYes = true, want false")
+		}
+		return true, nil
 	}
-	if ssh, ok := server["ssh"].(map[string]any); !ok || ssh["host"] != plan.SiteDomain || ssh["user"] != plan.SshUser || ssh["port"] != 22 {
-		t.Fatalf("server ssh = %#v, want host/user/port", server["ssh"])
+	runLinodeCLICommand = func(args []string) (map[string]any, error) {
+		return map[string]any{"id": "12345", "ipv4": "198.51.100.10"}, nil
 	}
-	if services, ok := server["services"].(map[string]any); !ok || services["php_fpm"] != "php8.3-fpm" {
-		t.Fatalf("server services = %#v, want php_fpm service", server["services"])
+	dnsimpleZoneLookup = func(plan Plan, token string) (string, error) { return "nfweb.dev", nil }
+	dnsimpleUpsertARecordRun = func(token, accountID, zone, name, ip string) error { return nil }
+	secretSaltFn = func() (string, error) { return "test-salt", nil }
+	currentTime = func() time.Time { return time.Date(2026, 5, 29, 12, 0, 0, 0, time.UTC) }
+
+	plan, err := BuildPlan(Args{Execute: true, Name: "app1", Hostname: "app1.nfweb.dev", Label: "app1", Region: "ca-central", Type: "g6-standard-1", SshUser: "nonfiction", DnsimpleAccountID: "14", UbuntuVersion: "24.04"})
+	if err != nil {
+		t.Fatalf("BuildPlan() error = %v", err)
+	}
+	prepared, _, err := preparePlan(plan)
+	if err != nil {
+		t.Fatalf("preparePlan() error = %v", err)
+	}
+	if got, want := strings.Join(events, "|"), "multi:Choose Linode SSH keys|confirm:This will create a Linode server and DNS records. Continue?"; got != want {
+		t.Fatalf("prompt order = %q, want %q", got, want)
+	}
+	if len(prepared.AuthorizedKeys) != 2 {
+		t.Fatalf("prepared AuthorizedKeys = %#v, want 2 keys", prepared.AuthorizedKeys)
 	}
 
-	site := siteStateRecord(plan, "nfweb.dev", "2026-05-27T00:00:00Z")
-	for _, legacy := range []string{"project_slug", "site_url", "remote_wp_path", "db_name", "db_user"} {
-		if _, ok := site[legacy]; ok {
-			t.Fatalf("site record unexpectedly contains legacy field %q: %#v", legacy, site[legacy])
+	if _, err := ProvisionServer(prepared); err != nil {
+		t.Fatalf("ProvisionServer() error = %v", err)
+	}
+	if got, want := strings.Join(events, "|"), "multi:Choose Linode SSH keys|confirm:This will create a Linode server and DNS records. Continue?"; got != want {
+		t.Fatalf("prompt order changed after ProvisionServer = %q, want %q", got, want)
+	}
+}
+
+func TestPreparePlanInteractiveDefaultPromptsForKeysBeforeConfirmAndReusesThem(t *testing.T) {
+	configHome := t.TempDir()
+	t.Setenv("NF_CONFIG_HOME", configHome)
+	t.Setenv("NF_SECRET_SALT", "test-salt")
+	t.Setenv("DNSIMPLE_TOKEN", "dns-token")
+	t.Setenv("LINODE_CLI_TOKEN", "linode-token")
+	t.Setenv("DNSIMPLE_ZONE_NAME", "example.test")
+
+	oldRunLinode := runLinodeCLICommand
+	oldRunLinodeValue := runLinodeCLIValueFn
+	oldZoneLookup := dnsimpleZoneLookup
+	oldUpsert := dnsimpleUpsertARecordRun
+	oldSalt := secretSaltFn
+	oldNow := currentTime
+	oldConfirm := confirmFn
+	oldMultiSelect := multiSelectFn
+	t.Cleanup(func() {
+		runLinodeCLICommand = oldRunLinode
+		runLinodeCLIValueFn = oldRunLinodeValue
+		dnsimpleZoneLookup = oldZoneLookup
+		dnsimpleUpsertARecordRun = oldUpsert
+		secretSaltFn = oldSalt
+		currentTime = oldNow
+		confirmFn = oldConfirm
+		multiSelectFn = oldMultiSelect
+	})
+
+	var events []string
+	runLinodeCLIValueFn = func(args []string) (any, error) {
+		if len(args) >= 2 && args[0] == "sshkeys" && args[1] == "list" {
+			return []any{
+				map[string]any{"id": json.Number("77496734"), "label": "team-a", "fingerprint": "fp-a", "created": "2026-05-29", "ssh_key": "ssh-rsa AAAA team-a"},
+				map[string]any{"id": json.Number("77496735"), "label": "team-b", "fingerprint": "fp-b", "created": "2026-05-29", "ssh_key": "ssh-ed25519 BBBB team-b"},
+			}, nil
+		}
+		t.Fatalf("unexpected linode-cli value args: %v", args)
+		return nil, nil
+	}
+	multiSelectFn = func(title string, options []ui.SelectOption) ([]string, error) {
+		events = append(events, "multi:"+title)
+		if len(options) != 2 {
+			t.Fatalf("multiSelect options = %#v, want 2", options)
+		}
+		return []string{"77496734", "77496735"}, nil
+	}
+	confirmFn = func(prompt string, defaultYes bool) (bool, error) {
+		events = append(events, "confirm:"+prompt)
+		if defaultYes {
+			t.Fatalf("confirm defaultYes = true, want false")
+		}
+		return true, nil
+	}
+	runLinodeCLICommand = func(args []string) (map[string]any, error) {
+		return map[string]any{"id": "12345", "ipv4": "198.51.100.10"}, nil
+	}
+	dnsimpleZoneLookup = func(plan Plan, token string) (string, error) { return "nfweb.dev", nil }
+	dnsimpleUpsertARecordRun = func(token, accountID, zone, name, ip string) error { return nil }
+	secretSaltFn = func() (string, error) { return "test-salt", nil }
+	currentTime = func() time.Time { return time.Date(2026, 5, 29, 12, 0, 0, 0, time.UTC) }
+
+	plan, err := BuildPlan(Args{Execute: false, Name: "app1", Hostname: "app1.nfweb.dev", Label: "app1", Region: "ca-central", Type: "g6-standard-1", SshUser: "nonfiction", DnsimpleAccountID: "14", UbuntuVersion: "24.04"})
+	if err != nil {
+		t.Fatalf("BuildPlan() error = %v", err)
+	}
+	prepared, _, err := preparePlan(plan)
+	if err != nil {
+		t.Fatalf("preparePlan() error = %v", err)
+	}
+	if got, want := strings.Join(events, "|"), "multi:Choose Linode SSH keys|confirm:This will create a Linode server and DNS records. Continue?"; got != want {
+		t.Fatalf("prompt order = %q, want %q", got, want)
+	}
+	if len(prepared.AuthorizedKeys) != 2 {
+		t.Fatalf("prepared AuthorizedKeys = %#v, want 2 keys", prepared.AuthorizedKeys)
+	}
+
+	if _, err := ProvisionServer(prepared); err != nil {
+		t.Fatalf("ProvisionServer() error = %v", err)
+	}
+	if got, want := strings.Join(events, "|"), "multi:Choose Linode SSH keys|confirm:This will create a Linode server and DNS records. Continue?"; got != want {
+		t.Fatalf("prompt order changed after ProvisionServer = %q, want %q", got, want)
+	}
+}
+
+func TestBuildPlanDerivesStackFromUbuntuVersion(t *testing.T) {
+	tests := []struct {
+		ubuntu string
+		php    string
+		image  string
+	}{
+		{"26.04", "8.5", "linode/ubuntu26.04"},
+		{"24.04", "8.3", "linode/ubuntu24.04"},
+		{"22.04", "8.1", "linode/ubuntu22.04"},
+		{"20.04", "7.4", "linode/ubuntu20.04"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.ubuntu, func(t *testing.T) {
+			plan, err := BuildPlan(Args{UbuntuVersion: tt.ubuntu, NonInteractive: true})
+			if err != nil {
+				t.Fatalf("BuildPlan() error = %v", err)
+			}
+			if got, want := plan.PHPVersion, tt.php; got != want {
+				t.Fatalf("PHPVersion = %q, want %q", got, want)
+			}
+			if got, want := plan.Image, tt.image; got != want {
+				t.Fatalf("Image = %q, want %q", got, want)
+			}
+			if got, want := plan.PHP.Service, "php"+tt.php+"-fpm"; got != want {
+				t.Fatalf("PHP.Service = %q, want %q", got, want)
+			}
+			if got, want := plan.PHP.Socket, filepath.Clean("/run/php/php"+tt.php+"-fpm.sock"); got != want {
+				t.Fatalf("PHP.Socket = %q, want %q", got, want)
+			}
+		})
+	}
+}
+
+func TestBuildPlanOverrides(t *testing.T) {
+	t.Setenv("DNSIMPLE_ZONE_NAME", "env.example.test")
+	plan, err := BuildPlan(Args{
+		Provider:          "linode",
+		DnsProvider:       "dnsimple",
+		DnsZone:           "explicit.example.test",
+		UbuntuVersion:     "22.04",
+		Name:              "app2",
+		Hostname:          "app2.example.test",
+		Label:             "app2-label",
+		Region:            "us-east",
+		Type:              "g6-standard-2",
+		Image:             "linode/custom-override",
+		SshUser:           "ubuntu",
+		SshPublicKeyFile:  "/tmp/id.pub",
+		DnsimpleAccountID: "99",
+		NonInteractive:    true,
+	})
+	if err != nil {
+		t.Fatalf("BuildPlan() error = %v", err)
+	}
+	if got, want := plan.UbuntuVersion, "22.04"; got != want {
+		t.Fatalf("UbuntuVersion = %q, want %q", got, want)
+	}
+	if got, want := plan.PHPVersion, "8.1"; got != want {
+		t.Fatalf("PHPVersion = %q, want %q", got, want)
+	}
+	if got, want := plan.Image, "linode/custom-override"; got != want {
+		t.Fatalf("Image = %q, want %q", got, want)
+	}
+	if got, want := plan.OS.Image, "linode/custom-override"; got != want {
+		t.Fatalf("OS.Image = %q, want %q", got, want)
+	}
+	if got, want := plan.OS.Label, "Ubuntu 22.04 LTS"; got != want {
+		t.Fatalf("OS.Label = %q, want %q", got, want)
+	}
+	if got, want := plan.PHP.Service, "php8.1-fpm"; got != want {
+		t.Fatalf("PHP.Service = %q, want %q", got, want)
+	}
+	if got, want := plan.PHP.Socket, filepath.Clean("/run/php/php8.1-fpm.sock"); got != want {
+		t.Fatalf("PHP.Socket = %q, want %q", got, want)
+	}
+	if got, want := plan.Name, "app2"; got != want {
+		t.Fatalf("Name = %q, want %q", got, want)
+	}
+	if got, want := plan.DnsZone, "explicit.example.test"; got != want {
+		t.Fatalf("DnsZone = %q, want %q", got, want)
+	}
+	if got, want := plan.Hostname, "app2.example.test"; got != want {
+		t.Fatalf("Hostname = %q, want %q", got, want)
+	}
+	if got, want := plan.Label, "app2-label"; got != want {
+		t.Fatalf("Label = %q, want %q", got, want)
+	}
+	if got, want := plan.Region, "us-east"; got != want {
+		t.Fatalf("Region = %q, want %q", got, want)
+	}
+	if got, want := plan.LinodeType, "g6-standard-2"; got != want {
+		t.Fatalf("LinodeType = %q, want %q", got, want)
+	}
+	if got, want := plan.SshUser, "ubuntu"; got != want {
+		t.Fatalf("SshUser = %q, want %q", got, want)
+	}
+	if got, want := plan.SshKeySource, "file"; got != want {
+		t.Fatalf("SshKeySource = %q, want %q", got, want)
+	}
+	if got, want := plan.SshPublicKeyFile, filepath.Clean("/tmp/id.pub"); got != want {
+		t.Fatalf("SshPublicKeyFile = %q, want %q", got, want)
+	}
+	if got, want := plan.DnsimpleAccountID, "99"; got != want {
+		t.Fatalf("DnsimpleAccountID = %q, want %q", got, want)
+	}
+}
+
+func TestBuildPlanRejectsUnsupportedUbuntuVersion(t *testing.T) {
+	_, err := BuildPlan(Args{UbuntuVersion: "18.04", NonInteractive: true})
+	if err == nil || !strings.Contains(err.Error(), "Unsupported Ubuntu LTS version") {
+		t.Fatalf("BuildPlan() error = %v, want unsupported ubuntu version", err)
+	}
+}
+
+func TestPHPReleaseForUbuntuDerivesServiceSocketAndPackages(t *testing.T) {
+	release, err := phpReleaseForUbuntu("20.04")
+	if err != nil {
+		t.Fatalf("phpReleaseForUbuntu() error = %v", err)
+	}
+	if got, want := release.Version, "7.4"; got != want {
+		t.Fatalf("Version = %q, want %q", got, want)
+	}
+	if got, want := release.Service, "php7.4-fpm"; got != want {
+		t.Fatalf("Service = %q, want %q", got, want)
+	}
+	if got, want := release.Socket, filepath.Clean("/run/php/php7.4-fpm.sock"); got != want {
+		t.Fatalf("Socket = %q, want %q", got, want)
+	}
+	if got, want := release.PackageSource, packageSourceUbuntuNative; got != want {
+		t.Fatalf("PackageSource = %q, want %q", got, want)
+	}
+	if containsString(release.Packages, "php7.4-xdebug") {
+		t.Fatalf("Packages unexpectedly included xdebug: %#v", release.Packages)
+	}
+	for _, want := range []string{"php7.4-fpm", "php7.4-cli", "php7.4-imagick"} {
+		if !containsString(release.Packages, want) {
+			t.Fatalf("Packages missing %q: %#v", want, release.Packages)
 		}
 	}
-	if got, ok := site["project"].(string); !ok || got != plan.ProjectSlug {
-		t.Fatalf("site project = %#v, want %q", site["project"], plan.ProjectSlug)
+}
+
+func TestBuildPlanRejectsUnsupportedProvider(t *testing.T) {
+	_, err := BuildPlan(Args{Provider: "digitalocean", NonInteractive: true})
+	if err == nil || !strings.Contains(err.Error(), "Unsupported provider") {
+		t.Fatalf("BuildPlan() error = %v, want unsupported provider", err)
 	}
-	if got, ok := site["url"].(string); !ok || got != "https://"+plan.SiteDomain {
-		t.Fatalf("site url = %#v, want https://%s", site["url"], plan.SiteDomain)
+}
+
+func TestBuildPlanRejectsUnsupportedDNSProvider(t *testing.T) {
+	_, err := BuildPlan(Args{DnsProvider: "cloudflare", NonInteractive: true})
+	if err == nil || !strings.Contains(err.Error(), "Unsupported DNS provider") {
+		t.Fatalf("BuildPlan() error = %v, want unsupported DNS provider", err)
 	}
-	if got, ok := site["remote_path"].(string); !ok || got != plan.RemoteWpPath {
-		t.Fatalf("site remote_path = %#v, want %q", site["remote_path"], plan.RemoteWpPath)
+}
+
+func TestCloudInitTemplateIsServerOnly(t *testing.T) {
+	osPlan, err := osReleasePlan("24.04", "")
+	if err != nil {
+		t.Fatalf("osReleasePlan() error = %v", err)
 	}
-	if wordpress, ok := site["wordpress"].(map[string]any); !ok || wordpress["wp_path"] != plan.RemoteWpPath {
-		t.Fatalf("site wordpress = %#v, want wp_path %q", site["wordpress"], plan.RemoteWpPath)
+	phpPlan, err := phpReleaseForUbuntu("24.04")
+	if err != nil {
+		t.Fatalf("phpReleaseForUbuntu() error = %v", err)
 	}
-	if database, ok := site["database"].(map[string]any); !ok || database["name"] != plan.DbName || database["user"] != plan.DbUser {
-		t.Fatalf("site database = %#v, want name/user", site["database"])
+	plan := Plan{SshUser: "ubuntu", Hostname: "app1.nfweb.dev", DnsimpleAccountID: "14", OS: osPlan, PHP: phpPlan}
+	rendered, err := renderCloudInit(plan, false, "", nil)
+	if err != nil {
+		t.Fatalf("renderCloudInit() error = %v", err)
 	}
+	for _, want := range []string{
+		"php8.3-fpm",
+		"php8.3-cli",
+		"fastcgi_pass unix:/run/php/php8.3-fpm.sock;",
+		"imagemagick",
+		"ghostscript",
+		"/var/www/nf-server",
+		"mariadb-server",
+		"/usr/local/bin/nf-enable-wildcard-tls",
+		"python3-certbot-dns-dnsimple",
+		"wp-cli.phar",
+		"rm -f /etc/nginx/sites-enabled/default",
+	} {
+		if !strings.Contains(rendered, want) {
+			t.Fatalf("renderCloudInit() output missing %q:\n%s", want, rendered)
+		}
+	}
+	for _, unwanted := range []string{
+		"wordpress.org/latest.zip",
+		"wp core install",
+		"CREATE DATABASE",
+		"wp config create",
+		"php-fpm\n",
+		"php-mysql\n",
+		"xdebug",
+		"__SITE_DOMAIN__",
+		"__REMOTE_WP_PATH__",
+		"__DB_NAME__",
+		"__WP_ADMIN_USER__",
+	} {
+		if strings.Contains(rendered, unwanted) {
+			t.Fatalf("renderCloudInit() output unexpectedly contained %q:\n%s", unwanted, rendered)
+		}
+	}
+}
+
+func TestRenderCloudInitSupportsMultipleSSHKeys(t *testing.T) {
+	osPlan, err := osReleasePlan("24.04", "linode/ubuntu24.04")
+	if err != nil {
+		t.Fatalf("osReleasePlan() error = %v", err)
+	}
+	phpPlan, err := phpReleaseForUbuntu("24.04")
+	if err != nil {
+		t.Fatalf("phpReleaseForUbuntu() error = %v", err)
+	}
+	plan := Plan{SshUser: "ubuntu", Hostname: "app1.nfweb.dev", DnsimpleAccountID: "14", OS: osPlan, PHP: phpPlan}
+	rendered, err := renderCloudInit(plan, true, "dns-token", []string{"ssh-rsa AAAA team-a", "ssh-ed25519 BBBB team-b"})
+	if err != nil {
+		t.Fatalf("renderCloudInit() error = %v", err)
+	}
+	for _, want := range []string{"ssh_authorized_keys:", "- ssh-rsa AAAA team-a", "- ssh-ed25519 BBBB team-b"} {
+		if !strings.Contains(rendered, want) {
+			t.Fatalf("renderCloudInit() output missing %q:\n%s", want, rendered)
+		}
+	}
+}
+
+func TestAppendLinodeAuthorizedKeyArgsUsesRepeatedSingleLineValues(t *testing.T) {
+	args := appendLinodeAuthorizedKeyArgs([]string{"linodes", "create"}, []SSHAuthorizedKey{
+		{PublicKey: "ssh-rsa AAAA team-a"},
+		{PublicKey: "   "},
+		{PublicKey: "ssh-ed25519 BBBB team-b"},
+	})
+
+	var values []string
+	for i := 0; i < len(args); i++ {
+		if args[i] == "--authorized_keys" {
+			if i+1 >= len(args) {
+				t.Fatalf("authorized key flag missing value: %v", args)
+			}
+			values = append(values, args[i+1])
+		}
+	}
+
+	if len(values) != 2 {
+		t.Fatalf("authorized key values = %#v, want 2 entries", values)
+	}
+	for _, value := range values {
+		if strings.Contains(value, "\n") {
+			t.Fatalf("authorized key value unexpectedly contained newline: %q", value)
+		}
+	}
+	for i, want := range []string{"ssh-rsa AAAA team-a", "ssh-ed25519 BBBB team-b"} {
+		if values[i] != want {
+			t.Fatalf("authorized key value[%d] = %q, want %q", i, values[i], want)
+		}
+	}
+}
+
+func TestResolveAuthorizedKeysFileFallback(t *testing.T) {
+	file := filepath.Join(t.TempDir(), "id.pub")
+	if err := os.WriteFile(file, []byte("ssh-ed25519 AAAA-file team@example\n"), 0o644); err != nil {
+		t.Fatalf("WriteFile() error = %v", err)
+	}
+	keys, err := resolveAuthorizedKeys(Plan{SshKeySource: "file", SshPublicKeyFile: file}, true)
+	if err != nil {
+		t.Fatalf("resolveAuthorizedKeys() error = %v", err)
+	}
+	if len(keys) != 1 || keys[0].Path != file || keys[0].PublicKey != "ssh-ed25519 AAAA-file team@example" {
+		t.Fatalf("resolveAuthorizedKeys() = %#v, want file fallback", keys)
+	}
+}
+
+func TestServerStateRecordShapeDoesNotContainSecrets(t *testing.T) {
+	osPlan, err := osReleasePlan("24.04", "linode/ubuntu24.04")
+	if err != nil {
+		t.Fatalf("osReleasePlan() error = %v", err)
+	}
+	phpPlan, err := phpReleaseForUbuntu("24.04")
+	if err != nil {
+		t.Fatalf("phpReleaseForUbuntu() error = %v", err)
+	}
+	plan := Plan{Provider: "linode", DnsProvider: "dnsimple", Name: "app1", Hostname: "app1.nfweb.dev", Label: "app1", Region: "us-east", LinodeType: "g6-standard-1", Image: osPlan.Image, SshUser: "ubuntu", DnsimpleAccountID: "14", OS: osPlan, PHP: phpPlan}
+	plan.AuthorizedKeys = []SSHAuthorizedKey{{Source: "linode-profile", ID: "77496734", Label: "team-a", Fingerprint: "fp-a", PublicKey: "ssh-rsa AAAAtest"}, {Source: "file", Path: "/tmp/id.pub", Label: "id.pub", PublicKey: "ssh-ed25519 BBBBtest"}}
+	created := CreatedServer{Provider: "linode", ProviderID: "12345", Name: plan.Name, Hostname: plan.Hostname, IPv4: "198.51.100.10"}
+	dns := dnsStateRecord(plan, "nfweb.dev", created.IPv4)
+	tls := tlsStateRecord(plan)
+	record := serverStateRecord(plan, created, dns, tls, "2026-05-29T12:00:00Z")
+
+	for _, legacy := range []string{"project", "remote_path", "database", "wp_admin_user", "wp_admin_email", "site", "dns_zone"} {
+		if _, ok := record[legacy]; ok {
+			t.Fatalf("server record unexpectedly contains %q: %#v", legacy, record[legacy])
+		}
+	}
+	if got, want := record["provider_id"], "12345"; got != want {
+		t.Fatalf("provider_id = %#v, want %q", got, want)
+	}
+	if linode, ok := record["linode"].(map[string]any); !ok || linode["instance_id"] != "12345" {
+		t.Fatalf("linode block = %#v, want instance_id 12345", record["linode"])
+	}
+	if dnsBlock, ok := record["dns"].(map[string]any); !ok || dnsBlock["provider"] != "dnsimple" || dnsBlock["zone"] != "nfweb.dev" {
+		t.Fatalf("dns block = %#v, want dnsimple provider", record["dns"])
+	}
+	if tlsBlock, ok := record["tls"].(map[string]any); !ok || tlsBlock["provider"] != "certbot-dnsimple" {
+		t.Fatalf("tls block = %#v, want certbot-dnsimple provider", record["tls"])
+	}
+	if osBlock, ok := record["os"].(map[string]any); !ok || osBlock["ubuntu_version"] != "24.04" || osBlock["image"] != "linode/ubuntu24.04" || osBlock["package_source"] != packageSourceUbuntuNative || osBlock["label"] != "24.04 LTS" || osBlock["family"] != "ubuntu" {
+		t.Fatalf("os block = %#v, want ubuntu metadata", record["os"])
+	}
+	if osBlock, ok := record["os"].(map[string]any); !ok || osBlock["family"] != "ubuntu" || osBlock["version"] != "24.04" {
+		t.Fatalf("os block missing family/version = %#v", record["os"])
+	}
+	if phpBlock, ok := record["php"].(map[string]any); !ok || phpBlock["version"] != "8.3" || phpBlock["service"] != "php8.3-fpm" || phpBlock["socket"] != filepath.Clean("/run/php/php8.3-fpm.sock") || phpBlock["package_source"] != packageSourceUbuntuNative {
+		t.Fatalf("php block = %#v, want php metadata", record["php"])
+	}
+	if services, ok := record["services"].(map[string]any); !ok || services["nginx"] != true || services["mariadb"] != true || services["php_fpm"] != "php8.3-fpm" || services["wp_cli"] != "/usr/local/bin/wp" {
+		t.Fatalf("services block = %#v, want nginx/mariadb/php_fpm/wp_cli", record["services"])
+	}
+}
+
+func TestFindDnsimpleZoneUsesExplicitPlanZone(t *testing.T) {
+	zone, err := findDnsimpleZone(Plan{Hostname: "app1.nfweb.dev", DnsZone: "explicit.example.test"}, "ignored")
+	if err != nil {
+		t.Fatalf("findDnsimpleZone() error = %v", err)
+	}
+	if got, want := zone, "explicit.example.test"; got != want {
+		t.Fatalf("findDnsimpleZone() = %q, want %q", got, want)
+	}
+}
+
+func TestRenderPlanShowsDnsZoneAndRecords(t *testing.T) {
+	osPlan, err := osReleasePlan("24.04", "linode/ubuntu24.04")
+	if err != nil {
+		t.Fatalf("osReleasePlan() error = %v", err)
+	}
+	phpPlan, err := phpReleaseForUbuntu("24.04")
+	if err != nil {
+		t.Fatalf("phpReleaseForUbuntu() error = %v", err)
+	}
+	plan := Plan{Provider: "linode", DnsProvider: "dnsimple", Name: "app1", Hostname: "app1.nfweb.dev", Label: "app1", Region: "ca-central", LinodeType: "g6-standard-1", Image: osPlan.Image, SshUser: "nonfiction", SshKeySource: "file", SshPublicKeyFile: "/tmp/id.pub", OS: osPlan, PHP: phpPlan}
+	output := renderPlan(plan, "/tmp/cloud-init.yaml", "")
+	for _, want := range []string{"Server provision dry-run plan", "Server", "SSH", "OS/PHP", "Mode", "  user: nonfiction", "  key source: file", "  authorized keys: /tmp/id.pub", "  stack: Ubuntu 24.04 LTS / PHP 8.3", "  ubuntu: 24.04 LTS", "  image: linode/ubuntu24.04", "  php: 8.3", "  php service: php8.3-fpm", "  php socket: /run/php/php8.3-fpm.sock", "  package source: ubuntu-native", "  base packages: nginx, mariadb-server", "  packages: php8.3-fpm, php8.3-cli", "  zone: nfweb.dev (inferred)", "  hostname A: app1.nfweb.dev -> <created after server IP is known>", "  wildcard A: *.app1.nfweb.dev -> <created after server IP is known>"} {
+		if !strings.Contains(output, want) {
+			t.Fatalf("renderPlan() output missing %q:\n%s", want, output)
+		}
+	}
+}
+
+func TestRenderPlanDefaultSSHSourceShowsLinodeProfile(t *testing.T) {
+	plan, err := BuildPlan(Args{NonInteractive: true, DnsZone: "example.test"})
+	if err != nil {
+		t.Fatalf("BuildPlan() error = %v", err)
+	}
+	output := renderPlan(plan, "/tmp/cloud-init.yaml", "")
+	for _, want := range []string{"  key source: linode-profile", "  authorized keys: all Linode profile keys"} {
+		if !strings.Contains(output, want) {
+			t.Fatalf("renderPlan() output missing %q:\n%s", want, output)
+		}
+	}
+	for _, unwanted := range []string{"id_ed25519.pub", "SSH public key file:"} {
+		if strings.Contains(output, unwanted) {
+			t.Fatalf("renderPlan() output unexpectedly contained %q:\n%s", unwanted, output)
+		}
+	}
+}
+
+func TestRenderProvisionSuccessShowsNextSteps(t *testing.T) {
+	osPlan, err := osReleasePlan("24.04", "linode/ubuntu24.04")
+	if err != nil {
+		t.Fatalf("osReleasePlan() error = %v", err)
+	}
+	phpPlan, err := phpReleaseForUbuntu("24.04")
+	if err != nil {
+		t.Fatalf("phpReleaseForUbuntu() error = %v", err)
+	}
+	plan := Plan{Provider: "linode", DnsProvider: "dnsimple", Name: "app1", Hostname: "app1.nfweb.dev", Label: "app1", SshUser: "nonfiction", SshPublicKeyFile: "/tmp/id.pub", OS: osPlan, PHP: phpPlan}
+	created := CreatedServer{ProviderID: "12345", IPv4: "198.51.100.10"}
+	dns := DNSState{Provider: "dnsimple", Zone: "nfweb.dev", HostnameRecord: DNSRecord{Name: "app1", Type: "A", Content: "198.51.100.10"}, WildcardRecord: DNSRecord{Name: "*.app1", Type: "A", Content: "198.51.100.10"}}
+	tls := TLSState{Provider: "certbot-dnsimple", Domains: []string{"app1.nfweb.dev", "*.app1.nfweb.dev"}, Certificate: "/etc/letsencrypt/live/app1.nfweb.dev/fullchain.pem", Key: "/etc/letsencrypt/live/app1.nfweb.dev/privkey.pem"}
+	sshKeys := []SSHAuthorizedKey{{Source: "linode-profile", ID: "1", Label: "team-a"}, {Source: "linode-profile", ID: "2", Label: "team-b"}}
+	plan.AuthorizedKeys = sshKeys
+	output := renderProvisionSuccess(plan, created, dns, tls, "/tmp/state/servers.json", "/tmp/cloud-init.yaml", sshKeys)
+	for _, want := range []string{"Server provisioned.", "Server", "SSH", "OS/PHP", "DNS", "TLS", "State", "Next", "wait for cloud-init to finish", "sudo /usr/local/bin/nf-enable-wildcard-tls", "linode instance id: 12345", "stack: Ubuntu 24.04 LTS / PHP 8.3", "php service: php8.3-fpm", "php socket: /run/php/php8.3-fpm.sock", "authorized keys: team-a, team-b", "hostname A: app1 -> 198.51.100.10", "wildcard A: *.app1 -> 198.51.100.10"} {
+		if !strings.Contains(output, want) {
+			t.Fatalf("renderProvisionSuccess() output missing %q:\n%s", want, output)
+		}
+	}
+}
+
+func TestProvisionServerWritesOnlyServersJSON(t *testing.T) {
+	configHome := t.TempDir()
+	t.Setenv("NF_CONFIG_HOME", configHome)
+	t.Setenv("NF_SECRET_SALT", "test-salt")
+	t.Setenv("DNSIMPLE_TOKEN", "dns-token")
+	t.Setenv("LINODE_CLI_TOKEN", "linode-token")
+
+	oldRunLinode := runLinodeCLICommand
+	oldRunLinodeValue := runLinodeCLIValueFn
+	oldZoneLookup := dnsimpleZoneLookup
+	oldUpsert := dnsimpleUpsertARecordRun
+	oldSalt := secretSaltFn
+	oldNow := currentTime
+	t.Cleanup(func() {
+		runLinodeCLICommand = oldRunLinode
+		runLinodeCLIValueFn = oldRunLinodeValue
+		dnsimpleZoneLookup = oldZoneLookup
+		dnsimpleUpsertARecordRun = oldUpsert
+		secretSaltFn = oldSalt
+		currentTime = oldNow
+	})
+
+	var recordedNames []string
+	var createArgs []string
+	runLinodeCLIValueFn = func(args []string) (any, error) {
+		if len(args) >= 2 && args[0] == "sshkeys" && args[1] == "list" {
+			return []any{
+				map[string]any{"id": json.Number("77496734"), "label": "team-a", "fingerprint": "fp-a", "created": "2026-05-29", "ssh_key": "ssh-rsa AAAA team-a"},
+				map[string]any{"id": json.Number("77496735"), "label": "team-b", "fingerprint": "fp-b", "created": "2026-05-29", "ssh_key": "ssh-ed25519 BBBB team-b"},
+			}, nil
+		}
+		t.Fatalf("unexpected linode-cli value args: %v", args)
+		return nil, nil
+	}
+	runLinodeCLICommand = func(args []string) (map[string]any, error) {
+		createArgs = append([]string(nil), args...)
+		if !containsArg(args, "--root_pass") {
+			t.Fatalf("linode create args missing --root_pass: %v", args)
+		}
+		if !containsArg(args, "--metadata.user_data") {
+			t.Fatalf("linode create args missing --metadata.user_data: %v", args)
+		}
+		if !containsArg(args, "--image") || !containsArg(args, "linode/ubuntu24.04") {
+			t.Fatalf("linode create args missing default ubuntu image: %v", args)
+		}
+		return map[string]any{"id": "12345", "ipv4": "198.51.100.10"}, nil
+	}
+	dnsimpleZoneLookup = func(plan Plan, token string) (string, error) {
+		if plan.Hostname != "app1.nfweb.dev" {
+			t.Fatalf("unexpected hostname passed to zone lookup: %s", plan.Hostname)
+		}
+		return "nfweb.dev", nil
+	}
+	dnsimpleUpsertARecordRun = func(token, accountID, zone, name, ip string) error {
+		recordedNames = append(recordedNames, name)
+		return nil
+	}
+	secretSaltFn = func() (string, error) { return "test-salt", nil }
+	currentTime = func() time.Time { return time.Date(2026, 5, 29, 12, 0, 0, 0, time.UTC) }
+
+	plan, err := BuildPlan(Args{NonInteractive: true, Execute: true, Yes: true, Name: "app1", Hostname: "app1.nfweb.dev"})
+	if err != nil {
+		t.Fatalf("BuildPlan() error = %v", err)
+	}
+	result, err := ProvisionServer(plan)
+	if err != nil {
+		t.Fatalf("ProvisionServer() error = %v", err)
+	}
+	if result == nil || result.StatePath == "" {
+		t.Fatalf("ProvisionServer() result = %#v, want state path", result)
+	}
+	serverStatePath := filepath.Join(configHome, "state", "servers.json")
+	data, err := os.ReadFile(serverStatePath)
+	if err != nil {
+		t.Fatalf("ReadFile(servers.json) error = %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(configHome, "state", "sites.json")); !os.IsNotExist(err) {
+		t.Fatalf("sites.json unexpectedly exists: %v", err)
+	}
+	var records []map[string]any
+	if err := json.Unmarshal(data, &records); err != nil {
+		t.Fatalf("Unmarshal(servers.json) error = %v", err)
+	}
+	if len(records) != 1 {
+		t.Fatalf("servers.json record count = %d, want 1", len(records))
+	}
+	record := records[0]
+	for _, unwanted := range []string{"remote_path", "database", "wp_admin_user", "wp_admin_email"} {
+		if _, ok := record[unwanted]; ok {
+			t.Fatalf("server record unexpectedly contained %q: %#v", unwanted, record[unwanted])
+		}
+	}
+	if osBlock, ok := record["os"].(map[string]any); !ok || osBlock["ubuntu_version"] != "24.04" || osBlock["image"] != "linode/ubuntu24.04" || osBlock["label"] != "24.04 LTS" || osBlock["family"] != "ubuntu" {
+		t.Fatalf("os block = %#v, want ubuntu metadata", record["os"])
+	}
+	if phpBlock, ok := record["php"].(map[string]any); !ok || phpBlock["version"] != "8.3" || phpBlock["service"] != "php8.3-fpm" || phpBlock["socket"] != filepath.Clean("/run/php/php8.3-fpm.sock") {
+		t.Fatalf("php block = %#v, want php metadata", record["php"])
+	}
+	if got, want := record["provider_id"], "12345"; got != want {
+		t.Fatalf("provider_id = %#v, want %q", got, want)
+	}
+	if ssh, ok := record["ssh"].(map[string]any); !ok || ssh["user"] != "nonfiction" || ssh["host"] != "app1.nfweb.dev" || valueString(ssh["port"]) != "22" || ssh["source"] != "linode-profile" {
+		t.Fatalf("ssh block = %#v, want metadata", record["ssh"])
+	} else {
+		keys, ok := ssh["authorized_keys"].([]any)
+		if !ok || len(keys) != 2 {
+			t.Fatalf("ssh authorized_keys = %#v, want 2 metadata entries", ssh["authorized_keys"])
+		}
+		for _, key := range keys {
+			m, ok := key.(map[string]any)
+			if !ok {
+				t.Fatalf("ssh authorized key = %#v, want map", key)
+			}
+			if _, ok := m["ssh_key"]; ok {
+				t.Fatalf("ssh authorized key unexpectedly stored body: %#v", m)
+			}
+		}
+	}
+	if got, want := record["hostname"], "app1.nfweb.dev"; got != want {
+		t.Fatalf("hostname = %#v, want %q", got, want)
+	}
+	var authorizedValues []string
+	for i := 0; i < len(createArgs); i++ {
+		if createArgs[i] == "--authorized_keys" {
+			if i+1 >= len(createArgs) {
+				t.Fatalf("linode create args missing value for --authorized_keys: %v", createArgs)
+			}
+			authorizedValues = append(authorizedValues, createArgs[i+1])
+		}
+	}
+	if len(authorizedValues) != 2 {
+		t.Fatalf("authorized key args = %#v, want 2 single-key entries", authorizedValues)
+	}
+	for _, value := range authorizedValues {
+		if strings.Contains(value, "\n") {
+			t.Fatalf("authorized key arg unexpectedly contained newline: %q", value)
+		}
+	}
+	for i, want := range []string{"ssh-rsa AAAA team-a", "ssh-ed25519 BBBB team-b"} {
+		if authorizedValues[i] != want {
+			t.Fatalf("authorized key arg[%d] = %q, want %q", i, authorizedValues[i], want)
+		}
+	}
+	if len(recordedNames) != 2 || recordedNames[0] != "app1" || recordedNames[1] != "*.app1" {
+		t.Fatalf("DNS record names = %#v, want [app1 *.app1]", recordedNames)
+	}
+}
+
+func TestProvisionServerWritesPartialStateOnDNSFailure(t *testing.T) {
+	configHome := t.TempDir()
+	t.Setenv("NF_CONFIG_HOME", configHome)
+	t.Setenv("NF_SECRET_SALT", "test-salt")
+	t.Setenv("DNSIMPLE_TOKEN", "dns-token")
+	t.Setenv("LINODE_CLI_TOKEN", "linode-token")
+
+	oldRunLinode := runLinodeCLICommand
+	oldRunLinodeValue := runLinodeCLIValueFn
+	oldZoneLookup := dnsimpleZoneLookup
+	oldUpsert := dnsimpleUpsertARecordRun
+	oldSalt := secretSaltFn
+	oldNow := currentTime
+	t.Cleanup(func() {
+		runLinodeCLICommand = oldRunLinode
+		runLinodeCLIValueFn = oldRunLinodeValue
+		dnsimpleZoneLookup = oldZoneLookup
+		dnsimpleUpsertARecordRun = oldUpsert
+		secretSaltFn = oldSalt
+		currentTime = oldNow
+	})
+
+	runLinodeCLIValueFn = func(args []string) (any, error) {
+		if len(args) >= 2 && args[0] == "sshkeys" && args[1] == "list" {
+			return []any{map[string]any{"id": json.Number("77496734"), "label": "team-a", "fingerprint": "fp-a", "created": "2026-05-29", "ssh_key": "ssh-rsa AAAA team-a"}}, nil
+		}
+		t.Fatalf("unexpected linode-cli value args: %v", args)
+		return nil, nil
+	}
+	runLinodeCLICommand = func(args []string) (map[string]any, error) {
+		return map[string]any{"id": float64(12345), "ipv4": "198.51.100.10"}, nil
+	}
+	dnsimpleZoneLookup = func(plan Plan, token string) (string, error) { return "nfweb.dev", nil }
+	callCount := 0
+	dnsimpleUpsertARecordRun = func(token, accountID, zone, name, ip string) error {
+		callCount++
+		return fmt.Errorf("simulated dns failure")
+	}
+	secretSaltFn = func() (string, error) { return "test-salt", nil }
+	currentTime = func() time.Time { return time.Date(2026, 5, 29, 12, 0, 0, 0, time.UTC) }
+
+	plan, err := BuildPlan(Args{NonInteractive: true, Execute: true, Yes: true, Name: "app1", Hostname: "app1.nfweb.dev"})
+	if err != nil {
+		t.Fatalf("BuildPlan() error = %v", err)
+	}
+	_, err = ProvisionServer(plan)
+	if err == nil || !strings.Contains(err.Error(), "Server provisioning paused.") || !strings.Contains(err.Error(), "DNS error") {
+		t.Fatalf("ProvisionServer() error = %v, want partial failure message", err)
+	}
+	if callCount != 1 {
+		t.Fatalf("dnsimpleUpsertARecordRun called %d times, want 1", callCount)
+	}
+	serverStatePath := filepath.Join(configHome, "state", "servers.json")
+	data, err := os.ReadFile(serverStatePath)
+	if err != nil {
+		t.Fatalf("ReadFile(servers.json) error = %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(configHome, "state", "sites.json")); !os.IsNotExist(err) {
+		t.Fatalf("sites.json unexpectedly exists: %v", err)
+	}
+	var records []map[string]any
+	if err := json.Unmarshal(data, &records); err != nil {
+		t.Fatalf("Unmarshal(servers.json) error = %v", err)
+	}
+	if len(records) != 1 {
+		t.Fatalf("servers.json record count = %d, want 1", len(records))
+	}
+	record := records[0]
+	if got, want := record["status"], "provisioning"; got != want {
+		t.Fatalf("status = %#v, want %q", got, want)
+	}
+	if got, want := record["phase"], "linode_created"; got != want {
+		t.Fatalf("phase = %#v, want %q", got, want)
+	}
+	if got, want := record["provider_id"], "12345"; got != want {
+		t.Fatalf("provider_id = %#v, want %q", got, want)
+	}
+	if _, ok := record["dns"]; ok {
+		t.Fatalf("dns block unexpectedly present in partial record: %#v", record["dns"])
+	}
+	if ssh, ok := record["ssh"].(map[string]any); !ok || ssh["source"] != "linode-profile" {
+		t.Fatalf("ssh block = %#v, want profile metadata", record["ssh"])
+	}
+}
+
+func TestProvisionServerResumesProvisioningRecordWithoutCreatingNewLinode(t *testing.T) {
+	configHome := t.TempDir()
+	t.Setenv("NF_CONFIG_HOME", configHome)
+	t.Setenv("NF_SECRET_SALT", "test-salt")
+	t.Setenv("DNSIMPLE_TOKEN", "dns-token")
+	t.Setenv("LINODE_CLI_TOKEN", "linode-token")
+
+	record := map[string]any{
+		"provider":    "linode",
+		"provider_id": "12345",
+		"name":        "app1",
+		"hostname":    "app1.nfweb.dev",
+		"label":       "app1",
+		"status":      "provisioning",
+		"phase":       "linode_created",
+		"ipv4":        "198.51.100.10",
+		"region":      "ca-central",
+		"type":        "g6-standard-1",
+		"image":       "linode/ubuntu24.04",
+		"created_at":  "2026-05-29T12:00:00Z",
+		"updated_at":  "2026-05-29T12:00:00Z",
+		"ssh":         map[string]any{"user": "nonfiction", "host": "app1.nfweb.dev", "port": 22, "source": "linode-profile", "authorized_keys": []map[string]any{{"source": "linode-profile", "id": "77496734", "label": "team-a", "fingerprint": "fp-a"}}},
+	}
+	if err := saveStatePayload(filepath.Join(configHome, "state", "servers.json"), []map[string]any{record}); err != nil {
+		t.Fatalf("saveStatePayload() error = %v", err)
+	}
+
+	oldRunLinode := runLinodeCLICommand
+	oldRunLinodeValue := runLinodeCLIValueFn
+	oldZoneLookup := dnsimpleZoneLookup
+	oldUpsert := dnsimpleUpsertARecordRun
+	oldSalt := secretSaltFn
+	oldNow := currentTime
+	t.Cleanup(func() {
+		runLinodeCLICommand = oldRunLinode
+		runLinodeCLIValueFn = oldRunLinodeValue
+		dnsimpleZoneLookup = oldZoneLookup
+		dnsimpleUpsertARecordRun = oldUpsert
+		secretSaltFn = oldSalt
+		currentTime = oldNow
+	})
+
+	runLinodeCLIValueFn = func(args []string) (any, error) {
+		if len(args) >= 2 && args[0] == "sshkeys" && args[1] == "list" {
+			return []any{map[string]any{"id": json.Number("77496734"), "label": "team-a", "fingerprint": "fp-a", "created": "2026-05-29", "ssh_key": "ssh-rsa AAAA team-a"}}, nil
+		}
+		t.Fatalf("unexpected linode-cli value args: %v", args)
+		return nil, nil
+	}
+	createCalled := false
+	runLinodeCLICommand = func(args []string) (map[string]any, error) {
+		createCalled = true
+		return nil, fmt.Errorf("should not create a second Linode")
+	}
+	dnsimpleZoneLookup = func(plan Plan, token string) (string, error) { return "nfweb.dev", nil }
+	dnsimpleUpsertARecordRun = func(token, accountID, zone, name, ip string) error { return nil }
+	secretSaltFn = func() (string, error) { return "test-salt", nil }
+	currentTime = func() time.Time { return time.Date(2026, 5, 29, 12, 0, 0, 0, time.UTC) }
+
+	plan, err := BuildPlan(Args{NonInteractive: true, Execute: true, Yes: true, Name: "app1", Hostname: "app1.nfweb.dev"})
+	if err != nil {
+		t.Fatalf("BuildPlan() error = %v", err)
+	}
+	result, err := ProvisionServer(plan)
+	if err != nil {
+		t.Fatalf("ProvisionServer() error = %v", err)
+	}
+	if createCalled {
+		t.Fatal("runLinodeCLICommand was called, want resume without new create")
+	}
+	if result == nil || result.Server.ProviderID != "12345" {
+		t.Fatalf("ProvisionServer() result = %#v, want resumed provider id", result)
+	}
+	data, err := os.ReadFile(filepath.Join(configHome, "state", "servers.json"))
+	if err != nil {
+		t.Fatalf("ReadFile(servers.json) error = %v", err)
+	}
+	var records []map[string]any
+	if err := json.Unmarshal(data, &records); err != nil {
+		t.Fatalf("Unmarshal(servers.json) error = %v", err)
+	}
+	if got, want := valueString(records[0]["status"]), "provisioned"; got != want {
+		t.Fatalf("status = %q, want %q", got, want)
+	}
+	if got, want := valueString(records[0]["phase"]), "complete"; got != want {
+		t.Fatalf("phase = %q, want %q", got, want)
+	}
+}
+
+func TestProvisionServerStopsWhenAlreadyProvisioned(t *testing.T) {
+	configHome := t.TempDir()
+	t.Setenv("NF_CONFIG_HOME", configHome)
+	t.Setenv("NF_SECRET_SALT", "test-salt")
+	t.Setenv("DNSIMPLE_TOKEN", "dns-token")
+	t.Setenv("LINODE_CLI_TOKEN", "linode-token")
+	record := map[string]any{"provider": "linode", "provider_id": "12345", "name": "app1", "hostname": "app1.nfweb.dev", "label": "app1", "status": "provisioned", "phase": "complete", "ipv4": "198.51.100.10"}
+	if err := saveStatePayload(filepath.Join(configHome, "state", "servers.json"), []map[string]any{record}); err != nil {
+		t.Fatalf("saveStatePayload() error = %v", err)
+	}
+
+	oldRunLinode := runLinodeCLICommand
+	oldRunLinodeValue := runLinodeCLIValueFn
+	oldZoneLookup := dnsimpleZoneLookup
+	oldUpsert := dnsimpleUpsertARecordRun
+	t.Cleanup(func() {
+		runLinodeCLICommand = oldRunLinode
+		runLinodeCLIValueFn = oldRunLinodeValue
+		dnsimpleZoneLookup = oldZoneLookup
+		dnsimpleUpsertARecordRun = oldUpsert
+	})
+	runLinodeCLIValueFn = func(args []string) (any, error) {
+		t.Fatalf("ssh key lookup should not run when already provisioned: %v", args)
+		return nil, nil
+	}
+	createCalled := false
+	runLinodeCLICommand = func(args []string) (map[string]any, error) {
+		createCalled = true
+		return nil, fmt.Errorf("should not create")
+	}
+	dnsimpleZoneLookup = func(plan Plan, token string) (string, error) {
+		t.Fatal("dns lookup should not run when already provisioned")
+		return "", nil
+	}
+	dnsimpleUpsertARecordRun = func(token, accountID, zone, name, ip string) error {
+		t.Fatal("dns upsert should not run when already provisioned")
+		return nil
+	}
+
+	plan, err := BuildPlan(Args{NonInteractive: true, Execute: true, Yes: true, Name: "app1", Hostname: "app1.nfweb.dev"})
+	if err != nil {
+		t.Fatalf("BuildPlan() error = %v", err)
+	}
+	_, err = ProvisionServer(plan)
+	if err == nil || !strings.Contains(err.Error(), "already provisioned") {
+		t.Fatalf("ProvisionServer() error = %v, want already provisioned", err)
+	}
+	if createCalled {
+		t.Fatal("runLinodeCLICommand was called for an already provisioned record")
+	}
+}
+
+func TestFindProvisionStateRecordMatchesExactServer(t *testing.T) {
+	configHome := t.TempDir()
+	t.Setenv("NF_CONFIG_HOME", configHome)
+	record := map[string]any{"provider": "linode", "provider_id": "98323103", "linode_id": "98323103", "id": "98323103", "name": "prod2", "hostname": "prod2.nfweb.dev", "label": "prod2", "status": "provisioned", "phase": "complete"}
+	if err := saveStatePayload(filepath.Join(configHome, "state", "servers.json"), []map[string]any{record}); err != nil {
+		t.Fatalf("saveStatePayload() error = %v", err)
+	}
+
+	got, idx, err := findProvisionStateRecord(Plan{Provider: "linode", Name: "prod2", Hostname: "prod2.nfweb.dev", Label: "prod2"})
+	if err != nil {
+		t.Fatalf("findProvisionStateRecord() error = %v", err)
+	}
+	if idx != 0 {
+		t.Fatalf("findProvisionStateRecord() index = %d, want 0", idx)
+	}
+	if got == nil || valueString(got["hostname"]) != "prod2.nfweb.dev" || valueString(got["name"]) != "prod2" {
+		t.Fatalf("findProvisionStateRecord() = %#v, want prod2 record", got)
+	}
+}
+
+func TestFindProvisionStateRecordRejectsDifferentServer(t *testing.T) {
+	configHome := t.TempDir()
+	t.Setenv("NF_CONFIG_HOME", configHome)
+	record := map[string]any{"provider": "linode", "provider_id": "98323103", "linode_id": "98323103", "id": "98323103", "name": "prod2", "hostname": "prod2.nfweb.dev", "label": "prod2", "status": "provisioned", "phase": "complete"}
+	if err := saveStatePayload(filepath.Join(configHome, "state", "servers.json"), []map[string]any{record}); err != nil {
+		t.Fatalf("saveStatePayload() error = %v", err)
+	}
+
+	got, idx, err := findProvisionStateRecord(Plan{Provider: "linode", Name: "prod3", Hostname: "prod3.nfweb.dev", Label: "prod3"})
+	if err != nil {
+		t.Fatalf("findProvisionStateRecord() error = %v", err)
+	}
+	if got != nil || idx != -1 {
+		t.Fatalf("findProvisionStateRecord() = %#v, %d, want nil, -1", got, idx)
+	}
+}
+
+func TestUpsertStateRecordDoesNotReplaceDifferentServerWithEmptyLabel(t *testing.T) {
+	configHome := t.TempDir()
+	t.Setenv("NF_CONFIG_HOME", configHome)
+	existing := map[string]any{"provider": "linode", "provider_id": "98323103", "linode_id": "98323103", "id": "98323103", "name": "prod2", "hostname": "prod2.nfweb.dev", "label": "", "status": "provisioned", "phase": "complete"}
+	candidate := map[string]any{"provider": "linode", "provider_id": "98323104", "linode_id": "98323104", "id": "98323104", "name": "prod3", "hostname": "prod3.nfweb.dev", "label": "", "status": "provisioning", "phase": "linode_created"}
+	path := filepath.Join(configHome, "state", "servers.json")
+	if err := saveStatePayload(path, []map[string]any{existing}); err != nil {
+		t.Fatalf("saveStatePayload() error = %v", err)
+	}
+	if err := upsertStateRecord(path, candidate); err != nil {
+		t.Fatalf("upsertStateRecord() error = %v", err)
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("ReadFile() error = %v", err)
+	}
+	var records []map[string]any
+	if err := json.Unmarshal(data, &records); err != nil {
+		t.Fatalf("Unmarshal() error = %v", err)
+	}
+	if len(records) != 2 {
+		t.Fatalf("upsertStateRecord() record count = %d, want 2", len(records))
+	}
+	if valueString(records[0]["hostname"]) != "prod2.nfweb.dev" || valueString(records[1]["hostname"]) != "prod3.nfweb.dev" {
+		t.Fatalf("upsertStateRecord() records = %#v, want prod2 and prod3", records)
+	}
+}
+
+func containsArg(args []string, want string) bool {
+	for _, arg := range args {
+		if arg == want {
+			return true
+		}
+	}
+	return false
+}
+
+func containsString(values []string, want string) bool {
+	for _, value := range values {
+		if value == want {
+			return true
+		}
+	}
+	return false
 }

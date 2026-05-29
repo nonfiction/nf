@@ -6,19 +6,20 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"math"
 	"net/http"
 	"net/url"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 
 	"github.com/nonfiction/nf/internal/config"
 	"github.com/nonfiction/nf/internal/envwizard"
 	"github.com/nonfiction/nf/internal/passwords"
-	"github.com/nonfiction/nf/internal/theme"
 	"github.com/nonfiction/nf/internal/ui"
 )
 
@@ -28,23 +29,21 @@ func (e Error) Error() string { return e.Msg }
 
 type Args struct {
 	Provider          string
-	ProjectSlug       string
-	ServerName        string
-	SiteDomain        string
+	DnsProvider       string
+	DnsZone           string
+	UbuntuVersion     string
+	Name              string
+	Hostname          string
 	Label             string
 	Region            string
 	Type              string
 	Image             string
 	SshUser           string
+	SshKeySource      string
+	SshKeyLabel       string
+	SshKeyID          string
+	AllLinodeSshKeys  bool
 	SshPublicKeyFile  string
-	RemoteWpPath      string
-	PhpFpmSocket      string
-	DbName            string
-	DbUser            string
-	WpAdminUser       string
-	WpAdminEmail      string
-	SiteTitle         string
-	DnsZone           string
 	DnsimpleAccountID string
 	WriteCloudInit    string
 	NonInteractive    bool
@@ -54,35 +53,396 @@ type Args struct {
 	DryRun            bool
 }
 
+type OSPlan struct {
+	UbuntuVersion string   `json:"ubuntu_version"`
+	Label         string   `json:"label"`
+	Image         string   `json:"image"`
+	PackageSource string   `json:"package_source"`
+	Packages      []string `json:"packages,omitempty"`
+}
+
+type PHPPlan struct {
+	Version       string   `json:"version"`
+	PackageSource string   `json:"package_source"`
+	Service       string   `json:"service"`
+	Socket        string   `json:"socket"`
+	Packages      []string `json:"packages"`
+}
+
 type Plan struct {
 	Provider          string
-	ProjectRoot       string
-	ProjectSlug       string
-	ProjectName       string
-	ServerName        string
+	DnsProvider       string
+	DnsZone           string
+	UbuntuVersion     string
+	PHPVersion        string
+	Name              string
+	Hostname          string
 	Label             string
 	Region            string
 	LinodeType        string
 	Image             string
 	SshUser           string
+	SshKeySource      string
+	SshKeyLabel       string
+	SshKeyID          string
+	AllLinodeSshKeys  bool
 	SshPublicKeyFile  string
-	SiteDomain        string
-	RemoteWpPath      string
-	PhpFpmSocket      string
-	DbName            string
-	DbUser            string
-	WpAdminUser       string
-	WpAdminEmail      string
-	SiteTitle         string
-	DnsZone           string
 	DnsimpleAccountID string
 	WriteCloudInit    string
+	OS                OSPlan
+	PHP               PHPPlan
+	AuthorizedKeys    []SSHAuthorizedKey
 	Execute           bool
 	Yes               bool
 	DryRun            bool
 	NonInteractive    bool
 	ShowCloudInit     bool
 }
+
+type ubuntuRelease struct {
+	version string
+	label   string
+	image   string
+	php     string
+}
+
+type ubuntuStack struct {
+	version   string
+	label     string
+	image     string
+	php       string
+	menuLabel string
+}
+
+const packageSourceUbuntuNative = "ubuntu-native"
+
+var ubuntuStackMatrix = []ubuntuStack{
+	{version: "26.04", label: "Ubuntu 26.04 LTS", image: "linode/ubuntu26.04", php: "8.5", menuLabel: "Ubuntu 26.04 LTS / PHP 8.5"},
+	{version: "24.04", label: "Ubuntu 24.04 LTS", image: "linode/ubuntu24.04", php: "8.3", menuLabel: "Ubuntu 24.04 LTS / PHP 8.3 recommended/default"},
+	{version: "22.04", label: "Ubuntu 22.04 LTS", image: "linode/ubuntu22.04", php: "8.1", menuLabel: "Ubuntu 22.04 LTS / PHP 8.1 legacy compatibility"},
+	{version: "20.04", label: "Ubuntu 20.04 LTS legacy/ESM", image: "linode/ubuntu20.04", php: "7.4", menuLabel: "Ubuntu 20.04 LTS / PHP 7.4 legacy/ESM only"},
+}
+
+func supportedUbuntuVersions() []string {
+	return []string{"26.04", "24.04", "22.04", "20.04"}
+}
+
+func releaseForUbuntu(version string) (ubuntuRelease, error) {
+	trimmed := strings.TrimSpace(version)
+	for _, stack := range ubuntuStackMatrix {
+		if stack.version == trimmed {
+			return ubuntuRelease{version: stack.version, label: stack.label, image: stack.image, php: stack.php}, nil
+		}
+	}
+	return ubuntuRelease{}, Error{Msg: fmt.Sprintf("Unsupported Ubuntu LTS version %q. Supported versions: %s.", version, strings.Join(supportedUbuntuVersions(), ", "))}
+}
+
+func phpPackages(version string) []string {
+	prefix := "php" + version + "-"
+	return []string{
+		prefix + "fpm",
+		prefix + "cli",
+		prefix + "common",
+		prefix + "mysql",
+		prefix + "curl",
+		prefix + "gd",
+		prefix + "imagick",
+		prefix + "intl",
+		prefix + "mbstring",
+		prefix + "xml",
+		prefix + "zip",
+		prefix + "bcmath",
+		prefix + "soap",
+		prefix + "opcache",
+		prefix + "readline",
+	}
+}
+
+func phpReleaseForUbuntu(version string) (PHPPlan, error) {
+	release, err := releaseForUbuntu(version)
+	if err != nil {
+		return PHPPlan{}, err
+	}
+	phpVersion := release.php
+	return PHPPlan{
+		Version:       phpVersion,
+		PackageSource: packageSourceUbuntuNative,
+		Service:       "php" + phpVersion + "-fpm",
+		Socket:        filepath.Clean("/run/php/php" + phpVersion + "-fpm.sock"),
+		Packages:      phpPackages(phpVersion),
+	}, nil
+}
+
+func osReleasePlan(version, overrideImage string) (OSPlan, error) {
+	release, err := releaseForUbuntu(version)
+	if err != nil {
+		return OSPlan{}, err
+	}
+	image := release.image
+	if strings.TrimSpace(overrideImage) != "" {
+		image = strings.TrimSpace(overrideImage)
+	}
+	return OSPlan{
+		UbuntuVersion: release.version,
+		Label:         release.label,
+		Image:         image,
+		PackageSource: packageSourceUbuntuNative,
+		Packages:      serverBasePackages(),
+	}, nil
+}
+
+func stackOptions() []ui.SelectOption {
+	options := make([]ui.SelectOption, 0, len(ubuntuStackMatrix))
+	for _, stack := range ubuntuStackMatrix {
+		options = append(options, ui.SelectOption{Label: stack.menuLabel, Value: stack.version, Default: stack.version == "24.04"})
+	}
+	return options
+}
+
+func selectUbuntuStack(explicit string, nonInteractive bool) (ubuntuRelease, error) {
+	if v := strings.TrimSpace(explicit); v != "" {
+		return releaseForUbuntu(v)
+	}
+	if nonInteractive {
+		return releaseForUbuntu("24.04")
+	}
+	selected, err := selectVersionFn("Choose an Ubuntu/PHP stack", stackOptions())
+	if err != nil {
+		return ubuntuRelease{}, err
+	}
+	return releaseForUbuntu(selected)
+}
+
+func packageLines(packages []string) []string {
+	lines := make([]string, 0, len(packages))
+	for _, pkg := range packages {
+		lines = append(lines, "    - "+pkg)
+	}
+	return lines
+}
+
+func joinedPackages(packages []string) string { return strings.Join(packages, ", ") }
+
+func apiIDString(value any) (string, error) {
+	switch typed := value.(type) {
+	case nil:
+		return "", fmt.Errorf("missing id")
+	case string:
+		trimmed := strings.TrimSpace(typed)
+		if trimmed == "" || trimmed == "<nil>" {
+			return "", fmt.Errorf("missing id")
+		}
+		if parsed, err := strconv.ParseInt(trimmed, 10, 64); err == nil {
+			return strconv.FormatInt(parsed, 10), nil
+		}
+		if parsed, err := strconv.ParseFloat(trimmed, 64); err == nil {
+			if math.Trunc(parsed) != parsed {
+				return "", fmt.Errorf("id %q is not an integer", typed)
+			}
+			return strconv.FormatInt(int64(parsed), 10), nil
+		}
+		return "", fmt.Errorf("id %q is not numeric", typed)
+	case json.Number:
+		if parsed, err := typed.Int64(); err == nil {
+			return strconv.FormatInt(parsed, 10), nil
+		}
+		f, err := typed.Float64()
+		if err != nil {
+			return "", fmt.Errorf("id %q is not numeric", typed.String())
+		}
+		if math.Trunc(f) != f {
+			return "", fmt.Errorf("id %q is not an integer", typed.String())
+		}
+		return strconv.FormatInt(int64(f), 10), nil
+	case float64:
+		if math.Trunc(typed) != typed {
+			return "", fmt.Errorf("id %v is not an integer", typed)
+		}
+		return strconv.FormatInt(int64(typed), 10), nil
+	case float32:
+		f := float64(typed)
+		if math.Trunc(f) != f {
+			return "", fmt.Errorf("id %v is not an integer", typed)
+		}
+		return strconv.FormatInt(int64(f), 10), nil
+	case int:
+		return strconv.Itoa(typed), nil
+	case int8:
+		return strconv.FormatInt(int64(typed), 10), nil
+	case int16:
+		return strconv.FormatInt(int64(typed), 10), nil
+	case int32:
+		return strconv.FormatInt(int64(typed), 10), nil
+	case int64:
+		return strconv.FormatInt(typed, 10), nil
+	case uint:
+		return strconv.FormatUint(uint64(typed), 10), nil
+	case uint8:
+		return strconv.FormatUint(uint64(typed), 10), nil
+	case uint16:
+		return strconv.FormatUint(uint64(typed), 10), nil
+	case uint32:
+		return strconv.FormatUint(uint64(typed), 10), nil
+	case uint64:
+		return strconv.FormatUint(typed, 10), nil
+	default:
+		return "", fmt.Errorf("unsupported id type %T", value)
+	}
+}
+
+func valueString(value any) string {
+	if id, err := apiIDString(value); err == nil {
+		return id
+	}
+	text := strings.TrimSpace(fmt.Sprint(value))
+	if text == "<nil>" {
+		return ""
+	}
+	return text
+}
+
+func sshAuthorizedKeyMetadata(keys []SSHAuthorizedKey) []map[string]any {
+	if len(keys) == 0 {
+		return nil
+	}
+	metadata := make([]map[string]any, 0, len(keys))
+	for _, key := range keys {
+		entry := map[string]any{"source": key.Source}
+		if key.ID != "" {
+			entry["id"] = key.ID
+		}
+		if key.Label != "" {
+			entry["label"] = key.Label
+		}
+		if key.Fingerprint != "" {
+			entry["fingerprint"] = key.Fingerprint
+		}
+		if key.Path != "" {
+			entry["path"] = key.Path
+		}
+		if key.Created != "" {
+			entry["created"] = key.Created
+		}
+		metadata = append(metadata, entry)
+	}
+	return metadata
+}
+
+func sshKeyBodies(keys []SSHAuthorizedKey) []string {
+	bodies := make([]string, 0, len(keys))
+	for _, key := range keys {
+		if body := strings.TrimSpace(key.PublicKey); body != "" {
+			bodies = append(bodies, body)
+		}
+	}
+	return bodies
+}
+
+func appendLinodeAuthorizedKeyArgs(args []string, keys []SSHAuthorizedKey) []string {
+	for _, body := range sshKeyBodies(keys) {
+		args = append(args, "--authorized_keys", body)
+	}
+	return args
+}
+
+func sshKeySummary(plan Plan) string {
+	source := firstNonEmpty(plan.SshKeySource, "linode-profile")
+	switch source {
+	case "file":
+		if plan.SshPublicKeyFile != "" {
+			return plan.SshPublicKeyFile
+		}
+		return "file"
+	default:
+		parts := []string{"all Linode profile keys"}
+		if plan.AllLinodeSshKeys {
+			parts = []string{"all Linode profile keys"}
+		}
+		if plan.SshKeyLabel != "" {
+			parts = append(parts, "label "+plan.SshKeyLabel)
+		}
+		if plan.SshKeyID != "" {
+			parts = append(parts, "id "+plan.SshKeyID)
+		}
+		return strings.Join(parts, "; ")
+	}
+}
+
+func sshKeyLabels(keys []SSHAuthorizedKey) string {
+	labels := make([]string, 0, len(keys))
+	for _, key := range keys {
+		label := strings.TrimSpace(key.Label)
+		if label == "" {
+			label = strings.TrimSpace(key.ID)
+		}
+		if label == "" {
+			label = strings.TrimSpace(key.Path)
+		}
+		if label != "" {
+			labels = append(labels, label)
+		}
+	}
+	return strings.Join(labels, ", ")
+}
+
+type CreatedServer struct {
+	Provider   string `json:"provider"`
+	ProviderID string `json:"provider_id"`
+	Name       string `json:"name"`
+	Hostname   string `json:"hostname"`
+	IPv4       string `json:"ipv4"`
+}
+
+type SSHAuthorizedKey struct {
+	Source      string `json:"source"`
+	ID          string `json:"id,omitempty"`
+	Label       string `json:"label,omitempty"`
+	Fingerprint string `json:"fingerprint,omitempty"`
+	Path        string `json:"path,omitempty"`
+	Created     string `json:"created,omitempty"`
+	PublicKey   string `json:"-"`
+}
+
+type DNSRecord struct {
+	Name    string `json:"name"`
+	Type    string `json:"type"`
+	Content string `json:"content"`
+}
+
+type DNSState struct {
+	Provider       string    `json:"provider"`
+	Zone           string    `json:"zone"`
+	HostnameRecord DNSRecord `json:"hostname_record"`
+	WildcardRecord DNSRecord `json:"wildcard_record"`
+}
+
+type TLSState struct {
+	Provider    string   `json:"provider"`
+	Domains     []string `json:"domains"`
+	Certificate string   `json:"certificate"`
+	Key         string   `json:"key"`
+}
+
+type ServerCreateResult struct {
+	Server        CreatedServer
+	DNS           DNSState
+	TLS           TLSState
+	StatePath     string
+	CloudInitPath string
+}
+
+var (
+	runLinodeCLICommand      = runLinodeCLI
+	runLinodeCLIValueFn      = runLinodeCLIValue
+	dnsimpleZoneLookup       = findDnsimpleZone
+	dnsimpleUpsertARecordRun = dnsimpleUpsertARecord
+	selectVersionFn          = ui.Select
+	promptStringFn           = ui.PromptString
+	confirmFn                = ui.Confirm
+	multiSelectFn            = ui.MultiSelect
+	secretSaltFn             = passwords.SecretSalt
+	currentTime              = time.Now
+)
 
 func firstNonEmpty(values ...string) string {
 	for _, v := range values {
@@ -112,46 +472,6 @@ func requiredEnv(name string) (string, error) {
 	return "", Error{Msg: fmt.Sprintf("Expected %s in the environment or %s.", name, config.EnvFile())}
 }
 
-func projectContext() (string, map[string]any, error) {
-	root, ok := config.DiscoverProjectRoot("")
-	if !ok {
-		return "", map[string]any{}, nil
-	}
-	metadata, err := theme.LoadProjectMetadata(root)
-	if err != nil {
-		return "", nil, err
-	}
-	return root, metadata, nil
-}
-
-func inferProjectSlug(explicit string, metadata map[string]any, projectRoot string) string {
-	if v := strings.TrimSpace(explicit); v != "" {
-		return v
-	}
-	if project, ok := metadata["project"].(map[string]any); ok {
-		if v, ok := project["slug"].(string); ok && strings.TrimSpace(v) != "" {
-			return strings.TrimSpace(v)
-		}
-	}
-	if strings.TrimSpace(projectRoot) != "" {
-		return filepath.Base(projectRoot)
-	}
-	cwd, err := os.Getwd()
-	if err != nil {
-		return ""
-	}
-	return filepath.Base(cwd)
-}
-
-func inferProjectName(metadata map[string]any, projectSlug string) string {
-	if project, ok := metadata["project"].(map[string]any); ok {
-		if v, ok := project["name"].(string); ok && strings.TrimSpace(v) != "" {
-			return strings.TrimSpace(v)
-		}
-	}
-	return slugToTitle(projectSlug)
-}
-
 func provisionRequirements() []envwizard.Requirement {
 	return []envwizard.Requirement{
 		{Keys: []string{"NF_SECRET_SALT"}, Prompt: "NF_SECRET_SALT (used for derived passwords): ", Secret: true, WriteKey: "NF_SECRET_SALT", Required: true},
@@ -160,15 +480,11 @@ func provisionRequirements() []envwizard.Requirement {
 	}
 }
 
-func defaultRemoteWpPath(projectSlug string) string {
-	if projectSlug == "" {
+func defaultHostname(name string) string {
+	if strings.TrimSpace(name) == "" {
 		return ""
 	}
-	return "/var/www/" + projectSlug
-}
-
-func phpFpmServiceName(socketPath string) string {
-	return strings.TrimSuffix(filepath.Base(socketPath), ".sock")
+	return strings.TrimSpace(name) + ".nfweb.dev"
 }
 
 func cleanPath(value string) string {
@@ -191,23 +507,7 @@ var cloudInitTemplate = strings.TrimSpace(`#cloud-config
 package_update: true
 package_upgrade: true
 packages:
-  - nginx
-  - mariadb-server
-  - php-fpm
-  - php-mysql
-  - php-xml
-  - php-mbstring
-  - php-curl
-  - php-zip
-  - php-gd
-  - php-intl
-  - unzip
-  - curl
-  - certbot
-  - python3-certbot-dns-dnsimple
-  - composer
-  - rsync
-  - zip
+__PACKAGE_LIST__
 
 users:
   - name: __SSH_USER__
@@ -215,48 +515,46 @@ users:
     sudo: ALL=(ALL) NOPASSWD:ALL
     groups: [sudo]
     ssh_authorized_keys:
-      - __SSH_PUBLIC_KEY__
+__SSH_PUBLIC_KEYS__
 
 write_files:
-  - path: /etc/nginx/sites-available/__SERVER_NAME__
+  - path: /etc/nginx/sites-available/nf-server
     permissions: '0644'
     content: |
       server {
           listen 80;
           listen [::]:80;
-          server_name __SITE_DOMAIN__;
-          root __REMOTE_WP_PATH__;
-          index index.php index.html;
+          server_name __HOSTNAME__;
+          root /var/www/nf-server;
+          index index.html index.htm;
           client_max_body_size 64M;
 
-          access_log /var/log/nginx/__SERVER_NAME__.access.log;
-          error_log /var/log/nginx/__SERVER_NAME__.error.log;
+          access_log /var/log/nginx/nf-server.access.log;
+          error_log /var/log/nginx/nf-server.error.log;
 
           location / {
-              try_files $uri $uri/ /index.php?$args;
+              try_files $uri $uri/ =404;
           }
 
           location ~ \.php$ {
-              include snippets/fastcgi-php.conf;
+              include fastcgi_params;
+              fastcgi_param SCRIPT_FILENAME $document_root$fastcgi_script_name;
               fastcgi_pass unix:__PHP_FPM_SOCKET__;
           }
-
-          location ~* \.(css|js|jpg|jpeg|png|gif|ico|svg|webp)$ {
-              expires 7d;
-              access_log off;
-          }
       }
-  - path: /usr/local/bin/__SERVER_NAME__-enable-tls
+  - path: /usr/local/bin/nf-enable-wildcard-tls
     permissions: '0755'
     content: |
       #!/usr/bin/env bash
       set -euo pipefail
 
-      cat >/etc/nginx/sites-available/__SERVER_NAME__ <<'EOF'
+      certbot certonly --non-interactive --agree-tos --dns-dnsimple --dns-dnsimple-credentials /root/.secrets/certbot/dnsimple.ini -m web@nonfiction.ca -d __HOSTNAME__ -d "*.__HOSTNAME__"
+
+      cat >/etc/nginx/sites-available/nf-server <<'EOF'
       server {
           listen 80;
           listen [::]:80;
-          server_name __SITE_DOMAIN__;
+          server_name __HOSTNAME__;
 
           return 301 https://$host$request_uri;
       }
@@ -264,29 +562,25 @@ write_files:
       server {
           listen 443 ssl http2;
           listen [::]:443 ssl http2;
-          server_name __SITE_DOMAIN__;
-          root __REMOTE_WP_PATH__;
-          index index.php index.html;
+          server_name __HOSTNAME__;
+          root /var/www/nf-server;
+          index index.html index.htm;
           client_max_body_size 64M;
 
-          ssl_certificate /etc/letsencrypt/live/__SITE_DOMAIN__/fullchain.pem;
-          ssl_certificate_key /etc/letsencrypt/live/__SITE_DOMAIN__/privkey.pem;
+          ssl_certificate /etc/letsencrypt/live/__HOSTNAME__/fullchain.pem;
+          ssl_certificate_key /etc/letsencrypt/live/__HOSTNAME__/privkey.pem;
 
-          access_log /var/log/nginx/__SERVER_NAME__.access.log;
-          error_log /var/log/nginx/__SERVER_NAME__.error.log;
+          access_log /var/log/nginx/nf-server.access.log;
+          error_log /var/log/nginx/nf-server.error.log;
 
           location / {
-              try_files $uri $uri/ /index.php?$args;
+              try_files $uri $uri/ =404;
           }
 
           location ~ \.php$ {
-              include snippets/fastcgi-php.conf;
+              include fastcgi_params;
+              fastcgi_param SCRIPT_FILENAME $document_root$fastcgi_script_name;
               fastcgi_pass unix:__PHP_FPM_SOCKET__;
-          }
-
-          location ~* \.(css|js|jpg|jpeg|png|gif|ico|svg|webp)$ {
-              expires 7d;
-              access_log off;
           }
       }
       EOF
@@ -300,30 +594,18 @@ write_files:
       dns_dnsimple_account = __DNSIMPLE_ACCOUNT_ID__
 
 runcmd:
-  - mkdir -p __REMOTE_WP_PATH__
-  - chown -R __SSH_USER__:www-data __REMOTE_WP_PATH__
-  - chmod -R 775 __REMOTE_WP_PATH__
+  - mkdir -p /var/www/nf-server
+  - chown -R __SSH_USER__:www-data /var/www/nf-server
+  - chmod -R 775 /var/www/nf-server
   - bash -lc 'cd /tmp && curl -O https://raw.githubusercontent.com/wp-cli/builds/gh-pages/phar/wp-cli.phar && chmod +x wp-cli.phar && mv wp-cli.phar /usr/local/bin/wp'
-  - bash -lc 'cd /tmp && curl -O https://wordpress.org/latest.zip && unzip -o latest.zip && rsync -av wordpress/ __REMOTE_WP_PATH__/'
-  - chown -R __SSH_USER__:www-data __REMOTE_WP_PATH__
-  - bash -lc 'find __REMOTE_WP_PATH__ -type d -exec chmod 775 {} + && find __REMOTE_WP_PATH__ -type f -exec chmod 664 {} +'
-  - mysql -e "CREATE DATABASE IF NOT EXISTS __BACKTICK____DB_NAME____BACKTICK__ CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;"
-  - mysql -e "CREATE USER IF NOT EXISTS '__DB_USER__'@'localhost' IDENTIFIED BY '__DB_PASS__';"
-  - mysql -e "ALTER USER '__DB_USER__'@'localhost' IDENTIFIED BY '__DB_PASS__';"
-  - mysql -e "GRANT ALL PRIVILEGES ON __BACKTICK____DB_NAME____BACKTICK__.* TO '__DB_USER__'@'localhost'; FLUSH PRIVILEGES;"
-  - bash -lc 'cd __REMOTE_WP_PATH__ && wp config create --dbname=__DB_NAME__ --dbuser=__DB_USER__ --dbpass=__DB_PASS__ --dbhost=localhost --allow-root --skip-check'
-  - bash -lc 'cd __REMOTE_WP_PATH__ && wp config set WP_DEBUG false --raw --type=constant --allow-root && wp config set WP_DEBUG_LOG true --raw --type=constant --allow-root && wp config set WP_DEBUG_DISPLAY false --raw --type=constant --allow-root && wp config set FS_METHOD direct --type=constant --allow-root'
   - rm -f /etc/nginx/sites-enabled/default
-  - ln -sf /etc/nginx/sites-available/__SERVER_NAME__ /etc/nginx/sites-enabled/__SERVER_NAME__
+  - ln -sf /etc/nginx/sites-available/nf-server /etc/nginx/sites-enabled/nf-server
   - nginx -t
   - systemctl enable nginx
   - systemctl restart nginx
   - systemctl enable __PHP_FPM_SERVICE__
   - systemctl restart __PHP_FPM_SERVICE__
-  - bash -lc 'wp core install --path=__REMOTE_WP_PATH__ --url=__SITE_URL__ --title="__SITE_TITLE__" --admin_user=__WP_ADMIN_USER__ --admin_password=__WP_ADMIN_PASS__ --admin_email=__WP_ADMIN_EMAIL__ --allow-root'
-  - bash -lc 'wp option update blog_public 0 --path=__REMOTE_WP_PATH__ --allow-root && wp rewrite structure "/%postname%/" --path=__REMOTE_WP_PATH__ --allow-root && wp rewrite flush --path=__REMOTE_WP_PATH__ --allow-root || true'
-  - bash -lc 'certbot certonly --non-interactive --agree-tos --dns-dnsimple --dns-dnsimple-credentials /root/.secrets/certbot/dnsimple.ini -m __WP_ADMIN_EMAIL__ -d __SITE_DOMAIN__ -d *.__SITE_DOMAIN__'
-  - /usr/local/bin/__SERVER_NAME__-enable-tls
+  - bash -lc 'echo "nf-server bootstrap complete" > /var/www/nf-server/index.html'
 `)
 
 func renderTemplate(template string, replacements map[string]string) string {
@@ -339,41 +621,58 @@ func renderTemplate(template string, replacements map[string]string) string {
 	return rendered
 }
 
-func cloudInitReplacements(plan Plan, sshPublicKey, dbPass, wpAdminPass, dnsimpleToken string) map[string]string {
+func serverBasePackages() []string {
+	return []string{"nginx", "mariadb-server", "unzip", "curl", "certbot", "python3-certbot-dns-dnsimple", "composer", "rsync", "zip", "imagemagick", "ghostscript"}
+}
+
+func cloudInitPackages(plan Plan) []string {
+	return append(serverBasePackages(), plan.PHP.Packages...)
+}
+
+func cloudInitPackageBlock(plan Plan) string {
+	return strings.Join(packageLines(cloudInitPackages(plan)), "\n")
+}
+
+func cloudInitSSHKeyLines(keys []string) string {
+	if len(keys) == 0 {
+		keys = []string{"<ssh public key>"}
+	}
+	lines := make([]string, 0, len(keys))
+	for _, key := range keys {
+		lines = append(lines, "      - "+strings.TrimSpace(key))
+	}
+	return strings.Join(lines, "\n")
+}
+
+func cloudInitReplacements(plan Plan, sshPublicKeys []string, dnsimpleToken string) map[string]string {
 	return map[string]string{
+		"__PACKAGE_LIST__":        cloudInitPackageBlock(plan),
 		"__SSH_USER__":            plan.SshUser,
-		"__SSH_PUBLIC_KEY__":      sshPublicKey,
-		"__SERVER_NAME__":         plan.ServerName,
-		"__SITE_DOMAIN__":         plan.SiteDomain,
-		"__SITE_URL__":            "https://" + plan.SiteDomain,
-		"__REMOTE_WP_PATH__":      plan.RemoteWpPath,
-		"__PHP_FPM_SOCKET__":      plan.PhpFpmSocket,
-		"__DB_NAME__":             plan.DbName,
-		"__DB_USER__":             plan.DbUser,
-		"__DB_PASS__":             dbPass,
-		"__WP_ADMIN_USER__":       plan.WpAdminUser,
-		"__WP_ADMIN_PASS__":       wpAdminPass,
-		"__WP_ADMIN_EMAIL__":      plan.WpAdminEmail,
+		"__SSH_PUBLIC_KEYS__":     cloudInitSSHKeyLines(sshPublicKeys),
+		"__HOSTNAME__":            plan.Hostname,
 		"__DNSIMPLE_TOKEN__":      dnsimpleToken,
 		"__DNSIMPLE_ACCOUNT_ID__": plan.DnsimpleAccountID,
-		"__SITE_TITLE__":          plan.SiteTitle,
-		"__PHP_FPM_SERVICE__":     phpFpmServiceName(plan.PhpFpmSocket),
-		"__BACKTICK__":            "`",
+		"__PHP_FPM_SERVICE__":     plan.PHP.Service,
+		"__PHP_FPM_SOCKET__":      plan.PHP.Socket,
 	}
 }
 
-func renderCloudInit(plan Plan, actual bool, dbPass, wpAdminPass, dnsimpleToken string) (string, error) {
+func stackSummary(plan Plan) string {
+	return plan.OS.Label + " / PHP " + plan.PHP.Version
+}
+
+func ubuntuDisplayLabel(plan Plan) string {
+	return strings.TrimPrefix(plan.OS.Label, "Ubuntu ")
+}
+
+func renderCloudInit(plan Plan, actual bool, dnsimpleToken string, sshPublicKeys []string) (string, error) {
 	if actual {
-		if dbPass == "" || wpAdminPass == "" || dnsimpleToken == "" {
+		if dnsimpleToken == "" {
 			return "", Error{Msg: "Missing secrets for cloud-init rendering."}
 		}
-		data, err := os.ReadFile(plan.SshPublicKeyFile)
-		if err != nil {
-			return "", err
-		}
-		return renderTemplate(cloudInitTemplate, cloudInitReplacements(plan, strings.TrimSpace(string(data)), dbPass, wpAdminPass, dnsimpleToken)), nil
+		return renderTemplate(cloudInitTemplate, cloudInitReplacements(plan, sshPublicKeys, dnsimpleToken)), nil
 	}
-	return renderTemplate(cloudInitTemplate, cloudInitReplacements(plan, "<ssh public key>", "<derived database password>", "<derived wp admin password>", "<dnsimple token>")), nil
+	return renderTemplate(cloudInitTemplate, cloudInitReplacements(plan, sshPublicKeys, "<dnsimple token>")), nil
 }
 
 func writeText(path, content string) error {
@@ -387,7 +686,7 @@ func validateActualExecution(plan Plan) error {
 	if plan.Provider != "linode" {
 		return Error{Msg: fmt.Sprintf("Unsupported provider %q. Only linode is available in this slice.", plan.Provider)}
 	}
-	if _, err := passwords.SecretSalt(); err != nil {
+	if _, err := secretSaltFn(); err != nil {
 		return err
 	}
 	if envwizard.Value("LINODE_CLI_TOKEN") == "" && envwizard.Value("LINODE_TOKEN") == "" {
@@ -396,8 +695,11 @@ func validateActualExecution(plan Plan) error {
 	if _, err := requiredEnv("DNSIMPLE_TOKEN"); err != nil {
 		return err
 	}
-	if _, err := os.Stat(plan.SshPublicKeyFile); err != nil {
-		return Error{Msg: fmt.Sprintf("Missing SSH public key file: %s", plan.SshPublicKeyFile)}
+	source := firstNonEmpty(plan.SshKeySource, "linode-profile")
+	if source == "file" {
+		if _, err := os.Stat(plan.SshPublicKeyFile); err != nil {
+			return Error{Msg: fmt.Sprintf("Missing SSH public key file: %s", plan.SshPublicKeyFile)}
+		}
 	}
 	return nil
 }
@@ -412,7 +714,7 @@ func linodeTokenEnv() (string, error) {
 	return "", Error{Msg: fmt.Sprintf("Expected LINODE_CLI_TOKEN or LINODE_TOKEN in the environment or %s.", config.EnvFile())}
 }
 
-func runLinodeCLI(args []string) (map[string]any, error) {
+func runLinodeCLIValue(args []string) (any, error) {
 	token, err := linodeTokenEnv()
 	if err != nil {
 		return nil, err
@@ -432,9 +734,19 @@ func runLinodeCLI(args []string) (map[string]any, error) {
 		}
 		return nil, Error{Msg: details}
 	}
+	dec := json.NewDecoder(bytes.NewReader(stdout.Bytes()))
+	dec.UseNumber()
 	var payload any
-	if err := json.Unmarshal(stdout.Bytes(), &payload); err != nil {
+	if err := dec.Decode(&payload); err != nil {
 		return nil, Error{Msg: fmt.Sprintf("Unexpected linode-cli JSON output: %v", err)}
+	}
+	return payload, nil
+}
+
+func runLinodeCLI(args []string) (map[string]any, error) {
+	payload, err := runLinodeCLIValueFn(args)
+	if err != nil {
+		return nil, err
 	}
 	if m, ok := payload.(map[string]any); ok {
 		return m, nil
@@ -445,6 +757,30 @@ func runLinodeCLI(args []string) (map[string]any, error) {
 		}
 	}
 	return nil, Error{Msg: "Unexpected Linode CLI response while creating the instance."}
+}
+
+func dnsimpleEndpointPath(rawURL string) string {
+	parsed, err := url.Parse(rawURL)
+	if err != nil {
+		return rawURL
+	}
+	path := parsed.EscapedPath()
+	if parsed.RawQuery != "" {
+		path += "?" + parsed.RawQuery
+	}
+	return path
+}
+
+func dnsimpleResponseExcerpt(data []byte) string {
+	text := strings.Join(strings.Fields(strings.TrimSpace(string(data))), " ")
+	if text == "" {
+		return ""
+	}
+	const maxExcerpt = 240
+	if len(text) > maxExcerpt {
+		text = text[:maxExcerpt] + "..."
+	}
+	return text
 }
 
 func dnsimpleRequest(method, rawURL, token string, payload map[string]any) (map[string]any, error) {
@@ -466,7 +802,7 @@ func dnsimpleRequest(method, rawURL, token string, payload map[string]any) (map[
 	client := &http.Client{Timeout: 60 * time.Second}
 	resp, err := client.Do(req)
 	if err != nil {
-		return nil, Error{Msg: fmt.Sprintf("DNSimple API request failed: %s %s: %v", method, rawURL, err)}
+		return nil, Error{Msg: fmt.Sprintf("DNSimple API request failed: %s %s: %v", method, dnsimpleEndpointPath(rawURL), err)}
 	}
 	defer resp.Body.Close()
 	data, err := io.ReadAll(resp.Body)
@@ -474,10 +810,17 @@ func dnsimpleRequest(method, rawURL, token string, payload map[string]any) (map[
 		return nil, err
 	}
 	if resp.StatusCode >= 400 {
-		return nil, Error{Msg: fmt.Sprintf("DNSimple API request failed: %s %s (HTTP %d)\n%s", method, rawURL, resp.StatusCode, string(data))}
+		excerpt := dnsimpleResponseExcerpt(data)
+		msg := fmt.Sprintf("DNSimple API request failed: %s %s (HTTP %d)", method, dnsimpleEndpointPath(rawURL), resp.StatusCode)
+		if excerpt != "" {
+			msg += ": " + excerpt
+		}
+		return nil, Error{Msg: msg}
 	}
+	dec := json.NewDecoder(bytes.NewReader(data))
+	dec.UseNumber()
 	var parsed map[string]any
-	if err := json.Unmarshal(data, &parsed); err != nil {
+	if err := dec.Decode(&parsed); err != nil {
 		return nil, Error{Msg: fmt.Sprintf("Unexpected DNSimple API response shape: %v", err)}
 	}
 	return parsed, nil
@@ -488,10 +831,10 @@ func dnsimpleURL(accountID, path string) string {
 }
 
 func findDnsimpleZone(plan Plan, token string) (string, error) {
-	if plan.DnsZone != "" {
-		return plan.DnsZone, nil
+	if strings.TrimSpace(plan.DnsZone) != "" {
+		return strings.TrimSpace(plan.DnsZone), nil
 	}
-	parts := strings.Split(plan.SiteDomain, ".")
+	parts := strings.Split(plan.Hostname, ".")
 	for i := 0; i < len(parts)-1; i++ {
 		candidate := strings.Join(parts[i:], ".")
 		encoded := url.PathEscape(candidate)
@@ -503,7 +846,314 @@ func findDnsimpleZone(plan Plan, token string) (string, error) {
 			return "", err
 		}
 	}
-	return "", Error{Msg: fmt.Sprintf("Could not find a matching DNSimple zone for %s", plan.SiteDomain)}
+	return "", Error{Msg: fmt.Sprintf("Could not find a matching DNSimple zone for %s", plan.Hostname)}
+}
+
+func dnsimpleUpsertHostnameRecords(token, accountID, zone, hostname, ip string) error {
+	if err := dnsimpleUpsertARecordRun(token, accountID, zone, relativeRecordName(hostname, zone), ip); err != nil {
+		return err
+	}
+	return dnsimpleUpsertARecordRun(token, accountID, zone, relativeRecordName("*."+hostname, zone), ip)
+}
+
+func dnsStateRecord(plan Plan, zone, ip string) DNSState {
+	return DNSState{
+		Provider:       plan.DnsProvider,
+		Zone:           zone,
+		HostnameRecord: DNSRecord{Name: relativeRecordName(plan.Hostname, zone), Type: "A", Content: ip},
+		WildcardRecord: DNSRecord{Name: relativeRecordName("*."+plan.Hostname, zone), Type: "A", Content: ip},
+	}
+}
+
+func tlsStateRecord(plan Plan) TLSState {
+	hostname := strings.TrimSpace(plan.Hostname)
+	return TLSState{
+		Provider:    "certbot-dnsimple",
+		Domains:     []string{hostname, "*." + hostname},
+		Certificate: "/etc/letsencrypt/live/" + hostname + "/fullchain.pem",
+		Key:         "/etc/letsencrypt/live/" + hostname + "/privkey.pem",
+	}
+}
+
+func sshPlanBlock(plan Plan) []string {
+	return []string{
+		"SSH",
+		"  user: " + plan.SshUser,
+		"  key source: " + firstNonEmpty(plan.SshKeySource, "linode-profile"),
+		"  authorized keys: " + sshKeySummary(plan),
+	}
+}
+
+func sshSuccessBlock(plan Plan, keys []SSHAuthorizedKey) []string {
+	lines := []string{
+		"SSH",
+		"  user: " + plan.SshUser,
+		"  key source: " + firstNonEmpty(plan.SshKeySource, "linode-profile"),
+	}
+	if labels := sshKeyLabels(keys); labels != "" {
+		lines = append(lines, "  authorized keys: "+labels)
+	}
+	return lines
+}
+
+func sshStateBlock(plan Plan, keys []SSHAuthorizedKey) map[string]any {
+	return map[string]any{
+		"user":            plan.SshUser,
+		"host":            plan.Hostname,
+		"port":            22,
+		"source":          firstNonEmpty(plan.SshKeySource, "linode-profile"),
+		"authorized_keys": sshAuthorizedKeyMetadata(keys),
+	}
+}
+
+func sshKeyPlanValue(plan Plan) string {
+	if source := firstNonEmpty(plan.SshKeySource, "linode-profile"); source == "file" {
+		return plan.SshPublicKeyFile
+	}
+	return sshKeySummary(plan)
+}
+
+func sshKeySourceIsFile(plan Plan) bool {
+	return firstNonEmpty(plan.SshKeySource, "linode-profile") == "file"
+}
+
+func filterLinodeSSHKeys(keys []SSHAuthorizedKey, plan Plan) []SSHAuthorizedKey {
+	if len(keys) == 0 {
+		return nil
+	}
+	if plan.AllLinodeSshKeys {
+		return append([]SSHAuthorizedKey{}, keys...)
+	}
+	filtered := make([]SSHAuthorizedKey, 0, len(keys))
+	for _, key := range keys {
+		if plan.SshKeyLabel != "" && key.Label != plan.SshKeyLabel {
+			continue
+		}
+		if plan.SshKeyID != "" && key.ID != plan.SshKeyID {
+			continue
+		}
+		filtered = append(filtered, key)
+	}
+	if len(filtered) > 0 {
+		return filtered
+	}
+	return nil
+}
+
+func parseLinodeSSHKeysPayload(payload any) ([]SSHAuthorizedKey, error) {
+	var items []any
+	if list, ok := payload.([]any); ok {
+		items = list
+	} else if raw, ok := payload.(map[string]any); ok {
+		if list, ok := raw["data"].([]any); ok {
+			items = list
+		} else if list, ok := raw["sshkeys"].([]any); ok {
+			items = list
+		} else if list, ok := raw["keys"].([]any); ok {
+			items = list
+		} else {
+			for _, value := range raw {
+				if list, ok := value.([]any); ok {
+					items = list
+					break
+				}
+			}
+		}
+	} else {
+		return nil, Error{Msg: fmt.Sprintf("Unexpected Linode SSH key response shape: %T", payload)}
+	}
+	keys := make([]SSHAuthorizedKey, 0, len(items))
+	for _, item := range items {
+		m, ok := item.(map[string]any)
+		if !ok {
+			continue
+		}
+		id, err := apiIDString(m["id"])
+		if err != nil {
+			return nil, err
+		}
+		key := SSHAuthorizedKey{Source: "linode-profile", ID: id, Label: valueString(m["label"]), Fingerprint: valueString(m["fingerprint"]), Created: valueString(m["created"]), PublicKey: valueString(m["ssh_key"])}
+		keys = append(keys, key)
+	}
+	return keys, nil
+}
+
+func loadLinodeProfileSSHKeys(plan Plan) ([]SSHAuthorizedKey, error) {
+	args := []string{"sshkeys", "list", "--json"}
+	if !plan.AllLinodeSshKeys {
+		if plan.SshKeyLabel != "" {
+			args = append(args, "--label", plan.SshKeyLabel)
+		}
+		if plan.SshKeyID != "" {
+			args = append(args, "--id", plan.SshKeyID)
+		}
+	}
+	payload, err := runLinodeCLIValueFn(args)
+	if err != nil {
+		return nil, err
+	}
+	keys, err := parseLinodeSSHKeysPayload(payload)
+	if err != nil {
+		return nil, err
+	}
+	return keys, nil
+}
+
+func selectLinodeSSHKeys(plan Plan, keys []SSHAuthorizedKey) ([]SSHAuthorizedKey, error) {
+	if len(keys) == 0 {
+		return nil, Error{Msg: "No Linode profile SSH keys were found. Use --ssh-key-source file --ssh-public-key-file <path> or add keys to the Linode profile."}
+	}
+	if plan.NonInteractive || plan.AllLinodeSshKeys || plan.SshKeyLabel != "" || plan.SshKeyID != "" {
+		return keys, nil
+	}
+	options := make([]ui.SelectOption, 0, len(keys))
+	for _, key := range keys {
+		label := key.Label
+		if label == "" {
+			label = key.ID
+		}
+		if key.Fingerprint != "" {
+			label += " / " + key.Fingerprint
+		}
+		options = append(options, ui.SelectOption{Label: label, Value: key.ID, Default: true})
+	}
+	selectedIDs, err := multiSelectFn("Choose Linode SSH keys", options)
+	if err != nil {
+		return nil, err
+	}
+	selected := make([]SSHAuthorizedKey, 0, len(selectedIDs))
+	selectedSet := map[string]struct{}{}
+	for _, id := range selectedIDs {
+		selectedSet[id] = struct{}{}
+	}
+	for _, key := range keys {
+		if _, ok := selectedSet[key.ID]; ok {
+			selected = append(selected, key)
+		}
+	}
+	return selected, nil
+}
+
+func resolveAuthorizedKeys(plan Plan, actual bool) ([]SSHAuthorizedKey, error) {
+	source := firstNonEmpty(plan.SshKeySource, "linode-profile")
+	switch source {
+	case "file":
+		data, err := os.ReadFile(plan.SshPublicKeyFile)
+		if err != nil {
+			return nil, err
+		}
+		return []SSHAuthorizedKey{{Source: "file", Path: plan.SshPublicKeyFile, PublicKey: strings.TrimSpace(string(data)), Label: filepath.Base(plan.SshPublicKeyFile)}}, nil
+	default:
+		if !actual {
+			return nil, nil
+		}
+		keys, err := loadLinodeProfileSSHKeys(plan)
+		if err != nil {
+			return nil, err
+		}
+		return selectLinodeSSHKeys(plan, keys)
+	}
+}
+
+func sshBodiesFromKeys(keys []SSHAuthorizedKey) []string {
+	return sshKeyBodies(keys)
+}
+
+func findProvisionStateRecord(plan Plan) (map[string]any, int, error) {
+	records, err := loadStatePayload(filepath.Join(config.StateDir(), "servers.json"))
+	if err != nil {
+		return nil, -1, err
+	}
+	for i, record := range records {
+		if matchesProvisionStateRecord(record, plan.Provider, "", plan.Hostname, plan.Name, plan.Label) {
+			return record, i, nil
+		}
+	}
+	return nil, -1, nil
+}
+
+func existingProvisionStatus(record map[string]any) string {
+	return strings.ToLower(valueString(record["status"]))
+}
+
+func existingProvisionPhase(record map[string]any) string {
+	return strings.ToLower(valueString(record["phase"]))
+}
+
+func serverStateRecord(plan Plan, created CreatedServer, dns DNSState, tls TLSState, createdAt string) map[string]any {
+	return serverStateRecordWithStatus(plan, created, dns, tls, createdAt, createdAt, "provisioned", "complete")
+}
+
+func serverStateRecordWithStatus(plan Plan, created CreatedServer, dns DNSState, tls TLSState, createdAt, updatedAt, status, phase string) map[string]any {
+	sshState := sshStateBlock(plan, plan.AuthorizedKeys)
+	record := map[string]any{
+		"provider":    plan.Provider,
+		"provider_id": created.ProviderID,
+		"name":        plan.Name,
+		"hostname":    plan.Hostname,
+		"label":       plan.Label,
+		"status":      status,
+		"phase":       phase,
+		"ipv4":        created.IPv4,
+		"region":      plan.Region,
+		"type":        plan.LinodeType,
+		"image":       plan.Image,
+		"ssh":         sshState,
+		"created_at":  createdAt,
+		"updated_at":  updatedAt,
+	}
+	record["linode"] = map[string]any{
+		"id":          created.ProviderID,
+		"instance_id": created.ProviderID,
+		"label":       plan.Label,
+		"region":      plan.Region,
+		"type":        plan.LinodeType,
+		"image":       plan.Image,
+		"ssh":         sshState,
+	}
+	if dns.Provider != "" {
+		record["dns"] = map[string]any{
+			"provider":        dns.Provider,
+			"zone":            dns.Zone,
+			"hostname_record": dns.HostnameRecord,
+			"wildcard_record": dns.WildcardRecord,
+		}
+	}
+	if tls.Provider != "" {
+		record["tls"] = map[string]any{
+			"provider":    tls.Provider,
+			"domains":     tls.Domains,
+			"certificate": tls.Certificate,
+			"key":         tls.Key,
+		}
+	}
+	record["os"] = map[string]any{
+		"family":         "ubuntu",
+		"ubuntu_version": plan.OS.UbuntuVersion,
+		"version":        plan.OS.UbuntuVersion,
+		"label":          strings.TrimPrefix(plan.OS.Label, "Ubuntu "),
+		"image":          plan.OS.Image,
+		"package_source": plan.OS.PackageSource,
+		"packages":       plan.OS.Packages,
+	}
+	record["php"] = map[string]any{
+		"version":        plan.PHP.Version,
+		"package_source": plan.PHP.PackageSource,
+		"service":        plan.PHP.Service,
+		"socket":         plan.PHP.Socket,
+		"packages":       plan.PHP.Packages,
+	}
+	record["services"] = map[string]any{
+		"nginx":   true,
+		"mariadb": true,
+		"php_fpm": plan.PHP.Service,
+		"wp_cli":  "/usr/local/bin/wp",
+	}
+	if created.ProviderID != "" {
+		record["id"] = created.ProviderID
+		record["linode_id"] = created.ProviderID
+	}
+	return record
 }
 
 func relativeRecordName(fqdn, zone string) string {
@@ -539,15 +1189,15 @@ func dnsimpleUpsertARecord(token, accountID, zone, name, ip string) error {
 		}
 	}
 	if existing != nil {
-		recordID := fmt.Sprint(existing["id"])
+		recordID, err := apiIDString(existing["id"])
+		if err != nil {
+			return Error{Msg: fmt.Sprintf("DNSimple record is missing a valid id: %v", err)}
+		}
 		currentIP := fmt.Sprint(existing["content"])
 		if currentIP == ip {
 			return nil
 		}
-		if recordID == "" || recordID == "<nil>" {
-			return Error{Msg: "DNSimple record is missing an id."}
-		}
-		_, err := dnsimpleRequest("PATCH", dnsimpleURL(accountID, "/zones/"+encodedZone+"/records/"+url.PathEscape(recordID)), token, map[string]any{"content": ip, "ttl": 60})
+		_, err = dnsimpleRequest("PATCH", dnsimpleURL(accountID, "/zones/"+encodedZone+"/records/"+recordID), token, map[string]any{"content": ip, "ttl": 60})
 		return err
 	}
 	_, err = dnsimpleRequest("POST", dnsimpleURL(accountID, "/zones/"+encodedZone+"/records"), token, map[string]any{"name": name, "type": "A", "content": ip, "ttl": 60})
@@ -555,34 +1205,63 @@ func dnsimpleUpsertARecord(token, accountID, zone, name, ip string) error {
 }
 
 func planLines(plan Plan, cloudInitPath string) []string {
-	lines := []string{
-		"provider: " + plan.Provider,
-		"server name: " + plan.ServerName,
-		"label: " + plan.Label,
-		"region: " + plan.Region,
-		"type: " + plan.LinodeType,
-		"image: " + plan.Image,
-		"server domain: " + plan.SiteDomain,
-		"dns zone: " + firstNonEmpty(plan.DnsZone, "inferred during execution"),
-		"dnsimple account id: " + plan.DnsimpleAccountID,
+	zone := strings.TrimSpace(plan.DnsZone)
+	zoneSuffix := " (inferred)"
+	if zone != "" {
+		zoneSuffix = " (explicit)"
+	} else if inferred := inferredDnsimpleZone(plan.Hostname); inferred != "" {
+		zone = inferred
+	} else {
+		zone = "<inferred during execution>"
 	}
+	lines := []string{
+		"Server",
+		"  provider: " + plan.Provider,
+		"  name: " + plan.Name,
+		"  hostname: " + plan.Hostname,
+		"  label: " + plan.Label,
+		"  region: " + plan.Region,
+		"  type: " + plan.LinodeType,
+		"OS/PHP",
+		"  stack: " + stackSummary(plan),
+		"  ubuntu: " + ubuntuDisplayLabel(plan),
+		"  image: " + plan.OS.Image,
+		"  php: " + plan.PHP.Version,
+		"  php service: " + plan.PHP.Service,
+		"  php socket: " + plan.PHP.Socket,
+		"  package source: " + plan.OS.PackageSource,
+		"  base packages: " + joinedPackages(plan.OS.Packages),
+		"  packages: " + joinedPackages(plan.PHP.Packages),
+		"DNS",
+		"  provider: " + plan.DnsProvider,
+		"  zone: " + zone + zoneSuffix,
+		"  hostname A: " + plan.Hostname + " -> <created after server IP is known>",
+		"  wildcard A: *." + plan.Hostname + " -> <created after server IP is known>",
+		"TLS",
+		"  provider: certbot-dnsimple",
+		"  domains: " + plan.Hostname + ", *." + plan.Hostname,
+		"  certificate: /etc/letsencrypt/live/" + plan.Hostname + "/fullchain.pem",
+		"  key: /etc/letsencrypt/live/" + plan.Hostname + "/privkey.pem",
+	}
+	lines = append(lines, sshPlanBlock(plan)...)
+	lines = append(lines, "Mode", "  dry-run: true")
 	if cloudInitPath != "" {
-		lines = append(lines, "cloud-init preview: "+cloudInitPath)
+		lines = append(lines, "  cloud-init preview: "+cloudInitPath)
 	}
 	return lines
 }
 
 func renderPlan(plan Plan, cloudInitPath, cloudInitPreview string) string {
-	header := "Provision server dry-run plan"
+	header := "Server provision dry-run plan"
 	if plan.Execute {
-		header = "Provision server plan"
+		header = "Server provision plan"
 	}
 	if plan.Execute && plan.NonInteractive && !plan.Yes {
-		header = "Provision server blocked (missing --yes)"
+		header = "Server provision blocked (missing --yes)"
 	}
 	lines := []string{header, ""}
 	for _, line := range planLines(plan, cloudInitPath) {
-		lines = append(lines, "- "+line)
+		lines = append(lines, line)
 	}
 	if cloudInitPreview != "" {
 		lines = append(lines, "", "cloud-init preview:", strings.TrimRight(cloudInitPreview, "\n"))
@@ -604,7 +1283,7 @@ func resolveValue(explicit, prompt, defaultValue string, nonInteractive, allowBl
 		}
 		return defaultValue, nil
 	}
-	v, err := ui.PromptString(prompt, defaultValue, allowBlank)
+	v, err := promptStringFn(prompt, defaultValue, allowBlank)
 	if err != nil {
 		return "", err
 	}
@@ -620,26 +1299,22 @@ func resolveValue(explicit, prompt, defaultValue string, nonInteractive, allowBl
 
 func BuildPlan(args Args) (Plan, error) {
 	nonInteractive := args.NonInteractive
-	projectRoot, metadata, err := projectContext()
-	if err != nil {
-		return Plan{}, err
-	}
 	provider := firstNonEmpty(args.Provider, "linode")
-	projectSlug := inferProjectSlug(args.ProjectSlug, metadata, projectRoot)
-	if strings.TrimSpace(projectSlug) == "" {
-		projectSlug = "site"
-	}
-	projectName := inferProjectName(metadata, projectSlug)
-	// TODO: move project-aware inference into the future project deploy flow.
-	serverName, err := resolveValue(args.ServerName, "Server name: ", "app1", nonInteractive, false)
+	dnsProvider := firstNonEmpty(args.DnsProvider, "dnsimple")
+	dnsZone := firstNonEmpty(args.DnsZone, envwizard.Value("DNSIMPLE_ZONE_NAME"))
+	ubuntuRelease, err := selectUbuntuStack(args.UbuntuVersion, nonInteractive)
 	if err != nil {
 		return Plan{}, err
 	}
-	label, err := resolveValue(args.Label, "Linode label: ", firstNonEmpty(serverName, projectSlug), nonInteractive, false)
+	name, err := resolveValue(args.Name, "Server name: ", "app1", nonInteractive, false)
 	if err != nil {
 		return Plan{}, err
 	}
-	siteDomain, err := resolveValue(args.SiteDomain, "Server domain: ", serverName+".nfweb.dev", nonInteractive, false)
+	hostname, err := resolveValue(args.Hostname, "Hostname: ", defaultHostname(name), nonInteractive, false)
+	if err != nil {
+		return Plan{}, err
+	}
+	label, err := resolveValue(args.Label, "Linode label: ", firstNonEmpty(name, hostname), nonInteractive, false)
 	if err != nil {
 		return Plan{}, err
 	}
@@ -651,48 +1326,61 @@ func BuildPlan(args Args) (Plan, error) {
 	if err != nil {
 		return Plan{}, err
 	}
-	image, err := resolveValue(args.Image, "Linode image: ", "linode/ubuntu24.04", nonInteractive, false)
-	if err != nil {
-		return Plan{}, err
-	}
 	sshUser, err := resolveValue(args.SshUser, "Deployment SSH user: ", "nonfiction", nonInteractive, false)
 	if err != nil {
 		return Plan{}, err
 	}
-	sshPublicKeyFile, err := resolveValue(args.SshPublicKeyFile, "SSH public key file: ", "~/.ssh/id_ed25519.pub", nonInteractive, false)
-	if err != nil {
-		return Plan{}, err
-	}
-	phpFpmSocket, err := resolveValue(args.PhpFpmSocket, "PHP-FPM socket: ", "/var/run/php/php8.3-fpm.sock", nonInteractive, false)
-	if err != nil {
-		return Plan{}, err
+	sshKeySource := firstNonEmpty(args.SshKeySource, "linode-profile")
+	explicitSSHPublicKeyFile := strings.TrimSpace(args.SshPublicKeyFile)
+	sshPublicKeyFile := ""
+	if explicitSSHPublicKeyFile != "" || sshKeySource == "file" {
+		if explicitSSHPublicKeyFile != "" && strings.TrimSpace(args.SshKeySource) == "" {
+			sshKeySource = "file"
+		}
+		sshPublicKeyFile, err = resolveValue(explicitSSHPublicKeyFile, "SSH public key file: ", "~/.ssh/id_ed25519.pub", nonInteractive, false)
+		if err != nil {
+			return Plan{}, err
+		}
+		sshPublicKeyFile = cleanPath(sshPublicKeyFile)
 	}
 	dnsimpleAccountID := firstNonEmpty(args.DnsimpleAccountID, envwizard.Value("DNSIMPLE_ACCOUNT_ID"), "14")
-	dnsZone := strings.TrimSpace(args.DnsZone)
 	writeCloudInit := strings.TrimSpace(args.WriteCloudInit)
+	if provider != "linode" {
+		return Plan{}, Error{Msg: fmt.Sprintf("Unsupported provider %q. Only linode is available in this slice.", provider)}
+	}
+	if dnsProvider != "dnsimple" {
+		return Plan{}, Error{Msg: fmt.Sprintf("Unsupported DNS provider %q. Only dnsimple is available in this slice.", dnsProvider)}
+	}
+	osPlan, err := osReleasePlan(ubuntuRelease.version, args.Image)
+	if err != nil {
+		return Plan{}, err
+	}
+	phpPlan, err := phpReleaseForUbuntu(ubuntuRelease.version)
+	if err != nil {
+		return Plan{}, err
+	}
 	return Plan{
 		Provider:          provider,
-		ProjectRoot:       projectRoot,
-		ProjectSlug:       projectSlug,
-		ProjectName:       projectName,
-		ServerName:        firstNonEmpty(serverName, "app1"),
-		Label:             firstNonEmpty(label, serverName, projectSlug),
+		DnsProvider:       dnsProvider,
+		DnsZone:           dnsZone,
+		UbuntuVersion:     ubuntuRelease.version,
+		PHPVersion:        ubuntuRelease.php,
+		Name:              firstNonEmpty(name, "app1"),
+		Hostname:          firstNonEmpty(hostname, defaultHostname(name)),
+		Label:             firstNonEmpty(label, name, hostname),
 		Region:            firstNonEmpty(region, "ca-central"),
 		LinodeType:        firstNonEmpty(linodeType, "g6-standard-1"),
-		Image:             firstNonEmpty(image, "linode/ubuntu24.04"),
+		Image:             osPlan.Image,
 		SshUser:           firstNonEmpty(sshUser, "nonfiction"),
-		SshPublicKeyFile:  cleanPath(firstNonEmpty(sshPublicKeyFile, "~/.ssh/id_ed25519.pub")),
-		SiteDomain:        firstNonEmpty(siteDomain, firstNonEmpty(serverName, "app1")+".nfweb.dev"),
-		RemoteWpPath:      firstNonEmpty(args.RemoteWpPath, defaultRemoteWpPath(projectSlug)),
-		PhpFpmSocket:      firstNonEmpty(phpFpmSocket, "/var/run/php/php8.3-fpm.sock"),
-		DbName:            firstNonEmpty(args.DbName, projectSlug),
-		DbUser:            firstNonEmpty(args.DbUser, projectSlug),
-		WpAdminUser:       firstNonEmpty(args.WpAdminUser, "nf-"+projectSlug),
-		WpAdminEmail:      firstNonEmpty(args.WpAdminEmail, "web@nonfiction.ca"),
-		SiteTitle:         firstNonEmpty(args.SiteTitle, projectName, slugToTitle(projectSlug)),
-		DnsZone:           dnsZone,
+		SshKeySource:      sshKeySource,
+		SshKeyLabel:       strings.TrimSpace(args.SshKeyLabel),
+		SshKeyID:          strings.TrimSpace(args.SshKeyID),
+		AllLinodeSshKeys:  args.AllLinodeSshKeys,
+		SshPublicKeyFile:  sshPublicKeyFile,
 		DnsimpleAccountID: firstNonEmpty(dnsimpleAccountID, "14"),
 		WriteCloudInit:    cleanPath(writeCloudInit),
+		OS:                osPlan,
+		PHP:               phpPlan,
 		Execute:           args.Execute,
 		Yes:               args.Yes,
 		DryRun:            args.DryRun || !args.Execute,
@@ -701,8 +1389,91 @@ func BuildPlan(args Args) (Plan, error) {
 	}, nil
 }
 
+func inferredDnsimpleZone(hostname string) string {
+	parts := strings.Split(strings.TrimSpace(hostname), ".")
+	if len(parts) < 2 {
+		return ""
+	}
+	return strings.Join(parts[1:], ".")
+}
+
+func dnsRecordLine(label string, record DNSRecord) string {
+	return fmt.Sprintf("  %s: %s -> %s", label, record.Name, record.Content)
+}
+
+func renderProvisionSuccess(plan Plan, created CreatedServer, dns DNSState, tls TLSState, statePath, cloudInitPath string, sshKeys []SSHAuthorizedKey) string {
+	lines := []string{
+		"Server provisioned.",
+		"",
+		"Server",
+		"  provider: " + plan.Provider,
+		"  name: " + plan.Name,
+		"  hostname: " + plan.Hostname,
+		"  label: " + plan.Label,
+		"  ipv4: " + created.IPv4,
+		"  linode instance id: " + created.ProviderID,
+		"OS/PHP",
+		"  stack: " + stackSummary(plan),
+		"  ubuntu: " + ubuntuDisplayLabel(plan),
+		"  image: " + plan.OS.Image,
+		"  php: " + plan.PHP.Version,
+		"  php service: " + plan.PHP.Service,
+		"  php socket: " + plan.PHP.Socket,
+		"  package source: " + plan.OS.PackageSource,
+		"  base packages: " + joinedPackages(plan.OS.Packages),
+		"  packages: " + joinedPackages(plan.PHP.Packages),
+		"DNS",
+		"  provider: " + dns.Provider,
+		"  zone: " + dns.Zone,
+		dnsRecordLine("hostname A", dns.HostnameRecord),
+		dnsRecordLine("wildcard A", dns.WildcardRecord),
+		"TLS",
+		"  provider: " + tls.Provider,
+		"  domains: " + strings.Join(tls.Domains, ", "),
+		"  certificate: " + tls.Certificate,
+		"  key: " + tls.Key,
+		"State",
+		"  path: " + statePath,
+	}
+	lines = append(lines, sshSuccessBlock(plan, sshKeys)...)
+	if cloudInitPath != "" {
+		lines = append(lines, "  cloud-init: "+cloudInitPath)
+	}
+	sshTarget := plan.SshUser + "@" + plan.Hostname
+	lines = append(lines,
+		"Next",
+		"  wait for cloud-init to finish:",
+		"  ssh "+sshTarget+" \"cloud-init status --wait\"",
+		"  enable wildcard TLS:",
+		"  ssh "+sshTarget+" \"sudo /usr/local/bin/nf-enable-wildcard-tls\"",
+	)
+	return strings.Join(lines, "\n") + "\n"
+}
+
+func renderProvisionPartialFailure(plan Plan, created CreatedServer, statePath string, dnsErr error) string {
+	lines := []string{
+		"Server provisioning paused.",
+		"",
+		"Server",
+		"  provider: " + plan.Provider,
+		"  name: " + plan.Name,
+		"  hostname: " + plan.Hostname,
+		"  provider id: " + created.ProviderID,
+		"  ipv4: " + created.IPv4,
+		"  status: provisioning",
+		"  phase: linode_created",
+		"State",
+		"  path: " + statePath,
+		"DNS error",
+		"  " + strings.TrimSpace(dnsErr.Error()),
+		"Next",
+		"  rerun the same provision command to resume DNS and TLS setup.",
+	}
+	return strings.Join(lines, "\n") + "\n"
+}
+
 func preparePlan(plan Plan) (Plan, string, error) {
-	preview, err := renderCloudInit(plan, false, "", "", "")
+	preview, err := renderCloudInit(plan, false, "", nil)
 	if err != nil {
 		return Plan{}, "", err
 	}
@@ -722,17 +1493,17 @@ func preparePlan(plan Plan) (Plan, string, error) {
 		}
 		return plan, plan.WriteCloudInit, nil
 	}
+	if len(plan.AuthorizedKeys) == 0 {
+		sshKeys, err := resolveAuthorizedKeys(plan, true)
+		if err != nil {
+			return Plan{}, plan.WriteCloudInit, err
+		}
+		plan.AuthorizedKeys = sshKeys
+	}
 	if plan.Execute && plan.Yes {
 		return plan, plan.WriteCloudInit, nil
 	}
-	answer, err := ui.Confirm("Execute remote provisioning?", false)
-	if err != nil {
-		return Plan{}, plan.WriteCloudInit, err
-	}
-	if !answer {
-		return Plan{}, plan.WriteCloudInit, nil
-	}
-	answer, err = ui.Confirm("This will create a Linode and DNS records. Continue?", false)
+	answer, err := confirmFn("This will create a Linode server and DNS records. Continue?", false)
 	if err != nil {
 		return Plan{}, plan.WriteCloudInit, err
 	}
@@ -764,61 +1535,7 @@ func upsertStateRecord(path string, candidate map[string]any) error {
 	return saveStatePayload(path, records)
 }
 
-func serverStateRecord(effectivePlan Plan, linodeID, linodeIP, dnsZone, createdAt string) map[string]any {
-	record := map[string]any{
-		"id":         linodeID,
-		"provider":   effectivePlan.Provider,
-		"project":    effectivePlan.ProjectSlug,
-		"name":       effectivePlan.ServerName,
-		"label":      effectivePlan.Label,
-		"hostname":   effectivePlan.SiteDomain,
-		"status":     "provisioned",
-		"linode_id":  linodeID,
-		"ipv4":       linodeIP,
-		"region":     effectivePlan.Region,
-		"type":       effectivePlan.LinodeType,
-		"image":      effectivePlan.Image,
-		"ssh":        map[string]any{"host": effectivePlan.SiteDomain, "user": effectivePlan.SshUser, "port": 22},
-		"dns_zone":   dnsZone,
-		"created_at": createdAt,
-	}
-	services := map[string]any{}
-	if strings.TrimSpace(effectivePlan.PhpFpmSocket) != "" {
-		services["php_fpm"] = phpFpmServiceName(effectivePlan.PhpFpmSocket)
-	}
-	if len(services) > 0 {
-		record["services"] = services
-	}
-	if linodeID != "" {
-		record["linode"] = map[string]any{"instance_id": linodeID}
-	}
-	return record
-}
-
-func siteStateRecord(effectivePlan Plan, dnsZone, createdAt string) map[string]any {
-	return map[string]any{
-		"provider":      effectivePlan.Provider,
-		"project":       effectivePlan.ProjectSlug,
-		"slug":          effectivePlan.ProjectSlug,
-		"name":          effectivePlan.ProjectSlug,
-		"hostname":      effectivePlan.SiteDomain,
-		"url":           "https://" + effectivePlan.SiteDomain,
-		"server":        effectivePlan.ServerName,
-		"label":         effectivePlan.Label,
-		"status":        "provisioned",
-		"remote_path":   effectivePlan.RemoteWpPath,
-		"wordpress":     map[string]any{"wp_path": effectivePlan.RemoteWpPath},
-		"database":      map[string]any{"name": effectivePlan.DbName, "user": effectivePlan.DbUser},
-		"wp_admin_user": effectivePlan.WpAdminUser,
-		"dns_zone":      dnsZone,
-		"created_at":    createdAt,
-	}
-}
-
-func ProvisionServer(plan Plan) (*struct{ LinodeID, IPv4, DnsZone, ServerStatePath, SiteStatePath string }, error) {
-	if plan.Provider != "linode" {
-		return nil, Error{Msg: fmt.Sprintf("Unsupported provider %q. Only linode is available in this slice.", plan.Provider)}
-	}
+func ProvisionServer(plan Plan) (*ServerCreateResult, error) {
 	effectivePlan, previewPath, err := preparePlan(plan)
 	if err != nil {
 		return nil, err
@@ -827,85 +1544,139 @@ func ProvisionServer(plan Plan) (*struct{ LinodeID, IPv4, DnsZone, ServerStatePa
 	if !effectivePlan.Execute {
 		return nil, nil
 	}
+	serverStatePath := filepath.Join(config.StateDir(), "servers.json")
+	existingRecord, _, err := findProvisionStateRecord(effectivePlan)
+	if err != nil {
+		return nil, err
+	}
+	if existingRecord != nil {
+		status := existingProvisionStatus(existingRecord)
+		phase := existingProvisionPhase(existingRecord)
+		if status == "provisioned" || phase == "complete" {
+			return nil, Error{Msg: fmt.Sprintf("Server %q is already provisioned. No changes made.\nState: %s", effectivePlan.Hostname, serverStatePath)}
+		}
+	}
 	if err := envwizard.Ensure(provisionRequirements(), effectivePlan.NonInteractive); err != nil {
 		return nil, err
 	}
 	if err := validateActualExecution(effectivePlan); err != nil {
 		return nil, err
 	}
-	salt, err := passwords.SecretSalt()
+	sshKeys := effectivePlan.AuthorizedKeys
+	if len(sshKeys) == 0 {
+		var err error
+		sshKeys, err = resolveAuthorizedKeys(effectivePlan, true)
+		if err != nil {
+			return nil, err
+		}
+		effectivePlan.AuthorizedKeys = sshKeys
+	}
+	salt, err := secretSaltFn()
 	if err != nil {
 		return nil, err
 	}
-	rootPass := passwords.DerivePassword(effectivePlan.ProjectSlug, "root", salt)
-	dbPass := passwords.DerivePassword(effectivePlan.ProjectSlug, "db", salt)
-	wpAdminPass := passwords.DerivePassword(effectivePlan.ProjectSlug, "wp", salt)
+	rootPass := passwords.DerivePassword(firstNonEmpty(effectivePlan.Hostname, effectivePlan.Name), "linode-root", salt)
 	dnsimpleToken, err := requiredEnv("DNSIMPLE_TOKEN")
 	if err != nil {
 		return nil, err
 	}
-	rendered, err := renderCloudInit(effectivePlan, true, dbPass, wpAdminPass, dnsimpleToken)
+	rendered, err := renderCloudInit(effectivePlan, true, dnsimpleToken, sshKeyBodies(sshKeys))
 	if err != nil {
 		return nil, err
 	}
-	sshPublicKey, err := os.ReadFile(effectivePlan.SshPublicKeyFile)
-	if err != nil {
-		return nil, err
-	}
-	linodePayload, err := runLinodeCLI([]string{
-		"linodes", "create",
-		"--region", effectivePlan.Region,
-		"--type", effectivePlan.LinodeType,
-		"--image", effectivePlan.Image,
-		"--label", effectivePlan.Label,
-		"--root_pass", rootPass,
-		"--authorized_keys", strings.TrimSpace(string(sshPublicKey)),
-		"--metadata.user_data", base64UserData(rendered),
-	})
-	if err != nil {
-		return nil, err
-	}
-	linodeID := fmt.Sprint(linodePayload["id"])
+	now := currentTime().UTC().Format(time.RFC3339)
+	var created CreatedServer
+	var linodeID string
 	var linodeIP string
-	switch ipv4 := linodePayload["ipv4"].(type) {
-	case []any:
-		if len(ipv4) > 0 {
-			linodeIP = fmt.Sprint(ipv4[0])
+	if existingRecord != nil {
+		linodeID, err = apiIDString(existingRecord["provider_id"])
+		if err != nil {
+			linodeID, err = apiIDString(existingRecord["id"])
+			if err != nil {
+				return nil, Error{Msg: fmt.Sprintf("Existing provisioning record for %q is missing a usable provider id.", effectivePlan.Hostname)}
+			}
 		}
-	case string:
-		linodeIP = ipv4
+		linodeIP = valueString(existingRecord["ipv4"])
+		if linodeIP == "" {
+			return nil, Error{Msg: fmt.Sprintf("Existing provisioning record for %q is missing an IPv4 address and cannot resume.", effectivePlan.Hostname)}
+		}
+		created = CreatedServer{Provider: effectivePlan.Provider, ProviderID: linodeID, Name: effectivePlan.Name, Hostname: effectivePlan.Hostname, IPv4: linodeIP}
+	} else {
+		createArgs := []string{
+			"linodes", "create",
+			"--region", effectivePlan.Region,
+			"--type", effectivePlan.LinodeType,
+			"--image", effectivePlan.Image,
+			"--label", effectivePlan.Label,
+			"--root_pass", rootPass,
+		}
+		createArgs = appendLinodeAuthorizedKeyArgs(createArgs, sshKeys)
+		createArgs = append(createArgs, "--metadata.user_data", base64UserData(rendered))
+		linodePayload, err := runLinodeCLICommand(createArgs)
+		if err != nil {
+			return nil, err
+		}
+		linodeID, err = apiIDString(linodePayload["id"])
+		if err != nil {
+			return nil, Error{Msg: fmt.Sprintf("Linode response included an invalid id: %v", err)}
+		}
+		switch ipv4 := linodePayload["ipv4"].(type) {
+		case []any:
+			if len(ipv4) > 0 {
+				linodeIP = valueString(ipv4[0])
+			}
+		case string:
+			linodeIP = strings.TrimSpace(ipv4)
+		}
+		if linodeIP == "" {
+			return nil, Error{Msg: "Linode response did not include an IPv4 address."}
+		}
+		created = CreatedServer{Provider: effectivePlan.Provider, ProviderID: linodeID, Name: effectivePlan.Name, Hostname: effectivePlan.Hostname, IPv4: linodeIP}
+		partial := serverStateRecordWithStatus(effectivePlan, created, DNSState{}, TLSState{}, now, now, "provisioning", "linode_created")
+		if err := upsertStateRecord(serverStatePath, partial); err != nil {
+			return nil, err
+		}
 	}
-	if linodeIP == "" {
-		return nil, Error{Msg: "Linode response did not include an IPv4 address."}
-	}
-	dnsZone, err := findDnsimpleZone(effectivePlan, dnsimpleToken)
+	dnsZone, err := dnsimpleZoneLookup(effectivePlan, dnsimpleToken)
 	if err != nil {
+		return nil, Error{Msg: renderProvisionPartialFailure(effectivePlan, created, serverStatePath, err)}
+	}
+	if err := dnsimpleUpsertHostnameRecords(dnsimpleToken, effectivePlan.DnsimpleAccountID, dnsZone, effectivePlan.Hostname, linodeIP); err != nil {
+		return nil, Error{Msg: renderProvisionPartialFailure(effectivePlan, created, serverStatePath, err)}
+	}
+	dnsState := dnsStateRecord(effectivePlan, dnsZone, linodeIP)
+	tlsState := tlsStateRecord(effectivePlan)
+	if err := upsertStateRecord(serverStatePath, serverStateRecordWithStatus(effectivePlan, created, dnsState, TLSState{}, now, now, "provisioning", "dns_configured")); err != nil {
 		return nil, err
 	}
-	if err := dnsimpleUpsertARecord(dnsimpleToken, effectivePlan.DnsimpleAccountID, dnsZone, relativeRecordName(effectivePlan.SiteDomain, dnsZone), linodeIP); err != nil {
+	if err := upsertStateRecord(serverStatePath, serverStateRecordWithStatus(effectivePlan, created, dnsState, tlsState, now, now, "provisioned", "complete")); err != nil {
 		return nil, err
 	}
-	if err := dnsimpleUpsertARecord(dnsimpleToken, effectivePlan.DnsimpleAccountID, dnsZone, relativeRecordName("*."+effectivePlan.SiteDomain, dnsZone), linodeIP); err != nil {
-		return nil, err
+	fmt.Print(renderProvisionSuccess(effectivePlan, created, dnsState, tlsState, serverStatePath, firstNonEmpty(previewPath, "not written"), sshKeys))
+	return &ServerCreateResult{Server: created, DNS: dnsState, TLS: tlsState, StatePath: serverStatePath, CloudInitPath: previewPath}, nil
+}
+
+func matchesProvisionStateRecord(record map[string]any, provider, providerID, hostname, name, label string) bool {
+	if strings.ToLower(valueString(record["provider"])) != strings.ToLower(strings.TrimSpace(provider)) {
+		return false
 	}
-	serverStatePath := filepath.Join(config.StateDir(), "servers.json")
-	siteStatePath := filepath.Join(config.StateDir(), "sites.json")
-	now := time.Now().UTC().Format(time.RFC3339)
-	serverRecord := serverStateRecord(effectivePlan, linodeID, linodeIP, dnsZone, now)
-	siteRecord := siteStateRecord(effectivePlan, dnsZone, now)
-	if err := upsertStateRecord(serverStatePath, serverRecord); err != nil {
-		return nil, err
+	if providerID != "" {
+		for _, key := range []string{"provider_id", "linode_id", "id"} {
+			if valueString(record[key]) == providerID {
+				return true
+			}
+		}
 	}
-	if err := upsertStateRecord(siteStatePath, siteRecord); err != nil {
-		return nil, err
+	if hostname != "" && valueString(record["hostname"]) == hostname {
+		return true
 	}
-	fmt.Printf("created linode id: %s\n", linodeID)
-	fmt.Printf("ipv4: %s\n", linodeIP)
-	fmt.Printf("dns zone: %s\n", dnsZone)
-	fmt.Printf("cloud-init preview: %s\n", firstNonEmpty(previewPath, "not written"))
-	fmt.Printf("state updated: %s\n", serverStatePath)
-	fmt.Printf("state updated: %s\n", siteStatePath)
-	return &struct{ LinodeID, IPv4, DnsZone, ServerStatePath, SiteStatePath string }{linodeID, linodeIP, dnsZone, serverStatePath, siteStatePath}, nil
+	if name != "" && valueString(record["name"]) == name {
+		return true
+	}
+	if label != "" && valueString(record["label"]) == label {
+		return true
+	}
+	return false
 }
 
 func loadStatePayload(path string) ([]map[string]any, error) {
@@ -916,8 +1687,10 @@ func loadStatePayload(path string) ([]map[string]any, error) {
 		}
 		return nil, err
 	}
+	dec := json.NewDecoder(bytes.NewReader(data))
+	dec.UseNumber()
 	var payload any
-	if err := json.Unmarshal(data, &payload); err != nil {
+	if err := dec.Decode(&payload); err != nil {
 		return nil, err
 	}
 	switch typed := payload.(type) {
@@ -980,10 +1753,19 @@ func saveStatePayload(path string, records []map[string]any) error {
 }
 
 func recordMatches(record, candidate map[string]any) bool {
-	for _, key := range []string{"linode_id", "hostname", "name", "slug", "label"} {
-		left, lok := record[key]
-		right, rok := candidate[key]
-		if lok && rok && fmt.Sprint(left) == fmt.Sprint(right) {
+	if strings.ToLower(valueString(record["provider"])) != strings.ToLower(valueString(candidate["provider"])) {
+		return false
+	}
+	if candidateID := firstNonEmpty(valueString(candidate["provider_id"]), valueString(candidate["linode_id"]), valueString(candidate["id"])); candidateID != "" {
+		for _, key := range []string{"provider_id", "linode_id", "id"} {
+			if valueString(record[key]) == candidateID {
+				return true
+			}
+		}
+	}
+	for _, key := range []string{"hostname", "name", "slug", "label"} {
+		candidateValue := strings.TrimSpace(valueString(candidate[key]))
+		if candidateValue != "" && valueString(record[key]) == candidateValue {
 			return true
 		}
 	}
