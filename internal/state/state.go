@@ -33,8 +33,10 @@ func loadJSONFile(path string) (any, error) {
 	if err != nil {
 		return nil, err
 	}
+	dec := json.NewDecoder(strings.NewReader(string(data)))
+	dec.UseNumber()
 	var payload any
-	if err := json.Unmarshal(data, &payload); err != nil {
+	if err := dec.Decode(&payload); err != nil {
 		return nil, err
 	}
 	return payload, nil
@@ -187,7 +189,7 @@ func MatchingRecord(records []map[string]any, needle string) map[string]any {
 	if normalized == "" {
 		return nil
 	}
-	candidateFields := []string{"id", "_state_key", "name", "slug", "hostname", "label"}
+	candidateFields := []string{"id", "provider_id", "_state_key", "name", "slug", "hostname", "label"}
 	matches := func(value any) bool {
 		str, ok := value.(string)
 		return ok && strings.ToLower(strings.TrimSpace(str)) == normalized
