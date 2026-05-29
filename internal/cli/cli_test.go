@@ -184,6 +184,57 @@ func TestRunInitHelpShowsFlags(t *testing.T) {
 	}
 }
 
+func TestRunServerHelpShowsProvisionFlags(t *testing.T) {
+	output := captureStdout(t, func() { _ = runServerHelp() })
+	for _, want := range []string{"server\n\nCommands:\n", "\n  provision [flags]   provision an infrastructure host\n", "\n  list                list servers\n", "\n  show <id-or-name>   show a server\n"} {
+		if !strings.Contains(output, want) {
+			t.Fatalf("runServerHelp() output missing %q:\n%s", want, output)
+		}
+	}
+}
+
+func TestRunServerProvisionDryRunShowsDnsZoneFlag(t *testing.T) {
+	output := captureStdout(t, func() {
+		if got := Run([]string{"server", "provision", "--non-interactive", "--dry-run", "--dns-zone", "example.test", "--ubuntu-version", "24.04"}); got != 0 {
+			t.Fatalf("Run() = %d, want 0", got)
+		}
+	})
+	for _, want := range []string{"Server provision dry-run plan", "SSH", "OS/PHP", "  zone: example.test (explicit)", "  stack: Ubuntu 24.04 LTS / PHP 8.3", "  user: nonfiction", "  key source: linode-profile", "  authorized keys: all Linode profile keys", "  ubuntu: 24.04 LTS", "  image: linode/ubuntu24.04", "  php: 8.3", "  php service: php8.3-fpm", "  php socket: /run/php/php8.3-fpm.sock", "  package source: ubuntu-native", "  packages: php8.3-fpm, php8.3-cli", "  hostname A: app1.nfweb.dev -> <created after server IP is known>", "  wildcard A: *.app1.nfweb.dev -> <created after server IP is known>"} {
+		if !strings.Contains(output, want) {
+			t.Fatalf("Run() output missing %q:\n%s", want, output)
+		}
+	}
+	for _, unwanted := range []string{"PHP-FPM socket:", "php-fpm socket:", "--php-version", "--php-fpm-socket"} {
+		if strings.Contains(output, unwanted) {
+			t.Fatalf("Run() output unexpectedly contained %q:\n%s", unwanted, output)
+		}
+	}
+}
+
+func TestRunServerProvisionHelpOmitsPhpVersionAndSocketFlags(t *testing.T) {
+	output := captureStderr(t, func() {
+		if got := Run([]string{"server", "provision", "--help"}); got != 1 {
+			t.Fatalf("Run() = %d, want 1", got)
+		}
+	})
+	for _, unwanted := range []string{"--php-version", "--php-fpm-socket"} {
+		if strings.Contains(output, unwanted) {
+			t.Fatalf("Run() help output unexpectedly contained %q:\n%s", unwanted, output)
+		}
+	}
+}
+
+func TestRunServerProvisionRejectsExecuteAndDryRunTogether(t *testing.T) {
+	output := captureStderr(t, func() {
+		if got := Run([]string{"server", "provision", "--non-interactive", "--execute", "--dry-run"}); got != 1 {
+			t.Fatalf("Run() = %d, want 1", got)
+		}
+	})
+	if !strings.Contains(output, "Choose either --execute or --dry-run, not both.") {
+		t.Fatalf("Run() stderr = %q, want execute/dry-run conflict", output)
+	}
+}
+
 func TestRunInstanceHelpShowsCommandsAndShortcuts(t *testing.T) {
 	output := captureStdout(t, func() { _ = runInstanceHelp() })
 	for _, wanted := range []string{"instance\n\nCommands:\n", "\n  up                  start the local instance\n", "\n  down                stop the local instance\n", "\n  shell               open a shell in the local instance\n", "\n  logs                tail WordPress logs\n", "\n  reset               destroy and recreate the local instance\n", "\n  wp -- <args>        run wp-cli in the local instance\n", "\n  info                show local instance paths, ports, and URLs\n", "\n  snapshot            manage/list instance snapshots\n", "\nShortcuts:\n", "\n  nf info             shortcut for nf instance info\n", "\n  nf up               shortcut for nf instance up\n", "\n  nf shell            shortcut for nf instance shell\n", "\n  nf wp -- <args>     shortcut for nf instance wp -- <args>\n"} {

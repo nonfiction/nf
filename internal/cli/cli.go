@@ -1750,6 +1750,9 @@ func cloneRecord(src map[string]any) map[string]any {
 }
 
 func serverSSHHost(server map[string]any) string {
+	if sshHost := mapStringAtPath(server, "linode", "ssh", "host"); sshHost != "" {
+		return sshHost
+	}
 	sshHost := mapStringAtPath(server, "ssh", "host")
 	if sshHost != "" {
 		return sshHost
@@ -1767,7 +1770,7 @@ func serverSSHUser(server map[string]any) string {
 
 func serverSummary(server map[string]any) string {
 	name := firstRecordString(server, "name", "slug", "_state_key", "hostname", "label")
-	id := firstRecordString(server, "id", "linode_id")
+	id := firstRecordString(server, "provider_id", "id", "linode_id")
 	provider := recordValueString(server["provider"])
 	sshHost := serverSSHHost(server)
 	parts := make([]string, 0, 4)
@@ -2418,7 +2421,7 @@ func printGroupHelp(title string, lines []string) {
 
 func runServerHelp() int {
 	printGroupHelp("server", []string{
-		"provision [flags]   provision a new server",
+		"provision [flags]   provision an infrastructure host",
 		"list                list servers",
 		"show <id-or-name>   show a server",
 		"delete [flags] <id-or-name>   delete a server (flags may also follow the id)",
@@ -3011,37 +3014,39 @@ func runSite(argv []string) int {
 func runProvision(argv []string) int {
 	fs := flag.NewFlagSet("server provision", flag.ContinueOnError)
 	args := provision.Args{}
-	fs.StringVar(&args.Provider, "provider", "", "")
-	fs.StringVar(&args.ProjectSlug, "project-slug", "", "")
-	fs.StringVar(&args.ServerName, "server-name", "", "")
-	fs.StringVar(&args.SiteDomain, "site-domain", "", "")
-	fs.StringVar(&args.Label, "label", "", "")
-	fs.StringVar(&args.Region, "region", "", "")
-	fs.StringVar(&args.Type, "type", "", "")
-	fs.StringVar(&args.Image, "image", "", "")
-	fs.StringVar(&args.SshUser, "ssh-user", "", "")
-	fs.StringVar(&args.SshPublicKeyFile, "ssh-public-key-file", "", "")
-	fs.StringVar(&args.RemoteWpPath, "remote-wp-path", "", "")
-	fs.StringVar(&args.PhpFpmSocket, "php-fpm-socket", "", "")
-	fs.StringVar(&args.DbName, "db-name", "", "")
-	fs.StringVar(&args.DbUser, "db-user", "", "")
-	fs.StringVar(&args.WpAdminUser, "wp-admin-user", "", "")
-	fs.StringVar(&args.WpAdminEmail, "wp-admin-email", "", "")
-	fs.StringVar(&args.SiteTitle, "site-title", "", "")
-	fs.StringVar(&args.DnsZone, "dns-zone", "", "")
-	fs.StringVar(&args.DnsimpleAccountID, "dnsimple-account-id", "", "")
-	fs.StringVar(&args.WriteCloudInit, "write-cloud-init", "", "")
+	fs.StringVar(&args.Provider, "provider", "", "server provider (linode)")
+	fs.StringVar(&args.DnsProvider, "dns-provider", "", "DNS provider (dnsimple)")
+	fs.StringVar(&args.DnsZone, "dns-zone", "", "DNS zone name")
+	fs.StringVar(&args.UbuntuVersion, "ubuntu-version", "", "Ubuntu LTS version to use (26.04, 24.04, 22.04, 20.04)")
+	fs.StringVar(&args.Name, "name", "", "server name")
+	fs.StringVar(&args.Hostname, "hostname", "", "server hostname")
+	fs.StringVar(&args.Label, "label", "", "Linode label")
+	fs.StringVar(&args.Region, "region", "", "Linode region")
+	fs.StringVar(&args.Type, "type", "", "Linode type")
+	fs.StringVar(&args.Image, "image", "", "advanced Linode image override")
+	fs.StringVar(&args.SshUser, "ssh-user", "", "deployment SSH user")
+	fs.StringVar(&args.SshKeySource, "ssh-key-source", "", "SSH key source (linode-profile or file)")
+	fs.StringVar(&args.SshKeyLabel, "ssh-key-label", "", "filter Linode profile SSH keys by label")
+	fs.StringVar(&args.SshKeyID, "ssh-key-id", "", "filter Linode profile SSH keys by id")
+	fs.BoolVar(&args.AllLinodeSshKeys, "all-linode-ssh-keys", false, "use all Linode profile SSH keys")
+	fs.StringVar(&args.SshPublicKeyFile, "ssh-public-key-file", "", "SSH public key file fallback for --ssh-key-source file")
+	fs.StringVar(&args.DnsimpleAccountID, "dnsimple-account-id", "", "DNSimple account ID")
+	fs.StringVar(&args.WriteCloudInit, "write-cloud-init", "", "write cloud-init preview to a file")
 	fs.BoolVar(&args.NonInteractive, "non-interactive", false, "")
-	fs.BoolVar(&args.ShowCloudInit, "show-cloud-init", false, "")
-	fs.BoolVar(&args.Execute, "execute", false, "")
-	fs.BoolVar(&args.Yes, "yes", false, "")
-	fs.BoolVar(&args.DryRun, "dry-run", false, "")
+	fs.BoolVar(&args.ShowCloudInit, "show-cloud-init", false, "show cloud-init preview in the terminal")
+	fs.BoolVar(&args.Execute, "execute", false, "execute remote provisioning")
+	fs.BoolVar(&args.Yes, "yes", false, "confirm execution in non-interactive mode")
+	fs.BoolVar(&args.DryRun, "dry-run", false, "show the plan without executing")
 	fs.SetOutput(os.Stderr)
 	if err := fs.Parse(argv); err != nil {
 		return 1
 	}
 	if args.Provider != "" && args.Provider != "linode" {
 		fmt.Fprintln(os.Stderr, "Only --provider linode is supported in this slice.")
+		return 1
+	}
+	if args.DnsProvider != "" && args.DnsProvider != "dnsimple" {
+		fmt.Fprintln(os.Stderr, "Only --dns-provider dnsimple is supported in this slice.")
 		return 1
 	}
 	if args.Execute && args.DryRun {
