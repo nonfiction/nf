@@ -77,3 +77,25 @@ func TestSelectModelNavigationAndSubmit(t *testing.T) {
 		t.Fatalf("enter result = %#v, want answered value 1", m)
 	}
 }
+
+func TestSelectModelHonorsDefaultOption(t *testing.T) {
+	m := newSelectModel("Choose", []SelectOption{{Label: "One", Value: "1"}, {Label: "Two", Value: "2", Default: true}, {Label: "Three", Value: "3"}})
+	if got, want := m.selected, 1; got != want {
+		t.Fatalf("default selected = %d, want %d", got, want)
+	}
+}
+
+func TestMultiSelectModelDefaultsToAllSelected(t *testing.T) {
+	m := newMultiSelectModel("Choose", []SelectOption{{Label: "One", Value: "1"}, {Label: "Two", Value: "2"}})
+	if got, want := len(m.selectedValues()), 2; got != want {
+		t.Fatalf("selectedValues count = %d, want %d", got, want)
+	}
+
+	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeySpace})
+	m = updated.(multiSelectModel)
+	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	m = updated.(multiSelectModel)
+	if !m.answered || len(m.result) != 1 || m.result[0] != "2" {
+		t.Fatalf("multi-select result = %#v, want only second option selected", m)
+	}
+}

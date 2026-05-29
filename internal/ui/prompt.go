@@ -119,8 +119,9 @@ type confirmModel struct {
 }
 
 type SelectOption struct {
-	Label string
-	Value string
+	Label   string
+	Value   string
+	Default bool
 }
 
 type selectModel struct {
@@ -134,8 +135,35 @@ type selectModel struct {
 	viewport  int
 }
 
+type multiSelectModel struct {
+	title     string
+	options   []SelectOption
+	selected  int
+	checked   []bool
+	result    []string
+	answered  bool
+	cancelled bool
+	width     int
+	viewport  int
+}
+
 func newSelectModel(title string, options []SelectOption) selectModel {
-	return selectModel{title: title, options: options, width: 64, viewport: 8}
+	selected := 0
+	for i, option := range options {
+		if option.Default {
+			selected = i
+			break
+		}
+	}
+	return selectModel{title: title, options: options, selected: selected, width: 64, viewport: 8}
+}
+
+func newMultiSelectModel(title string, options []SelectOption) multiSelectModel {
+	checked := make([]bool, len(options))
+	for i := range checked {
+		checked[i] = true
+	}
+	return multiSelectModel{title: title, options: options, checked: checked, width: 64, viewport: 8}
 }
 
 func newConfirmModel(prompt string, defaultYes bool) confirmModel {
@@ -313,6 +341,103 @@ func (m selectModel) View() string {
 	return frameStyle.Render(lipgloss.JoinVertical(lipgloss.Left, lines...))
 }
 
+func (m multiSelectModel) Init() tea.Cmd { return nil }
+
+func (m multiSelectModel) move(delta int) multiSelectModel {
+	if len(m.options) == 0 {
+		return m
+	}
+	m.selected += delta
+	if m.selected < 0 {
+		m.selected = len(m.options) - 1
+	}
+	if m.selected >= len(m.options) {
+		m.selected = 0
+	}
+	return m
+}
+
+func (m multiSelectModel) toggleSelected() multiSelectModel {
+	if len(m.checked) == 0 || m.selected < 0 || m.selected >= len(m.checked) {
+		return m
+	}
+	m.checked[m.selected] = !m.checked[m.selected]
+	return m
+}
+
+func (m multiSelectModel) selectedValues() []string {
+	values := make([]string, 0, len(m.options))
+	for i, option := range m.options {
+		if i < len(m.checked) && m.checked[i] {
+			values = append(values, option.Value)
+		}
+	}
+	return values
+}
+
+func (m multiSelectModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
+	switch msg := msg.(type) {
+	case tea.WindowSizeMsg:
+		m.width = clampInt(32, 96, msg.Width-8)
+		m.viewport = clampInt(4, 12, msg.Height-10)
+		return m, nil
+	case tea.KeyMsg:
+		switch strings.ToLower(msg.String()) {
+		case "ctrl+c", "esc":
+			m.cancelled = true
+			return m, tea.Quit
+		case "up", "k", "shift+tab":
+			m = m.move(-1)
+			return m, nil
+		case "down", "j", "tab":
+			m = m.move(1)
+			return m, nil
+		case "space":
+			m = m.toggleSelected()
+			return m, nil
+		}
+		switch msg.Type {
+		case tea.KeySpace:
+			m = m.toggleSelected()
+			return m, nil
+		case tea.KeyEnter:
+			m.result = m.selectedValues()
+			m.answered = true
+			return m, tea.Quit
+		}
+	}
+	return m, nil
+}
+
+func (m multiSelectModel) View() string {
+	start := 0
+	if m.viewport > 0 && m.selected >= m.viewport {
+		start = m.selected - m.viewport + 1
+	}
+	end := len(m.options)
+	if m.viewport > 0 && end > start+m.viewport {
+		end = start + m.viewport
+	}
+	lines := []string{titleStyle.Render("Multi-select"), labelStyle.Render(m.title), ""}
+	if len(m.options) == 0 {
+		lines = append(lines, hintStyle.Render("No options available"))
+	} else {
+		for i := start; i < end; i++ {
+			prefix := "[ ] "
+			style := lipgloss.NewStyle()
+			if i < len(m.checked) && m.checked[i] {
+				prefix = "[x] "
+			}
+			if i == m.selected {
+				style = lipgloss.NewStyle().Foreground(accentColor).Bold(true)
+			}
+			lines = append(lines, style.Render(prefix+m.options[i].Label))
+		}
+	}
+	lines = append(lines, hintStyle.Render("Use ↑/↓, j/k, space, Enter, or Esc/Ctrl+C"))
+	return frameStyle.Render(lipgloss.JoinVertical(lipgloss.Left, lines...))
+}
+
 func PromptString(prompt, defaultValue string, allowBlank bool) (string, error) {
 	program := tea.NewProgram(newPromptModel(prompt, defaultValue, allowBlank))
 	model, err := program.Run()
@@ -388,6 +513,28 @@ func Select(title string, options []SelectOption) (string, error) {
 	}
 	if !final.answered {
 		return "", fmt.Errorf("select failed")
+	}
+	return final.result, nil
+}
+
+func MultiSelect(title string, options []SelectOption) ([]string, error) {
+	if len(options) == 0 {
+		return nil, fmt.Errorf("no options available")
+	}
+	program := tea.NewProgram(newMultiSelectModel(title, options))
+	model, err := program.Run()
+	if err != nil {
+		return nil, err
+	}
+	final, ok := model.(multiSelectModel)
+	if !ok {
+		return nil, fmt.Errorf("multi-select failed")
+	}
+	if final.cancelled {
+		return nil, fmt.Errorf("multi-select cancelled")
+	}
+	if !final.answered {
+		return nil, fmt.Errorf("multi-select failed")
 	}
 	return final.result, nil
 }
