@@ -49,9 +49,9 @@ Reserved but not implemented yet:
 * `nf site push`
 * `nf site pull`
 
-Linode is the first implemented remote provider. Kinsta site records can be represented in shared state, but Kinsta deploy/sync workflows are future adapter work.
+Linode is the server provider today. DNS/TLS provisioning uses DNSimple by default. `nf server provision` uses a single stock Ubuntu/PHP stack picker: the Ubuntu LTS release determines the Ubuntu-native PHP version, Linode image, service, socket, and package set. Kinsta site records can be represented in shared state, but Kinsta deploy/sync workflows are future adapter work.
 
-Remote infrastructure workflows are intentionally guarded. Provisioning and deletion default toward dry-run/planning behavior unless explicitly executed.
+Remote infrastructure workflows are intentionally guarded. Server provisioning defaults toward dry-run/planning behavior unless explicitly executed, and non-interactive execution requires `--execute --yes`.
 
 ## Install and run
 
@@ -93,6 +93,7 @@ For remote Linode provisioning:
 * `linode-cli`
 * Linode API token
 * DNSimple API token
+* `NF_SECRET_SALT`
 * an SSH public key
 
 ## Command overview
@@ -112,6 +113,44 @@ Commands:
 ```
 
 Inside a project repository, `nf instance` manages the local WordPress instance and `nf theme tasks` lists project tasks from `.nf/project.json`.
+
+`nf server provision` is site-agnostic. It provisions a Linode server, upserts DNSimple A records for the hostname and wildcard hostname, and writes shared server state only. It does not install WordPress, create databases, or write `sites.json`.
+
+Common server provisioning flags:
+
+```sh
+nf server provision --name app1 --hostname app1.nfweb.dev
+nf server provision --ubuntu-version 24.04
+nf server provision --provider linode --dns-provider dnsimple --execute --yes
+```
+
+Defaults:
+
+* server provider: `linode`
+* DNS/TLS provider: `dnsimple`
+* server name: `app1`
+* hostname: `app1.nfweb.dev`
+* label: server name
+* Ubuntu/PHP stack: `Ubuntu 24.04 LTS / PHP 8.3`
+* Ubuntu LTS version: `24.04`
+* PHP version: `8.3` (derived from the selected stack)
+* package source: `ubuntu-native`
+* Ubuntu image: `linode/ubuntu24.04`
+* PHP service: `php8.3-fpm`
+* PHP socket: `/run/php/php8.3-fpm.sock`
+
+Supported Ubuntu/PHP matrix:
+
+* `26.04` -> `linode/ubuntu26.04` / PHP `8.5`
+* `24.04` -> `linode/ubuntu24.04` / PHP `8.3`
+* `22.04` -> `linode/ubuntu22.04` / PHP `8.1`
+* `20.04` -> `linode/ubuntu20.04` / PHP `7.4` (legacy/ESM)
+
+Use `--ubuntu-version` for normal non-interactive selection. `--image` is only an advanced override; it does not replace the recorded Ubuntu/PHP metadata. Arbitrary PHP selection is not supported in this pass, and there is no public socket flag.
+
+Common WordPress PHP extensions are installed from Ubuntu packages by default: `curl`, `gd`, `imagick`, `intl`, `mbstring`, `xml`, `zip`, `bcmath`, `soap`, `opcache`, and `readline`. Xdebug is intentionally not included.
+
+The server state `os` block records `family: ubuntu`, `version`, `label`, and `image` alongside the legacy `ubuntu_version` convenience field.
 
 ## Project metadata
 
@@ -553,7 +592,7 @@ nf server delete [flags] [id-or-name]
 
 `nf server show` prints the matching server record as JSON. Without an identifier, interactive mode opens a selector.
 
-`nf server provision` builds a guarded provisioning plan and can create a Linode-backed WordPress host.
+`nf server provision` builds a guarded provisioning plan and can create a Linode server with DNS/TLS bootstrap. It does not install WordPress or write site state.
 
 `nf server delete` prints a deletion plan first. In non-interactive mode it remains dry-run unless `--execute --yes` is supplied.
 
@@ -609,9 +648,8 @@ Dry-run plan:
 ```sh
 nf server provision \
   --non-interactive \
-  --project-slug client \
-  --server-name app1 \
-  --site-domain app1.nfweb.dev
+  --name app1 \
+  --hostname app1.nfweb.dev
 ```
 
 Actual execution requires both:
@@ -625,9 +663,8 @@ Example execution:
 ```sh
 nf server provision \
   --non-interactive \
-  --project-slug client \
-  --server-name app1 \
-  --site-domain app1.nfweb.dev \
+  --name app1 \
+  --hostname app1.nfweb.dev \
   --execute \
   --yes
 ```
@@ -636,23 +673,17 @@ Useful flags:
 
 ```text
 --provider
---project-slug
---server-name
---site-domain
+--dns-provider
+--dns-zone
+--ubuntu-version
+--name
+--hostname
 --label
 --region
 --type
 --image
 --ssh-user
 --ssh-public-key-file
---remote-wp-path
---php-fpm-socket
---db-name
---db-user
---wp-admin-user
---wp-admin-email
---site-title
---dns-zone
 --dnsimple-account-id
 --write-cloud-init
 --show-cloud-init
@@ -666,17 +697,23 @@ Defaults include:
 
 ```text
 provider: linode
+dns provider: dnsimple
 server name: app1
-server domain: app1.nfweb.dev
+hostname: app1.nfweb.dev
 region: ca-central
 type: g6-standard-1
 image: linode/ubuntu24.04
+Ubuntu/PHP stack: Ubuntu 24.04 LTS / PHP 8.3
+Ubuntu LTS version: 24.04
+PHP version: 8.3 (derived)
+package source: ubuntu-native
 ssh user: nonfiction
-ssh public key: ~/.ssh/id_ed25519.pub
-remote WordPress path: /var/www/<project-slug>
-PHP-FPM socket: /var/run/php/php8.3-fpm.sock
+ssh key source: linode-profile
+ssh public key file fallback: ~/.ssh/id_ed25519.pub
 DNSimple account ID: 14
 ```
+
+The PHP-FPM service and socket are derived from the selected Ubuntu/PHP stack.
 
 Required environment for execution:
 
@@ -698,9 +735,8 @@ Write cloud-init preview:
 
 ```sh
 nf server provision \
-  --project-slug client \
-  --server-name app1 \
-  --site-domain app1.nfweb.dev \
+  --name app1 \
+  --hostname app1.nfweb.dev \
   --write-cloud-init /tmp/app1-cloud-init.yml
 ```
 
@@ -708,9 +744,8 @@ Show cloud-init preview in the terminal:
 
 ```sh
 nf server provision \
-  --project-slug client \
-  --server-name app1 \
-  --site-domain app1.nfweb.dev \
+  --name app1 \
+  --hostname app1.nfweb.dev \
   --show-cloud-init
 ```
 

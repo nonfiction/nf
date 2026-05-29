@@ -346,9 +346,23 @@ Shared state should track:
 * remote paths
 * last known operational metadata when needed
 
+For server provisioning records, keep the Ubuntu/PHP metadata in dedicated `os` and `php` objects with `os.family: ubuntu`, `os.version`, `package_source: ubuntu-native`, the derived PHP service/socket, and the versioned package list.
+
 `nf server list` and `nf site list` read shared state and print tables.
 
 `nf server show` and `nf site show` print matching records as JSON.
+
+`nf server provision` is site-agnostic. It uses `--name` and `--hostname`, defaults to Linode plus DNSimple, and writes only `servers.json` with generic provider_id, nested linode, os, php, dns/tls/services, and no secrets.
+
+Ubuntu/PHP provisioning uses a single stock stack picker:
+
+* supported Ubuntu LTS values are `26.04`, `24.04` (default), `22.04`, and `20.04`
+* matching native PHP versions are `8.5`, `8.3` (default), `8.1`, and `7.4`
+* `--ubuntu-version` is the normal non-interactive selector; there is no public `--php-version`
+* `--image` is an advanced override; it does not replace the Ubuntu/PHP metadata
+* do not treat PHP-FPM socket path as user input; derive the service and socket from the selected stack
+* keep the base image and PHP packages Ubuntu-native for now
+* common WordPress PHP extensions are `curl`, `gd`, `imagick`, `intl`, `mbstring`, `xml`, `zip`, `bcmath`, `soap`, `opcache`, and `readline`; do not include Xdebug
 
 When no identifier is supplied in interactive mode, `server show`, `site show`, and `server delete` should prefer selectors over forcing positional arguments.
 
@@ -417,7 +431,7 @@ Current Linode responsibilities:
 * server inventory from shared state
 * server deletion
 * DNSimple-backed hostnames for `nfweb.dev`
-* writing state records for provisioned servers/sites
+* writing state records for provisioned servers
 
 `nf server provision` is dry-run by default.
 
