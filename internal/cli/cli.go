@@ -66,12 +66,12 @@ func (c argvCommandRunner) Execute(root string, extraArgs []string) error {
 
 func (c argvCommandRunner) Render() string { return strings.Join(c, " ") }
 
-type runtimeConfig struct {
+type instanceConfig struct {
 	ProjectSlug      string
 	ProjectName      string
 	RepoRoot         string
 	ThemePath        string
-	ManagedDir       string
+	InstanceDir      string
 	WordpressPort    int
 	MailpitPort      int
 	Compose          string
@@ -82,25 +82,25 @@ type runtimeConfig struct {
 	ThemeSlug        string
 }
 
-type runtimeSnapshotContents struct {
+type instanceSnapshotContents struct {
 	Database       string   `json:"database"`
 	WpContent      string   `json:"wp_content"`
 	WpContentPaths []string `json:"wp_content_paths"`
 }
 
-type runtimeSnapshotMetadata struct {
-	Schema         int                     `json:"schema"`
-	Name           string                  `json:"name"`
-	ProjectSlug    string                  `json:"project_slug"`
-	CreatedAt      string                  `json:"created_at"`
-	RuntimePath    string                  `json:"runtime_path"`
-	ComposeProject string                  `json:"compose_project"`
-	WordpressURL   string                  `json:"wordpress_url"`
-	Contents       runtimeSnapshotContents `json:"contents"`
+type instanceSnapshotMetadata struct {
+	Schema         int                      `json:"schema"`
+	Name           string                   `json:"name"`
+	ProjectSlug    string                   `json:"project_slug"`
+	CreatedAt      string                   `json:"created_at"`
+	InstancePath   string                   `json:"instance_path"`
+	ComposeProject string                   `json:"compose_project"`
+	WordpressURL   string                   `json:"wordpress_url"`
+	Contents       instanceSnapshotContents `json:"contents"`
 }
 
-type runtimeSnapshotRecord struct {
-	Metadata         runtimeSnapshotMetadata
+type instanceSnapshotRecord struct {
+	Metadata         instanceSnapshotMetadata
 	Directory        string
 	DatabaseArchive  string
 	WpContentArchive string
@@ -109,117 +109,117 @@ type runtimeSnapshotRecord struct {
 	CreatedAt        time.Time
 }
 
-const runtimeSnapshotSchema = 1
+const instanceSnapshotSchema = 1
 
 var (
-	runtimeSnapshotPromptString  = ui.PromptString
-	runtimeSnapshotConfirm       = ui.Confirm
-	runtimeSnapshotSelect        = ui.Select
-	runtimeSnapshotIsInteractive = runtimeSnapshotInteractive
+	instanceSnapshotPromptString  = ui.PromptString
+	instanceSnapshotConfirm       = ui.Confirm
+	instanceSnapshotSelect        = ui.Select
+	instanceSnapshotIsInteractive = instanceSnapshotInteractive
 )
 
-func defaultRuntimeSnapshotName(now time.Time) string {
+func defaultInstanceSnapshotName(now time.Time) string {
 	return now.Format("2006-01-02-150405")
 }
 
 func defaultPreRestoreSnapshotName(now time.Time) string {
-	return defaultRuntimeSnapshotName(now) + "-pre-restore"
+	return defaultInstanceSnapshotName(now) + "-pre-restore"
 }
 
-func runtimeSnapshotProjectDir(cfg runtimeConfig) string {
+func instanceSnapshotProjectDir(cfg instanceConfig) string {
 	return config.SnapshotProjectDir(cfg.ProjectSlug)
 }
 
-func runtimeSnapshotDir(cfg runtimeConfig, name string) string {
+func instanceSnapshotDir(cfg instanceConfig, name string) string {
 	return config.SnapshotDir(cfg.ProjectSlug, name)
 }
 
-func runtimeSnapshotContainerDir(name string) string {
-	return path.Join("/runtime-snapshots", name)
+func instanceSnapshotContainerDir(name string) string {
+	return path.Join("/instance-snapshots", name)
 }
 
-func runtimeSnapshotContainerDatabaseArchive(name string) string {
-	return path.Join(runtimeSnapshotContainerDir(name), "database.sql.gz")
+func instanceSnapshotContainerDatabaseArchive(name string) string {
+	return path.Join(instanceSnapshotContainerDir(name), "database.sql.gz")
 }
 
-func runtimeSnapshotContainerWpContentArchive(name string) string {
-	return path.Join(runtimeSnapshotContainerDir(name), "wp-content.tar.gz")
+func instanceSnapshotContainerWpContentArchive(name string) string {
+	return path.Join(instanceSnapshotContainerDir(name), "wp-content.tar.gz")
 }
 
-func runtimeSnapshotHostDatabaseArchive(cfg runtimeConfig, name string) string {
-	return filepath.Join(runtimeSnapshotDir(cfg, name), "database.sql.gz")
+func instanceSnapshotHostDatabaseArchive(cfg instanceConfig, name string) string {
+	return filepath.Join(instanceSnapshotDir(cfg, name), "database.sql.gz")
 }
 
-func runtimeSnapshotHostWpContentArchive(cfg runtimeConfig, name string) string {
-	return filepath.Join(runtimeSnapshotDir(cfg, name), "wp-content.tar.gz")
+func instanceSnapshotHostWpContentArchive(cfg instanceConfig, name string) string {
+	return filepath.Join(instanceSnapshotDir(cfg, name), "wp-content.tar.gz")
 }
 
-func runtimeSnapshotMetadataPath(cfg runtimeConfig, name string) string {
-	return filepath.Join(runtimeSnapshotDir(cfg, name), "snapshot.json")
+func instanceSnapshotMetadataPath(cfg instanceConfig, name string) string {
+	return filepath.Join(instanceSnapshotDir(cfg, name), "snapshot.json")
 }
 
-func runtimeSnapshotComposeMount(cfg runtimeConfig) string {
+func instanceSnapshotComposeMount(cfg instanceConfig) string {
 	return config.SnapshotProjectDir(cfg.ProjectSlug)
 }
 
-func runtimeSnapshotContentPaths() []string {
+func instanceSnapshotContentPaths() []string {
 	return []string{"wp-content/uploads", "wp-content/plugins", "wp-content/mu-plugins", "wp-content/languages"}
 }
 
-func newRuntimeSnapshotMetadata(cfg runtimeConfig, name string, createdAt time.Time) runtimeSnapshotMetadata {
-	return runtimeSnapshotMetadata{
-		Schema:         runtimeSnapshotSchema,
+func newInstanceSnapshotMetadata(cfg instanceConfig, name string, createdAt time.Time) instanceSnapshotMetadata {
+	return instanceSnapshotMetadata{
+		Schema:         instanceSnapshotSchema,
 		Name:           name,
 		ProjectSlug:    cfg.ProjectSlug,
 		CreatedAt:      createdAt.Format(time.RFC3339),
-		RuntimePath:    cfg.ManagedDir,
-		ComposeProject: runtimeComposeProjectName(cfg.ProjectSlug),
-		WordpressURL:   runtimeSnapshotWordPressURL(cfg),
-		Contents: runtimeSnapshotContents{
+		InstancePath:   cfg.InstanceDir,
+		ComposeProject: instanceComposeProjectName(cfg.ProjectSlug),
+		WordpressURL:   instanceSnapshotWordPressURL(cfg),
+		Contents: instanceSnapshotContents{
 			Database:       "database.sql.gz",
 			WpContent:      "wp-content.tar.gz",
-			WpContentPaths: runtimeSnapshotContentPaths(),
+			WpContentPaths: instanceSnapshotContentPaths(),
 		},
 	}
 }
 
-func runtimeSnapshotWordPressURL(cfg runtimeConfig) string {
+func instanceSnapshotWordPressURL(cfg instanceConfig) string {
 	return fmt.Sprintf("http://localhost:%d", cfg.WordpressPort)
 }
 
-func runtimeSnapshotNormalizedName(input string) (string, error) {
+func instanceSnapshotNormalizedName(input string) (string, error) {
 	name := strings.TrimSpace(input)
 	if name == "" {
-		return "", ProjectError{Msg: "runtime snapshot name cannot be empty"}
+		return "", ProjectError{Msg: "instance snapshot name cannot be empty"}
 	}
 	name = strings.Join(strings.Fields(name), "-")
 	if name == "" {
-		return "", ProjectError{Msg: "runtime snapshot name cannot be empty"}
+		return "", ProjectError{Msg: "instance snapshot name cannot be empty"}
 	}
 	if filepath.IsAbs(name) {
-		return "", ProjectError{Msg: fmt.Sprintf("runtime snapshot name %q must not be absolute", input)}
+		return "", ProjectError{Msg: fmt.Sprintf("instance snapshot name %q must not be absolute", input)}
 	}
 	if strings.ContainsAny(name, "/\\") {
-		return "", ProjectError{Msg: fmt.Sprintf("runtime snapshot name %q must not contain path separators", input)}
+		return "", ProjectError{Msg: fmt.Sprintf("instance snapshot name %q must not contain path separators", input)}
 	}
 	if strings.Contains(name, "..") {
-		return "", ProjectError{Msg: fmt.Sprintf("runtime snapshot name %q must not contain path traversal", input)}
+		return "", ProjectError{Msg: fmt.Sprintf("instance snapshot name %q must not contain path traversal", input)}
 	}
 	for _, r := range name {
 		if r >= 'a' && r <= 'z' || r >= 'A' && r <= 'Z' || r >= '0' && r <= '9' || r == '-' || r == '_' {
 			continue
 		}
-		return "", ProjectError{Msg: fmt.Sprintf("runtime snapshot name %q contains unsafe characters", input)}
+		return "", ProjectError{Msg: fmt.Sprintf("instance snapshot name %q contains unsafe characters", input)}
 	}
 	return name, nil
 }
 
-func runtimeSnapshotExists(cfg runtimeConfig, name string) bool {
-	_, err := os.Stat(runtimeSnapshotDir(cfg, name))
+func instanceSnapshotExists(cfg instanceConfig, name string) bool {
+	_, err := os.Stat(instanceSnapshotDir(cfg, name))
 	return err == nil
 }
 
-func runtimeSnapshotInteractive() bool {
+func instanceSnapshotInteractive() bool {
 	info, err := os.Stdin.Stat()
 	if err != nil {
 		return false
@@ -227,7 +227,7 @@ func runtimeSnapshotInteractive() bool {
 	return info.Mode()&os.ModeCharDevice != 0
 }
 
-func runtimeSnapshotMetadataJSON(meta runtimeSnapshotMetadata) (string, error) {
+func instanceSnapshotMetadataJSON(meta instanceSnapshotMetadata) (string, error) {
 	data, err := json.MarshalIndent(meta, "", "  ")
 	if err != nil {
 		return "", err
@@ -235,29 +235,29 @@ func runtimeSnapshotMetadataJSON(meta runtimeSnapshotMetadata) (string, error) {
 	return string(append(data, '\n')), nil
 }
 
-func (c runtimeConfig) managedUploadsDir() string {
-	return filepath.Join(c.ManagedDir, firstNonEmpty(c.UploadsPath, "uploads"))
+func (c instanceConfig) managedUploadsDir() string {
+	return filepath.Join(c.InstanceDir, firstNonEmpty(c.UploadsPath, "uploads"))
 }
 
-func (c runtimeConfig) uploadsContainerPath() string {
-	return path.Join("/", "runtime", firstNonEmpty(c.UploadsPath, "uploads"))
+func (c instanceConfig) uploadsContainerPath() string {
+	return path.Join("/", "instance", firstNonEmpty(c.UploadsPath, "uploads"))
 }
 
-func runtimePortBlockStart(projectSlug string) int {
+func instancePortBlockStart(projectSlug string) int {
 	h := fnv.New32a()
-	_, _ = h.Write([]byte(cleanRuntimeSlug(projectSlug)))
+	_, _ = h.Write([]byte(cleanInstanceSlug(projectSlug)))
 	return 18000 + int(h.Sum32()%1000)*4
 }
 
-func runtimeDerivedPorts(projectSlug string) (int, int) {
-	base := runtimePortBlockStart(projectSlug)
+func instanceDerivedPorts(projectSlug string) (int, int) {
+	base := instancePortBlockStart(projectSlug)
 	return base, base + 1
 }
 
-func cleanRuntimeSlug(projectSlug string) string {
+func cleanInstanceSlug(projectSlug string) string {
 	cleaned := strings.ToLower(strings.TrimSpace(projectSlug))
 	var b strings.Builder
-	b.Grow(len(cleaned) + len("nf__runtime"))
+	b.Grow(len(cleaned) + len("nf__instance"))
 	for _, r := range cleaned {
 		switch {
 		case r >= 'a' && r <= 'z', r >= '0' && r <= '9', r == '_', r == '-':
@@ -275,64 +275,64 @@ func cleanRuntimeSlug(projectSlug string) string {
 	return slug
 }
 
-type runtimeCommandRunner struct {
+type instanceCommandRunner struct {
 	name string
-	cfg  runtimeConfig
+	cfg  instanceConfig
 }
 
-func (c runtimeCommandRunner) ensureUpInstalledActive(runtimeDir string) error {
-	if err := runCommandSpec(execSpec{Dir: runtimeDir, Args: runtimeComposeArgs(c.cfg, "up", "-d")}); err != nil {
+func (c instanceCommandRunner) ensureUpInstalledActive(instanceDir string) error {
+	if err := runCommandSpec(execSpec{Dir: instanceDir, Args: instanceComposeArgs(c.cfg, "up", "-d")}); err != nil {
 		return err
 	}
-	if err := runCommandSpecQuiet(execSpec{Dir: runtimeDir, Args: runtimeWpProbeArgs(c.cfg, "core", "is-installed")}); err != nil {
-		if err := runCommandSpec(execSpec{Dir: runtimeDir, Args: runtimeWpCoreInstallArgs(c.cfg)}); err != nil {
+	if err := runCommandSpecQuiet(execSpec{Dir: instanceDir, Args: instanceWpProbeArgs(c.cfg, "core", "is-installed")}); err != nil {
+		if err := runCommandSpec(execSpec{Dir: instanceDir, Args: instanceWpCoreInstallArgs(c.cfg)}); err != nil {
 			return err
 		}
 		return nil
 	}
-	if err := runCommandSpecQuiet(execSpec{Dir: runtimeDir, Args: runtimeWpThemeIsActiveArgs(c.cfg, "")}); err != nil {
-		return runCommandSpec(execSpec{Dir: runtimeDir, Args: runtimeWpThemeActivateArgs(c.cfg, "")})
+	if err := runCommandSpecQuiet(execSpec{Dir: instanceDir, Args: instanceWpThemeIsActiveArgs(c.cfg, "")}); err != nil {
+		return runCommandSpec(execSpec{Dir: instanceDir, Args: instanceWpThemeActivateArgs(c.cfg, "")})
 	}
 	return nil
 }
 
-func (c runtimeCommandRunner) runtimeReadyForSnapshot(runtimeDir string) bool {
-	if err := runCommandSpecQuiet(execSpec{Dir: runtimeDir, Args: runtimeWpProbeArgs(c.cfg, "core", "is-installed")}); err != nil {
+func (c instanceCommandRunner) instanceReadyForSnapshot(instanceDir string) bool {
+	if err := runCommandSpecQuiet(execSpec{Dir: instanceDir, Args: instanceWpProbeArgs(c.cfg, "core", "is-installed")}); err != nil {
 		return false
 	}
-	if err := runCommandSpecQuiet(execSpec{Dir: runtimeDir, Args: runtimeWpThemeIsActiveArgs(c.cfg, "")}); err != nil {
+	if err := runCommandSpecQuiet(execSpec{Dir: instanceDir, Args: instanceWpThemeIsActiveArgs(c.cfg, "")}); err != nil {
 		return false
 	}
 	return true
 }
 
-func (c runtimeCommandRunner) Execute(root string, extraArgs []string) error {
-	if err := ensureManagedRuntime(c.cfg); err != nil {
+func (c instanceCommandRunner) Execute(root string, extraArgs []string) error {
+	if err := ensureManagedInstance(c.cfg); err != nil {
 		return err
 	}
-	runtimeDir := c.cfg.ManagedDir
+	instanceDir := c.cfg.InstanceDir
 	switch c.name {
 	case "up":
-		return c.ensureUpInstalledActive(runtimeDir)
+		return c.ensureUpInstalledActive(instanceDir)
 	case "down":
-		return runCommandSpec(execSpec{Dir: runtimeDir, Args: runtimeComposeArgs(c.cfg, "down")})
+		return runCommandSpec(execSpec{Dir: instanceDir, Args: instanceComposeArgs(c.cfg, "down")})
 	case "logs":
-		return runCommandSpec(execSpec{Dir: runtimeDir, Args: runtimeComposeArgs(c.cfg, "logs", "-f", c.cfg.WordpressService)})
+		return runCommandSpec(execSpec{Dir: instanceDir, Args: instanceComposeArgs(c.cfg, "logs", "-f", c.cfg.WordpressService)})
 	case "reset":
-		if err := runCommandSpec(execSpec{Dir: runtimeDir, Args: runtimeComposeArgs(c.cfg, "down", "-v", "--remove-orphans")}); err != nil {
+		if err := runCommandSpec(execSpec{Dir: instanceDir, Args: instanceComposeArgs(c.cfg, "down", "-v", "--remove-orphans")}); err != nil {
 			return err
 		}
-		return c.ensureUpInstalledActive(runtimeDir)
+		return c.ensureUpInstalledActive(instanceDir)
 	case "shell":
-		return runCommandSpec(execSpec{Dir: runtimeDir, Args: runtimeShellArgs(c.cfg)})
+		return runCommandSpec(execSpec{Dir: instanceDir, Args: instanceShellArgs(c.cfg)})
 	case "wp":
-		return runCommandSpec(execSpec{Dir: runtimeDir, Args: runtimeWpArgs(c.cfg, extraArgs...)})
+		return runCommandSpec(execSpec{Dir: instanceDir, Args: instanceWpArgs(c.cfg, extraArgs...)})
 	default:
 		return fmt.Errorf("unsupported repo command type")
 	}
 }
 
-func (c runtimeCommandRunner) Render() string {
+func (c instanceCommandRunner) Render() string {
 	switch c.name {
 	case "up":
 		return "docker compose up -d; install WordPress if missing and ensure the mounted theme is active"
@@ -341,7 +341,7 @@ func (c runtimeCommandRunner) Render() string {
 	case "logs":
 		return "docker compose logs -f " + c.cfg.WordpressService
 	case "reset":
-		return "docker compose down -v --remove-orphans; nuke runtime data and recreate it with docker compose up -d, install WordPress if missing, and ensure the mounted theme is active"
+		return "docker compose down -v --remove-orphans; nuke instance data and recreate it with docker compose up -d, install WordPress if missing, and ensure the mounted theme is active"
 	case "shell":
 		return "docker compose exec " + firstNonEmpty(c.cfg.WordpressService, "wordpress") + " sh"
 	case "wp":
@@ -351,20 +351,20 @@ func (c runtimeCommandRunner) Render() string {
 	}
 }
 
-func ensureRuntimeReadyForSnapshot(cfg runtimeConfig) error {
-	if err := ensureManagedRuntime(cfg); err != nil {
+func ensureInstanceReadyForSnapshot(cfg instanceConfig) error {
+	if err := ensureManagedInstance(cfg); err != nil {
 		return err
 	}
-	runner := runtimeCommandRunner{name: "up", cfg: cfg}
-	if runner.runtimeReadyForSnapshot(cfg.ManagedDir) {
+	runner := instanceCommandRunner{name: "up", cfg: cfg}
+	if runner.instanceReadyForSnapshot(cfg.InstanceDir) {
 		return nil
 	}
-	return runner.ensureUpInstalledActive(cfg.ManagedDir)
+	return runner.ensureUpInstalledActive(cfg.InstanceDir)
 }
 
-func runtimeSnapshotCreateScript(name string) string {
-	containerDir := runtimeSnapshotContainerDir(name)
-	wpContentArchive := runtimeSnapshotContainerWpContentArchive(name)
+func instanceSnapshotCreateScript(name string) string {
+	containerDir := instanceSnapshotContainerDir(name)
+	wpContentArchive := instanceSnapshotContainerWpContentArchive(name)
 	return fmt.Sprintf(`set -eu
 mkdir -p "%s"
 wp db export "%s/database.sql" --allow-root
@@ -384,9 +384,9 @@ fi
 `, containerDir, containerDir, containerDir, wpContentArchive, wpContentArchive)
 }
 
-func runtimeSnapshotRestoreScript(name string) string {
-	databaseArchive := runtimeSnapshotContainerDatabaseArchive(name)
-	wpContentArchive := runtimeSnapshotContainerWpContentArchive(name)
+func instanceSnapshotRestoreScript(name string) string {
+	databaseArchive := instanceSnapshotContainerDatabaseArchive(name)
+	wpContentArchive := instanceSnapshotContainerWpContentArchive(name)
 	return fmt.Sprintf(`set -eu
 tmpdir="$(mktemp -d)"
 trap 'rm -rf "$tmpdir"' EXIT
@@ -399,8 +399,8 @@ fi
 `, databaseArchive, wpContentArchive, wpContentArchive)
 }
 
-func runtimeSnapshotComposeArgs(cfg runtimeConfig, args ...string) []string {
-	return append(runtimeComposeArgs(cfg, "run", "--rm", firstNonEmpty(cfg.CliService, "cli"), "sh", "-lc"), args...)
+func instanceSnapshotComposeArgs(cfg instanceConfig, args ...string) []string {
+	return append(instanceComposeArgs(cfg, "run", "--rm", firstNonEmpty(cfg.CliService, "cli"), "sh", "-lc"), args...)
 }
 
 func runCommandSpecNoPreview(spec execSpec) error {
@@ -415,39 +415,39 @@ func runCommandSpecNoPreview(spec execSpec) error {
 	return cmd.Run()
 }
 
-func runtimeSnapshotCreateArchives(cfg runtimeConfig, name string) error {
-	if err := os.MkdirAll(runtimeSnapshotDir(cfg, name), 0o755); err != nil {
+func instanceSnapshotCreateArchives(cfg instanceConfig, name string) error {
+	if err := os.MkdirAll(instanceSnapshotDir(cfg, name), 0o755); err != nil {
 		return err
 	}
-	if err := os.Chmod(runtimeSnapshotDir(cfg, name), 0o777); err != nil {
+	if err := os.Chmod(instanceSnapshotDir(cfg, name), 0o777); err != nil {
 		return err
 	}
-	if err := runCommandSpecNoPreview(execSpec{Dir: cfg.ManagedDir, Args: runtimeSnapshotComposeArgs(cfg, runtimeSnapshotCreateScript(name))}); err != nil {
-		return err
-	}
-	return nil
-}
-
-func runtimeSnapshotRestoreArchives(cfg runtimeConfig, name string) error {
-	if err := runCommandSpecNoPreview(execSpec{Dir: cfg.ManagedDir, Args: runtimeSnapshotComposeArgs(cfg, runtimeSnapshotRestoreScript(name))}); err != nil {
+	if err := runCommandSpecNoPreview(execSpec{Dir: cfg.InstanceDir, Args: instanceSnapshotComposeArgs(cfg, instanceSnapshotCreateScript(name))}); err != nil {
 		return err
 	}
 	return nil
 }
 
-func runtimeSnapshotMetadataFromFile(path string) (runtimeSnapshotMetadata, error) {
+func instanceSnapshotRestoreArchives(cfg instanceConfig, name string) error {
+	if err := runCommandSpecNoPreview(execSpec{Dir: cfg.InstanceDir, Args: instanceSnapshotComposeArgs(cfg, instanceSnapshotRestoreScript(name))}); err != nil {
+		return err
+	}
+	return nil
+}
+
+func instanceSnapshotMetadataFromFile(path string) (instanceSnapshotMetadata, error) {
 	data, err := os.ReadFile(path)
 	if err != nil {
-		return runtimeSnapshotMetadata{}, err
+		return instanceSnapshotMetadata{}, err
 	}
-	var meta runtimeSnapshotMetadata
+	var meta instanceSnapshotMetadata
 	if err := json.Unmarshal(data, &meta); err != nil {
-		return runtimeSnapshotMetadata{}, err
+		return instanceSnapshotMetadata{}, err
 	}
 	return meta, nil
 }
 
-func runtimeSnapshotArchiveSize(path string) int64 {
+func instanceSnapshotArchiveSize(path string) int64 {
 	info, err := os.Stat(path)
 	if err != nil {
 		return -1
@@ -455,7 +455,7 @@ func runtimeSnapshotArchiveSize(path string) int64 {
 	return info.Size()
 }
 
-func runtimeSnapshotCreatedAt(meta runtimeSnapshotMetadata) time.Time {
+func instanceSnapshotCreatedAt(meta instanceSnapshotMetadata) time.Time {
 	if meta.CreatedAt == "" {
 		return time.Time{}
 	}
@@ -465,8 +465,8 @@ func runtimeSnapshotCreatedAt(meta runtimeSnapshotMetadata) time.Time {
 	return time.Time{}
 }
 
-func loadRuntimeSnapshots(cfg runtimeConfig) ([]runtimeSnapshotRecord, error) {
-	dir := runtimeSnapshotProjectDir(cfg)
+func loadInstanceSnapshots(cfg instanceConfig) ([]instanceSnapshotRecord, error) {
+	dir := instanceSnapshotProjectDir(cfg)
 	entries, err := os.ReadDir(dir)
 	if err != nil {
 		if os.IsNotExist(err) {
@@ -474,24 +474,24 @@ func loadRuntimeSnapshots(cfg runtimeConfig) ([]runtimeSnapshotRecord, error) {
 		}
 		return nil, err
 	}
-	records := make([]runtimeSnapshotRecord, 0, len(entries))
+	records := make([]instanceSnapshotRecord, 0, len(entries))
 	for _, entry := range entries {
 		if !entry.IsDir() {
 			continue
 		}
 		name := entry.Name()
-		meta, err := runtimeSnapshotMetadataFromFile(runtimeSnapshotMetadataPath(cfg, name))
+		meta, err := instanceSnapshotMetadataFromFile(instanceSnapshotMetadataPath(cfg, name))
 		if err != nil {
 			continue
 		}
-		record := runtimeSnapshotRecord{
+		record := instanceSnapshotRecord{
 			Metadata:         meta,
-			Directory:        runtimeSnapshotDir(cfg, name),
-			DatabaseArchive:  runtimeSnapshotHostDatabaseArchive(cfg, name),
-			WpContentArchive: runtimeSnapshotHostWpContentArchive(cfg, name),
-			DatabaseSize:     runtimeSnapshotArchiveSize(runtimeSnapshotHostDatabaseArchive(cfg, name)),
-			WpContentSize:    runtimeSnapshotArchiveSize(runtimeSnapshotHostWpContentArchive(cfg, name)),
-			CreatedAt:        runtimeSnapshotCreatedAt(meta),
+			Directory:        instanceSnapshotDir(cfg, name),
+			DatabaseArchive:  instanceSnapshotHostDatabaseArchive(cfg, name),
+			WpContentArchive: instanceSnapshotHostWpContentArchive(cfg, name),
+			DatabaseSize:     instanceSnapshotArchiveSize(instanceSnapshotHostDatabaseArchive(cfg, name)),
+			WpContentSize:    instanceSnapshotArchiveSize(instanceSnapshotHostWpContentArchive(cfg, name)),
+			CreatedAt:        instanceSnapshotCreatedAt(meta),
 		}
 		records = append(records, record)
 	}
@@ -509,7 +509,7 @@ func loadRuntimeSnapshots(cfg runtimeConfig) ([]runtimeSnapshotRecord, error) {
 	return records, nil
 }
 
-func formatRuntimeSnapshotTime(value string) string {
+func formatInstanceSnapshotTime(value string) string {
 	if value == "" {
 		return "-"
 	}
@@ -519,7 +519,7 @@ func formatRuntimeSnapshotTime(value string) string {
 	return value
 }
 
-func formatRuntimeSnapshotSize(size int64) string {
+func formatInstanceSnapshotSize(size int64) string {
 	if size < 0 {
 		return "-"
 	}
@@ -539,142 +539,142 @@ func formatRuntimeSnapshotSize(size int64) string {
 	return fmt.Sprintf("%.1f %s", value, units[unit])
 }
 
-func runtimeSnapshotRows(records []runtimeSnapshotRecord) [][]string {
+func instanceSnapshotRows(records []instanceSnapshotRecord) [][]string {
 	rows := [][]string{{"name", "created", "database", "wp-content", "path"}}
 	for _, record := range records {
 		rows = append(rows, []string{
 			firstNonEmpty(record.Metadata.Name, filepath.Base(record.Directory)),
-			formatRuntimeSnapshotTime(record.Metadata.CreatedAt),
-			formatRuntimeSnapshotSize(record.DatabaseSize),
-			formatRuntimeSnapshotSize(record.WpContentSize),
+			formatInstanceSnapshotTime(record.Metadata.CreatedAt),
+			formatInstanceSnapshotSize(record.DatabaseSize),
+			formatInstanceSnapshotSize(record.WpContentSize),
 			record.Directory,
 		})
 	}
 	return rows
 }
 
-func chooseRuntimeSnapshot(records []runtimeSnapshotRecord, action string) (runtimeSnapshotRecord, error) {
+func chooseInstanceSnapshot(records []instanceSnapshotRecord, action string) (instanceSnapshotRecord, error) {
 	options := make([]ui.SelectOption, 0, len(records))
 	for _, record := range records {
 		name := firstNonEmpty(record.Metadata.Name, filepath.Base(record.Directory))
 		if name == "" {
 			continue
 		}
-		label := fmt.Sprintf("%s / %s / %s / %s", name, formatRuntimeSnapshotTime(record.Metadata.CreatedAt), formatRuntimeSnapshotSize(record.DatabaseSize), formatRuntimeSnapshotSize(record.WpContentSize))
+		label := fmt.Sprintf("%s / %s / %s / %s", name, formatInstanceSnapshotTime(record.Metadata.CreatedAt), formatInstanceSnapshotSize(record.DatabaseSize), formatInstanceSnapshotSize(record.WpContentSize))
 		options = append(options, ui.SelectOption{Label: label, Value: name})
 	}
 	if len(options) == 0 {
-		return runtimeSnapshotRecord{}, fmt.Errorf("No runtime snapshots found.")
+		return instanceSnapshotRecord{}, fmt.Errorf("No instance snapshots found.")
 	}
-	selected, err := runtimeSnapshotSelect(fmt.Sprintf("Choose a runtime snapshot to %s", action), options)
+	selected, err := instanceSnapshotSelect(fmt.Sprintf("Choose an instance snapshot to %s", action), options)
 	if err != nil {
-		return runtimeSnapshotRecord{}, err
+		return instanceSnapshotRecord{}, err
 	}
 	for _, record := range records {
 		if firstNonEmpty(record.Metadata.Name, filepath.Base(record.Directory)) == selected {
 			return record, nil
 		}
 	}
-	return runtimeSnapshotRecord{}, fmt.Errorf("runtime snapshot %q was not found", selected)
+	return instanceSnapshotRecord{}, fmt.Errorf("instance snapshot %q was not found", selected)
 }
 
-func cmdRuntimeSnapshotCreate(cfg runtimeConfig, name string, nonInteractive bool) int {
+func cmdInstanceSnapshotCreate(cfg instanceConfig, name string, nonInteractive bool) int {
 	if strings.TrimSpace(name) == "" {
-		if nonInteractive || !runtimeSnapshotIsInteractive() {
-			fmt.Fprintln(os.Stderr, "runtime snapshot create requires a name when stdin is not interactive")
+		if nonInteractive || !instanceSnapshotIsInteractive() {
+			fmt.Fprintln(os.Stderr, "instance snapshot create requires a name when stdin is not interactive")
 			return 1
 		}
-		defaultName := defaultRuntimeSnapshotName(time.Now())
-		prompted, err := runtimeSnapshotPromptString("Snapshot name", defaultName, false)
+		defaultName := defaultInstanceSnapshotName(time.Now())
+		prompted, err := instanceSnapshotPromptString("Snapshot name", defaultName, false)
 		if err != nil {
 			fmt.Fprintln(os.Stderr, err)
 			return 1
 		}
 		name = prompted
 	}
-	normalized, err := runtimeSnapshotNormalizedName(name)
+	normalized, err := instanceSnapshotNormalizedName(name)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		return 1
 	}
-	if runtimeSnapshotExists(cfg, normalized) {
-		fmt.Fprintf(os.Stderr, "runtime snapshot %q already exists.\n", normalized)
+	if instanceSnapshotExists(cfg, normalized) {
+		fmt.Fprintf(os.Stderr, "instance snapshot %q already exists.\n", normalized)
 		return 1
 	}
-	if err := ensureRuntimeReadyForSnapshot(cfg); err != nil {
+	if err := ensureInstanceReadyForSnapshot(cfg); err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		return 1
 	}
-	if err := runtimeSnapshotCreateArchives(cfg, normalized); err != nil {
+	if err := instanceSnapshotCreateArchives(cfg, normalized); err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		return 1
 	}
-	meta := newRuntimeSnapshotMetadata(cfg, normalized, time.Now())
-	jsonText, err := runtimeSnapshotMetadataJSON(meta)
+	meta := newInstanceSnapshotMetadata(cfg, normalized, time.Now())
+	jsonText, err := instanceSnapshotMetadataJSON(meta)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		return 1
 	}
-	if err := os.WriteFile(runtimeSnapshotMetadataPath(cfg, normalized), []byte(jsonText), 0o644); err != nil {
+	if err := os.WriteFile(instanceSnapshotMetadataPath(cfg, normalized), []byte(jsonText), 0o644); err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		return 1
 	}
-	fmt.Printf("Snapshot created.\n\nSnapshot:\n  project: %s\n  name: %s\n  path: %s\n  database: database.sql.gz\n  wp-content: wp-content.tar.gz\n", cfg.ProjectSlug, normalized, runtimeSnapshotDir(cfg, normalized))
+	fmt.Printf("Snapshot created.\n\nSnapshot:\n  project: %s\n  name: %s\n  path: %s\n  database: database.sql.gz\n  wp-content: wp-content.tar.gz\n", cfg.ProjectSlug, normalized, instanceSnapshotDir(cfg, normalized))
 	return 0
 }
 
-func cmdRuntimeSnapshotList(cfg runtimeConfig) int {
-	records, err := loadRuntimeSnapshots(cfg)
+func cmdInstanceSnapshotList(cfg instanceConfig) int {
+	records, err := loadInstanceSnapshots(cfg)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		return 1
 	}
 	if len(records) == 0 {
-		fmt.Println("No runtime snapshots found.")
+		fmt.Println("No instance snapshots found.")
 		return 0
 	}
-	fmt.Println(formatTable(runtimeSnapshotRows(records)))
+	fmt.Println(formatTable(instanceSnapshotRows(records)))
 	return 0
 }
 
-func cmdRuntimeSnapshotDelete(cfg runtimeConfig, name string, nonInteractive bool) int {
-	records, err := loadRuntimeSnapshots(cfg)
+func cmdInstanceSnapshotDelete(cfg instanceConfig, name string, nonInteractive bool) int {
+	records, err := loadInstanceSnapshots(cfg)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		return 1
 	}
 	selectedName := strings.TrimSpace(name)
 	if selectedName == "" {
-		if nonInteractive || !runtimeSnapshotIsInteractive() {
-			fmt.Fprintln(os.Stderr, "runtime snapshot delete requires a name when stdin is not interactive")
+		if nonInteractive || !instanceSnapshotIsInteractive() {
+			fmt.Fprintln(os.Stderr, "instance snapshot delete requires a name when stdin is not interactive")
 			return 1
 		}
-		record, err := chooseRuntimeSnapshot(records, "delete")
+		record, err := chooseInstanceSnapshot(records, "delete")
 		if err != nil {
 			fmt.Fprintln(os.Stderr, err)
 			return 1
 		}
 		selectedName = firstNonEmpty(record.Metadata.Name, filepath.Base(record.Directory))
 	}
-	normalized, err := runtimeSnapshotNormalizedName(selectedName)
+	normalized, err := instanceSnapshotNormalizedName(selectedName)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		return 1
 	}
-	path := runtimeSnapshotDir(cfg, normalized)
+	path := instanceSnapshotDir(cfg, normalized)
 	if _, err := os.Stat(path); err != nil {
 		if os.IsNotExist(err) {
-			fmt.Fprintf(os.Stderr, "No runtime snapshot matched %q.\n", normalized)
+			fmt.Fprintf(os.Stderr, "No instance snapshot matched %q.\n", normalized)
 			return 1
 		}
 		fmt.Fprintln(os.Stderr, err)
 		return 1
 	}
-	if nonInteractive || !runtimeSnapshotIsInteractive() {
-		fmt.Fprintln(os.Stderr, "runtime snapshot delete requires an interactive terminal for confirmation")
+	if nonInteractive || !instanceSnapshotIsInteractive() {
+		fmt.Fprintln(os.Stderr, "instance snapshot delete requires an interactive terminal for confirmation")
 		return 1
 	}
-	confirmed, err := runtimeSnapshotConfirm(fmt.Sprintf("Delete runtime snapshot %q? This removes %s.", normalized, path), false)
+	confirmed, err := instanceSnapshotConfirm(fmt.Sprintf("Delete instance snapshot %q? This removes %s.", normalized, path), false)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		return 1
@@ -687,48 +687,48 @@ func cmdRuntimeSnapshotDelete(cfg runtimeConfig, name string, nonInteractive boo
 		fmt.Fprintln(os.Stderr, err)
 		return 1
 	}
-	fmt.Printf("Deleted runtime snapshot.\n\nDeleted:\n  name: %s\n  path: %s\n", normalized, path)
+	fmt.Printf("Deleted instance snapshot.\n\nDeleted:\n  name: %s\n  path: %s\n", normalized, path)
 	return 0
 }
 
-func cmdRuntimeSnapshotRestore(cfg runtimeConfig, name string, nonInteractive bool) int {
-	records, err := loadRuntimeSnapshots(cfg)
+func cmdInstanceSnapshotRestore(cfg instanceConfig, name string, nonInteractive bool) int {
+	records, err := loadInstanceSnapshots(cfg)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		return 1
 	}
 	selectedName := strings.TrimSpace(name)
 	if selectedName == "" {
-		if nonInteractive || !runtimeSnapshotIsInteractive() {
-			fmt.Fprintln(os.Stderr, "runtime snapshot restore requires a name when stdin is not interactive")
+		if nonInteractive || !instanceSnapshotIsInteractive() {
+			fmt.Fprintln(os.Stderr, "instance snapshot restore requires a name when stdin is not interactive")
 			return 1
 		}
-		record, err := chooseRuntimeSnapshot(records, "restore")
+		record, err := chooseInstanceSnapshot(records, "restore")
 		if err != nil {
 			fmt.Fprintln(os.Stderr, err)
 			return 1
 		}
 		selectedName = firstNonEmpty(record.Metadata.Name, filepath.Base(record.Directory))
 	}
-	normalized, err := runtimeSnapshotNormalizedName(selectedName)
+	normalized, err := instanceSnapshotNormalizedName(selectedName)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		return 1
 	}
-	path := runtimeSnapshotDir(cfg, normalized)
+	path := instanceSnapshotDir(cfg, normalized)
 	if _, err := os.Stat(path); err != nil {
 		if os.IsNotExist(err) {
-			fmt.Fprintf(os.Stderr, "No runtime snapshot matched %q.\n", normalized)
+			fmt.Fprintf(os.Stderr, "No instance snapshot matched %q.\n", normalized)
 			return 1
 		}
 		fmt.Fprintln(os.Stderr, err)
 		return 1
 	}
-	if nonInteractive || !runtimeSnapshotIsInteractive() {
-		fmt.Fprintln(os.Stderr, "runtime snapshot restore requires an interactive terminal for confirmation")
+	if nonInteractive || !instanceSnapshotIsInteractive() {
+		fmt.Fprintln(os.Stderr, "instance snapshot restore requires an interactive terminal for confirmation")
 		return 1
 	}
-	confirmed, err := runtimeSnapshotConfirm(fmt.Sprintf("Restore runtime snapshot %q? This will overwrite the current runtime database and mutable wp-content.", normalized), false)
+	confirmed, err := instanceSnapshotConfirm(fmt.Sprintf("Restore instance snapshot %q? This will overwrite the current instance database and mutable wp-content.", normalized), false)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		return 1
@@ -737,34 +737,34 @@ func cmdRuntimeSnapshotRestore(cfg runtimeConfig, name string, nonInteractive bo
 		fmt.Fprintln(os.Stderr, "Aborted.")
 		return 1
 	}
-	if err := ensureRuntimeReadyForSnapshot(cfg); err != nil {
+	if err := ensureInstanceReadyForSnapshot(cfg); err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		return 1
 	}
 	safetyName := defaultPreRestoreSnapshotName(time.Now())
-	if runtimeSnapshotExists(cfg, safetyName) {
-		fmt.Fprintf(os.Stderr, "runtime snapshot %q already exists.\n", safetyName)
+	if instanceSnapshotExists(cfg, safetyName) {
+		fmt.Fprintf(os.Stderr, "instance snapshot %q already exists.\n", safetyName)
 		return 1
 	}
-	if err := runtimeSnapshotCreateArchives(cfg, safetyName); err != nil {
+	if err := instanceSnapshotCreateArchives(cfg, safetyName); err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		return 1
 	}
-	safetyMeta := newRuntimeSnapshotMetadata(cfg, safetyName, time.Now())
-	jsonText, err := runtimeSnapshotMetadataJSON(safetyMeta)
+	safetyMeta := newInstanceSnapshotMetadata(cfg, safetyName, time.Now())
+	jsonText, err := instanceSnapshotMetadataJSON(safetyMeta)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		return 1
 	}
-	if err := os.WriteFile(runtimeSnapshotMetadataPath(cfg, safetyName), []byte(jsonText), 0o644); err != nil {
+	if err := os.WriteFile(instanceSnapshotMetadataPath(cfg, safetyName), []byte(jsonText), 0o644); err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		return 1
 	}
-	if err := runtimeSnapshotRestoreArchives(cfg, normalized); err != nil {
+	if err := instanceSnapshotRestoreArchives(cfg, normalized); err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		return 1
 	}
-	fmt.Printf("Snapshot restored.\n\nRestored:\n  project: %s\n  name: %s\n\nSafety snapshot:\n  name: %s\n  path: %s\n", cfg.ProjectSlug, normalized, safetyName, runtimeSnapshotDir(cfg, safetyName))
+	fmt.Printf("Snapshot restored.\n\nRestored:\n  project: %s\n  name: %s\n\nSafety snapshot:\n  name: %s\n  path: %s\n", cfg.ProjectSlug, normalized, safetyName, instanceSnapshotDir(cfg, safetyName))
 	return 0
 }
 
@@ -829,30 +829,30 @@ func shellQuoteArg(arg string) string {
 	return "'" + strings.ReplaceAll(arg, "'", "'\\''") + "'"
 }
 
-func runtimeCommandDir(cfg runtimeConfig) string {
-	return cfg.ManagedDir
+func instanceCommandDir(cfg instanceConfig) string {
+	return cfg.InstanceDir
 }
 
-func ensureManagedRuntime(cfg runtimeConfig) error {
-	if strings.TrimSpace(cfg.ManagedDir) == "" {
-		return fmt.Errorf("missing managed runtime directory")
+func ensureManagedInstance(cfg instanceConfig) error {
+	if strings.TrimSpace(cfg.InstanceDir) == "" {
+		return fmt.Errorf("missing managed instance directory")
 	}
-	if err := os.MkdirAll(cfg.ManagedDir, 0o755); err != nil {
+	if err := os.MkdirAll(cfg.InstanceDir, 0o755); err != nil {
 		return err
 	}
-	if err := os.MkdirAll(runtimeSnapshotProjectDir(cfg), 0o755); err != nil {
+	if err := os.MkdirAll(instanceSnapshotProjectDir(cfg), 0o755); err != nil {
 		return err
 	}
-	if err := os.Chmod(runtimeSnapshotProjectDir(cfg), 0o777); err != nil {
+	if err := os.Chmod(instanceSnapshotProjectDir(cfg), 0o777); err != nil {
 		return err
 	}
 	files := map[string]string{
-		filepath.Join(cfg.ManagedDir, "docker-compose.yml"):                                  renderRuntimeCompose(cfg),
-		filepath.Join(cfg.ManagedDir, ".env"):                                                renderRuntimeEnv(cfg),
-		filepath.Join(cfg.ManagedDir, "php", "uploads.ini"):                                  renderRuntimeUploadsINI(),
-		filepath.Join(cfg.ManagedDir, "wordpress", "Dockerfile"):                             renderRuntimeDockerfile(),
-		filepath.Join(cfg.ManagedDir, "wordpress", "wordpress-rewrites.conf"):                renderRuntimeRewritesConf(),
-		filepath.Join(cfg.ManagedDir, firstNonEmpty(cfg.UploadsPath, "uploads"), ".gitkeep"): "",
+		filepath.Join(cfg.InstanceDir, "docker-compose.yml"):                                  renderInstanceCompose(cfg),
+		filepath.Join(cfg.InstanceDir, ".env"):                                                renderInstanceEnv(cfg),
+		filepath.Join(cfg.InstanceDir, "php", "uploads.ini"):                                  renderInstanceUploadsINI(),
+		filepath.Join(cfg.InstanceDir, "wordpress", "Dockerfile"):                             renderInstanceDockerfile(),
+		filepath.Join(cfg.InstanceDir, "wordpress", "wordpress-rewrites.conf"):                renderInstanceRewritesConf(),
+		filepath.Join(cfg.InstanceDir, firstNonEmpty(cfg.UploadsPath, "uploads"), ".gitkeep"): "",
 	}
 	for path, contents := range files {
 		if err := writeManagedFile(path, contents, 0o644); err != nil {
@@ -879,7 +879,7 @@ func writeManagedFile(path, contents string, mode os.FileMode) error {
 	return nil
 }
 
-func runtimePortInUse(port int) bool {
+func instancePortInUse(port int) bool {
 	if port <= 0 || port > 65535 {
 		return true
 	}
@@ -891,24 +891,24 @@ func runtimePortInUse(port int) bool {
 	return false
 }
 
-func runtimePortsInUse(cfg runtimeConfig) []int {
+func instancePortsInUse(cfg instanceConfig) []int {
 	occupied := make([]int, 0, 2)
 	for _, port := range []int{cfg.WordpressPort, cfg.MailpitPort} {
-		if runtimePortInUse(port) {
+		if instancePortInUse(port) {
 			occupied = append(occupied, port)
 		}
 	}
 	return occupied
 }
 
-func runtimePortCollisionMessage(cfg runtimeConfig, occupied []int) string {
+func instancePortCollisionMessage(cfg instanceConfig, occupied []int) string {
 	if len(occupied) == 0 {
 		return ""
 	}
 	ports := append([]int(nil), occupied...)
 	sort.Ints(ports)
 	projectLabel := firstNonEmpty(cfg.ProjectSlug, "project")
-	block := fmt.Sprintf("The %s runtime wants:\n  WordPress: http://localhost:%d\n  Mailpit:   http://localhost:%d\n\nSet runtime.ports.wordpress and runtime.ports.mailpit in .nf/project.json to override.", projectLabel, cfg.WordpressPort, cfg.MailpitPort)
+	block := fmt.Sprintf("The %s instance wants:\n  WordPress: http://localhost:%d\n  Mailpit:   http://localhost:%d\n\nSet instance.ports.wordpress and instance.ports.mailpit in .nf/project.json to override.", projectLabel, cfg.WordpressPort, cfg.MailpitPort)
 	if len(ports) == 1 {
 		return fmt.Sprintf("Port %d is already in use.\n\n%s", ports[0], block)
 	}
@@ -919,55 +919,55 @@ func runtimePortCollisionMessage(cfg runtimeConfig, occupied []int) string {
 	return fmt.Sprintf("Ports %s are already in use.\n\n%s", strings.Join(parts, " and "), block)
 }
 
-func preflightRuntimePorts(cfg runtimeConfig) error {
-	if occupied := runtimePortsInUse(cfg); len(occupied) > 0 {
-		return fmt.Errorf("%s", runtimePortCollisionMessage(cfg, occupied))
+func preflightInstancePorts(cfg instanceConfig) error {
+	if occupied := instancePortsInUse(cfg); len(occupied) > 0 {
+		return fmt.Errorf("%s", instancePortCollisionMessage(cfg, occupied))
 	}
 	return nil
 }
 
-func runtimeComposeArgs(cfg runtimeConfig, args ...string) []string {
+func instanceComposeArgs(cfg instanceConfig, args ...string) []string {
 	fields := strings.Fields(firstNonEmpty(cfg.Compose, "docker compose"))
 	return append(fields, args...)
 }
 
-func runtimeCliArgs(cfg runtimeConfig, args ...string) []string {
-	return append(runtimeComposeArgs(cfg, "run", "--rm", firstNonEmpty(cfg.CliService, "cli")), args...)
+func instanceCliArgs(cfg instanceConfig, args ...string) []string {
+	return append(instanceComposeArgs(cfg, "run", "--rm", firstNonEmpty(cfg.CliService, "cli")), args...)
 }
 
-func runtimeWpArgs(cfg runtimeConfig, args ...string) []string {
-	return append(runtimeCliArgs(cfg, "wp"), append(args, "--allow-root")...)
+func instanceWpArgs(cfg instanceConfig, args ...string) []string {
+	return append(instanceCliArgs(cfg, "wp"), append(args, "--allow-root")...)
 }
 
-func runtimeShellArgs(cfg runtimeConfig) []string {
-	return runtimeComposeArgs(cfg, "exec", firstNonEmpty(cfg.WordpressService, "wordpress"), "sh")
+func instanceShellArgs(cfg instanceConfig) []string {
+	return instanceComposeArgs(cfg, "exec", firstNonEmpty(cfg.WordpressService, "wordpress"), "sh")
 }
 
-func runtimeWpProbeArgs(cfg runtimeConfig, args ...string) []string {
-	return runtimeWpArgs(cfg, args...)
+func instanceWpProbeArgs(cfg instanceConfig, args ...string) []string {
+	return instanceWpArgs(cfg, args...)
 }
 
-func runtimeWpThemeIsActiveArgs(cfg runtimeConfig, slug string) []string {
-	return runtimeWpArgs(cfg, "theme", "is-active", firstNonEmpty(slug, cfg.ThemeMountSlug, cfg.ThemeSlug, "theme"))
+func instanceWpThemeIsActiveArgs(cfg instanceConfig, slug string) []string {
+	return instanceWpArgs(cfg, "theme", "is-active", firstNonEmpty(slug, cfg.ThemeMountSlug, cfg.ThemeSlug, "theme"))
 }
 
-func runtimeWpCoreInstallArgs(cfg runtimeConfig) []string {
+func instanceWpCoreInstallArgs(cfg instanceConfig) []string {
 	slug := firstNonEmpty(cfg.ThemeMountSlug, cfg.ThemeSlug, "theme")
-	return append(runtimeComposeArgs(cfg, "run", "--rm", firstNonEmpty(cfg.CliService, "cli"), "sh", "-lc"), `wp core install --url="$WP_URL" --title="$WP_TITLE" --admin_user="$ADMIN_USER" --admin_password="$ADMIN_PASSWORD" --admin_email="$ADMIN_EMAIL" --skip-email --allow-root && wp theme activate `+slug+` --allow-root`)
+	return append(instanceComposeArgs(cfg, "run", "--rm", firstNonEmpty(cfg.CliService, "cli"), "sh", "-lc"), `wp core install --url="$WP_URL" --title="$WP_TITLE" --admin_user="$ADMIN_USER" --admin_password="$ADMIN_PASSWORD" --admin_email="$ADMIN_EMAIL" --skip-email --allow-root && wp theme activate `+slug+` --allow-root`)
 }
 
-func runtimeWpThemeActivateArgs(cfg runtimeConfig, slug string) []string {
-	return runtimeWpArgs(cfg, "theme", "activate", firstNonEmpty(slug, cfg.ThemeMountSlug, cfg.ThemeSlug, "theme"))
+func instanceWpThemeActivateArgs(cfg instanceConfig, slug string) []string {
+	return instanceWpArgs(cfg, "theme", "activate", firstNonEmpty(slug, cfg.ThemeMountSlug, cfg.ThemeSlug, "theme"))
 }
 
-func runtimeThemeArchivePaths(cfg runtimeConfig, sourcePath string) (string, string) {
+func instanceThemeArchivePaths(cfg instanceConfig, sourcePath string) (string, string) {
 	base := filepath.Base(sourcePath)
-	host := filepath.Join(runtimeCommandDir(cfg), firstNonEmpty(cfg.UploadsPath, "uploads"), base)
-	container := path.Join("/", "runtime", firstNonEmpty(cfg.UploadsPath, "uploads"), base)
+	host := filepath.Join(instanceCommandDir(cfg), firstNonEmpty(cfg.UploadsPath, "uploads"), base)
+	container := path.Join("/", "instance", firstNonEmpty(cfg.UploadsPath, "uploads"), base)
 	return host, container
 }
 
-func runtimeRepoPath(root, sourcePath string) string {
+func instanceRepoPath(root, sourcePath string) string {
 	if filepath.IsAbs(sourcePath) {
 		return sourcePath
 	}
@@ -1367,10 +1367,10 @@ func formatProjectTaskLines(tasks map[string]projectCommand) []string {
 	return lines
 }
 
-func loadRuntimeConfig(root string, metadata map[string]any) (runtimeConfig, bool) {
-	raw, ok := metadata["runtime"].(map[string]any)
+func loadInstanceConfig(root string, metadata map[string]any) (instanceConfig, bool) {
+	raw, ok := metadata["instance"].(map[string]any)
 	if !ok || raw == nil {
-		return runtimeConfig{}, false
+		return instanceConfig{}, false
 	}
 	projectSlug := firstNonEmpty(mapStringAtPath(metadata, "project", "slug"), "project")
 	projectName := firstNonEmpty(mapStringAtPath(metadata, "project", "name"), slugToTitle(projectSlug))
@@ -1379,14 +1379,14 @@ func loadRuntimeConfig(root string, metadata map[string]any) (runtimeConfig, boo
 		themePath = filepath.Join(root, themePath)
 	}
 	wordpress := mapMapAtPath(metadata, "wordpress")
-	return runtimeConfig{
+	return instanceConfig{
 		ProjectSlug:      projectSlug,
 		ProjectName:      projectName,
 		RepoRoot:         root,
 		ThemePath:        themePath,
-		ManagedDir:       config.RuntimeDir(projectSlug),
-		WordpressPort:    firstRuntimePort(raw, "wordpress", projectSlug),
-		MailpitPort:      firstRuntimePort(raw, "mailpit", projectSlug),
+		InstanceDir:      config.InstanceDir(projectSlug),
+		WordpressPort:    firstInstancePort(raw, "wordpress", projectSlug),
+		MailpitPort:      firstInstancePort(raw, "mailpit", projectSlug),
 		Compose:          firstNonEmpty(mapStringAtPath(raw, "compose"), "docker compose"),
 		WordpressService: firstNonEmpty(mapStringAtPath(raw, "wordpress_service"), "wordpress"),
 		CliService:       firstNonEmpty(mapStringAtPath(raw, "cli_service"), "cli"),
@@ -1396,8 +1396,8 @@ func loadRuntimeConfig(root string, metadata map[string]any) (runtimeConfig, boo
 	}, true
 }
 
-func firstRuntimePort(raw map[string]any, name, projectSlug string) int {
-	derivedWordpress, derivedMailpit := runtimeDerivedPorts(projectSlug)
+func firstInstancePort(raw map[string]any, name, projectSlug string) int {
+	derivedWordpress, derivedMailpit := instanceDerivedPorts(projectSlug)
 	derived := derivedWordpress
 	if name == "mailpit" {
 		derived = derivedMailpit
@@ -1410,14 +1410,14 @@ func firstRuntimePort(raw map[string]any, name, projectSlug string) int {
 	if !ok {
 		return derived
 	}
-	port, parsed := parseRuntimePort(value)
+	port, parsed := parseInstancePort(value)
 	if !parsed || port == 0 {
 		return derived
 	}
 	return port
 }
 
-func parseRuntimePort(value any) (int, bool) {
+func parseInstancePort(value any) (int, bool) {
 	switch typed := value.(type) {
 	case nil:
 		return 0, false
@@ -1464,14 +1464,14 @@ func parseRuntimePort(value any) (int, bool) {
 	}
 }
 
-func defaultRuntimeCommands(cfg runtimeConfig) map[string]projectCommand {
+func defaultInstanceCommands(cfg instanceConfig) map[string]projectCommand {
 	return map[string]projectCommand{
-		"up":    {Description: "Start the managed runtime, install WordPress if missing, and ensure the mounted theme is active", Run: runtimeCommandRunner{name: "up", cfg: cfg}},
-		"down":  {Description: "Stop the managed runtime", Run: runtimeCommandRunner{name: "down", cfg: cfg}},
-		"logs":  {Description: "Tail WordPress logs", Run: runtimeCommandRunner{name: "logs", cfg: cfg}},
-		"reset": {Description: "Destroy and recreate the local runtime", Run: runtimeCommandRunner{name: "reset", cfg: cfg}},
-		"shell": {Description: "Open a shell in the WordPress container", Run: runtimeCommandRunner{name: "shell", cfg: cfg}},
-		"wp":    {Description: "Run wp-cli passthrough", Run: runtimeCommandRunner{name: "wp", cfg: cfg}},
+		"up":    {Description: "Start the managed instance, install WordPress if missing, and ensure the mounted theme is active", Run: instanceCommandRunner{name: "up", cfg: cfg}},
+		"down":  {Description: "Stop the managed instance", Run: instanceCommandRunner{name: "down", cfg: cfg}},
+		"logs":  {Description: "Tail WordPress logs", Run: instanceCommandRunner{name: "logs", cfg: cfg}},
+		"reset": {Description: "Destroy and recreate the local instance", Run: instanceCommandRunner{name: "reset", cfg: cfg}},
+		"shell": {Description: "Open a shell in the WordPress container", Run: instanceCommandRunner{name: "shell", cfg: cfg}},
+		"wp":    {Description: "Run wp-cli passthrough", Run: instanceCommandRunner{name: "wp", cfg: cfg}},
 	}
 }
 
@@ -1479,7 +1479,7 @@ func discoverProjectRootOrError() (string, error) {
 	if root, ok := config.DiscoverProjectRoot(""); ok {
 		return root, nil
 	}
-	return "", ProjectError{Msg: "No repo metadata found above the current directory. Add .nf/project.json with runtime metadata or tasks.<name>."}
+	return "", ProjectError{Msg: "No repo metadata found above the current directory. Add .nf/project.json with instance metadata or tasks.<name>."}
 }
 
 func cmdProjectTasks() int {
@@ -2034,10 +2034,10 @@ func writeProjectInit(root string, args projectInitArgs) error {
 	return nil
 }
 
-func ensureRuntimeProjectMetadata() error {
+func ensureInstanceProjectMetadata() error {
 	root, ok := currentGitRoot()
 	if !ok {
-		return ProjectError{Msg: "runtime up requires a .git repository above the current directory"}
+		return ProjectError{Msg: "instance up requires a .git repository above the current directory"}
 	}
 	projectPath := config.ProjectFile(root)
 	if _, err := os.Stat(projectPath); err == nil {
@@ -2069,7 +2069,7 @@ func repoInitMetadata(args projectInitArgs) map[string]any {
 			"theme_slug":  themeSlug,
 			"theme_path":  themePath,
 		},
-		"runtime": map[string]any{
+		"instance": map[string]any{
 			"compose":           "docker compose",
 			"wordpress_service": "wordpress",
 			"cli_service":       "cli",
@@ -2105,7 +2105,7 @@ func repoInitJSON(metadata map[string]any) string {
 	return string(append(data, '\n'))
 }
 
-func renderRuntimeCompose(cfg runtimeConfig) string {
+func renderInstanceCompose(cfg instanceConfig) string {
 	themeMountSlug := firstNonEmpty(cfg.ThemeMountSlug, "theme")
 	wordpressService := firstNonEmpty(cfg.WordpressService, "wordpress")
 	cliService := firstNonEmpty(cfg.CliService, "cli")
@@ -2180,7 +2180,7 @@ func renderRuntimeCompose(cfg runtimeConfig) string {
       - wp_data:/var/www/html
       - %s:/var/www/html/wp-content/themes/%s
       - ./%s:%s
-      - %s:/runtime-snapshots
+      - %s:/instance-snapshots
 
   mailpit:
     image: axllent/mailpit
@@ -2190,10 +2190,10 @@ func renderRuntimeCompose(cfg runtimeConfig) string {
 volumes:
   db_data:
   wp_data:
-`, wordpressService, themePath, themeMountSlug, cliService, wordpressService, themePath, themeMountSlug, uploadsPath, path.Join("/", "runtime", uploadsPath), runtimeSnapshotComposeMount(cfg))
+`, wordpressService, themePath, themeMountSlug, cliService, wordpressService, themePath, themeMountSlug, uploadsPath, path.Join("/", "instance", uploadsPath), instanceSnapshotComposeMount(cfg))
 }
 
-func renderRuntimeEnv(cfg runtimeConfig) string {
+func renderInstanceEnv(cfg instanceConfig) string {
 	wpTitle := firstNonEmpty(cfg.ProjectName, slugToTitle(cfg.ProjectSlug))
 	return fmt.Sprintf(`COMPOSE_PROJECT_NAME=%s
 WP_PORT=%d
@@ -2207,19 +2207,19 @@ WP_TITLE=%s
 ADMIN_USER=admin
 ADMIN_PASSWORD=admin
 ADMIN_EMAIL=web@nonfiction.ca
-`, runtimeComposeProjectName(cfg.ProjectSlug), cfg.WordpressPort, cfg.MailpitPort, cfg.ProjectSlug, cfg.ProjectSlug, cfg.WordpressPort, wpTitle)
+`, instanceComposeProjectName(cfg.ProjectSlug), cfg.WordpressPort, cfg.MailpitPort, cfg.ProjectSlug, cfg.ProjectSlug, cfg.WordpressPort, wpTitle)
 }
 
-func runtimeComposeProjectName(projectSlug string) string {
-	return "nf_" + cleanRuntimeSlug(projectSlug) + "_runtime"
+func instanceComposeProjectName(projectSlug string) string {
+	return "nf_" + cleanInstanceSlug(projectSlug) + "_instance"
 }
 
-func renderRuntimeInfo(cfg runtimeConfig, includeURLs bool) string {
+func renderInstanceInfo(cfg instanceConfig, includeURLs bool) string {
 	lines := []string{
-		"Runtime:",
+		"Instance:",
 		"  project: " + cfg.ProjectSlug,
-		"  path: " + cfg.ManagedDir,
-		"  compose project: " + runtimeComposeProjectName(cfg.ProjectSlug),
+		"  path: " + cfg.InstanceDir,
+		"  compose project: " + instanceComposeProjectName(cfg.ProjectSlug),
 	}
 	if includeURLs {
 		lines = append(lines,
@@ -2230,11 +2230,11 @@ func renderRuntimeInfo(cfg runtimeConfig, includeURLs bool) string {
 	return strings.Join(lines, "\n")
 }
 
-func renderRuntimeUploadsINI() string {
+func renderInstanceUploadsINI() string {
 	return "file_uploads=On\nmemory_limit=256M\nupload_max_filesize=128M\npost_max_size=128M\nmax_execution_time=120\nmax_input_time=120\n"
 }
 
-func renderRuntimeDockerfile() string {
+func renderInstanceDockerfile() string {
 	return `FROM wordpress:7.0-php8.4-apache
 
 RUN a2enmod rewrite \
@@ -2244,7 +2244,7 @@ COPY wordpress/wordpress-rewrites.conf /etc/apache2/conf-enabled/wordpress-rewri
 `
 }
 
-func renderRuntimeRewritesConf() string {
+func renderInstanceRewritesConf() string {
 	return `<Directory /var/www/html>
   Options FollowSymLinks
   AllowOverride All
@@ -2452,26 +2452,26 @@ func runPasswordHelp() int {
 	return 0
 }
 
-func runRuntimeHelp() int {
-	printGroupHelp("runtime", []string{
-		"up                  start the local runtime",
-		"down                stop the local runtime",
+func runInstanceHelp() int {
+	printGroupHelp("instance", []string{
+		"up                  start the local instance",
+		"down                stop the local instance",
+		"shell               open a shell in the local instance",
 		"logs                tail WordPress logs",
-		"reset               destroy and recreate the local runtime",
-		"shell               open a shell in the WordPress container",
-		"wp -- <args>        run wp-cli in the local runtime",
-		"snapshot            manage runtime snapshots",
-		"info                show local runtime paths, ports, and URLs",
+		"reset               destroy and recreate the local instance",
+		"wp -- <args>        run wp-cli in the local instance",
+		"info                show local instance paths, ports, and URLs",
+		"snapshot            manage/list instance snapshots",
 	})
 	fmt.Println("\nShortcuts:")
 	for _, line := range []string{
-		"nf up               shortcut for nf runtime up",
-		"nf down             shortcut for nf runtime down",
-		"nf logs             shortcut for nf runtime logs",
-		"nf reset            shortcut for nf runtime reset",
-		"nf shell            shortcut for nf runtime shell",
-		"nf wp -- <args>     shortcut for nf runtime wp -- <args>",
-		"nf info             shortcut for nf runtime info",
+		"nf up               shortcut for nf instance up",
+		"nf down             shortcut for nf instance down",
+		"nf logs             shortcut for nf instance logs",
+		"nf reset            shortcut for nf instance reset",
+		"nf shell            shortcut for nf instance shell",
+		"nf wp -- <args>     shortcut for nf instance wp -- <args>",
+		"nf info             shortcut for nf instance info",
 	} {
 		fmt.Printf("  %s\n", line)
 	}
@@ -2503,34 +2503,34 @@ func runRepoHelp() int {
 	return 0
 }
 
-func runRuntime(argv []string) int {
+func runInstance(argv []string) int {
 	if len(argv) == 0 || argv[0] == "help" {
-		return runRuntimeHelp()
+		return runInstanceHelp()
 	}
 	name := argv[0]
 	switch name {
 	case "info", "up", "down", "logs", "reset", "shell", "wp", "snapshot":
 	default:
-		fmt.Fprintln(os.Stderr, "unsupported runtime command")
+		fmt.Fprintln(os.Stderr, "unsupported instance command")
 		return 1
 	}
 	if name == "snapshot" {
-		return runRuntimeSnapshot(argv[1:])
+		return runInstanceSnapshot(argv[1:])
 	}
 	if name == "info" && len(argv) != 1 {
-		fmt.Fprintln(os.Stderr, "runtime info takes no arguments")
+		fmt.Fprintln(os.Stderr, "instance info takes no arguments")
 		return 1
 	}
 	if name == "shell" && len(argv) != 1 {
-		fmt.Fprintln(os.Stderr, "runtime shell takes no arguments")
+		fmt.Fprintln(os.Stderr, "instance shell takes no arguments")
 		return 1
 	}
-	if err := requireProjectContext("runtime " + name); err != nil {
+	if err := requireProjectContext("instance " + name); err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		return 1
 	}
 	if name == "up" {
-		if err := ensureRuntimeProjectMetadata(); err != nil {
+		if err := ensureInstanceProjectMetadata(); err != nil {
 			fmt.Fprintln(os.Stderr, err)
 			return 1
 		}
@@ -2545,17 +2545,17 @@ func runRuntime(argv []string) int {
 		fmt.Fprintln(os.Stderr, err)
 		return 1
 	}
-	cfg, ok := loadRuntimeConfig(root, metadata)
+	cfg, ok := loadInstanceConfig(root, metadata)
 	if !ok {
-		fmt.Fprintln(os.Stderr, "Missing runtime metadata in .nf/project.json. Run nf runtime up first.")
+		fmt.Fprintln(os.Stderr, "Missing instance metadata in .nf/project.json. Run nf instance up first.")
 		return 1
 	}
 	if name == "info" {
-		fmt.Println(renderRuntimeInfo(cfg, true))
+		fmt.Println(renderInstanceInfo(cfg, true))
 		return 0
 	}
 	if name == "up" {
-		if err := preflightRuntimePorts(cfg); err != nil {
+		if err := preflightInstancePorts(cfg); err != nil {
 			fmt.Fprintln(os.Stderr, err)
 			return 1
 		}
@@ -2564,35 +2564,35 @@ func runRuntime(argv []string) int {
 	if name == "wp" {
 		extraArgs = normalizePassthroughArgs(extraArgs)
 	}
-	if err := (runtimeCommandRunner{name: name, cfg: cfg}).Execute(root, extraArgs); err != nil {
+	if err := (instanceCommandRunner{name: name, cfg: cfg}).Execute(root, extraArgs); err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		return 1
 	}
 	switch name {
 	case "up":
-		fmt.Println("Runtime started.")
+		fmt.Println("Instance started.")
 		fmt.Println()
-		fmt.Println(renderRuntimeInfo(cfg, true))
+		fmt.Println(renderInstanceInfo(cfg, true))
 	case "reset":
-		fmt.Println("Runtime reset.")
+		fmt.Println("Instance reset.")
 		fmt.Println()
-		fmt.Println(renderRuntimeInfo(cfg, true))
+		fmt.Println(renderInstanceInfo(cfg, true))
 	case "down":
-		fmt.Println("Runtime stopped.")
+		fmt.Println("Instance stopped.")
 		fmt.Println()
-		fmt.Println(renderRuntimeInfo(cfg, false))
+		fmt.Println(renderInstanceInfo(cfg, false))
 	}
 	return 0
 }
 
-func runRuntimeSnapshot(argv []string) int {
+func runInstanceSnapshot(argv []string) int {
 	if len(argv) == 0 || argv[0] == "help" {
-		printGroupHelp("runtime snapshot", []string{
-			"create [name]       create a runtime snapshot",
-			"list                list runtime snapshots",
+		printGroupHelp("instance snapshot", []string{
+			"create [name]       create an instance snapshot",
+			"list                list instance snapshots",
 			"ls                  alias for list",
-			"restore [name]      restore a runtime snapshot",
-			"delete [name]       delete a runtime snapshot",
+			"restore [name]      restore an instance snapshot",
+			"delete [name]       delete an instance snapshot",
 		})
 		return 0
 	}
@@ -2601,19 +2601,19 @@ func runRuntimeSnapshot(argv []string) int {
 	switch cmd {
 	case "list", "ls":
 		if len(args) != 0 {
-			fmt.Fprintln(os.Stderr, "runtime snapshot list takes no arguments")
+			fmt.Fprintln(os.Stderr, "instance snapshot list takes no arguments")
 			return 1
 		}
 	case "create", "restore", "delete":
 		if len(args) > 1 {
-			fmt.Fprintln(os.Stderr, "runtime snapshot command takes at most one name")
+			fmt.Fprintln(os.Stderr, "instance snapshot command takes at most one name")
 			return 1
 		}
 	default:
-		fmt.Fprintln(os.Stderr, "unsupported runtime snapshot command")
+		fmt.Fprintln(os.Stderr, "unsupported instance snapshot command")
 		return 1
 	}
-	if err := requireProjectContext("runtime snapshot " + cmd); err != nil {
+	if err := requireProjectContext("instance snapshot " + cmd); err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		return 1
 	}
@@ -2627,32 +2627,32 @@ func runRuntimeSnapshot(argv []string) int {
 		fmt.Fprintln(os.Stderr, err)
 		return 1
 	}
-	cfg, ok := loadRuntimeConfig(root, metadata)
+	cfg, ok := loadInstanceConfig(root, metadata)
 	if !ok {
-		fmt.Fprintln(os.Stderr, "Missing runtime metadata in .nf/project.json. Run nf runtime up first.")
+		fmt.Fprintln(os.Stderr, "Missing instance metadata in .nf/project.json. Run nf instance up first.")
 		return 1
 	}
 	switch cmd {
 	case "list", "ls":
-		return cmdRuntimeSnapshotList(cfg)
+		return cmdInstanceSnapshotList(cfg)
 	case "create":
 		name := ""
 		if len(args) == 1 {
 			name = args[0]
 		}
-		return cmdRuntimeSnapshotCreate(cfg, name, false)
+		return cmdInstanceSnapshotCreate(cfg, name, false)
 	case "restore":
 		name := ""
 		if len(args) == 1 {
 			name = args[0]
 		}
-		return cmdRuntimeSnapshotRestore(cfg, name, false)
+		return cmdInstanceSnapshotRestore(cfg, name, false)
 	case "delete":
 		name := ""
 		if len(args) == 1 {
 			name = args[0]
 		}
-		return cmdRuntimeSnapshotDelete(cfg, name, false)
+		return cmdInstanceSnapshotDelete(cfg, name, false)
 	default:
 		return 1
 	}
@@ -2663,7 +2663,7 @@ func runHelp() int {
 	fmt.Println("\nCommands:")
 	fmt.Println("  server        provision, list, show, delete servers")
 	fmt.Println("  site          list, show, deploy/sync remote sites")
-	fmt.Println("  runtime       manage the local WordPress runtime")
+	fmt.Println("  instance      manage the local WordPress instance")
 	fmt.Println("  repo          init metadata, package artifacts, run repo tasks")
 	fmt.Println("  config        init local config")
 	fmt.Println("  password      derive passwords")
@@ -2725,8 +2725,8 @@ func Run(argv []string) int {
 		return runServer(argv[1:])
 	case "site":
 		return runSite(argv[1:])
-	case "runtime":
-		return runRuntime(argv[1:])
+	case "instance":
+		return runInstance(argv[1:])
 	case "repo":
 		return runRepo(argv[1:])
 	case "config":
@@ -2734,9 +2734,9 @@ func Run(argv []string) int {
 	case "password":
 		return runPassword(argv[1:])
 	case "info":
-		return runRuntime([]string{"info"})
+		return runInstance([]string{"info"})
 	case "up", "down", "logs", "reset", "shell", "wp":
-		return runRuntime(argv)
+		return runInstance(argv)
 	default:
 		fmt.Fprintf(os.Stderr, "unsupported command: %s\n", argv[0])
 		return 1
@@ -2752,8 +2752,8 @@ func runTopicHelp(argv []string) int {
 		return runServerHelp()
 	case "site":
 		return runSiteHelp()
-	case "runtime":
-		return runRuntimeHelp()
+	case "instance":
+		return runInstanceHelp()
 	case "repo":
 		return runRepoHelp()
 	case "config":
