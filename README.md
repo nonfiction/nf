@@ -2,7 +2,7 @@
 
 `nf` is nonfiction’s internal CLI for agency WordPress theme work.
 
-It gives the team one command surface for project metadata, local WordPress runtimes, repo tasks, theme packaging, shared server/site state, password derivation, and guarded infrastructure operations.
+It gives the team one command surface for project metadata, local WordPress instances, repo tasks, theme packaging, shared server/site state, password derivation, and guarded infrastructure operations.
 
 This is an internal agency tool, not a general-purpose public WordPress framework.
 
@@ -12,17 +12,18 @@ Working now:
 
 * `nf repo init`
 * `nf repo tasks`
-* `nf runtime up`
-* `nf runtime down`
-* `nf runtime logs`
-* `nf runtime reset`
-* `nf runtime info`
-* `nf runtime shell`
-* `nf runtime wp`
-* `nf runtime snapshot create [name]`
-* `nf runtime snapshot list`
-* `nf runtime snapshot restore [name]`
-* `nf runtime snapshot delete [name]`
+* `nf instance up`
+* `nf instance down`
+* `nf instance logs`
+* `nf instance reset`
+* `nf instance info`
+* `nf instance shell`
+* `nf instance wp`
+* `nf instance snapshot create [name]`
+* `nf instance snapshot list`
+* `nf instance snapshot restore [name]`
+* `nf instance snapshot delete [name]`
+* `nf instance snapshots` (alias for `nf instance snapshot list`)
 * `nf up`
 * `nf down`
 * `nf logs`
@@ -59,7 +60,7 @@ From this repository:
 ```sh
 nix run .#nf -- --help
 nix develop -c nf --help
-go run ./cmd/nf -- --help
+go run ./cmd/nf --help
 ```
 
 Build and test:
@@ -85,7 +86,7 @@ For normal development:
 
 * Nix with flakes enabled
 * Go, when working outside the Nix dev shell
-* Docker with Docker Compose, for local runtimes
+* Docker with Docker Compose, for local instances
 
 For remote Linode provisioning:
 
@@ -102,14 +103,14 @@ nf
 Commands:
   server        provision, list, show, delete servers
   site          list, show, deploy/sync remote sites
-  runtime       manage the local WordPress runtime
+  instance       manage the local WordPress instance
   repo          init metadata, package artifacts, run repo tasks
   config        init local config
   password      derive passwords
   help          show help
 ```
 
-Inside a project repository, `nf runtime` manages the local WordPress runtime and `nf repo tasks` lists project tasks from `.nf/project.json`.
+Inside a project repository, `nf instance` manages the local WordPress instance and `nf repo tasks` lists project tasks from `.nf/project.json`.
 
 ## Repo workflow
 
@@ -119,7 +120,7 @@ Project repositories use:
 .nf/project.json
 ```
 
-This file is safe to commit. It describes project intent, theme paths, local runtime behavior, artifact naming, deploy targets, and repo tasks.
+This file is safe to commit. It describes project intent, theme paths, local instance behavior, artifact naming, deploy targets, and repo tasks.
 
 It must not contain secrets, API tokens, SSH keys, live database passwords, or mutable infrastructure state.
 
@@ -156,7 +157,7 @@ Example `.nf/project.json`:
     "theme_slug": "theme",
     "theme_path": "theme"
   },
-  "runtime": {
+  "instance": {
     "compose": "docker compose",
     "wordpress_service": "wordpress",
     "cli_service": "cli",
@@ -237,31 +238,31 @@ Examples:
 nf repo tasks
 nf repo build
 nf repo test
-nf runtime shell
+nf instance shell
 nf shell
-nf runtime wp -- plugin list
+nf instance wp -- plugin list
 ```
 
-## Local WordPress runtime
+## Local WordPress instance
 
-A runtime is `nf`'s generated local WordPress environment for a project. It contains the Docker/WordPress scaffolding and mutable local state used to run, reset, snapshot, and sync the project during development.
+An instance is `nf`'s generated local WordPress environment for a project. It contains the Docker/WordPress scaffolding and mutable local state used to run, reset, snapshot, and sync the project during development.
 
-The runtime is generated and owned by `nf`.
+The instance is generated and owned by `nf`.
 
-Project repositories should contain the theme source and `.nf/project.json` runtime definition. They should not need committed Docker runtime scaffolding.
+Project repositories should contain the theme source and `.nf/project.json` instance definition. They should not need committed Docker instance scaffolding.
 
-Runtime ports are derived deterministically from the project slug. Set `runtime.ports.wordpress` and `runtime.ports.mailpit` in `.nf/project.json` to override them individually; zero or missing values fall back to the derived ports.
+Instance ports are derived deterministically from the project slug. Set `instance.ports.wordpress` and `instance.ports.mailpit` in `.nf/project.json` to override them individually; zero or missing values fall back to the derived ports.
 
-Generated runtime files live under:
+Generated instance files live under:
 
 ```text
-~/.config/nf/runtimes/<project-slug>/
+~/.config/nf/instances/<project-slug>/
 ```
 
 For the placeholder project:
 
 ```text
-~/.config/nf/runtimes/client/
+~/.config/nf/instances/client/
 ```
 
 Derived local URLs:
@@ -271,18 +272,18 @@ WordPress: http://localhost:<wordpress-port>
 Mailpit:   http://localhost:<mailpit-port>
 ```
 
-Runtime info and startup output include both WordPress and Mailpit URLs, for example:
+Instance info and startup output include both WordPress and Mailpit URLs, for example:
 
 ```text
-Runtime:
+Instance:
   project: client
-  path: ~/.config/nf/runtimes/client
-  compose project: nf_client_runtime
+  path: ~/.config/nf/instances/client
+  compose project: nf_client_instance
   WordPress: http://localhost:<wordpress-port>
   Mailpit:   http://localhost:<mailpit-port>
 ```
 
-`nf runtime up` and `nf runtime reset` print a success line followed by the full runtime info block. `nf runtime down` prints a success line followed by the short runtime info block.
+`nf instance up` and `nf instance reset` print a success line followed by the full instance info block. `nf instance down` prints a success line followed by the short instance info block.
 
 Default local WordPress credentials:
 
@@ -293,35 +294,35 @@ admin / admin
 Default Docker Compose project name:
 
 ```text
-nf_client_runtime
+nf_client_instance
 ```
 
-Common runtime workflow:
+Common instance workflow:
 
 ```sh
-nf runtime up
-nf runtime info
-nf runtime logs
-nf runtime shell
-nf runtime wp -- plugin list
-nf runtime down
+nf instance up
+nf instance info
+nf instance logs
+nf instance shell
+nf instance wp -- plugin list
+nf instance down
 ```
 
-The top-level shortcuts `nf up`, `nf down`, `nf logs`, `nf reset`, `nf info`, `nf shell`, and `nf wp` behave the same as `nf runtime ...`.
+The top-level shortcuts `nf up`, `nf down`, `nf logs`, `nf reset`, `nf info`, `nf shell`, and `nf wp` behave the same as `nf instance ...`.
 
-Reset the local runtime:
+Reset the local instance:
 
 ```sh
-nf runtime reset
+nf instance reset
 ```
 
-`nf runtime up` is idempotent. It starts Docker Compose, installs WordPress if needed, and ensures the mounted theme is active.
+`nf instance up` is idempotent. It starts Docker Compose, installs WordPress if needed, and ensures the mounted theme is active.
 
-`nf runtime reset` runs a volume-destroying reset and recreates the same managed runtime state.
+`nf instance reset` runs a volume-destroying reset and recreates the same managed instance state.
 
-## Runtime snapshots
+## Instance snapshots
 
-Runtime snapshots are stored under:
+Instance snapshots are stored under:
 
 ```text
 ~/.config/nf/snapshots/<project-slug>/<snapshot-name>/
@@ -344,15 +345,15 @@ The `wp-content` archive includes only `uploads/`, `plugins/`, `mu-plugins/`, an
 Commands:
 
 ```sh
-nf runtime snapshot create [name]
-nf runtime snapshot list
-nf runtime snapshot restore [name]
-nf runtime snapshot delete [name]
+nf instance snapshot create [name]
+nf instance snapshot list
+nf instance snapshot restore [name]
+nf instance snapshot delete [name]
 ```
 
 Snapshot names default to `YYYY-MM-DD-HHMMSS`. Spaces become dashes. Empty names, path traversal, separators, and unsafe characters are rejected.
 
-`nf runtime snapshot restore` creates a safety snapshot named `YYYY-MM-DD-HHMMSS-pre-restore` before restoring the selected snapshot.
+`nf instance snapshot restore` creates a safety snapshot named `YYYY-MM-DD-HHMMSS-pre-restore` before restoring the selected snapshot.
 
 ## Theme packaging
 
@@ -440,7 +441,7 @@ Expected layout:
     servers.json
     sites.json
     projects.json
-  runtimes/
+  instances/
     <project-slug>/
 ```
 

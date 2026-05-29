@@ -8,7 +8,7 @@
 * Main command groups are:
   * `nf server ...`
   * `nf site ...`
-  * `nf runtime ...`
+  * `nf instance ...`
   * `nf repo ...`
   * `nf config ...`
   * `nf password ...`
@@ -22,17 +22,18 @@ The current project command surface is intentionally small:
 * `nf repo init`
 * `nf repo tasks`
 * `nf repo package`
-* `nf runtime up`
-* `nf runtime down`
-* `nf runtime logs`
-* `nf runtime reset`
-* `nf runtime info`
-* `nf runtime shell`
-* `nf runtime wp`
-* `nf runtime snapshot create [name]`
-* `nf runtime snapshot list`
-* `nf runtime snapshot restore [name]`
-* `nf runtime snapshot delete [name]`
+* `nf instance up`
+* `nf instance down`
+* `nf instance logs`
+* `nf instance reset`
+* `nf instance info`
+* `nf instance shell`
+* `nf instance wp`
+* `nf instance snapshot create [name]`
+* `nf instance snapshot list`
+* `nf instance snapshot restore [name]`
+* `nf instance snapshot delete [name]`
+* `nf instance snapshots` (alias for `nf instance snapshot list`)
 * `nf up`
 * `nf down`
 * `nf logs`
@@ -122,7 +123,7 @@ Expected local layout:
     servers.json
     sites.json
     projects.json
-  runtimes/
+  instances/
     <project-slug>/
 ```
 
@@ -146,17 +147,17 @@ Current shared state files:
 * `sites.json`
 * `projects.json`
 
-Local WordPress runtime lives under:
+Local WordPress instance lives under:
 
 ```text
-~/.config/nf/runtimes/<project-slug>/
+~/.config/nf/instances/<project-slug>/
 ```
 
 or the equivalent `NF_CONFIG_HOME` test path.
 
-A runtime is `nf`'s generated local WordPress environment for a project. It contains the Docker/WordPress scaffolding and mutable local state used to run, reset, snapshot, and sync the project during development.
+An instance is `nf`'s generated local WordPress environment for a project. It contains the Docker/WordPress scaffolding and mutable local state used to run, reset, snapshot, and sync the project during development.
 
-The runtime is generated and owned by `nf`. Do not scaffold Docker runtime files into project repos by default.
+The instance is generated and owned by `nf`. Do not scaffold Docker instance files into project repos by default.
 
 Repo-local metadata lives at:
 
@@ -183,7 +184,7 @@ Required/expected environment values:
 
 ## Repo-context behavior
 
-`nf runtime ...` and `nf repo ...` commands are the local project command surface.
+`nf instance ...` and `nf repo ...` commands are the local project command surface.
 
 Repo tasks come from:
 
@@ -205,7 +206,7 @@ Generated metadata should default these values to `theme` unless an explicit ove
 
 * `wordpress.theme_path`
 * `wordpress.theme_slug`
-* `runtime.theme_mount_slug`
+* `instance.theme_mount_slug`
 
 String tasks run through:
 
@@ -241,9 +242,9 @@ Resolve `{version}` from:
 
 Fail clearly if neither exists.
 
-## Runtime behavior
+## Instance behavior
 
-Built-in runtime commands come from `runtime` metadata in `.nf/project.json`.
+Built-in instance commands come from `instance` metadata in `.nf/project.json`.
 
 Current built-ins:
 
@@ -255,29 +256,29 @@ Current built-ins:
 * `shell`
 * `wp`
 
-Runtime ports are derived deterministically from the project slug. `runtime.ports.wordpress` and `runtime.ports.mailpit` may override them individually; zero or missing values fall back to the derived ports.
+Instance ports are derived deterministically from the project slug. `instance.ports.wordpress` and `instance.ports.mailpit` may override them individually; zero or missing values fall back to the derived ports.
 
-`nf runtime up` should be idempotent:
+`nf instance up` should be idempotent:
 
-* ensure the managed runtime exists
+* ensure the managed instance exists
 * start Docker Compose
 * install WordPress if missing
 * ensure the mounted theme is active
 
-`nf runtime up` should preflight the WordPress and Mailpit host ports before Docker Compose starts. `nf runtime info` should print the local runtime paths, compose project name, and URLs without starting Docker.
+`nf instance up` should preflight the WordPress and Mailpit host ports before Docker Compose starts. `nf instance info` should print the local instance paths, compose project name, and URLs without starting Docker.
 
-`nf runtime up` and `nf runtime reset` should print a success line followed by the full runtime info block. `nf runtime down` should print a success line followed by the short runtime info block.
+`nf instance up` and `nf instance reset` should print a success line followed by the full instance info block. `nf instance down` should print a success line followed by the short instance info block.
 
-`nf runtime reset` is destructive for the local runtime only:
+`nf instance reset` is destructive for the local instance only:
 
 * run Docker Compose down with volumes removed
-* recreate the runtime
+* recreate the instance
 * reinstall WordPress if missing
 * ensure the mounted theme is active
 
-Runtime-generated files should stay under `~/.config/nf/runtimes/<project-slug>/`.
+Instance-generated files should stay under `~/.config/nf/instances/<project-slug>/`.
 
-Runtime snapshots should stay under `~/.config/nf/snapshots/<project-slug>/<snapshot-name>/`.
+Instance snapshots should stay under `~/.config/nf/snapshots/<project-slug>/<snapshot-name>/`.
 
 Snapshot contents:
 
@@ -287,9 +288,9 @@ Snapshot contents:
 
 The `wp-content` archive should include only `uploads/`, `plugins/`, `mu-plugins/`, and `languages/`. Do not include themes.
 
-`nf runtime snapshot restore` should create a safety snapshot named `YYYY-MM-DD-HHMMSS-pre-restore` before importing the selected snapshot.
+`nf instance snapshot restore` should create a safety snapshot named `YYYY-MM-DD-HHMMSS-pre-restore` before importing the selected snapshot.
 
-Do not write generated runtime scaffolding into project repos unless the user explicitly changes that design.
+Do not write generated instance scaffolding into project repos unless the user explicitly changes that design.
 
 ## Theme packaging behavior
 
@@ -326,7 +327,7 @@ Project repos should track:
 
 * project slug/type
 * WordPress/theme structure
-* runtime intent
+* instance intent
 * build/artifact recipe
 * deploy targets
 * repo tasks
@@ -502,7 +503,7 @@ Do not commit:
 * `.direnv`
 * build outputs
 * local state
-* runtime files
+* instance files
 * temporary artifacts
 
 Keep examples neutral and fictional.
