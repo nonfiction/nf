@@ -9,7 +9,8 @@
   * `nf server ...`
   * `nf site ...`
   * `nf instance ...`
-  * `nf repo ...`
+  * `nf init`
+  * `nf theme ...`
   * `nf config ...`
   * `nf password ...`
 * Do not add old compatibility routes or alternate top-level command shapes unless explicitly requested.
@@ -19,9 +20,9 @@
 
 The current project command surface is intentionally small:
 
-* `nf repo init`
-* `nf repo tasks`
-* `nf repo package`
+* `nf init`
+* `nf theme tasks`
+* `nf theme package`
 * `nf instance up`
 * `nf instance down`
 * `nf instance logs`
@@ -41,17 +42,17 @@ The current project command surface is intentionally small:
 * `nf info`
 * `nf shell`
 * `nf wp`
-* direct repo tasks from `.nf/project.json`
+* direct theme tasks from `.nf/project.json`
 
 Do not re-add public routes such as:
 
-* `repo run`
+* `legacy run route`
 * `setup`
 * `fresh`
 * `restart`
 * `install-theme`
 * `activate-theme`
-* top-level repo aliases
+* top-level legacy aliases
 * top-level `list` / `show`
 
 unless the user explicitly asks for that command design.
@@ -81,7 +82,7 @@ CLI smoke checks:
 go run ./cmd/nf --help
 go run ./cmd/nf server list
 go run ./cmd/nf site list
-go run ./cmd/nf repo help
+go run ./cmd/nf theme help
 ```
 
 Nix smoke checks:
@@ -159,7 +160,7 @@ An instance is `nf`'s generated local WordPress environment for a project. It co
 
 The instance is generated and owned by `nf`. Do not scaffold Docker instance files into project repos by default.
 
-Repo-local metadata lives at:
+Project metadata lives at:
 
 ```text
 .nf/project.json
@@ -182,11 +183,11 @@ Required/expected environment values:
 * `DNSIMPLE_TOKEN` for DNSimple operations
 * optional `DNSIMPLE_ACCOUNT_ID`, defaulting to `14`
 
-## Repo-context behavior
+## Project-context behavior
 
-`nf instance ...` and `nf repo ...` commands are the local project command surface.
+`nf instance ...`, `nf init`, and `nf theme ...` commands are the local project command surface.
 
-Repo tasks come from:
+Theme tasks come from:
 
 ```text
 .nf/project.json tasks
@@ -194,7 +195,7 @@ Repo tasks come from:
 
 They execute from the project root.
 
-`nf repo init` defaults `project.slug` from the current git root folder.
+`nf init` defaults `project.slug` from the current git root folder.
 
 The default WordPress theme directory convention is:
 
@@ -220,9 +221,9 @@ Passthrough args follow `--`.
 
 Command execution should print the underlying command preview before running it.
 
-Repo-context commands are hidden or rejected outside a `.git` repo. Keep that distinction when adding local workflow commands.
+Project-context commands are hidden or rejected outside a `.git` repo. Keep that distinction when adding local workflow commands.
 
-`nf repo package` only zips existing theme files. It does not run Composer, npm, or asset builds first.
+`nf theme package` only zips existing theme files. It does not run Composer, npm, or asset builds first.
 
 Deploy artifacts must include built files when the project expects them, such as:
 
@@ -294,7 +295,7 @@ Do not write generated instance scaffolding into project repos unless the user e
 
 ## Theme packaging behavior
 
-`nf repo package` should:
+`nf theme package` should:
 
 * load project metadata from `.nf/project.json`
 * default source to `wordpress.theme_path`, falling back to `theme`
@@ -312,12 +313,12 @@ It should not:
 * install dependencies
 * deploy the artifact
 
-Build/test/prep steps belong in repo tasks such as:
+Build/test/prep steps belong in theme tasks such as:
 
-* `nf repo build`
-* `nf repo test`
-* `nf repo composer`
-* `nf repo npm`
+* `nf theme build`
+* `nf theme test`
+* `nf theme composer`
+* `nf theme npm`
 
 ## State behavior
 
@@ -329,8 +330,8 @@ Project repos should track:
 * WordPress/theme structure
 * instance intent
 * build/artifact recipe
-* deploy targets
-* repo tasks
+* target aliases
+* theme tasks
 
 Shared state should track:
 
@@ -351,7 +352,9 @@ Shared state should track:
 
 When no identifier is supplied in interactive mode, `server show`, `site show`, and `server delete` should prefer selectors over forcing positional arguments.
 
-`nf site show` may resolve deploy targets from `.nf/project.json`.
+`nf site show` may resolve target aliases from `.nf/project.json`.
+
+Target aliases map project-local names like `staging`, `production`, and `app1` to shared `nf` site records.
 
 Example placeholder target alias shape:
 
@@ -401,6 +404,8 @@ If a remote operation is potentially destructive or creates infrastructure, non-
 ```
 
 ## Provider rules
+
+`nf server` manages infrastructure hosts owned by nonfiction, currently Linode and potentially DigitalOcean later. Kinsta is not modeled as a server provider; Kinsta environments are modeled as site targets.
 
 ### Linode
 

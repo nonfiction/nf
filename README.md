@@ -2,7 +2,7 @@
 
 `nf` is nonfiction’s internal CLI for agency WordPress theme work.
 
-It gives the team one command surface for project metadata, local WordPress instances, repo tasks, theme packaging, shared server/site state, password derivation, and guarded infrastructure operations.
+It gives the team one command surface for project metadata, local WordPress instances, theme tasks, theme packaging, shared server/site state, password derivation, and guarded infrastructure operations.
 
 This is an internal agency tool, not a general-purpose public WordPress framework.
 
@@ -10,8 +10,8 @@ This is an internal agency tool, not a general-purpose public WordPress framewor
 
 Working now:
 
-* `nf repo init`
-* `nf repo tasks`
+* `nf init`
+* `nf theme tasks`
 * `nf instance up`
 * `nf instance down`
 * `nf instance logs`
@@ -31,7 +31,7 @@ Working now:
 * `nf info`
 * `nf shell`
 * `nf wp`
-* `nf repo package`
+* `nf theme package`
 * `nf server list`
 * `nf server show`
 * `nf server provision`
@@ -101,18 +101,19 @@ For remote Linode provisioning:
 nf
 
 Commands:
-  server        provision, list, show, delete servers
+  init          initialize project metadata
+  theme         package artifacts and run theme tasks
+  instance      manage the local WordPress instance
   site          list, show, deploy/sync remote sites
-  instance       manage the local WordPress instance
-  repo          init metadata, package artifacts, run repo tasks
+  server        provision, list, show, delete infrastructure hosts
   config        init local config
   password      derive passwords
   help          show help
 ```
 
-Inside a project repository, `nf instance` manages the local WordPress instance and `nf repo tasks` lists project tasks from `.nf/project.json`.
+Inside a project repository, `nf instance` manages the local WordPress instance and `nf theme tasks` lists project tasks from `.nf/project.json`.
 
-## Repo workflow
+## Project metadata
 
 Project repositories use:
 
@@ -120,27 +121,27 @@ Project repositories use:
 .nf/project.json
 ```
 
-This file is safe to commit. It describes project intent, theme paths, local instance behavior, artifact naming, deploy targets, and repo tasks.
+This file is safe to commit. It describes project intent, theme paths, local instance behavior, artifact naming, target aliases, and theme tasks.
 
 It must not contain secrets, API tokens, SSH keys, live database passwords, or mutable infrastructure state.
 
 Create it with:
 
 ```sh
-nf repo init
+nf init
 ```
 
 Common flags:
 
 ```sh
-nf repo init \
+nf init \
   --project-slug client \
   --project-name "Client" \
   --theme-slug theme \
   --theme-source theme
 ```
 
-By default, `nf repo init` derives the project slug from the current git root folder and assumes the WordPress theme lives in `theme/`.
+By default, `nf init` derives the project slug from the current git root folder and assumes the WordPress theme lives in `theme/`.
 
 Example `.nf/project.json`:
 
@@ -169,7 +170,7 @@ Example `.nf/project.json`:
     }
   },
   "build": {
-    "commands": [
+    "steps": [
       "composer install",
       "npm run build"
     ]
@@ -217,27 +218,26 @@ Example `.nf/project.json`:
 }
 ```
 
-## Repo tasks
+## Theme tasks
 
 ```sh
-nf repo init
-nf repo tasks
-nf repo package [--dry-run] [--source path] [--output path]
-nf repo <task>
+nf theme tasks
+nf theme package [--dry-run] [--source path] [--output path]
+nf theme <task>
 ```
 
-`nf repo tasks` lists custom project tasks from `.nf/project.json`.
+`nf theme tasks` lists custom project tasks from `.nf/project.json`.
 
-`nf repo <task>` runs a task defined in `.nf/project.json`.
+`nf theme <task>` runs a task defined in `.nf/project.json`.
 
 String tasks run through the shell from the project root. Array tasks execute directly. The underlying command is printed before execution.
 
 Examples:
 
 ```sh
-nf repo tasks
-nf repo build
-nf repo test
+nf theme tasks
+nf theme build
+nf theme test
 nf instance shell
 nf shell
 nf instance wp -- plugin list
@@ -360,19 +360,19 @@ Snapshot names default to `YYYY-MM-DD-HHMMSS`. Spaces become dashes. Empty names
 Package the current theme:
 
 ```sh
-nf repo package
+nf theme package
 ```
 
 Preview packaging:
 
 ```sh
-nf repo package --dry-run
+nf theme package --dry-run
 ```
 
 Use explicit paths:
 
 ```sh
-nf repo package --source theme --output dist/client.zip
+nf theme package --source theme --output dist/client.zip
 ```
 
 The default source is `wordpress.theme_path` from `.nf/project.json`, falling back to `theme`.
@@ -398,11 +398,11 @@ If neither exists, packaging fails clearly.
 
 Packaging only zips the existing theme files. It does not run Composer, npm, or asset builds first.
 
-Run the appropriate repo task before packaging:
+Run the appropriate theme task before packaging:
 
 ```sh
-nf repo build
-nf repo package
+nf theme build
+nf theme package
 ```
 
 The packager skips common non-theme paths such as:
@@ -568,7 +568,9 @@ nf site show [id-or-name]
 
 `nf site show` prints the matching site record as JSON. Without an identifier, interactive mode opens a selector.
 
-When run inside a project repository, `nf site show` can resolve deploy targets from `.nf/project.json`.
+When run inside a project repository, `nf site show` can resolve target aliases from `.nf/project.json`.
+
+Target aliases map project-local names like `staging`, `production`, and `app1` to shared `nf` site records.
 
 For example:
 
@@ -761,6 +763,8 @@ It does not use the server hostname, so derived passwords can remain stable acro
 ```
 
 ## Provider model
+
+`nf server` manages infrastructure hosts owned by nonfiction, currently Linode and potentially DigitalOcean later. Kinsta is not modeled as a server provider; Kinsta environments are modeled as site targets.
 
 ### Linode
 
