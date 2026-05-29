@@ -1041,11 +1041,11 @@ func currentGitRoot() (string, bool) {
 func currentGitRootBase() (string, error) {
 	root, ok := currentGitRoot()
 	if !ok {
-		return "", ProjectError{Msg: "repo init requires a .git repository above the current directory when --project-slug is not set"}
+		return "", ProjectError{Msg: "init requires a .git repository above the current directory when --project-slug is not set"}
 	}
 	base := filepath.Base(filepath.Clean(root))
 	if base == "" || base == "." || base == string(filepath.Separator) {
-		return "", ProjectError{Msg: fmt.Sprintf("repo init could not derive a project slug from git root %q; pass --project-slug", root)}
+		return "", ProjectError{Msg: fmt.Sprintf("init could not derive a project slug from git root %q; pass --project-slug", root)}
 	}
 	return base, nil
 }
@@ -1479,11 +1479,11 @@ func discoverProjectRootOrError() (string, error) {
 	if root, ok := config.DiscoverProjectRoot(""); ok {
 		return root, nil
 	}
-	return "", ProjectError{Msg: "No repo metadata found above the current directory. Add .nf/project.json with instance metadata or tasks.<name>."}
+	return "", ProjectError{Msg: "No project metadata found above the current directory. Add .nf/project.json with instance metadata or tasks.<name>."}
 }
 
-func cmdProjectTasks() int {
-	if err := requireProjectContext("repo tasks"); err != nil {
+func cmdThemeTasks() int {
+	if err := requireProjectContext("theme tasks"); err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		return 1
 	}
@@ -1498,10 +1498,10 @@ func cmdProjectTasks() int {
 		return 1
 	}
 	if len(tasks) == 0 {
-		fmt.Fprintln(os.Stderr, "No local repo tasks configured. Add .nf/project.json tasks.<name>.")
+		fmt.Fprintln(os.Stderr, "No local theme tasks configured. Add .nf/project.json tasks.<name>.")
 		return 1
 	}
-	fmt.Println("Repo tasks:")
+	fmt.Println("Theme tasks:")
 	for _, line := range formatProjectTaskLines(tasks) {
 		fmt.Printf("  %s\n", line)
 	}
@@ -2015,7 +2015,7 @@ func cmdProjectInit(args projectInitArgs) int {
 }
 
 func writeProjectInit(root string, args projectInitArgs) error {
-	metadata := repoInitMetadata(args)
+	metadata := projectInitMetadata(args)
 	projectPath := config.ProjectFile(root)
 	if !args.force {
 		if _, err := os.Stat(projectPath); err == nil {
@@ -2027,7 +2027,7 @@ func writeProjectInit(root string, args projectInitArgs) error {
 	if err := os.MkdirAll(filepath.Dir(projectPath), 0o755); err != nil {
 		return err
 	}
-	if err := os.WriteFile(projectPath, []byte(repoInitJSON(metadata)), 0o644); err != nil {
+	if err := os.WriteFile(projectPath, []byte(projectInitJSON(metadata)), 0o644); err != nil {
 		return err
 	}
 	fmt.Printf("Wrote %s\n", projectPath)
@@ -2049,10 +2049,10 @@ func ensureInstanceProjectMetadata() error {
 	if err != nil {
 		return err
 	}
-	return writeProjectInit(root, projectInitArgs{projectSlug: slug})
+	return writeProjectInit(root, projectInitArgs{projectSlug: slug, projectType: "wordpress-theme"})
 }
 
-func repoInitMetadata(args projectInitArgs) map[string]any {
+func projectInitMetadata(args projectInitArgs) map[string]any {
 	themePath := firstNonEmpty(args.themeSource, "theme")
 	themeSlug := firstNonEmpty(args.themeSlug, "theme")
 	projectName := firstNonEmpty(args.projectName, slugToTitle(args.projectSlug))
@@ -2062,7 +2062,7 @@ func repoInitMetadata(args projectInitArgs) map[string]any {
 		"project": map[string]any{
 			"slug": projectSlug,
 			"name": projectName,
-			"type": "wordpress-theme",
+			"type": firstNonEmpty(args.projectType, "wordpress-theme"),
 		},
 		"wordpress": map[string]any{
 			"deploy_unit": "theme",
@@ -2077,7 +2077,7 @@ func repoInitMetadata(args projectInitArgs) map[string]any {
 			"uploads_path":      "uploads",
 		},
 		"build": map[string]any{
-			"commands": []any{"composer install", "npm run build"},
+			"steps": []any{"composer install", "npm run build"},
 		},
 		"artifact": map[string]any{
 			"path":    filepath.ToSlash(filepath.Join("dist", projectSlug+"-v{version}.zip")),
@@ -2097,10 +2097,11 @@ type projectInitArgs struct {
 	projectName string
 	themeSlug   string
 	themeSource string
+	projectType string
 	force       bool
 }
 
-func repoInitJSON(metadata map[string]any) string {
+func projectInitJSON(metadata map[string]any) string {
 	data, _ := json.MarshalIndent(metadata, "", "  ")
 	return string(append(data, '\n'))
 }
@@ -2274,8 +2275,8 @@ func cmdPasswordDerive(slug, purpose string, nonInteractive bool) int {
 	return 0
 }
 
-func cmdRepoPackage(source, output string, dryRun bool) int {
-	return cmdPackage("repo package", source, output, dryRun)
+func cmdThemePackage(source, output string, dryRun bool) int {
+	return cmdPackage("theme package", source, output, dryRun)
 }
 
 func cmdPackage(commandName, source, output string, dryRun bool) int {
@@ -2452,6 +2453,24 @@ func runPasswordHelp() int {
 	return 0
 }
 
+func runInitHelp() int {
+	fmt.Println("init")
+	fmt.Println("\nUsage:")
+	fmt.Println("  nf init [flags]")
+	fmt.Println("\nFlags:")
+	for _, line := range []string{
+		"--project-slug string   project slug (defaults to the current git root name)",
+		"--project-name string   project name",
+		"--theme-slug string     mounted theme slug",
+		"--theme-source string   theme source directory",
+		"--type string           project type (default wordpress-theme)",
+		"--force                 overwrite .nf/project.json",
+	} {
+		fmt.Printf("  %s\n", line)
+	}
+	return 0
+}
+
 func runInstanceHelp() int {
 	printGroupHelp("instance", []string{
 		"up                  start the local instance",
@@ -2478,22 +2497,16 @@ func runInstanceHelp() int {
 	return 0
 }
 
-func runRepoHelp() int {
+func runThemeHelp() int {
 	lines := []string{
-		"init                create .nf/project.json",
+		"tasks               list configured theme tasks",
+		"package [--dry-run] [--source] [--output]   package theme artifacts",
 	}
-	showTasks := projectContextAvailable()
-	if showTasks {
-		lines = append(lines,
-			"tasks               list configured repo tasks",
-			"package [--dry-run] [--source] [--output]   package theme artifacts",
-		)
-	}
-	printGroupHelp("repo", lines)
-	if showTasks {
+	printGroupHelp("theme", lines)
+	if projectContextAvailable() {
 		if root, ok := currentGitRoot(); ok {
 			if tasks, err := loadProjectTasks(root); err == nil && len(tasks) > 0 {
-				fmt.Println("\nRepo tasks:")
+				fmt.Println("\nTheme tasks:")
 				for _, line := range formatProjectTaskLines(tasks) {
 					fmt.Printf("  %s\n", line)
 				}
@@ -2503,16 +2516,106 @@ func runRepoHelp() int {
 	return 0
 }
 
+func runInit(argv []string) int {
+	if len(argv) > 0 && (argv[0] == "help" || argv[0] == "--help" || argv[0] == "-h") {
+		return runInitHelp()
+	}
+	fs := flag.NewFlagSet("init", flag.ContinueOnError)
+	projectSlug := fs.String("project-slug", "", "")
+	projectName := fs.String("project-name", "", "")
+	themeSlug := fs.String("theme-slug", "", "")
+	themeSource := fs.String("theme-source", "", "")
+	projectType := fs.String("type", "wordpress-theme", "")
+	force := fs.Bool("force", false, "")
+	fs.SetOutput(os.Stderr)
+	if err := fs.Parse(argv); err != nil {
+		return 1
+	}
+	if strings.TrimSpace(*projectType) != "wordpress-theme" {
+		fmt.Fprintf(os.Stderr, "unsupported init type %q; only wordpress-theme is supported\n", *projectType)
+		return 1
+	}
+	if strings.TrimSpace(*projectSlug) == "" {
+		derivedSlug, err := currentGitRootBase()
+		if err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			return 1
+		}
+		projectSlug = &derivedSlug
+	}
+	return cmdProjectInit(projectInitArgs{projectSlug: *projectSlug, projectName: *projectName, themeSlug: *themeSlug, themeSource: *themeSource, projectType: *projectType, force: *force})
+}
+
+func runTheme(argv []string) int {
+	if len(argv) == 0 || argv[0] == "help" || argv[0] == "--help" || argv[0] == "-h" {
+		return runThemeHelp()
+	}
+	switch argv[0] {
+	case "tasks":
+		if len(argv) != 1 {
+			fmt.Fprintln(os.Stderr, "theme tasks takes no arguments")
+			return 1
+		}
+		if err := requireProjectContext("theme tasks"); err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			return 1
+		}
+		return cmdThemeTasks()
+	case "package":
+		if err := requireProjectContext("theme package"); err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			return 1
+		}
+		fs := flag.NewFlagSet("theme package", flag.ContinueOnError)
+		source := fs.String("source", "", "")
+		output := fs.String("output", "", "")
+		dryRun := fs.Bool("dry-run", false, "")
+		fs.SetOutput(os.Stderr)
+		if err := fs.Parse(argv[1:]); err != nil {
+			return 1
+		}
+		return cmdThemePackage(*source, *output, *dryRun)
+	default:
+		if err := requireProjectContext("theme " + argv[0]); err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			return 1
+		}
+		root, err := discoverProjectRootOrError()
+		if err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			return 1
+		}
+		tasks, err := loadProjectTasks(root)
+		if err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			return 1
+		}
+		if task, ok := tasks[argv[0]]; ok {
+			extraArgs := normalizePassthroughArgs(argv[1:])
+			if err := task.Run.Execute(root, extraArgs); err != nil {
+				fmt.Fprintln(os.Stderr, err)
+				return 1
+			}
+			return 0
+		}
+		fmt.Fprintln(os.Stderr, "unsupported theme command")
+		return 1
+	}
+}
+
 func runInstance(argv []string) int {
 	if len(argv) == 0 || argv[0] == "help" {
 		return runInstanceHelp()
 	}
 	name := argv[0]
 	switch name {
-	case "info", "up", "down", "logs", "reset", "shell", "wp", "snapshot":
+	case "info", "up", "down", "logs", "reset", "shell", "wp", "snapshot", "snapshots":
 	default:
 		fmt.Fprintln(os.Stderr, "unsupported instance command")
 		return 1
+	}
+	if name == "snapshots" {
+		return runInstanceSnapshot([]string{"list"})
 	}
 	if name == "snapshot" {
 		return runInstanceSnapshot(argv[1:])
@@ -2661,10 +2764,11 @@ func runInstanceSnapshot(argv []string) int {
 func runHelp() int {
 	fmt.Println("nf")
 	fmt.Println("\nCommands:")
-	fmt.Println("  server        provision, list, show, delete servers")
-	fmt.Println("  site          list, show, deploy/sync remote sites")
+	fmt.Println("  init          initialize project metadata")
+	fmt.Println("  theme         package artifacts and run theme tasks")
 	fmt.Println("  instance      manage the local WordPress instance")
-	fmt.Println("  repo          init metadata, package artifacts, run repo tasks")
+	fmt.Println("  site          list, show, deploy/sync remote sites")
+	fmt.Println("  server        provision, list, show, delete infrastructure hosts")
 	fmt.Println("  config        init local config")
 	fmt.Println("  password      derive passwords")
 	fmt.Println("  help          show help")
@@ -2727,8 +2831,10 @@ func Run(argv []string) int {
 		return runSite(argv[1:])
 	case "instance":
 		return runInstance(argv[1:])
-	case "repo":
-		return runRepo(argv[1:])
+	case "init":
+		return runInit(argv[1:])
+	case "theme":
+		return runTheme(argv[1:])
 	case "config":
 		return runConfig(argv[1:])
 	case "password":
@@ -2752,10 +2858,12 @@ func runTopicHelp(argv []string) int {
 		return runServerHelp()
 	case "site":
 		return runSiteHelp()
+	case "init":
+		return runInitHelp()
+	case "theme":
+		return runThemeHelp()
 	case "instance":
 		return runInstanceHelp()
-	case "repo":
-		return runRepoHelp()
 	case "config":
 		return runConfigHelp()
 	case "password":
@@ -2763,74 +2871,6 @@ func runTopicHelp(argv []string) int {
 	default:
 		return runHelp()
 	}
-}
-
-func runRepo(argv []string) int {
-	if len(argv) == 0 || argv[0] == "help" {
-		return runRepoHelp()
-	}
-	if argv[0] == "init" {
-		fs := flag.NewFlagSet("repo init", flag.ContinueOnError)
-		projectSlug := fs.String("project-slug", "", "")
-		projectName := fs.String("project-name", "", "")
-		themeSlug := fs.String("theme-slug", "", "")
-		themeSource := fs.String("theme-source", "", "")
-		force := fs.Bool("force", false, "")
-		fs.SetOutput(os.Stderr)
-		if err := fs.Parse(argv[1:]); err != nil {
-			return 1
-		}
-		if strings.TrimSpace(*projectSlug) == "" {
-			derivedSlug, err := currentGitRootBase()
-			if err != nil {
-				fmt.Fprintln(os.Stderr, err)
-				return 1
-			}
-			projectSlug = &derivedSlug
-		}
-		return cmdProjectInit(projectInitArgs{projectSlug: *projectSlug, projectName: *projectName, themeSlug: *themeSlug, themeSource: *themeSource, force: *force})
-	}
-	if argv[0] == "tasks" {
-		return cmdProjectTasks()
-	}
-	if argv[0] == "package" {
-		if err := requireProjectContext("repo package"); err != nil {
-			fmt.Fprintln(os.Stderr, err)
-			return 1
-		}
-		fs := flag.NewFlagSet("repo package", flag.ContinueOnError)
-		source := fs.String("source", "", "")
-		output := fs.String("output", "", "")
-		dryRun := fs.Bool("dry-run", false, "")
-		fs.SetOutput(os.Stderr)
-		if err := fs.Parse(argv[1:]); err != nil {
-			return 1
-		}
-		return cmdRepoPackage(*source, *output, *dryRun)
-	}
-	if err := requireProjectContext(argv[0]); err != nil {
-		fmt.Fprintln(os.Stderr, err)
-		return 1
-	}
-	root, err := discoverProjectRootOrError()
-	if err != nil {
-		fmt.Fprintln(os.Stderr, err)
-		return 1
-	}
-	tasks, err := loadProjectTasks(root)
-	if err != nil {
-		fmt.Fprintln(os.Stderr, err)
-		return 1
-	}
-	if task, ok := tasks[argv[0]]; ok {
-		if err := task.Run.Execute(root, normalizePassthroughArgs(argv[1:])); err != nil {
-			fmt.Fprintln(os.Stderr, err)
-			return 1
-		}
-		return 0
-	}
-	fmt.Fprintln(os.Stderr, "unsupported repo command")
-	return 1
 }
 
 func runPassword(argv []string) int {
