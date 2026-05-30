@@ -354,7 +354,7 @@ For server provisioning records, keep the Ubuntu/PHP metadata in dedicated `os` 
 
 `nf server show`, `nf server root-password`, and `nf site show` print matching records or derived values from shared state.
 
-`nf server provision` is site-agnostic. It uses `--name` and `--hostname`, defaults to Linode plus DNSimple, and writes only `servers.json` with generic provider_id, nested linode, os, php, firewall, dns/tls/services, and no secrets. It waits for SSH/TLS/health by default, `--no-wait` skips that finalization, and reruns resume partial phases instead of recreating the Linode.
+`nf server provision` is site-agnostic. It uses `--name` as the canonical server identity, derives hostname/label/wildcard/health URL from `NF_SERVER_DOMAIN`, defaults to Linode plus DNSimple, and writes only `servers.json` with generic provider_id, nested linode, os, php, firewall, dns/tls/services, and no secrets. It waits for SSH/TLS/health by default, `--no-wait` skips that finalization, and reruns resume partial phases instead of recreating the Linode. There is no public `--hostname`, `--label`, or `--dns-zone` flag.
 
 Server baseline expectations:
 
@@ -368,6 +368,7 @@ Server baseline expectations:
 * `/etc/nf/server.json` stores non-secret machine facts only
 * Node/npm are not installed by default
 * if TLS finalization fails, the recovery helper is `ssh nonfiction@<hostname> "sudo /usr/local/bin/nf-enable-wildcard-tls"`
+* `NF_SERVER_DOMAIN` drives the derived hostname, wildcard hostname, and health URL for `nf server provision`
 
 Record root credential metadata as `credentials.root` with `derived: true`, `identity: <hostname>`, `purpose: linode-root`, and `stored: false`; do not store a password.
 

@@ -119,7 +119,7 @@ Commands:
 
 Inside a project repository, `nf instance` manages the local WordPress instance and `nf theme tasks` lists project tasks from `.nf/project.json`.
 
-`nf server provision` is site-agnostic. It provisions a Linode server, upserts DNSimple A records for the hostname and wildcard hostname, then waits for SSH, runs cloud-init/TLS finalization, and checks HTTPS health unless `--no-wait` is supplied. It creates a neutral server health vhost for the server hostname only. It does not install WordPress, create databases, create future site vhosts, or write `sites.json`, and reruns resume partial phases instead of recreating the Linode.
+`nf server provision` is site-agnostic. It uses `--name` as the canonical server identity, derives the hostname, wildcard hostname, and health URL from `NF_SERVER_DOMAIN`, upserts DNSimple A records, then waits for SSH, runs cloud-init/TLS finalization, and checks HTTPS health unless `--no-wait` is supplied. It creates a neutral server health vhost for the derived hostname only. There is no public `--hostname`, `--label`, or `--dns-zone` flag. It does not install WordPress, create databases, create future site vhosts, or write `sites.json`, and reruns resume partial phases instead of recreating the Linode.
 
 Server baseline details:
 
@@ -145,14 +145,19 @@ Server access defaults:
 * root password: derived, not stored in state, revealable with `nf server root-password <id-or-name>`
 * DNSimple token: used for cloud-init rendering and not stored in state
 
-Common server provisioning flags:
+Derived server identity:
+
+* server name: `app1`
+* server domain: `NF_SERVER_DOMAIN` (default `nfweb.dev`)
+* hostname: `app1.nfweb.dev`
+* label: `app1`
+* wildcard hostname: `*.app1.nfweb.dev`
+* health URL: `https://app1.nfweb.dev`
+
+Example:
 
 ```sh
-nf server provision --name app1 --hostname app1.nfweb.dev
-nf server provision --ubuntu-version 24.04
-nf server provision --firewall managed --firewall-id 12345
-nf server provision --provider linode --dns-provider dnsimple --execute --yes
-nf server provision --no-wait --execute --yes
+NF_SERVER_DOMAIN=nfweb.dev nf server provision --name app1
 ```
 
 Defaults:
@@ -160,6 +165,7 @@ Defaults:
 * server provider: `linode`
 * DNS/TLS provider: `dnsimple`
 * server name: `app1`
+* server domain: `NF_SERVER_DOMAIN` (default `nfweb.dev`)
 * hostname: `app1.nfweb.dev`
 * label: server name
 * Ubuntu/PHP stack: `Ubuntu 24.04 LTS / PHP 8.3`
@@ -185,7 +191,7 @@ Server health URL:
 
 * `https://<hostname>`
 
-Use `--ubuntu-version` for normal non-interactive selection. `--image` is only an advanced override; it does not replace the recorded Ubuntu/PHP metadata. Arbitrary PHP selection is not supported in this pass, and there is no public socket flag.
+Use `--ubuntu-version` for normal non-interactive selection. `--image` is only an advanced override; it does not replace the recorded Ubuntu/PHP metadata. Arbitrary PHP selection is not supported in this pass, and there is no public socket flag. `NF_SERVER_DOMAIN` controls the derived hostname, wildcard hostname, and health URL; there is no public `--hostname`, `--label`, or `--dns-zone` flag.
 
 If SSH appears to hang after provisioning, test by IP first: `ssh nonfiction@<ipv4>`.
 
@@ -690,8 +696,7 @@ Dry-run plan:
 ```sh
 nf server provision \
   --non-interactive \
-  --name app1 \
-  --hostname app1.nfweb.dev
+  --name app1
 ```
 
 Actual execution requires both:
@@ -706,7 +711,6 @@ Example execution:
 nf server provision \
   --non-interactive \
   --name app1 \
-  --hostname app1.nfweb.dev \
   --execute \
   --yes
 ```
@@ -717,7 +721,6 @@ Use `--no-wait` to stop after DNS if you want to finish cloud-init, TLS, and hea
 nf server provision \
   --non-interactive \
   --name app1 \
-  --hostname app1.nfweb.dev \
   --execute \
   --yes \
   --no-wait
@@ -732,11 +735,8 @@ Useful flags:
 ```text
 --provider
 --dns-provider
---dns-zone
 --ubuntu-version
 --name
---hostname
---label
 --region
 --type
 --image
@@ -763,7 +763,9 @@ Defaults include:
 provider: linode
 dns provider: dnsimple
 server name: app1
+server domain: nfweb.dev
 hostname: app1.nfweb.dev
+label: app1
 region: ca-central
 type: g6-standard-1
 image: linode/ubuntu24.04
@@ -782,6 +784,7 @@ The PHP-FPM service and socket are derived from the selected Ubuntu/PHP stack.
 Required environment for execution:
 
 ```env
+NF_SERVER_DOMAIN=nfweb.dev
 NF_SECRET_SALT=
 DNSIMPLE_TOKEN=
 LINODE_CLI_TOKEN=
@@ -800,7 +803,6 @@ Write cloud-init preview:
 ```sh
 nf server provision \
   --name app1 \
-  --hostname app1.nfweb.dev \
   --write-cloud-init /tmp/app1-cloud-init.yml
 ```
 
@@ -809,7 +811,6 @@ Show cloud-init preview in the terminal:
 ```sh
 nf server provision \
   --name app1 \
-  --hostname app1.nfweb.dev \
   --show-cloud-init
 ```
 
