@@ -10,7 +10,6 @@ import (
 	"math"
 	"net"
 	"net/http"
-	"net/url"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -406,6 +405,49 @@ func valueString(value any) string {
 	return text
 }
 
+func valueInt(value any) int {
+	switch typed := value.(type) {
+	case nil:
+		return 0
+	case json.Number:
+		if parsed, err := typed.Int64(); err == nil {
+			return int(parsed)
+		}
+		if parsed, err := strconv.ParseFloat(typed.String(), 64); err == nil {
+			return int(parsed)
+		}
+	case float64:
+		return int(typed)
+	case float32:
+		return int(typed)
+	case int:
+		return typed
+	case int8:
+		return int(typed)
+	case int16:
+		return int(typed)
+	case int32:
+		return int(typed)
+	case int64:
+		return int(typed)
+	case uint:
+		return int(typed)
+	case uint8:
+		return int(typed)
+	case uint16:
+		return int(typed)
+	case uint32:
+		return int(typed)
+	case uint64:
+		return int(typed)
+	case string:
+		if parsed, err := strconv.Atoi(strings.TrimSpace(typed)); err == nil {
+			return parsed
+		}
+	}
+	return 0
+}
+
 func waitForTCPPort(host string, port int, timeout time.Duration) error {
 	if timeout <= 0 {
 		timeout = 5 * time.Minute
@@ -496,6 +538,18 @@ func checkHTTPSHealth(url, name, hostname string, timeout time.Duration) error {
 		}
 		time.Sleep(5 * time.Second)
 	}
+}
+
+func dnsimpleResponseExcerpt(data []byte) string {
+	text := strings.Join(strings.Fields(strings.TrimSpace(string(data))), " ")
+	if text == "" {
+		return ""
+	}
+	const maxExcerpt = 240
+	if len(text) > maxExcerpt {
+		text = text[:maxExcerpt] + "..."
+	}
+	return text
 }
 
 func defaultHealthHTTPClient() *http.Client { return &http.Client{Timeout: 20 * time.Second} }
@@ -624,9 +678,11 @@ type SSHAuthorizedKey struct {
 }
 
 type DNSRecord struct {
+	ID      string `json:"id,omitempty"`
 	Name    string `json:"name"`
 	Type    string `json:"type"`
 	Content string `json:"content"`
+	TTL     int    `json:"ttl,omitempty"`
 }
 
 type DNSState struct {
@@ -652,21 +708,21 @@ type ServerCreateResult struct {
 }
 
 var (
-	dnsimpleZoneLookup       = findDnsimpleZone
-	dnsimpleRequestFn        = dnsimpleRequest
-	dnsimpleListARecordsFn   = dnsimpleListARecords
-	dnsimpleUpsertARecordRun = dnsimpleUpsertARecord
-	waitForTCPPortFn         = waitForTCPPort
-	runSSHCommandFn          = runSSHCommand
-	checkHTTPSHealthFn       = checkHTTPSHealth
-	healthHTTPClientFn       = defaultHealthHTTPClient
-	selectVersionFn          = ui.Select
-	promptStringFn           = ui.PromptString
-	confirmFn                = ui.Confirm
-	multiSelectFn            = ui.MultiSelect
-	secretSaltFn             = passwords.SecretSalt
-	currentTime              = time.Now
-	serverProviderFactory    = newServerProvider
+	dnsimpleZoneLookup                  = defaultDNSimpleZoneLookup
+	dnsimpleListARecordsFn              = defaultDNSimpleListARecords
+	dnsimpleUpsertARecordRun            = defaultDNSimpleUpsertARecord
+	dnsimpleWaitForRecordDistributionFn = defaultDNSimpleWaitForRecordDistribution
+	waitForTCPPortFn                    = waitForTCPPort
+	runSSHCommandFn                     = runSSHCommand
+	checkHTTPSHealthFn                  = checkHTTPSHealth
+	healthHTTPClientFn                  = defaultHealthHTTPClient
+	selectVersionFn                     = ui.Select
+	promptStringFn                      = ui.PromptString
+	confirmFn                           = ui.Confirm
+	multiSelectFn                       = ui.MultiSelect
+	secretSaltFn                        = passwords.SecretSalt
+	currentTime                         = time.Now
+	serverProviderFactory               = newServerProvider
 )
 
 func newServerProvider(plan Plan) (ServerProvider, error) {
@@ -1377,138 +1433,22 @@ func linodeIPFromRecord(record map[string]any) string {
 	return ""
 }
 
-func dnsimpleEndpointPath(rawURL string) string {
-	parsed, err := url.Parse(rawURL)
-	if err != nil {
-		return rawURL
-	}
-	path := parsed.EscapedPath()
-	if parsed.RawQuery != "" {
-		path += "?" + parsed.RawQuery
-	}
-	return path
-}
-
-func dnsimpleResponseExcerpt(data []byte) string {
-	text := strings.Join(strings.Fields(strings.TrimSpace(string(data))), " ")
-	if text == "" {
-		return ""
-	}
-	const maxExcerpt = 240
-	if len(text) > maxExcerpt {
-		text = text[:maxExcerpt] + "..."
-	}
-	return text
-}
-
-func dnsimpleRequest(method, rawURL, token string, payload map[string]any) (map[string]any, error) {
-	var body io.Reader
-	if payload != nil {
-		data, err := json.Marshal(payload)
-		if err != nil {
-			return nil, err
-		}
-		body = bytes.NewReader(data)
-	}
-	req, err := http.NewRequest(method, rawURL, body)
-	if err != nil {
-		return nil, err
-	}
-	req.Header.Set("Authorization", "Bearer "+token)
-	req.Header.Set("Accept", "application/json")
-	req.Header.Set("Content-Type", "application/json")
-	client := &http.Client{Timeout: 60 * time.Second}
-	resp, err := client.Do(req)
-	if err != nil {
-		return nil, Error{Msg: fmt.Sprintf("DNSimple API request failed: %s %s: %v", method, dnsimpleEndpointPath(rawURL), err)}
-	}
-	defer resp.Body.Close()
-	data, err := io.ReadAll(resp.Body)
-	if err != nil {
-		return nil, err
-	}
-	if resp.StatusCode >= 400 {
-		excerpt := dnsimpleResponseExcerpt(data)
-		msg := fmt.Sprintf("DNSimple API request failed: %s %s (HTTP %d)", method, dnsimpleEndpointPath(rawURL), resp.StatusCode)
-		if excerpt != "" {
-			msg += ": " + excerpt
-		}
-		return nil, Error{Msg: msg}
-	}
-	dec := json.NewDecoder(bytes.NewReader(data))
-	dec.UseNumber()
-	var parsed map[string]any
-	if err := dec.Decode(&parsed); err != nil {
-		return nil, Error{Msg: fmt.Sprintf("Unexpected DNSimple API response shape: %v", err)}
-	}
-	return parsed, nil
-}
-
-func dnsimpleURL(accountID, path string) string {
-	return fmt.Sprintf("https://api.dnsimple.com/v2/%s%s", accountID, path)
-}
-
-func findDnsimpleZone(plan Plan, token string) (string, error) {
-	zone := firstNonEmpty(plan.DnsZone, plan.Domain)
-	if zone == "" {
-		zone = serverDomain()
-	}
-	encoded := url.PathEscape(zone)
-	if _, err := dnsimpleRequestFn("GET", dnsimpleURL(plan.DnsimpleAccountID, "/zones/"+encoded), token, nil); err != nil {
-		if strings.Contains(err.Error(), "HTTP 404") {
-			return "", Error{Msg: fmt.Sprintf("DNSimple zone %s was not found for account %s. Check NF_SERVER_DOMAIN, DNSIMPLE_ACCOUNT_ID, and DNSIMPLE_TOKEN.", zone, plan.DnsimpleAccountID)}
-		}
-		return "", err
-	}
-	return zone, nil
-}
-
-func dnsimpleListARecords(token, accountID, zone string) ([]map[string]any, error) {
-	encodedZone := url.PathEscape(zone)
-	payload, err := dnsimpleRequestFn("GET", dnsimpleURL(accountID, "/zones/"+encodedZone+"/records?type=A"), token, nil)
-	if err != nil {
-		return nil, err
-	}
-	rawRecords, ok := payload["data"]
-	if !ok {
-		rawRecords = payload
-	}
-	items, ok := rawRecords.([]any)
-	if !ok {
-		return nil, Error{Msg: "Unexpected DNSimple records response shape."}
-	}
-	records := make([]map[string]any, 0, len(items))
-	for _, item := range items {
-		if record, ok := item.(map[string]any); ok {
-			records = append(records, record)
-		}
-	}
-	return records, nil
-}
-
-func dnsimpleRecordByName(records []map[string]any, name string) (map[string]any, bool) {
-	for _, record := range records {
-		if fmt.Sprint(record["name"]) == name {
-			return record, true
-		}
-	}
-	return nil, false
-}
-
-func dnsimpleUpsertHostnameRecords(token, accountID, zone, hostname, ip string) error {
-	if err := dnsimpleUpsertARecordRun(token, accountID, zone, relativeRecordName(hostname, zone), ip); err != nil {
-		return err
-	}
-	return dnsimpleUpsertARecordRun(token, accountID, zone, relativeRecordName("*."+hostname, zone), ip)
-}
-
-func dnsStateRecord(plan Plan, zone, ip string) DNSState {
+func dnsStateRecord(plan Plan, zone string, hostnameRecord, wildcardRecord DNSRecord) DNSState {
 	return DNSState{
 		Provider:       plan.DnsProvider,
 		Zone:           zone,
-		HostnameRecord: DNSRecord{Name: relativeRecordName(plan.Hostname, zone), Type: "A", Content: ip},
-		WildcardRecord: DNSRecord{Name: relativeRecordName("*."+plan.Hostname, zone), Type: "A", Content: ip},
+		HostnameRecord: hostnameRecord,
+		WildcardRecord: wildcardRecord,
 	}
+}
+
+func dnsRecordByName(records []DNSRecord, name string) (DNSRecord, bool) {
+	for _, record := range records {
+		if record.Name == name {
+			return record, true
+		}
+	}
+	return DNSRecord{}, false
 }
 
 func tlsStateRecord(plan Plan) TLSState {
@@ -1531,10 +1471,10 @@ func dnsStateFromRecord(record map[string]any) DNSState {
 	}
 	state := DNSState{Provider: valueString(block["provider"]), Zone: valueString(block["zone"])}
 	if hostnameRecord, ok := block["hostname_record"].(map[string]any); ok {
-		state.HostnameRecord = DNSRecord{Name: valueString(hostnameRecord["name"]), Type: valueString(hostnameRecord["type"]), Content: valueString(hostnameRecord["content"])}
+		state.HostnameRecord = DNSRecord{ID: valueString(hostnameRecord["id"]), Name: valueString(hostnameRecord["name"]), Type: valueString(hostnameRecord["type"]), Content: valueString(hostnameRecord["content"]), TTL: valueInt(hostnameRecord["ttl"])}
 	}
 	if wildcardRecord, ok := block["wildcard_record"].(map[string]any); ok {
-		state.WildcardRecord = DNSRecord{Name: valueString(wildcardRecord["name"]), Type: valueString(wildcardRecord["type"]), Content: valueString(wildcardRecord["content"])}
+		state.WildcardRecord = DNSRecord{ID: valueString(wildcardRecord["id"]), Name: valueString(wildcardRecord["name"]), Type: valueString(wildcardRecord["type"]), Content: valueString(wildcardRecord["content"]), TTL: valueInt(wildcardRecord["ttl"])}
 	}
 	return state
 }
@@ -2115,43 +2055,6 @@ func relativeRecordName(fqdn, zone string) string {
 		return strings.TrimSuffix(fqdn, suffix)
 	}
 	return fqdn
-}
-
-func dnsimpleUpsertARecord(token, accountID, zone, name, ip string) error {
-	encodedZone := url.PathEscape(zone)
-	payload, err := dnsimpleRequest("GET", dnsimpleURL(accountID, "/zones/"+encodedZone+"/records?type=A"), token, nil)
-	if err != nil {
-		return err
-	}
-	rawRecords, ok := payload["data"]
-	if !ok {
-		rawRecords = payload
-	}
-	records, ok := rawRecords.([]any)
-	if !ok {
-		return Error{Msg: "Unexpected DNSimple records response shape."}
-	}
-	var existing map[string]any
-	for _, record := range records {
-		if m, ok := record.(map[string]any); ok && fmt.Sprint(m["name"]) == name {
-			existing = m
-			break
-		}
-	}
-	if existing != nil {
-		recordID, err := apiIDString(existing["id"])
-		if err != nil {
-			return Error{Msg: fmt.Sprintf("DNSimple record is missing a valid id: %v", err)}
-		}
-		currentIP := fmt.Sprint(existing["content"])
-		if currentIP == ip {
-			return nil
-		}
-		_, err = dnsimpleRequestFn("PATCH", dnsimpleURL(accountID, "/zones/"+encodedZone+"/records/"+recordID), token, map[string]any{"content": ip, "ttl": 60})
-		return err
-	}
-	_, err = dnsimpleRequestFn("POST", dnsimpleURL(accountID, "/zones/"+encodedZone+"/records"), token, map[string]any{"name": name, "type": "A", "content": ip, "ttl": 60})
-	return err
 }
 
 func planLines(plan Plan, cloudInitPath string) []string {
@@ -2746,12 +2649,12 @@ func ProvisionServer(plan Plan) (*ServerCreateResult, error) {
 			return nil, err
 		}
 		hostnameRecordName := relativeRecordName(effectivePlan.Hostname, dnsZone)
-		if record, ok := dnsimpleRecordByName(records, hostnameRecordName); ok {
-			return nil, Error{Msg: fmt.Sprintf("Server name %q is unavailable. DNSimple record %s already exists with content %s.", effectivePlan.Name, effectivePlan.Hostname, valueString(record["content"]))}
+		if record, ok := dnsRecordByName(records, hostnameRecordName); ok {
+			return nil, Error{Msg: fmt.Sprintf("Server name %q is unavailable.\nReason:\n  DNS record %s already exists and points to %s.\nNext:\n  Choose a different server name or clean up DNS first.", effectivePlan.Name, effectivePlan.Hostname, record.Content)}
 		}
 		wildcardRecordName := relativeRecordName(effectivePlan.WildcardHostname, dnsZone)
-		if record, ok := dnsimpleRecordByName(records, wildcardRecordName); ok {
-			return nil, Error{Msg: fmt.Sprintf("Server name %q is unavailable. DNSimple record %s already exists with content %s.", effectivePlan.Name, effectivePlan.WildcardHostname, valueString(record["content"]))}
+		if record, ok := dnsRecordByName(records, wildcardRecordName); ok {
+			return nil, Error{Msg: fmt.Sprintf("Server name %q is unavailable.\nReason:\n  DNS record %s already exists and points to %s.\nNext:\n  Choose a different server name or clean up DNS first.", effectivePlan.Name, effectivePlan.WildcardHostname, record.Content)}
 		}
 		createdPtr, err := provider.CreateServer(ctx, ServerCreatePlan{Plan: effectivePlan, RootPass: rootPass, UserData: rendered, SSHKeys: sshKeys})
 		if err != nil {
@@ -2787,16 +2690,37 @@ func ProvisionServer(plan Plan) (*ServerCreateResult, error) {
 		if err != nil {
 			return nil, err
 		}
-		if err := dnsimpleUpsertHostnameRecords(dnsimpleToken, effectivePlan.DnsimpleAccountID, dnsZone, effectivePlan.Hostname, linodeIP); err != nil {
+		hostnameRecordName := relativeRecordName(effectivePlan.Hostname, dnsZone)
+		wildcardRecordName := relativeRecordName(effectivePlan.WildcardHostname, dnsZone)
+		if err := dnsimpleUpsertARecordRun(dnsimpleToken, effectivePlan.DnsimpleAccountID, dnsZone, hostnameRecordName, linodeIP); err != nil {
 			return nil, Error{Msg: renderProvisionPartialFailure(effectivePlan, created, serverStatePath, err)}
 		}
-		dnsState = dnsStateRecord(effectivePlan, dnsZone, linodeIP)
+		if err := dnsimpleUpsertARecordRun(dnsimpleToken, effectivePlan.DnsimpleAccountID, dnsZone, wildcardRecordName, linodeIP); err != nil {
+			return nil, Error{Msg: renderProvisionPartialFailure(effectivePlan, created, serverStatePath, err)}
+		}
+		records, err := dnsimpleListARecordsFn(dnsimpleToken, effectivePlan.DnsimpleAccountID, dnsZone)
+		if err != nil {
+			return nil, err
+		}
+		hostnameRecord, _ := dnsRecordByName(records, hostnameRecordName)
+		wildcardRecord, _ := dnsRecordByName(records, wildcardRecordName)
+		dnsState = dnsStateRecord(effectivePlan, dnsZone, hostnameRecord, wildcardRecord)
 		if tlsState.Provider == "" {
 			tlsState = tlsStateRecord(effectivePlan)
 		}
 		currentPhase = "dns_configured"
 		if err := upsertStateRecord(serverStatePath, serverStateRecordWithStatus(effectivePlan, created, dnsState, TLSState{}, createdAt, now, "provisioning", currentPhase)); err != nil {
 			return nil, err
+		}
+		if effectivePlan.Wait {
+			// Keep distribution failures in the dns_configured pause/resume path.
+			// This preserves the current resume behavior without re-creating the Linode.
+			if err := dnsimpleWaitForRecordDistributionFn(dnsimpleToken, effectivePlan.DnsimpleAccountID, dnsZone, hostnameRecordName, effectivePlan.TLSTimeout); err != nil {
+				return nil, Error{Msg: renderProvisionPartialFailure(effectivePlan, created, serverStatePath, err)}
+			}
+			if err := dnsimpleWaitForRecordDistributionFn(dnsimpleToken, effectivePlan.DnsimpleAccountID, dnsZone, wildcardRecordName, effectivePlan.TLSTimeout); err != nil {
+				return nil, Error{Msg: renderProvisionPartialFailure(effectivePlan, created, serverStatePath, err)}
+			}
 		}
 	}
 	if !effectivePlan.Wait {

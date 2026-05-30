@@ -68,9 +68,14 @@ func TestShortHostname(t *testing.T) {
 func stubEmptyDNSRecords(t *testing.T) {
 	t.Helper()
 	oldList := dnsimpleListARecordsFn
+	oldWait := dnsimpleWaitForRecordDistributionFn
 	t.Cleanup(func() { dnsimpleListARecordsFn = oldList })
-	dnsimpleListARecordsFn = func(token, accountID, zone string) ([]map[string]any, error) {
-		return []map[string]any{}, nil
+	t.Cleanup(func() { dnsimpleWaitForRecordDistributionFn = oldWait })
+	dnsimpleListARecordsFn = func(token, accountID, zone string) ([]DNSRecord, error) {
+		return []DNSRecord{}, nil
+	}
+	dnsimpleWaitForRecordDistributionFn = func(token, accountID, zone, name string, timeout time.Duration) error {
+		return nil
 	}
 }
 
@@ -95,15 +100,6 @@ func TestAPIIDString(t *testing.T) {
 				t.Fatalf("apiIDString() = %q, want %q", got, tt.want)
 			}
 		})
-	}
-}
-
-func TestDNSimpleEndpointPathAndExcerpt(t *testing.T) {
-	if got, want := dnsimpleEndpointPath("https://api.dnsimple.com/v2/14/zones/example.test/records/77496734"), "/v2/14/zones/example.test/records/77496734"; got != want {
-		t.Fatalf("dnsimpleEndpointPath() = %q, want %q", got, want)
-	}
-	if got, want := dnsimpleResponseExcerpt([]byte("<html>\n  <body>  not found  </body>\n</html>")), "<html> <body> not found </body> </html>"; got != want {
-		t.Fatalf("dnsimpleResponseExcerpt() = %q, want %q", got, want)
 	}
 }
 
@@ -953,7 +949,7 @@ func TestServerStateRecordShapeDoesNotContainSecrets(t *testing.T) {
 	plan.AuthorizedKeys = []SSHAuthorizedKey{{Source: "linode-profile", ID: "77496734", Label: "team-a", Fingerprint: "fp-a", PublicKey: "ssh-rsa AAAAtest"}, {Source: "file", Path: "/tmp/id.pub", Label: "id.pub", PublicKey: "ssh-ed25519 BBBBtest"}}
 	plan.Firewall.DeviceID = "12345"
 	created := CreatedServer{Provider: "linode", ProviderID: "12345", Name: plan.Name, Hostname: plan.Hostname, IPv4: "198.51.100.10"}
-	dns := dnsStateRecord(plan, "nfweb.dev", created.IPv4)
+	dns := dnsStateRecord(plan, "nfweb.dev", DNSRecord{ID: "77496734", Name: "app1", Type: "A", Content: created.IPv4, TTL: 60}, DNSRecord{ID: "77496735", Name: "*.app1", Type: "A", Content: created.IPv4, TTL: 60})
 	tls := tlsStateRecord(plan)
 	record := serverStateRecord(plan, created, dns, tls, "2026-05-29T12:00:00Z")
 
@@ -970,6 +966,10 @@ func TestServerStateRecordShapeDoesNotContainSecrets(t *testing.T) {
 	}
 	if dnsBlock, ok := record["dns"].(map[string]any); !ok || dnsBlock["provider"] != "dnsimple" || dnsBlock["zone"] != "nfweb.dev" {
 		t.Fatalf("dns block = %#v, want dnsimple provider", record["dns"])
+	} else if hostname, ok := dnsBlock["hostname_record"].(DNSRecord); !ok || hostname.ID != "77496734" || hostname.Name != "app1" {
+		t.Fatalf("dns hostname record = %#v, want decimal id", dnsBlock["hostname_record"])
+	} else if wildcard, ok := dnsBlock["wildcard_record"].(DNSRecord); !ok || wildcard.ID != "77496735" || wildcard.Name != "*.app1" {
+		t.Fatalf("dns wildcard record = %#v, want decimal id", dnsBlock["wildcard_record"])
 	}
 	if got, want := record["domain"], "nfweb.dev"; got != want {
 		t.Fatalf("domain = %#v, want %q", got, want)
@@ -1006,26 +1006,6 @@ func TestServerStateRecordShapeDoesNotContainSecrets(t *testing.T) {
 		t.Fatalf("firewall block = %#v, want managed firewall metadata", record["firewall"])
 	} else if device, ok := firewall["device"].(map[string]any); !ok || valueString(device["id"]) != "12345" {
 		t.Fatalf("firewall block = %#v, want managed firewall metadata", record["firewall"])
-	}
-}
-
-func TestFindDnsimpleZoneUsesExplicitPlanZone(t *testing.T) {
-	oldRequest := dnsimpleRequestFn
-	t.Cleanup(func() { dnsimpleRequestFn = oldRequest })
-	var requestedPath string
-	dnsimpleRequestFn = func(method, rawURL, token string, payload map[string]any) (map[string]any, error) {
-		requestedPath = dnsimpleEndpointPath(rawURL)
-		return map[string]any{}, nil
-	}
-	zone, err := findDnsimpleZone(Plan{Domain: "explicit.example.test", DnsimpleAccountID: "14"}, "ignored")
-	if err != nil {
-		t.Fatalf("findDnsimpleZone() error = %v", err)
-	}
-	if got, want := zone, "explicit.example.test"; got != want {
-		t.Fatalf("findDnsimpleZone() = %q, want %q", got, want)
-	}
-	if got, want := requestedPath, "/v2/14/zones/explicit.example.test"; got != want {
-		t.Fatalf("findDnsimpleZone() path = %q, want %q", got, want)
 	}
 }
 
@@ -1439,14 +1419,18 @@ func TestProvisionServerManagedFirewallReusesExistingFirewallByLabel(t *testing.
 	oldRunLinode := runLinodeCLICommand
 	oldRunLinodeValue := runLinodeCLIValueFn
 	oldZoneLookup := dnsimpleZoneLookup
+	oldList := dnsimpleListARecordsFn
 	oldUpsert := dnsimpleUpsertARecordRun
+	oldWait := dnsimpleWaitForRecordDistributionFn
 	oldSalt := secretSaltFn
 	oldNow := currentTime
 	t.Cleanup(func() {
 		runLinodeCLICommand = oldRunLinode
 		runLinodeCLIValueFn = oldRunLinodeValue
 		dnsimpleZoneLookup = oldZoneLookup
+		dnsimpleListARecordsFn = oldList
 		dnsimpleUpsertARecordRun = oldUpsert
+		dnsimpleWaitForRecordDistributionFn = oldWait
 		secretSaltFn = oldSalt
 		currentTime = oldNow
 	})
@@ -1536,14 +1520,18 @@ func TestProvisionServerFirewallFailureKeepsPartialStateAndExplainsRecovery(t *t
 	oldRunLinode := runLinodeCLICommand
 	oldRunLinodeValue := runLinodeCLIValueFn
 	oldZoneLookup := dnsimpleZoneLookup
+	oldList := dnsimpleListARecordsFn
 	oldUpsert := dnsimpleUpsertARecordRun
+	oldWait := dnsimpleWaitForRecordDistributionFn
 	oldSalt := secretSaltFn
 	oldNow := currentTime
 	t.Cleanup(func() {
 		runLinodeCLICommand = oldRunLinode
 		runLinodeCLIValueFn = oldRunLinodeValue
 		dnsimpleZoneLookup = oldZoneLookup
+		dnsimpleListARecordsFn = oldList
 		dnsimpleUpsertARecordRun = oldUpsert
+		dnsimpleWaitForRecordDistributionFn = oldWait
 		secretSaltFn = oldSalt
 		currentTime = oldNow
 	})
@@ -1757,7 +1745,9 @@ func TestProvisionServerHealthFailureExplainsRecovery(t *testing.T) {
 		}
 	}
 	dnsimpleZoneLookup = func(plan Plan, token string) (string, error) { return "nfweb.dev", nil }
+	dnsimpleListARecordsFn = func(token, accountID, zone string) ([]DNSRecord, error) { return []DNSRecord{}, nil }
 	dnsimpleUpsertARecordRun = func(token, accountID, zone, name, ip string) error { return nil }
+	dnsimpleWaitForRecordDistributionFn = func(token, accountID, zone, name string, timeout time.Duration) error { return nil }
 	waitForTCPPortFn = func(host string, port int, timeout time.Duration) error { return nil }
 	runSSHCommandFn = func(user, host, command string, timeout time.Duration) error { return nil }
 	checkHTTPSHealthFn = func(url, name, hostname string, timeout time.Duration) error {
@@ -1859,7 +1849,9 @@ func TestProvisionServerResumesProvisioningRecordWithoutCreatingNewLinode(t *tes
 		return nil, fmt.Errorf("should not create a second Linode")
 	}
 	dnsimpleZoneLookup = func(plan Plan, token string) (string, error) { return "nfweb.dev", nil }
+	dnsimpleListARecordsFn = func(token, accountID, zone string) ([]DNSRecord, error) { return []DNSRecord{}, nil }
 	dnsimpleUpsertARecordRun = func(token, accountID, zone, name, ip string) error { return nil }
+	dnsimpleWaitForRecordDistributionFn = func(token, accountID, zone, name string, timeout time.Duration) error { return nil }
 	waitForTCPPortFn = func(host string, port int, timeout time.Duration) error { return nil }
 	runSSHCommandFn = func(user, host, command string, timeout time.Duration) error { return nil }
 	checkHTTPSHealthFn = func(url, name, hostname string, timeout time.Duration) error { return nil }
