@@ -14,6 +14,8 @@ import (
 	"time"
 
 	"github.com/nonfiction/nf/internal/config"
+	"github.com/nonfiction/nf/internal/passwords"
+	"github.com/nonfiction/nf/internal/state"
 )
 
 func TestSlugToTitle(t *testing.T) {
@@ -186,10 +188,70 @@ func TestRunInitHelpShowsFlags(t *testing.T) {
 
 func TestRunServerHelpShowsProvisionFlags(t *testing.T) {
 	output := captureStdout(t, func() { _ = runServerHelp() })
-	for _, want := range []string{"server\n\nCommands:\n", "\n  provision [flags]   provision an infrastructure host\n", "\n  list                list servers\n", "\n  show <id-or-name>   show a server\n"} {
+	for _, want := range []string{"server\n\nCommands:\n", "\n  provision [flags]   provision an infrastructure host\n", "\n  list                list servers\n", "\n  show <id-or-name>   show a server\n", "\n  root-password <id-or-name>   derive the Linode root password for a server\n"} {
 		if !strings.Contains(output, want) {
 			t.Fatalf("runServerHelp() output missing %q:\n%s", want, output)
 		}
+	}
+}
+
+func TestRunServerRootPasswordUsesHostnameAndSalt(t *testing.T) {
+	configHome := t.TempDir()
+	t.Setenv("NF_CONFIG_HOME", configHome)
+	t.Setenv("NF_SECRET_SALT", "secret-salt")
+	records := []map[string]any{{"provider": "linode", "name": "app1", "hostname": "app1.nfweb.dev", "label": "app1"}}
+	if err := state.SaveStateRecords("servers", records); err != nil {
+		t.Fatalf("SaveStateRecords() error = %v", err)
+	}
+
+	output := captureStdout(t, func() {
+		if got := Run([]string{"server", "root-password", "app1"}); got != 0 {
+			t.Fatalf("Run() = %d, want 0", got)
+		}
+	})
+	wantPassword := passwords.DerivePassword("app1.nfweb.dev", "linode-root", "secret-salt")
+	want := "Root password for app1.nfweb.dev:\n\n" + wantPassword + "\n"
+	if output != want {
+		t.Fatalf("Run() output = %q, want %q", output, want)
+	}
+}
+
+func TestRunServerRootPasswordMissingSaltFailsClearly(t *testing.T) {
+	configHome := t.TempDir()
+	t.Setenv("NF_CONFIG_HOME", configHome)
+	t.Setenv("NF_SECRET_SALT", "")
+	records := []map[string]any{{"provider": "linode", "name": "app1", "hostname": "app1.nfweb.dev", "label": "app1"}}
+	if err := state.SaveStateRecords("servers", records); err != nil {
+		t.Fatalf("SaveStateRecords() error = %v", err)
+	}
+
+	output := captureStderr(t, func() {
+		if got := Run([]string{"server", "root-password", "app1"}); got != 1 {
+			t.Fatalf("Run() = %d, want 1", got)
+		}
+	})
+	for _, want := range []string{"NF_SECRET_SALT is not set", "nf config init"} {
+		if !strings.Contains(output, want) {
+			t.Fatalf("Run() stderr missing %q:\n%s", want, output)
+		}
+	}
+}
+
+func TestRunServerRootPasswordMissingServerFailsClearly(t *testing.T) {
+	configHome := t.TempDir()
+	t.Setenv("NF_CONFIG_HOME", configHome)
+	t.Setenv("NF_SECRET_SALT", "secret-salt")
+	if err := state.SaveStateRecords("servers", []map[string]any{}); err != nil {
+		t.Fatalf("SaveStateRecords() error = %v", err)
+	}
+
+	output := captureStderr(t, func() {
+		if got := Run([]string{"server", "root-password", "missing"}); got != 1 {
+			t.Fatalf("Run() = %d, want 1", got)
+		}
+	})
+	if !strings.Contains(output, "No server matched \"missing\"") {
+		t.Fatalf("Run() stderr = %q, want missing server error", output)
 	}
 }
 
@@ -199,7 +261,7 @@ func TestRunServerProvisionDryRunShowsDnsZoneFlag(t *testing.T) {
 			t.Fatalf("Run() = %d, want 0", got)
 		}
 	})
-	for _, want := range []string{"Server provision dry-run plan", "SSH", "OS/PHP", "  zone: example.test (explicit)", "  stack: Ubuntu 24.04 LTS / PHP 8.3", "  user: nonfiction", "  key source: linode-profile", "  authorized keys: all Linode profile keys", "  ubuntu: 24.04 LTS", "  image: linode/ubuntu24.04", "  php: 8.3", "  php service: php8.3-fpm", "  php socket: /run/php/php8.3-fpm.sock", "  package source: ubuntu-native", "  packages: php8.3-fpm, php8.3-cli", "  hostname A: app1.nfweb.dev -> <created after server IP is known>", "  wildcard A: *.app1.nfweb.dev -> <created after server IP is known>"} {
+	for _, want := range []string{"Server provision dry-run plan", "Firewall", "  mode: managed", "  managed label: nf-web", "  inbound: 22/tcp, 80/tcp, 443/tcp", "  inbound policy: DROP", "  outbound policy: ACCEPT", "SSH", "Root", "  password: derived from hostname + purpose linode-root", "  stored in state: no", "  reveal: nf server root-password app1", "OS/PHP", "  zone: example.test (explicit)", "  stack: Ubuntu 24.04 LTS / PHP 8.3", "  user: nonfiction", "  auth: SSH keys only", "  sudo: passwordless", "  key source: linode-profile", "  authorized keys: all Linode profile keys", "  ubuntu: 24.04 LTS", "  image: linode/ubuntu24.04", "  php: 8.3", "  php service: php8.3-fpm", "  php socket: /run/php/php8.3-fpm.sock", "  package source: ubuntu-native", "  packages: php8.3-fpm, php8.3-cli", "  hostname A: app1.nfweb.dev -> <created after server IP is known>", "  wildcard A: *.app1.nfweb.dev -> <created after server IP is known>"} {
 		if !strings.Contains(output, want) {
 			t.Fatalf("Run() output missing %q:\n%s", want, output)
 		}
@@ -217,6 +279,11 @@ func TestRunServerProvisionHelpOmitsPhpVersionAndSocketFlags(t *testing.T) {
 			t.Fatalf("Run() = %d, want 1", got)
 		}
 	})
+	for _, want := range []string{"-firewall string", "-firewall-id string"} {
+		if !strings.Contains(output, want) {
+			t.Fatalf("Run() help output missing %q:\n%s", want, output)
+		}
+	}
 	for _, unwanted := range []string{"--php-version", "--php-fpm-socket"} {
 		if strings.Contains(output, unwanted) {
 			t.Fatalf("Run() help output unexpectedly contained %q:\n%s", unwanted, output)

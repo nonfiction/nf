@@ -1942,6 +1942,32 @@ func cmdShowServer(needle string) int {
 	return 0
 }
 
+func cmdServerRootPassword(needle string) int {
+	servers, err := state.LoadStateRecords("servers")
+	if err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		return 1
+	}
+	record := state.MatchingRecord(servers, needle)
+	if record == nil {
+		fmt.Fprintf(os.Stderr, "No server matched %q.\n", needle)
+		return 1
+	}
+	hostname := firstRecordString(record, "hostname")
+	if hostname == "" {
+		fmt.Fprintf(os.Stderr, "Server %q is missing hostname.\n", needle)
+		return 1
+	}
+	salt, err := passwords.SecretSalt()
+	if err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		return 1
+	}
+	password := passwords.DerivePassword(hostname, "linode-root", salt)
+	fmt.Printf("Root password for %s:\n\n%s\n", hostname, password)
+	return 0
+}
+
 func cmdShowSite(needle string) int {
 	resolved, _, projectFileExists, targetAliasUsed, err := resolveSiteTarget(needle)
 	if err != nil {
@@ -2424,6 +2450,7 @@ func runServerHelp() int {
 		"provision [flags]   provision an infrastructure host",
 		"list                list servers",
 		"show <id-or-name>   show a server",
+		"root-password <id-or-name>   derive the Linode root password for a server",
 		"delete [flags] <id-or-name>   delete a server (flags may also follow the id)",
 	})
 	return 0
@@ -2949,6 +2976,12 @@ func runServer(argv []string) int {
 			needle = selected
 		}
 		return cmdShowServer(needle)
+	case "root-password":
+		if len(argv) != 2 {
+			fmt.Fprintln(os.Stderr, "server root-password takes exactly one identifier")
+			return 1
+		}
+		return cmdServerRootPassword(argv[1])
 	case "delete":
 		needle, opts, err := parseDeleteServerArgs(argv[1:])
 		if err != nil {
@@ -3018,6 +3051,8 @@ func runProvision(argv []string) int {
 	fs.StringVar(&args.DnsProvider, "dns-provider", "", "DNS provider (dnsimple)")
 	fs.StringVar(&args.DnsZone, "dns-zone", "", "DNS zone name")
 	fs.StringVar(&args.UbuntuVersion, "ubuntu-version", "", "Ubuntu LTS version to use (26.04, 24.04, 22.04, 20.04)")
+	fs.StringVar(&args.Firewall, "firewall", "", "Linode cloud firewall mode (managed or none)")
+	fs.StringVar(&args.FirewallID, "firewall-id", "", "existing Linode cloud firewall id")
 	fs.StringVar(&args.Name, "name", "", "server name")
 	fs.StringVar(&args.Hostname, "hostname", "", "server hostname")
 	fs.StringVar(&args.Label, "label", "", "Linode label")
