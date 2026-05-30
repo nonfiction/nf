@@ -100,12 +100,15 @@ type Plan struct {
 	Provider          string
 	DnsProvider       string
 	DnsZone           string
+	Domain            string
 	UbuntuVersion     string
 	PHPVersion        string
 	Firewall          FirewallPlan
 	Name              string
 	Hostname          string
 	Label             string
+	WildcardHostname  string
+	HealthURL         string
 	Region            string
 	LinodeType        string
 	Image             string
@@ -629,6 +632,8 @@ var (
 	runLinodeCLICommand      = runLinodeCLI
 	runLinodeCLIValueFn      = runLinodeCLIValue
 	dnsimpleZoneLookup       = findDnsimpleZone
+	dnsimpleRequestFn        = dnsimpleRequest
+	dnsimpleListARecordsFn   = dnsimpleListARecords
 	dnsimpleUpsertARecordRun = dnsimpleUpsertARecord
 	waitForTCPPortFn         = waitForTCPPort
 	runSSHCommandFn          = runSSHCommand
@@ -670,19 +675,64 @@ func requiredEnv(name string) (string, error) {
 	return "", Error{Msg: fmt.Sprintf("Expected %s in the environment or %s.", name, config.EnvFile())}
 }
 
+func serverDomain() string {
+	return firstNonEmpty(envwizard.Value("NF_SERVER_DOMAIN"), envwizard.Value("DNSIMPLE_ZONE_NAME"), "nfweb.dev")
+}
+
+func validateServerName(name string) error {
+	trimmed := strings.TrimSpace(name)
+	if trimmed == "" {
+		return Error{Msg: "Server name cannot be empty. Use 1-63 lowercase letters, digits, and hyphens, starting and ending with a letter or digit."}
+	}
+	if len(trimmed) > 63 {
+		return Error{Msg: fmt.Sprintf("Invalid server name %q: must be 63 characters or fewer.", name)}
+	}
+	for _, r := range trimmed {
+		switch {
+		case r >= 'a' && r <= 'z':
+		case r >= '0' && r <= '9':
+		case r == '-':
+		default:
+			return Error{Msg: fmt.Sprintf("Invalid server name %q. Use lowercase letters, digits, and hyphens only; no dots, underscores, spaces, or uppercase letters.", name)}
+		}
+	}
+	if trimmed[0] == '-' || trimmed[len(trimmed)-1] == '-' {
+		return Error{Msg: fmt.Sprintf("Invalid server name %q. It must start and end with a letter or digit.", name)}
+	}
+	return nil
+}
+
+func deriveHostname(name, domain string) string {
+	name = strings.TrimSpace(name)
+	domain = strings.TrimSpace(domain)
+	if name == "" || domain == "" {
+		return ""
+	}
+	return name + "." + domain
+}
+
+func deriveWildcardHostname(hostname string) string {
+	hostname = strings.TrimSpace(hostname)
+	if hostname == "" {
+		return ""
+	}
+	return "*." + hostname
+}
+
+func deriveHealthURL(hostname string) string {
+	hostname = strings.TrimSpace(hostname)
+	if hostname == "" {
+		return ""
+	}
+	return "https://" + hostname
+}
+
 func provisionRequirements() []envwizard.Requirement {
 	return []envwizard.Requirement{
 		{Keys: []string{"NF_SECRET_SALT"}, Prompt: "NF_SECRET_SALT (used for derived passwords): ", Secret: true, WriteKey: "NF_SECRET_SALT", Required: true},
 		{Keys: []string{"DNSIMPLE_TOKEN"}, Prompt: "DNSimple token: ", Secret: true, WriteKey: "DNSIMPLE_TOKEN", Required: true},
 		{Keys: []string{"LINODE_CLI_TOKEN", "LINODE_TOKEN"}, Prompt: "Linode token: ", Secret: true, WriteKey: "LINODE_CLI_TOKEN", Required: true},
 	}
-}
-
-func defaultHostname(name string) string {
-	if strings.TrimSpace(name) == "" {
-		return ""
-	}
-	return strings.TrimSpace(name) + ".nfweb.dev"
 }
 
 func shortHostname(hostname string) string {
@@ -1183,6 +1233,47 @@ func runLinodeCLI(args []string) (map[string]any, error) {
 	return nil, Error{Msg: "Unexpected Linode CLI response while creating the instance."}
 }
 
+func linodeListByLabel(label string) ([]map[string]any, error) {
+	payload, err := runLinodeCLIValueFn([]string{"linodes", "list", "--json"})
+	if err != nil {
+		return nil, err
+	}
+	var items []any
+	switch typed := payload.(type) {
+	case []any:
+		items = typed
+	case map[string]any:
+		if list, ok := typed["data"].([]any); ok {
+			items = list
+		} else if list, ok := typed["linodes"].([]any); ok {
+			items = list
+		}
+	}
+	matched := make([]map[string]any, 0)
+	for _, item := range items {
+		record, ok := item.(map[string]any)
+		if !ok {
+			continue
+		}
+		if strings.EqualFold(valueString(record["label"]), strings.TrimSpace(label)) {
+			matched = append(matched, record)
+		}
+	}
+	return matched, nil
+}
+
+func linodeIPFromRecord(record map[string]any) string {
+	switch ipv4 := record["ipv4"].(type) {
+	case []any:
+		if len(ipv4) > 0 {
+			return valueString(ipv4[0])
+		}
+	case string:
+		return strings.TrimSpace(ipv4)
+	}
+	return ""
+}
+
 func dnsimpleEndpointPath(rawURL string) string {
 	parsed, err := url.Parse(rawURL)
 	if err != nil {
@@ -1255,22 +1346,50 @@ func dnsimpleURL(accountID, path string) string {
 }
 
 func findDnsimpleZone(plan Plan, token string) (string, error) {
-	if strings.TrimSpace(plan.DnsZone) != "" {
-		return strings.TrimSpace(plan.DnsZone), nil
+	zone := firstNonEmpty(plan.DnsZone, plan.Domain)
+	if zone == "" {
+		zone = serverDomain()
 	}
-	parts := strings.Split(plan.Hostname, ".")
-	for i := 0; i < len(parts)-1; i++ {
-		candidate := strings.Join(parts[i:], ".")
-		encoded := url.PathEscape(candidate)
-		_, err := dnsimpleRequest("GET", dnsimpleURL(plan.DnsimpleAccountID, "/zones/"+encoded), token, nil)
-		if err == nil {
-			return candidate, nil
+	encoded := url.PathEscape(zone)
+	if _, err := dnsimpleRequestFn("GET", dnsimpleURL(plan.DnsimpleAccountID, "/zones/"+encoded), token, nil); err != nil {
+		if strings.Contains(err.Error(), "HTTP 404") {
+			return "", Error{Msg: fmt.Sprintf("DNSimple zone %s was not found for account %s. Check NF_SERVER_DOMAIN, DNSIMPLE_ACCOUNT_ID, and DNSIMPLE_TOKEN.", zone, plan.DnsimpleAccountID)}
 		}
-		if !strings.Contains(err.Error(), "HTTP 404") {
-			return "", err
+		return "", err
+	}
+	return zone, nil
+}
+
+func dnsimpleListARecords(token, accountID, zone string) ([]map[string]any, error) {
+	encodedZone := url.PathEscape(zone)
+	payload, err := dnsimpleRequestFn("GET", dnsimpleURL(accountID, "/zones/"+encodedZone+"/records?type=A"), token, nil)
+	if err != nil {
+		return nil, err
+	}
+	rawRecords, ok := payload["data"]
+	if !ok {
+		rawRecords = payload
+	}
+	items, ok := rawRecords.([]any)
+	if !ok {
+		return nil, Error{Msg: "Unexpected DNSimple records response shape."}
+	}
+	records := make([]map[string]any, 0, len(items))
+	for _, item := range items {
+		if record, ok := item.(map[string]any); ok {
+			records = append(records, record)
 		}
 	}
-	return "", Error{Msg: fmt.Sprintf("Could not find a matching DNSimple zone for %s", plan.Hostname)}
+	return records, nil
+}
+
+func dnsimpleRecordByName(records []map[string]any, name string) (map[string]any, bool) {
+	for _, record := range records {
+		if fmt.Sprint(record["name"]) == name {
+			return record, true
+		}
+	}
+	return nil, false
 }
 
 func dnsimpleUpsertHostnameRecords(token, accountID, zone, hostname, ip string) error {
@@ -1473,24 +1592,17 @@ func ensureManagedFirewall(plan Plan, created CreatedServer, existingRecord map[
 }
 
 func renderProvisionFirewallPartialFailure(plan Plan, created CreatedServer, statePath string, setupErr error) string {
-	lines := []string{
-		"Server provisioning paused.",
-		"",
-		"Host",
-		"  provider: " + plan.Provider,
-		"  name: " + plan.Name,
-		"  hostname: " + plan.Hostname,
-		"  provider id: " + created.ProviderID,
-		"  ipv4: " + created.IPv4,
-		"  status: provisioning",
-		"  phase: linode_created",
+	plan = normalizePlan(plan)
+	lines := []string{"Server provisioning paused.", ""}
+	lines = append(lines, serverPlanBlock(plan, &created, "provisioning", "linode_created")...)
+	lines = append(lines,
 		"Paths",
-		"  state: " + statePath,
+		"  state: "+statePath,
 		"Firewall error",
-		"  " + strings.TrimSpace(setupErr.Error()),
+		"  "+strings.TrimSpace(setupErr.Error()),
 		"Next",
 		"  rerun the same provision command to resume firewall, DNS, and TLS setup.",
-	}
+	)
 	return strings.Join(lines, "\n") + "\n"
 }
 
@@ -1542,7 +1654,7 @@ func phpBaselinePlanBlock(plan Plan) []string {
 
 func healthPlanBlock(plan Plan) []string {
 	return []string{
-		"Server health URL: https://" + plan.Hostname,
+		"Server health URL: " + plan.HealthURL,
 	}
 }
 
@@ -1865,20 +1977,23 @@ func serverStateRecord(plan Plan, created CreatedServer, dns DNSState, tls TLSSt
 func serverStateRecordWithStatus(plan Plan, created CreatedServer, dns DNSState, tls TLSState, createdAt, updatedAt, status, phase string) map[string]any {
 	sshState := sshStateBlock(plan, plan.AuthorizedKeys)
 	record := map[string]any{
-		"provider":    plan.Provider,
-		"provider_id": created.ProviderID,
-		"name":        plan.Name,
-		"hostname":    plan.Hostname,
-		"label":       plan.Label,
-		"status":      status,
-		"phase":       phase,
-		"ipv4":        created.IPv4,
-		"region":      plan.Region,
-		"type":        plan.LinodeType,
-		"image":       plan.Image,
-		"ssh":         sshState,
-		"created_at":  createdAt,
-		"updated_at":  updatedAt,
+		"provider":          plan.Provider,
+		"provider_id":       created.ProviderID,
+		"name":              plan.Name,
+		"hostname":          plan.Hostname,
+		"label":             plan.Label,
+		"domain":            plan.Domain,
+		"wildcard_hostname": plan.WildcardHostname,
+		"health_url":        plan.HealthURL,
+		"status":            status,
+		"phase":             phase,
+		"ipv4":              created.IPv4,
+		"region":            plan.Region,
+		"type":              plan.LinodeType,
+		"image":             plan.Image,
+		"ssh":               sshState,
+		"created_at":        createdAt,
+		"updated_at":        updatedAt,
 	}
 	if firewall := firewallStateBlock(plan, plan.Firewall.ID, plan.Firewall.DeviceID); firewall != nil {
 		record["firewall"] = firewall
@@ -1897,6 +2012,8 @@ func serverStateRecordWithStatus(plan Plan, created CreatedServer, dns DNSState,
 		record["dns"] = map[string]any{
 			"provider":        dns.Provider,
 			"zone":            dns.Zone,
+			"hostname_name":   dns.HostnameRecord.Name,
+			"wildcard_name":   dns.WildcardRecord.Name,
 			"hostname_record": dns.HostnameRecord,
 			"wildcard_record": dns.WildcardRecord,
 		}
@@ -1979,56 +2096,42 @@ func dnsimpleUpsertARecord(token, accountID, zone, name, ip string) error {
 		if currentIP == ip {
 			return nil
 		}
-		_, err = dnsimpleRequest("PATCH", dnsimpleURL(accountID, "/zones/"+encodedZone+"/records/"+recordID), token, map[string]any{"content": ip, "ttl": 60})
+		_, err = dnsimpleRequestFn("PATCH", dnsimpleURL(accountID, "/zones/"+encodedZone+"/records/"+recordID), token, map[string]any{"content": ip, "ttl": 60})
 		return err
 	}
-	_, err = dnsimpleRequest("POST", dnsimpleURL(accountID, "/zones/"+encodedZone+"/records"), token, map[string]any{"name": name, "type": "A", "content": ip, "ttl": 60})
+	_, err = dnsimpleRequestFn("POST", dnsimpleURL(accountID, "/zones/"+encodedZone+"/records"), token, map[string]any{"name": name, "type": "A", "content": ip, "ttl": 60})
 	return err
 }
 
 func planLines(plan Plan, cloudInitPath string) []string {
-	zone := strings.TrimSpace(plan.DnsZone)
-	zoneSuffix := " (inferred)"
-	if zone != "" {
-		zoneSuffix = " (explicit)"
-	} else if inferred := inferredDnsimpleZone(plan.Hostname); inferred != "" {
-		zone = inferred
-	} else {
-		zone = "<inferred during execution>"
-	}
-	lines := []string{
-		"Host",
-		"  provider: " + plan.Provider,
-		"  name: " + plan.Name,
-		"  hostname: " + plan.Hostname,
-		"  label: " + plan.Label,
-		"  region: " + plan.Region,
-		"  type: " + plan.LinodeType,
-	}
+	plan = normalizePlan(plan)
+	lines := serverPlanBlock(plan, nil, "", "")
+	lines = append(lines, configPlanBlock(plan)...)
+	lines = append(lines, availabilityPlanBlock(plan)...)
 	lines = append(lines, sshPlanBlock(plan)...)
 	lines = append(lines, rootPlanBlock(plan)...)
 	lines = append(lines, ubuntuFirewallPlanBlock()...)
 	lines = append(lines, firewallPlanBlock(plan)...)
 	lines = append(lines, phpBaselinePlanBlock(plan)...)
-	lines = append(lines, healthPlanBlock(plan)...)
 	lines = append(lines,
 		"DNS",
 		"  provider: "+plan.DnsProvider,
-		"  zone: "+zone+zoneSuffix,
-		"  hostname A: "+plan.Hostname+" -> <created after server IP is known>",
-		"  wildcard A: *."+plan.Hostname+" -> <created after server IP is known>",
+		"  zone: "+plan.Domain,
+		"  hostname A: "+relativeRecordName(plan.Hostname, plan.Domain)+" -> <created after server IP is known>",
+		"  wildcard A: "+relativeRecordName(plan.WildcardHostname, plan.Domain)+" -> <created after server IP is known>",
 		"TLS",
 		"  provider: certbot-dnsimple",
-		"  domains: "+plan.Hostname+", *."+plan.Hostname,
+		"  domains: "+plan.Hostname+", "+plan.WildcardHostname,
 		"  certificate: /etc/letsencrypt/live/"+plan.Hostname+"/fullchain.pem",
 		"  key: /etc/letsencrypt/live/"+plan.Hostname+"/privkey.pem",
 	)
 	lines = append(lines, pathsPlanBlock(cloudInitPath)...)
-	lines = append(lines, "Mode", "  dry-run: true")
+	lines = append(lines, "Mode", fmt.Sprintf("  dry-run: %t", plan.DryRun || !plan.Execute))
 	return lines
 }
 
 func renderPlan(plan Plan, cloudInitPath, cloudInitPreview string) string {
+	plan = normalizePlan(plan)
 	header := "Server provision dry-run plan"
 	if plan.Execute {
 		header = "Server provision plan"
@@ -2044,6 +2147,58 @@ func renderPlan(plan Plan, cloudInitPath, cloudInitPreview string) string {
 		lines = append(lines, "", "cloud-init preview:", strings.TrimRight(cloudInitPreview, "\n"))
 	}
 	return strings.Join(lines, "\n") + "\n"
+}
+
+func serverPlanBlock(plan Plan, created *CreatedServer, status, phase string) []string {
+	lines := []string{
+		"Server",
+		"  provider: " + plan.Provider,
+		"  name: " + plan.Name,
+		"  hostname: " + plan.Hostname,
+		"  label: " + plan.Label,
+		"  wildcard hostname: " + plan.WildcardHostname,
+		"  health url: " + plan.HealthURL,
+		"  region: " + plan.Region,
+		"  type: " + plan.LinodeType,
+	}
+	if created != nil {
+		lines = append(lines,
+			"  ipv4: "+created.IPv4,
+			"  linode instance id: "+created.ProviderID,
+		)
+	}
+	if status != "" {
+		lines = append(lines,
+			"  health check: "+plan.HealthURL+"/healthz",
+			"  status: "+status,
+		)
+	}
+	if phase != "" {
+		lines = append(lines, "  phase: "+phase)
+	}
+	return lines
+}
+
+func configPlanBlock(plan Plan) []string {
+	return []string{
+		"Config",
+		"  server domain: " + plan.Domain,
+		"  dns provider: " + plan.DnsProvider,
+		"  dnsimple account id: " + plan.DnsimpleAccountID,
+	}
+}
+
+func availabilityPlanBlock(plan Plan) []string {
+	mode := "checked before create"
+	if plan.DryRun {
+		mode = "not checked (dry-run)"
+	}
+	return []string{
+		"Availability",
+		"  local state: " + mode,
+		"  linode label: " + mode,
+		"  dns records: " + mode,
+	}
 }
 
 func base64UserData(content string) string {
@@ -2074,11 +2229,55 @@ func resolveValue(explicit, prompt, defaultValue string, nonInteractive, allowBl
 	return v, nil
 }
 
+func resolveServerName(explicit string, nonInteractive bool) (string, error) {
+	if explicit != "" {
+		return explicit, nil
+	}
+	if nonInteractive {
+		return "app1", nil
+	}
+	v, err := promptStringFn("Server name: ", "app1", false)
+	if err != nil {
+		return "", err
+	}
+	if strings.TrimSpace(v) == "" {
+		return "app1", nil
+	}
+	return v, nil
+}
+
+func normalizePlan(plan Plan) Plan {
+	if strings.TrimSpace(plan.Domain) == "" {
+		plan.Domain = firstNonEmpty(plan.DnsZone, serverDomain())
+	}
+	if strings.TrimSpace(plan.DnsZone) == "" {
+		plan.DnsZone = plan.Domain
+	}
+	if strings.TrimSpace(plan.Hostname) == "" && strings.TrimSpace(plan.Name) != "" && strings.TrimSpace(plan.Domain) != "" {
+		plan.Hostname = deriveHostname(plan.Name, plan.Domain)
+	}
+	if strings.TrimSpace(plan.Label) == "" {
+		plan.Label = plan.Name
+	}
+	if strings.TrimSpace(plan.WildcardHostname) == "" {
+		plan.WildcardHostname = deriveWildcardHostname(plan.Hostname)
+	}
+	if strings.TrimSpace(plan.HealthURL) == "" {
+		plan.HealthURL = deriveHealthURL(plan.Hostname)
+	}
+	if strings.TrimSpace(plan.DnsimpleAccountID) == "" {
+		plan.DnsimpleAccountID = firstNonEmpty(envwizard.Value("DNSIMPLE_ACCOUNT_ID"), "14")
+	}
+	if !plan.DryRun && !plan.Execute {
+		plan.DryRun = true
+	}
+	return plan
+}
+
 func BuildPlan(args Args) (Plan, error) {
 	nonInteractive := args.NonInteractive
 	provider := firstNonEmpty(args.Provider, "linode")
 	dnsProvider := firstNonEmpty(args.DnsProvider, "dnsimple")
-	dnsZone := firstNonEmpty(args.DnsZone, envwizard.Value("DNSIMPLE_ZONE_NAME"))
 	ubuntuRelease, err := selectUbuntuStack(args.UbuntuVersion, nonInteractive)
 	if err != nil {
 		return Plan{}, err
@@ -2092,17 +2291,23 @@ func BuildPlan(args Args) (Plan, error) {
 	if firewallMode == "none" && strings.TrimSpace(args.FirewallID) != "" {
 		return Plan{}, Error{Msg: "--firewall-id requires --firewall managed."}
 	}
-	name, err := resolveValue(args.Name, "Server name: ", "app1", nonInteractive, false)
+	name, err := resolveServerName(args.Name, nonInteractive)
 	if err != nil {
 		return Plan{}, err
 	}
-	hostname, err := resolveValue(args.Hostname, "Hostname: ", defaultHostname(name), nonInteractive, false)
-	if err != nil {
+	if err := validateServerName(name); err != nil {
 		return Plan{}, err
 	}
-	label, err := resolveValue(args.Label, "Linode label: ", firstNonEmpty(name, hostname), nonInteractive, false)
-	if err != nil {
-		return Plan{}, err
+	domain := serverDomain()
+	hostname := deriveHostname(name, domain)
+	wildcardHostname := deriveWildcardHostname(hostname)
+	healthURL := deriveHealthURL(hostname)
+	if hostname == "" || wildcardHostname == "" || healthURL == "" {
+		return Plan{}, Error{Msg: "Server name and domain are required to derive the hostname, wildcard hostname, and health URL."}
+	}
+	label := name
+	if strings.TrimSpace(label) == "" {
+		return Plan{}, Error{Msg: "Server name cannot be empty."}
 	}
 	region, err := resolveValue(args.Region, "Linode region: ", "ca-central", nonInteractive, false)
 	if err != nil {
@@ -2149,16 +2354,19 @@ func BuildPlan(args Args) (Plan, error) {
 	if err != nil {
 		return Plan{}, err
 	}
-	return Plan{
+	return normalizePlan(Plan{
 		Provider:          provider,
 		DnsProvider:       dnsProvider,
-		DnsZone:           dnsZone,
+		DnsZone:           domain,
+		Domain:            domain,
 		UbuntuVersion:     ubuntuRelease.version,
 		PHPVersion:        ubuntuRelease.php,
 		Firewall:          firewallPlan,
 		Name:              firstNonEmpty(name, "app1"),
-		Hostname:          firstNonEmpty(hostname, defaultHostname(name)),
-		Label:             firstNonEmpty(label, name, hostname),
+		Hostname:          hostname,
+		Label:             label,
+		WildcardHostname:  wildcardHostname,
+		HealthURL:         healthURL,
 		Region:            firstNonEmpty(region, "ca-central"),
 		LinodeType:        firstNonEmpty(linodeType, "g6-standard-1"),
 		Image:             osPlan.Image,
@@ -2182,7 +2390,7 @@ func BuildPlan(args Args) (Plan, error) {
 		DryRun:            args.DryRun || !args.Execute,
 		NonInteractive:    nonInteractive,
 		ShowCloudInit:     args.ShowCloudInit,
-	}, nil
+	}), nil
 }
 
 func firstDuration(value, fallback time.Duration) time.Duration {
@@ -2192,14 +2400,6 @@ func firstDuration(value, fallback time.Duration) time.Duration {
 	return fallback
 }
 
-func inferredDnsimpleZone(hostname string) string {
-	parts := strings.Split(strings.TrimSpace(hostname), ".")
-	if len(parts) < 2 {
-		return ""
-	}
-	return strings.Join(parts[1:], ".")
-}
-
 func dnsRecordLine(label string, record DNSRecord) string {
 	return fmt.Sprintf("  %s: %s -> %s", label, record.Name, record.Content)
 }
@@ -2207,30 +2407,21 @@ func dnsRecordLine(label string, record DNSRecord) string {
 func healthSuccessBlock(plan Plan) []string {
 	return []string{
 		"Server",
-		"  health: https://" + plan.Hostname,
-		"  health check: https://" + plan.Hostname + "/healthz",
+		"  health: " + plan.HealthURL,
+		"  health check: " + plan.HealthURL + "/healthz",
 		"  status: ready",
 	}
 }
 
 func renderProvisionSuccess(plan Plan, created CreatedServer, dns DNSState, tls TLSState, statePath, cloudInitPath string, sshKeys []SSHAuthorizedKey) string {
-	lines := []string{
-		"Server provisioned.",
-		"",
-		"Host",
-		"  provider: " + plan.Provider,
-		"  name: " + plan.Name,
-		"  hostname: " + plan.Hostname,
-		"  label: " + plan.Label,
-		"  ipv4: " + created.IPv4,
-		"  linode instance id: " + created.ProviderID,
-	}
+	plan = normalizePlan(plan)
+	lines := []string{"Server provisioned.", ""}
+	lines = append(lines, serverPlanBlock(plan, &created, "ready", "complete")...)
 	lines = append(lines, sshSuccessBlock(plan, sshKeys)...)
 	lines = append(lines, rootSuccessBlock(plan)...)
 	lines = append(lines, ubuntuFirewallPlanBlock()...)
 	lines = append(lines, firewallPlanBlock(plan)...)
 	lines = append(lines, phpBaselinePlanBlock(plan)...)
-	lines = append(lines, healthSuccessBlock(plan)...)
 	lines = append(lines,
 		"DNS",
 		"  provider: "+dns.Provider,
@@ -2259,29 +2450,16 @@ func renderProvisionSuccess(plan Plan, created CreatedServer, dns DNSState, tls 
 }
 
 func renderProvisionPaused(plan Plan, created CreatedServer, dns DNSState, statePath string, phase string, sshKeys []SSHAuthorizedKey) string {
+	plan = normalizePlan(plan)
 	sshTarget := plan.SshUser + "@" + plan.Hostname
-	lines := []string{
-		"Server provisioning paused.",
-		"",
-		"Host",
-		"  provider: " + plan.Provider,
-		"  name: " + plan.Name,
-		"  hostname: " + plan.Hostname,
-		"  label: " + plan.Label,
-		"  ipv4: " + created.IPv4,
-		"  linode instance id: " + created.ProviderID,
-	}
+	lines := []string{"Server provisioning paused.", ""}
+	lines = append(lines, serverPlanBlock(plan, &created, "provisioning", phase)...)
 	lines = append(lines, sshSuccessBlock(plan, sshKeys)...)
 	lines = append(lines, rootSuccessBlock(plan)...)
 	lines = append(lines, ubuntuFirewallPlanBlock()...)
 	lines = append(lines, firewallPlanBlock(plan)...)
 	lines = append(lines, phpBaselinePlanBlock(plan)...)
 	lines = append(lines,
-		"Server",
-		"  health: https://"+plan.Hostname,
-		"  health check: https://"+plan.Hostname+"/healthz",
-		"  status: provisioning",
-		"  phase: "+phase,
 		"DNS",
 		"  provider: "+dns.Provider,
 		"  zone: "+dns.Zone,
@@ -2300,34 +2478,22 @@ func renderProvisionPaused(plan Plan, created CreatedServer, dns DNSState, state
 		"  enable wildcard TLS:",
 		"  ssh "+sshTarget+" \"sudo /usr/local/bin/nf-enable-wildcard-tls\"",
 		"  check HTTPS health:",
-		"  curl -fsS https://"+plan.Hostname+"/healthz",
+		"  curl -fsS "+plan.HealthURL+"/healthz",
 	)
 	return strings.Join(lines, "\n") + "\n"
 }
 
 func renderProvisionHealthFailure(plan Plan, created CreatedServer, dns DNSState, tls TLSState, statePath string, sshKeys []SSHAuthorizedKey, err error) string {
+	plan = normalizePlan(plan)
 	sshTarget := plan.SshUser + "@" + plan.Hostname
-	lines := []string{
-		"Server provisioning paused.",
-		"",
-		"Host",
-		"  provider: " + plan.Provider,
-		"  name: " + plan.Name,
-		"  hostname: " + plan.Hostname,
-		"  label: " + plan.Label,
-		"  ipv4: " + created.IPv4,
-		"  linode instance id: " + created.ProviderID,
-	}
+	lines := []string{"Server provisioning paused.", ""}
+	lines = append(lines, serverPlanBlock(plan, &created, "tls_configured", "tls_configured")...)
 	lines = append(lines, sshSuccessBlock(plan, sshKeys)...)
 	lines = append(lines, rootSuccessBlock(plan)...)
 	lines = append(lines, ubuntuFirewallPlanBlock()...)
 	lines = append(lines, firewallPlanBlock(plan)...)
 	lines = append(lines, phpBaselinePlanBlock(plan)...)
 	lines = append(lines,
-		"Server",
-		"  health: https://"+plan.Hostname,
-		"  health check: https://"+plan.Hostname+"/healthz",
-		"  status: tls_configured",
 		"DNS",
 		"  provider: "+dns.Provider,
 		"  zone: "+dns.Zone,
@@ -2349,34 +2515,28 @@ func renderProvisionHealthFailure(plan Plan, created CreatedServer, dns DNSState
 		"  "+strings.TrimSpace(err.Error()),
 		"Recovery",
 		"  ssh "+sshTarget+" \"sudo nginx -t && sudo systemctl status nginx\"",
-		"  curl -I https://"+plan.Hostname,
+		"  curl -I "+plan.HealthURL,
 	)
 	return strings.Join(lines, "\n") + "\n"
 }
 
 func renderProvisionPartialFailure(plan Plan, created CreatedServer, statePath string, dnsErr error) string {
-	lines := []string{
-		"Server provisioning paused.",
-		"",
-		"Host",
-		"  provider: " + plan.Provider,
-		"  name: " + plan.Name,
-		"  hostname: " + plan.Hostname,
-		"  provider id: " + created.ProviderID,
-		"  ipv4: " + created.IPv4,
-		"  status: provisioning",
-		"  phase: linode_created",
+	plan = normalizePlan(plan)
+	lines := []string{"Server provisioning paused.", ""}
+	lines = append(lines, serverPlanBlock(plan, &created, "provisioning", "linode_created")...)
+	lines = append(lines,
 		"Paths",
-		"  state: " + statePath,
+		"  state: "+statePath,
 		"DNS error",
-		"  " + strings.TrimSpace(dnsErr.Error()),
+		"  "+strings.TrimSpace(dnsErr.Error()),
 		"Next",
 		"  rerun the same provision command to resume DNS and TLS setup.",
-	}
+	)
 	return strings.Join(lines, "\n") + "\n"
 }
 
 func preparePlan(plan Plan) (Plan, string, error) {
+	plan = normalizePlan(plan)
 	preview, err := renderCloudInit(plan, false, "", nil)
 	if err != nil {
 		return Plan{}, "", err
@@ -2440,6 +2600,7 @@ func upsertStateRecord(path string, candidate map[string]any) error {
 }
 
 func ProvisionServer(plan Plan) (*ServerCreateResult, error) {
+	plan = normalizePlan(plan)
 	effectivePlan, previewPath, err := preparePlan(plan)
 	if err != nil {
 		return nil, err
@@ -2511,6 +2672,34 @@ func ProvisionServer(plan Plan) (*ServerCreateResult, error) {
 		effectivePlan.Firewall.ID = firewallStateID(existingRecord)
 		effectivePlan.Firewall.DeviceID = firewallStateDeviceID(existingRecord)
 	} else {
+		linodeMatches, err := linodeListByLabel(effectivePlan.Label)
+		if err != nil {
+			return nil, err
+		}
+		if len(linodeMatches) > 0 {
+			label := valueString(linodeMatches[0]["label"])
+			linodeID := valueString(linodeMatches[0]["id"])
+			if linodeID == "" {
+				linodeID = valueString(linodeMatches[0]["instance_id"])
+			}
+			return nil, Error{Msg: fmt.Sprintf("Server name %q is unavailable. Linode label %q already exists (id %s).", effectivePlan.Name, label, linodeID)}
+		}
+		dnsZone, err := dnsimpleZoneLookup(effectivePlan, dnsimpleToken)
+		if err != nil {
+			return nil, err
+		}
+		records, err := dnsimpleListARecordsFn(dnsimpleToken, effectivePlan.DnsimpleAccountID, dnsZone)
+		if err != nil {
+			return nil, err
+		}
+		hostnameRecordName := relativeRecordName(effectivePlan.Hostname, dnsZone)
+		if record, ok := dnsimpleRecordByName(records, hostnameRecordName); ok {
+			return nil, Error{Msg: fmt.Sprintf("Server name %q is unavailable. DNSimple record %s already exists with content %s.", effectivePlan.Name, effectivePlan.Hostname, valueString(record["content"]))}
+		}
+		wildcardRecordName := relativeRecordName(effectivePlan.WildcardHostname, dnsZone)
+		if record, ok := dnsimpleRecordByName(records, wildcardRecordName); ok {
+			return nil, Error{Msg: fmt.Sprintf("Server name %q is unavailable. DNSimple record %s already exists with content %s.", effectivePlan.Name, effectivePlan.WildcardHostname, valueString(record["content"]))}
+		}
 		createArgs := []string{
 			"linodes", "create",
 			"--region", effectivePlan.Region,
@@ -2529,14 +2718,7 @@ func ProvisionServer(plan Plan) (*ServerCreateResult, error) {
 		if err != nil {
 			return nil, Error{Msg: fmt.Sprintf("Linode response included an invalid id: %v", err)}
 		}
-		switch ipv4 := linodePayload["ipv4"].(type) {
-		case []any:
-			if len(ipv4) > 0 {
-				linodeIP = valueString(ipv4[0])
-			}
-		case string:
-			linodeIP = strings.TrimSpace(ipv4)
-		}
+		linodeIP = linodeIPFromRecord(linodePayload)
 		if linodeIP == "" {
 			return nil, Error{Msg: "Linode response did not include an IPv4 address."}
 		}
@@ -2567,7 +2749,7 @@ func ProvisionServer(plan Plan) (*ServerCreateResult, error) {
 		fmt.Println("Configuring DNS")
 		dnsZone, err := dnsimpleZoneLookup(effectivePlan, dnsimpleToken)
 		if err != nil {
-			return nil, Error{Msg: renderProvisionPartialFailure(effectivePlan, created, serverStatePath, err)}
+			return nil, err
 		}
 		if err := dnsimpleUpsertHostnameRecords(dnsimpleToken, effectivePlan.DnsimpleAccountID, dnsZone, effectivePlan.Hostname, linodeIP); err != nil {
 			return nil, Error{Msg: renderProvisionPartialFailure(effectivePlan, created, serverStatePath, err)}
@@ -2603,7 +2785,7 @@ func ProvisionServer(plan Plan) (*ServerCreateResult, error) {
 	}
 	tlsState = tlsStateRecord(effectivePlan)
 	fmt.Println("Checking server health")
-	healthURL := "https://" + effectivePlan.Hostname + "/healthz"
+	healthURL := effectivePlan.HealthURL + "/healthz"
 	if err := checkHTTPSHealthFn(healthURL, effectivePlan.Name, effectivePlan.Hostname, effectivePlan.HealthTimeout); err != nil {
 		return nil, Error{Msg: renderProvisionHealthFailure(effectivePlan, created, dnsState, tlsState, serverStatePath, sshKeys, err)}
 	}

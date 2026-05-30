@@ -64,6 +64,15 @@ func TestShortHostname(t *testing.T) {
 	}
 }
 
+func stubEmptyDNSRecords(t *testing.T) {
+	t.Helper()
+	oldList := dnsimpleListARecordsFn
+	t.Cleanup(func() { dnsimpleListARecordsFn = oldList })
+	dnsimpleListARecordsFn = func(token, accountID, zone string) ([]map[string]any, error) {
+		return []map[string]any{}, nil
+	}
+}
+
 func TestAPIIDString(t *testing.T) {
 	tests := []struct {
 		name  string
@@ -142,7 +151,6 @@ func TestUbuntuReleaseMatrix(t *testing.T) {
 }
 
 func TestBuildPlanDefaults(t *testing.T) {
-	t.Setenv("DNSIMPLE_ZONE_NAME", "example.test")
 	plan, err := BuildPlan(Args{NonInteractive: true})
 	if err != nil {
 		t.Fatalf("BuildPlan() error = %v", err)
@@ -153,8 +161,11 @@ func TestBuildPlanDefaults(t *testing.T) {
 	if got, want := plan.DnsProvider, "dnsimple"; got != want {
 		t.Fatalf("DnsProvider = %q, want %q", got, want)
 	}
-	if got, want := plan.DnsZone, "example.test"; got != want {
+	if got, want := plan.DnsZone, "nfweb.dev"; got != want {
 		t.Fatalf("DnsZone = %q, want %q", got, want)
+	}
+	if got, want := plan.Domain, "nfweb.dev"; got != want {
+		t.Fatalf("Domain = %q, want %q", got, want)
 	}
 	if got, want := plan.UbuntuVersion, "24.04"; got != want {
 		t.Fatalf("UbuntuVersion = %q, want %q", got, want)
@@ -170,6 +181,12 @@ func TestBuildPlanDefaults(t *testing.T) {
 	}
 	if got, want := plan.Label, "app1"; got != want {
 		t.Fatalf("Label = %q, want %q", got, want)
+	}
+	if got, want := plan.WildcardHostname, "*.app1.nfweb.dev"; got != want {
+		t.Fatalf("WildcardHostname = %q, want %q", got, want)
+	}
+	if got, want := plan.HealthURL, "https://app1.nfweb.dev"; got != want {
+		t.Fatalf("HealthURL = %q, want %q", got, want)
 	}
 	if got, want := plan.Region, "ca-central"; got != want {
 		t.Fatalf("Region = %q, want %q", got, want)
@@ -201,7 +218,7 @@ func TestBuildPlanDefaults(t *testing.T) {
 	if !plan.Wait {
 		t.Fatalf("Wait = false, want true")
 	}
-	planNoWait, err := BuildPlan(Args{NoWait: true, NonInteractive: true, DnsZone: "example.test"})
+	planNoWait, err := BuildPlan(Args{NoWait: true, NonInteractive: true})
 	if err != nil {
 		t.Fatalf("BuildPlan(NoWait) error = %v", err)
 	}
@@ -379,10 +396,10 @@ func TestBuildPlanInteractiveFileSSHSourcePromptsForKeyPath(t *testing.T) {
 func TestPreparePlanInteractiveExecutePromptsForKeysBeforeConfirmAndReusesThem(t *testing.T) {
 	configHome := t.TempDir()
 	t.Setenv("NF_CONFIG_HOME", configHome)
+	t.Setenv("NF_SERVER_DOMAIN", "example.test")
 	t.Setenv("NF_SECRET_SALT", "test-salt")
 	t.Setenv("DNSIMPLE_TOKEN", "dns-token")
 	t.Setenv("LINODE_CLI_TOKEN", "linode-token")
-	t.Setenv("DNSIMPLE_ZONE_NAME", "example.test")
 
 	oldRunLinode := runLinodeCLICommand
 	oldRunLinodeValue := runLinodeCLIValueFn
@@ -402,6 +419,7 @@ func TestPreparePlanInteractiveExecutePromptsForKeysBeforeConfirmAndReusesThem(t
 		confirmFn = oldConfirm
 		multiSelectFn = oldMultiSelect
 	})
+	stubEmptyDNSRecords(t)
 
 	var events []string
 	runLinodeCLIValueFn = func(args []string) (any, error) {
@@ -410,6 +428,9 @@ func TestPreparePlanInteractiveExecutePromptsForKeysBeforeConfirmAndReusesThem(t
 				map[string]any{"id": json.Number("77496734"), "label": "team-a", "fingerprint": "fp-a", "created": "2026-05-29", "ssh_key": "ssh-rsa AAAA team-a"},
 				map[string]any{"id": json.Number("77496735"), "label": "team-b", "fingerprint": "fp-b", "created": "2026-05-29", "ssh_key": "ssh-ed25519 BBBB team-b"},
 			}, nil
+		}
+		if len(args) >= 2 && args[0] == "linodes" && args[1] == "list" {
+			return []any{}, nil
 		}
 		t.Fatalf("unexpected linode-cli value args: %v", args)
 		return nil, nil
@@ -436,7 +457,7 @@ func TestPreparePlanInteractiveExecutePromptsForKeysBeforeConfirmAndReusesThem(t
 	secretSaltFn = func() (string, error) { return "test-salt", nil }
 	currentTime = func() time.Time { return time.Date(2026, 5, 29, 12, 0, 0, 0, time.UTC) }
 
-	plan, err := BuildPlan(Args{Execute: true, NoWait: true, Firewall: "none", Name: "app1", Hostname: "app1.nfweb.dev", Label: "app1", Region: "ca-central", Type: "g6-standard-1", SshUser: "nonfiction", DnsimpleAccountID: "14", UbuntuVersion: "24.04"})
+	plan, err := BuildPlan(Args{Execute: true, NoWait: true, Firewall: "none", Name: "app1", Region: "ca-central", Type: "g6-standard-1", SshUser: "nonfiction", DnsimpleAccountID: "14", UbuntuVersion: "24.04"})
 	if err != nil {
 		t.Fatalf("BuildPlan() error = %v", err)
 	}
@@ -462,10 +483,10 @@ func TestPreparePlanInteractiveExecutePromptsForKeysBeforeConfirmAndReusesThem(t
 func TestPreparePlanInteractiveDefaultPromptsForKeysBeforeConfirmAndReusesThem(t *testing.T) {
 	configHome := t.TempDir()
 	t.Setenv("NF_CONFIG_HOME", configHome)
+	t.Setenv("NF_SERVER_DOMAIN", "example.test")
 	t.Setenv("NF_SECRET_SALT", "test-salt")
 	t.Setenv("DNSIMPLE_TOKEN", "dns-token")
 	t.Setenv("LINODE_CLI_TOKEN", "linode-token")
-	t.Setenv("DNSIMPLE_ZONE_NAME", "example.test")
 
 	oldRunLinode := runLinodeCLICommand
 	oldRunLinodeValue := runLinodeCLIValueFn
@@ -485,6 +506,7 @@ func TestPreparePlanInteractiveDefaultPromptsForKeysBeforeConfirmAndReusesThem(t
 		confirmFn = oldConfirm
 		multiSelectFn = oldMultiSelect
 	})
+	stubEmptyDNSRecords(t)
 
 	var events []string
 	runLinodeCLIValueFn = func(args []string) (any, error) {
@@ -493,6 +515,9 @@ func TestPreparePlanInteractiveDefaultPromptsForKeysBeforeConfirmAndReusesThem(t
 				map[string]any{"id": json.Number("77496734"), "label": "team-a", "fingerprint": "fp-a", "created": "2026-05-29", "ssh_key": "ssh-rsa AAAA team-a"},
 				map[string]any{"id": json.Number("77496735"), "label": "team-b", "fingerprint": "fp-b", "created": "2026-05-29", "ssh_key": "ssh-ed25519 BBBB team-b"},
 			}, nil
+		}
+		if len(args) >= 2 && args[0] == "linodes" && args[1] == "list" {
+			return []any{}, nil
 		}
 		t.Fatalf("unexpected linode-cli value args: %v", args)
 		return nil, nil
@@ -519,7 +544,7 @@ func TestPreparePlanInteractiveDefaultPromptsForKeysBeforeConfirmAndReusesThem(t
 	secretSaltFn = func() (string, error) { return "test-salt", nil }
 	currentTime = func() time.Time { return time.Date(2026, 5, 29, 12, 0, 0, 0, time.UTC) }
 
-	plan, err := BuildPlan(Args{Execute: false, NoWait: true, Firewall: "none", Name: "app1", Hostname: "app1.nfweb.dev", Label: "app1", Region: "ca-central", Type: "g6-standard-1", SshUser: "nonfiction", DnsimpleAccountID: "14", UbuntuVersion: "24.04"})
+	plan, err := BuildPlan(Args{Execute: false, NoWait: true, Firewall: "none", Name: "app1", Region: "ca-central", Type: "g6-standard-1", SshUser: "nonfiction", DnsimpleAccountID: "14", UbuntuVersion: "24.04"})
 	if err != nil {
 		t.Fatalf("BuildPlan() error = %v", err)
 	}
@@ -576,15 +601,12 @@ func TestBuildPlanDerivesStackFromUbuntuVersion(t *testing.T) {
 }
 
 func TestBuildPlanOverrides(t *testing.T) {
-	t.Setenv("DNSIMPLE_ZONE_NAME", "env.example.test")
+	t.Setenv("NF_SERVER_DOMAIN", "env.example.test")
 	plan, err := BuildPlan(Args{
 		Provider:          "linode",
 		DnsProvider:       "dnsimple",
-		DnsZone:           "explicit.example.test",
 		UbuntuVersion:     "22.04",
 		Name:              "app2",
-		Hostname:          "app2.example.test",
-		Label:             "app2-label",
 		Region:            "us-east",
 		Type:              "g6-standard-2",
 		Image:             "linode/custom-override",
@@ -620,14 +642,23 @@ func TestBuildPlanOverrides(t *testing.T) {
 	if got, want := plan.Name, "app2"; got != want {
 		t.Fatalf("Name = %q, want %q", got, want)
 	}
-	if got, want := plan.DnsZone, "explicit.example.test"; got != want {
+	if got, want := plan.Domain, "env.example.test"; got != want {
+		t.Fatalf("Domain = %q, want %q", got, want)
+	}
+	if got, want := plan.DnsZone, "env.example.test"; got != want {
 		t.Fatalf("DnsZone = %q, want %q", got, want)
 	}
-	if got, want := plan.Hostname, "app2.example.test"; got != want {
+	if got, want := plan.Hostname, "app2.env.example.test"; got != want {
 		t.Fatalf("Hostname = %q, want %q", got, want)
 	}
-	if got, want := plan.Label, "app2-label"; got != want {
+	if got, want := plan.Label, "app2"; got != want {
 		t.Fatalf("Label = %q, want %q", got, want)
+	}
+	if got, want := plan.WildcardHostname, "*.app2.env.example.test"; got != want {
+		t.Fatalf("WildcardHostname = %q, want %q", got, want)
+	}
+	if got, want := plan.HealthURL, "https://app2.env.example.test"; got != want {
+		t.Fatalf("HealthURL = %q, want %q", got, want)
 	}
 	if got, want := plan.Region, "us-east"; got != want {
 		t.Fatalf("Region = %q, want %q", got, want)
@@ -917,7 +948,7 @@ func TestServerStateRecordShapeDoesNotContainSecrets(t *testing.T) {
 	if err != nil {
 		t.Fatalf("phpReleaseForUbuntu() error = %v", err)
 	}
-	plan := Plan{Provider: "linode", DnsProvider: "dnsimple", Name: "app1", Hostname: "app1.nfweb.dev", Label: "app1", Region: "us-east", LinodeType: "g6-standard-1", Image: osPlan.Image, SshUser: "ubuntu", DnsimpleAccountID: "14", OS: osPlan, PHP: phpPlan, Firewall: managedFirewallPlan("fw-123")}
+	plan := Plan{Provider: "linode", DnsProvider: "dnsimple", Name: "app1", Hostname: "app1.nfweb.dev", Label: "app1", Domain: "nfweb.dev", WildcardHostname: "*.app1.nfweb.dev", HealthURL: "https://app1.nfweb.dev", Region: "us-east", LinodeType: "g6-standard-1", Image: osPlan.Image, SshUser: "ubuntu", DnsimpleAccountID: "14", OS: osPlan, PHP: phpPlan, Firewall: managedFirewallPlan("fw-123")}
 	plan.AuthorizedKeys = []SSHAuthorizedKey{{Source: "linode-profile", ID: "77496734", Label: "team-a", Fingerprint: "fp-a", PublicKey: "ssh-rsa AAAAtest"}, {Source: "file", Path: "/tmp/id.pub", Label: "id.pub", PublicKey: "ssh-ed25519 BBBBtest"}}
 	plan.Firewall.DeviceID = "12345"
 	created := CreatedServer{Provider: "linode", ProviderID: "12345", Name: plan.Name, Hostname: plan.Hostname, IPv4: "198.51.100.10"}
@@ -938,6 +969,15 @@ func TestServerStateRecordShapeDoesNotContainSecrets(t *testing.T) {
 	}
 	if dnsBlock, ok := record["dns"].(map[string]any); !ok || dnsBlock["provider"] != "dnsimple" || dnsBlock["zone"] != "nfweb.dev" {
 		t.Fatalf("dns block = %#v, want dnsimple provider", record["dns"])
+	}
+	if got, want := record["domain"], "nfweb.dev"; got != want {
+		t.Fatalf("domain = %#v, want %q", got, want)
+	}
+	if got, want := record["wildcard_hostname"], "*.app1.nfweb.dev"; got != want {
+		t.Fatalf("wildcard_hostname = %#v, want %q", got, want)
+	}
+	if got, want := record["health_url"], "https://app1.nfweb.dev"; got != want {
+		t.Fatalf("health_url = %#v, want %q", got, want)
 	}
 	if tlsBlock, ok := record["tls"].(map[string]any); !ok || tlsBlock["provider"] != "certbot-dnsimple" {
 		t.Fatalf("tls block = %#v, want certbot-dnsimple provider", record["tls"])
@@ -969,12 +1009,22 @@ func TestServerStateRecordShapeDoesNotContainSecrets(t *testing.T) {
 }
 
 func TestFindDnsimpleZoneUsesExplicitPlanZone(t *testing.T) {
-	zone, err := findDnsimpleZone(Plan{Hostname: "app1.nfweb.dev", DnsZone: "explicit.example.test"}, "ignored")
+	oldRequest := dnsimpleRequestFn
+	t.Cleanup(func() { dnsimpleRequestFn = oldRequest })
+	var requestedPath string
+	dnsimpleRequestFn = func(method, rawURL, token string, payload map[string]any) (map[string]any, error) {
+		requestedPath = dnsimpleEndpointPath(rawURL)
+		return map[string]any{}, nil
+	}
+	zone, err := findDnsimpleZone(Plan{Domain: "explicit.example.test", DnsimpleAccountID: "14"}, "ignored")
 	if err != nil {
 		t.Fatalf("findDnsimpleZone() error = %v", err)
 	}
 	if got, want := zone, "explicit.example.test"; got != want {
 		t.Fatalf("findDnsimpleZone() = %q, want %q", got, want)
+	}
+	if got, want := requestedPath, "/v2/14/zones/explicit.example.test"; got != want {
+		t.Fatalf("findDnsimpleZone() path = %q, want %q", got, want)
 	}
 }
 
@@ -987,9 +1037,9 @@ func TestRenderPlanShowsDnsZoneAndRecords(t *testing.T) {
 	if err != nil {
 		t.Fatalf("phpReleaseForUbuntu() error = %v", err)
 	}
-	plan := Plan{Provider: "linode", DnsProvider: "dnsimple", Name: "app1", Hostname: "app1.nfweb.dev", Label: "app1", Region: "ca-central", LinodeType: "g6-standard-1", Image: osPlan.Image, SshUser: "nonfiction", SshKeySource: "file", SshPublicKeyFile: "/tmp/id.pub", OS: osPlan, PHP: phpPlan, Firewall: managedFirewallPlan("")}
+	plan := Plan{Provider: "linode", DnsProvider: "dnsimple", Name: "app1", Hostname: "app1.nfweb.dev", Label: "app1", Domain: "nfweb.dev", WildcardHostname: "*.app1.nfweb.dev", HealthURL: "https://app1.nfweb.dev", Region: "ca-central", LinodeType: "g6-standard-1", Image: osPlan.Image, SshUser: "nonfiction", SshKeySource: "file", SshPublicKeyFile: "/tmp/id.pub", OS: osPlan, PHP: phpPlan, Firewall: managedFirewallPlan("")}
 	output := renderPlan(plan, "/tmp/cloud-init.yaml", "")
-	for _, want := range []string{"Server provision dry-run plan", "Host", "  provider: linode", "Access", "  ssh user: nonfiction", "  auth: SSH keys only", "  sudo: passwordless", "  key source: file", "  authorized keys: /tmp/id.pub", "  root password: derived from hostname + purpose linode-root", "  root stored in state: no", "  root reveal: nf server root-password app1", "Ubuntu firewall", "  ufw default: deny incoming", "  ufw outbound: allow", "  allow: 22/tcp, 80/tcp, 443/tcp", "Linode firewall", "  provider: linode", "  mode: managed", "  managed label: nf-web", "  inbound: 22/tcp, 80/tcp, 443/tcp", "  inbound policy: DROP", "  outbound policy: ACCEPT", "PHP baseline", "  timezone: UTC", "  swap: 2G", "  stack: Ubuntu 24.04 LTS / PHP 8.3", "  ubuntu: 24.04 LTS", "  image: linode/ubuntu24.04", "  php version: 8.3", "  php service: php8.3-fpm", "  php socket: /run/php/php8.3-fpm.sock", "  package source: ubuntu-native", "  base packages: nginx, mariadb-server", "  packages: php8.3-fpm, php8.3-cli", "Server health URL: https://app1.nfweb.dev", "Paths", "  cloud-init preview: /tmp/cloud-init.yaml", "  marker: /etc/nf/server.json", "  sites root: /var/www/sites", "  shared root: /var/www/shared", "  nginx site logs: /var/log/nginx/sites", "Mode", "  dry-run: true", "DNS", "  zone: nfweb.dev (inferred)", "  hostname A: app1.nfweb.dev -> <created after server IP is known>", "  wildcard A: *.app1.nfweb.dev -> <created after server IP is known>"} {
+	for _, want := range []string{"Server provision dry-run plan", "Server", "  provider: linode", "  name: app1", "  hostname: app1.nfweb.dev", "  label: app1", "  wildcard hostname: *.app1.nfweb.dev", "  health url: https://app1.nfweb.dev", "Config", "  server domain: nfweb.dev", "  dns provider: dnsimple", "  dnsimple account id: 14", "Availability", "  local state: not checked (dry-run)", "  linode label: not checked (dry-run)", "  dns records: not checked (dry-run)", "Access", "  ssh user: nonfiction", "  auth: SSH keys only", "  sudo: passwordless", "  key source: file", "  authorized keys: /tmp/id.pub", "  root password: derived from hostname + purpose linode-root", "  root stored in state: no", "  root reveal: nf server root-password app1", "Ubuntu firewall", "  ufw default: deny incoming", "  ufw outbound: allow", "  allow: 22/tcp, 80/tcp, 443/tcp", "Linode firewall", "  provider: linode", "  mode: managed", "  managed label: nf-web", "  inbound: 22/tcp, 80/tcp, 443/tcp", "  inbound policy: DROP", "  outbound policy: ACCEPT", "PHP baseline", "  timezone: UTC", "  swap: 2G", "  stack: Ubuntu 24.04 LTS / PHP 8.3", "  ubuntu: 24.04 LTS", "  image: linode/ubuntu24.04", "  php version: 8.3", "  php service: php8.3-fpm", "  php socket: /run/php/php8.3-fpm.sock", "  package source: ubuntu-native", "  base packages: nginx, mariadb-server", "  packages: php8.3-fpm, php8.3-cli", "DNS", "  provider: dnsimple", "  zone: nfweb.dev", "  hostname A: app1 -> <created after server IP is known>", "  wildcard A: *.app1 -> <created after server IP is known>", "TLS", "  provider: certbot-dnsimple", "  domains: app1.nfweb.dev, *.app1.nfweb.dev", "  certificate: /etc/letsencrypt/live/app1.nfweb.dev/fullchain.pem", "  key: /etc/letsencrypt/live/app1.nfweb.dev/privkey.pem", "Paths", "  cloud-init preview: /tmp/cloud-init.yaml", "  marker: /etc/nf/server.json", "  motd: /etc/update-motd.d/99-nf", "  sites root: /var/www/sites", "  shared root: /var/www/shared", "  nginx site logs: /var/log/nginx/sites", "Mode", "  dry-run: true"} {
 		if !strings.Contains(output, want) {
 			t.Fatalf("renderPlan() output missing %q:\n%s", want, output)
 		}
@@ -997,7 +1047,7 @@ func TestRenderPlanShowsDnsZoneAndRecords(t *testing.T) {
 }
 
 func TestRenderPlanDefaultSSHSourceShowsLinodeProfile(t *testing.T) {
-	plan, err := BuildPlan(Args{NonInteractive: true, DnsZone: "example.test"})
+	plan, err := BuildPlan(Args{NonInteractive: true})
 	if err != nil {
 		t.Fatalf("BuildPlan() error = %v", err)
 	}
@@ -1023,7 +1073,7 @@ func TestRenderProvisionSuccessShowsNextSteps(t *testing.T) {
 	if err != nil {
 		t.Fatalf("phpReleaseForUbuntu() error = %v", err)
 	}
-	plan := Plan{Provider: "linode", DnsProvider: "dnsimple", Name: "app1", Hostname: "app1.nfweb.dev", Label: "app1", SshUser: "nonfiction", SshPublicKeyFile: "/tmp/id.pub", OS: osPlan, PHP: phpPlan, Firewall: managedFirewallPlan("")}
+	plan := Plan{Provider: "linode", DnsProvider: "dnsimple", Name: "app1", Hostname: "app1.nfweb.dev", Label: "app1", Domain: "nfweb.dev", WildcardHostname: "*.app1.nfweb.dev", HealthURL: "https://app1.nfweb.dev", SshUser: "nonfiction", SshPublicKeyFile: "/tmp/id.pub", OS: osPlan, PHP: phpPlan, Firewall: managedFirewallPlan("")}
 	created := CreatedServer{ProviderID: "12345", IPv4: "198.51.100.10"}
 	dns := DNSState{Provider: "dnsimple", Zone: "nfweb.dev", HostnameRecord: DNSRecord{Name: "app1", Type: "A", Content: "198.51.100.10"}, WildcardRecord: DNSRecord{Name: "*.app1", Type: "A", Content: "198.51.100.10"}}
 	tls := TLSState{Provider: "certbot-dnsimple", Domains: []string{"app1.nfweb.dev", "*.app1.nfweb.dev"}, Certificate: "/etc/letsencrypt/live/app1.nfweb.dev/fullchain.pem", Key: "/etc/letsencrypt/live/app1.nfweb.dev/privkey.pem"}
@@ -1032,7 +1082,7 @@ func TestRenderProvisionSuccessShowsNextSteps(t *testing.T) {
 	plan.Firewall.ID = "fw-123"
 	plan.Firewall.DeviceID = created.ProviderID
 	output := renderProvisionSuccess(plan, created, dns, tls, "/tmp/state/servers.json", "/tmp/cloud-init.yaml", sshKeys)
-	for _, want := range []string{"Server provisioned.", "Host", "  provider: linode", "Access", "  ssh user: nonfiction", "  auth: SSH keys only", "  sudo: passwordless", "  root password: derived from hostname + purpose linode-root", "  root stored in state: no", "  root reveal: nf server root-password app1", "Ubuntu firewall", "  ufw default: deny incoming", "  ufw outbound: allow", "  allow: 22/tcp, 80/tcp, 443/tcp", "Linode firewall", "  provider: linode", "  mode: managed", "  managed label: nf-web", "  firewall id: fw-123", "PHP baseline", "  timezone: UTC", "  swap: 2G", "Server", "  health: https://app1.nfweb.dev", "  health check: https://app1.nfweb.dev/healthz", "  status: ready", "DNS", "TLS", "Paths", "  state: /tmp/state/servers.json", "  cloud-init: /tmp/cloud-init.yaml", "  marker: /etc/nf/server.json", "  sites root: /var/www/sites", "  shared root: /var/www/shared", "  nginx site logs: /var/log/nginx/sites", "linode instance id: 12345", "stack: Ubuntu 24.04 LTS / PHP 8.3", "php service: php8.3-fpm", "php socket: /run/php/php8.3-fpm.sock", "authorized keys: team-a, team-b", "hostname A: app1 -> 198.51.100.10", "wildcard A: *.app1 -> 198.51.100.10"} {
+	for _, want := range []string{"Server provisioned.", "Server", "  provider: linode", "  name: app1", "  hostname: app1.nfweb.dev", "  label: app1", "  wildcard hostname: *.app1.nfweb.dev", "  health url: https://app1.nfweb.dev", "  ipv4: 198.51.100.10", "  linode instance id: 12345", "  health check: https://app1.nfweb.dev/healthz", "  status: ready", "Access", "  ssh user: nonfiction", "  auth: SSH keys only", "  sudo: passwordless", "  root password: derived from hostname + purpose linode-root", "  root stored in state: no", "  root reveal: nf server root-password app1", "Ubuntu firewall", "  ufw default: deny incoming", "  ufw outbound: allow", "  allow: 22/tcp, 80/tcp, 443/tcp", "Linode firewall", "  provider: linode", "  mode: managed", "  managed label: nf-web", "  firewall id: fw-123", "PHP baseline", "  timezone: UTC", "  swap: 2G", "DNS", "  provider: dnsimple", "  zone: nfweb.dev", "TLS", "  provider: certbot-dnsimple", "  domains: app1.nfweb.dev, *.app1.nfweb.dev", "Paths", "  state: /tmp/state/servers.json", "  cloud-init: /tmp/cloud-init.yaml", "  marker: /etc/nf/server.json", "  sites root: /var/www/sites", "  shared root: /var/www/shared", "  nginx site logs: /var/log/nginx/sites", "stack: Ubuntu 24.04 LTS / PHP 8.3", "php service: php8.3-fpm", "php socket: /run/php/php8.3-fpm.sock", "authorized keys: team-a, team-b", "hostname A: app1 -> 198.51.100.10", "wildcard A: *.app1 -> 198.51.100.10"} {
 		if !strings.Contains(output, want) {
 			t.Fatalf("renderProvisionSuccess() output missing %q:\n%s", want, output)
 		}
@@ -1066,6 +1116,7 @@ func TestProvisionServerWritesOnlyServersJSON(t *testing.T) {
 		secretSaltFn = oldSalt
 		currentTime = oldNow
 	})
+	stubEmptyDNSRecords(t)
 
 	var recordedNames []string
 	var createArgs []string
@@ -1075,6 +1126,9 @@ func TestProvisionServerWritesOnlyServersJSON(t *testing.T) {
 				map[string]any{"id": json.Number("77496734"), "label": "team-a", "fingerprint": "fp-a", "created": "2026-05-29", "ssh_key": "ssh-rsa AAAA team-a"},
 				map[string]any{"id": json.Number("77496735"), "label": "team-b", "fingerprint": "fp-b", "created": "2026-05-29", "ssh_key": "ssh-ed25519 BBBB team-b"},
 			}, nil
+		}
+		if len(args) >= 2 && args[0] == "linodes" && args[1] == "list" {
+			return []any{}, nil
 		}
 		t.Fatalf("unexpected linode-cli value args: %v", args)
 		return nil, nil
@@ -1272,11 +1326,15 @@ func TestProvisionServerManagedFirewallCreatesRulesAndAttachesDevice(t *testing.
 		secretSaltFn = oldSalt
 		currentTime = oldNow
 	})
+	stubEmptyDNSRecords(t)
 
 	var calls [][]string
 	runLinodeCLIValueFn = func(args []string) (any, error) {
 		if len(args) >= 2 && args[0] == "sshkeys" && args[1] == "list" {
 			return []any{map[string]any{"id": json.Number("77496734"), "label": "team-a", "fingerprint": "fp-a", "created": "2026-05-29", "ssh_key": "ssh-rsa AAAA team-a"}}, nil
+		}
+		if len(args) >= 2 && args[0] == "linodes" && args[1] == "list" {
+			return []any{}, nil
 		}
 		if len(args) >= 2 && args[0] == "firewalls" && args[1] == "list" {
 			return []any{}, nil
@@ -1391,11 +1449,15 @@ func TestProvisionServerManagedFirewallReusesExistingFirewallByLabel(t *testing.
 		secretSaltFn = oldSalt
 		currentTime = oldNow
 	})
+	stubEmptyDNSRecords(t)
 
 	var calls [][]string
 	runLinodeCLIValueFn = func(args []string) (any, error) {
 		if len(args) >= 2 && args[0] == "sshkeys" && args[1] == "list" {
 			return []any{map[string]any{"id": json.Number("77496734"), "label": "team-a", "fingerprint": "fp-a", "created": "2026-05-29", "ssh_key": "ssh-rsa AAAA team-a"}}, nil
+		}
+		if len(args) >= 2 && args[0] == "linodes" && args[1] == "list" {
+			return []any{}, nil
 		}
 		if len(args) >= 2 && args[0] == "firewalls" && args[1] == "list" {
 			return []any{map[string]any{"id": json.Number("987"), "label": firewallManagedLabel}}, nil
@@ -1484,10 +1546,14 @@ func TestProvisionServerFirewallFailureKeepsPartialStateAndExplainsRecovery(t *t
 		secretSaltFn = oldSalt
 		currentTime = oldNow
 	})
+	stubEmptyDNSRecords(t)
 
 	runLinodeCLIValueFn = func(args []string) (any, error) {
 		if len(args) >= 2 && args[0] == "sshkeys" && args[1] == "list" {
 			return []any{map[string]any{"id": json.Number("77496734"), "label": "team-a", "fingerprint": "fp-a", "created": "2026-05-29", "ssh_key": "ssh-rsa AAAA team-a"}}, nil
+		}
+		if len(args) >= 2 && args[0] == "linodes" && args[1] == "list" {
+			return []any{}, nil
 		}
 		if len(args) >= 2 && args[0] == "firewalls" && args[1] == "list" {
 			return []any{}, nil
@@ -1508,10 +1574,7 @@ func TestProvisionServerFirewallFailureKeepsPartialStateAndExplainsRecovery(t *t
 			return nil, nil
 		}
 	}
-	dnsimpleZoneLookup = func(plan Plan, token string) (string, error) {
-		t.Fatal("dns lookup should not run after firewall failure")
-		return "", nil
-	}
+	dnsimpleZoneLookup = func(plan Plan, token string) (string, error) { return "nfweb.dev", nil }
 	dnsimpleUpsertARecordRun = func(token, accountID, zone, name, ip string) error {
 		t.Fatal("dns upsert should not run after firewall failure")
 		return nil
@@ -1567,10 +1630,14 @@ func TestProvisionServerWritesPartialStateOnDNSFailure(t *testing.T) {
 		secretSaltFn = oldSalt
 		currentTime = oldNow
 	})
+	stubEmptyDNSRecords(t)
 
 	runLinodeCLIValueFn = func(args []string) (any, error) {
 		if len(args) >= 2 && args[0] == "sshkeys" && args[1] == "list" {
 			return []any{map[string]any{"id": json.Number("77496734"), "label": "team-a", "fingerprint": "fp-a", "created": "2026-05-29", "ssh_key": "ssh-rsa AAAA team-a"}}, nil
+		}
+		if len(args) >= 2 && args[0] == "linodes" && args[1] == "list" {
+			return []any{}, nil
 		}
 		t.Fatalf("unexpected linode-cli value args: %v", args)
 		return nil, nil
@@ -1658,10 +1725,14 @@ func TestProvisionServerHealthFailureExplainsRecovery(t *testing.T) {
 		secretSaltFn = oldSalt
 		currentTime = oldNow
 	})
+	stubEmptyDNSRecords(t)
 
 	runLinodeCLIValueFn = func(args []string) (any, error) {
 		if len(args) >= 2 && args[0] == "sshkeys" && args[1] == "list" {
 			return []any{map[string]any{"id": json.Number("77496734"), "label": "team-a", "fingerprint": "fp-a", "created": "2026-05-29", "ssh_key": "ssh-rsa AAAA team-a"}}, nil
+		}
+		if len(args) >= 2 && args[0] == "linodes" && args[1] == "list" {
+			return []any{}, nil
 		}
 		if len(args) >= 2 && args[0] == "firewalls" && args[1] == "list" {
 			return []any{}, nil
@@ -1774,6 +1845,9 @@ func TestProvisionServerResumesProvisioningRecordWithoutCreatingNewLinode(t *tes
 	runLinodeCLIValueFn = func(args []string) (any, error) {
 		if len(args) >= 2 && args[0] == "sshkeys" && args[1] == "list" {
 			return []any{map[string]any{"id": json.Number("77496734"), "label": "team-a", "fingerprint": "fp-a", "created": "2026-05-29", "ssh_key": "ssh-rsa AAAA team-a"}}, nil
+		}
+		if len(args) >= 2 && args[0] == "linodes" && args[1] == "list" {
+			return []any{}, nil
 		}
 		t.Fatalf("unexpected linode-cli value args: %v", args)
 		return nil, nil
@@ -1941,10 +2015,14 @@ func TestProvisionServerNoWaitLeavesDnsConfiguredAndPrintsManualSteps(t *testing
 		secretSaltFn = oldSalt
 		currentTime = oldNow
 	})
+	stubEmptyDNSRecords(t)
 
 	runLinodeCLIValueFn = func(args []string) (any, error) {
 		if len(args) >= 2 && args[0] == "sshkeys" && args[1] == "list" {
 			return []any{map[string]any{"id": json.Number("77496734"), "label": "team-a", "fingerprint": "fp-a", "created": "2026-05-29", "ssh_key": "ssh-rsa AAAA team-a"}}, nil
+		}
+		if len(args) >= 2 && args[0] == "linodes" && args[1] == "list" {
+			return []any{}, nil
 		}
 		t.Fatalf("unexpected linode-cli value args: %v", args)
 		return nil, nil
