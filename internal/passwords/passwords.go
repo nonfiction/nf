@@ -23,7 +23,7 @@ func SecretSalt() (string, error) {
 	if salt := values["NF_SECRET_SALT"]; salt != "" {
 		return salt, nil
 	}
-	return "", PasswordError{Msg: "NF_SECRET_SALT is not set in the environment or ~/.config/nf/.env"}
+	return "", PasswordError{Msg: "NF_SECRET_SALT is not set in the environment or ~/.config/nf/.env. Run `nf config init` to populate it."}
 }
 
 func DerivePassword(slug, purpose, salt string) string {
