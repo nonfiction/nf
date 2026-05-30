@@ -179,7 +179,7 @@ This file is safe project intent/config only. Do not put any of the following in
 Required/expected environment values:
 
 * `NF_SECRET_SALT` for password derivation
-* `LINODE_CLI_TOKEN` or `LINODE_TOKEN` for Linode execution
+* `LINODE_TOKEN` for Linode execution (`LINODE_CLI_TOKEN` is accepted for convenience)
 * `DNSIMPLE_TOKEN` for DNSimple operations
 * optional `DNSIMPLE_ACCOUNT_ID`, defaulting to `14`
 

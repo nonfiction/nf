@@ -93,7 +93,6 @@ For normal development:
 
 For remote Linode provisioning:
 
-* `linode-cli`
 * Linode API token
 * DNSimple API token
 * `NF_SECRET_SALT`
@@ -544,11 +543,11 @@ Expected values include:
 ```env
 NF_SECRET_SALT=
 DNSIMPLE_TOKEN=
-LINODE_CLI_TOKEN=
+LINODE_TOKEN=
 DNSIMPLE_ACCOUNT_ID=14
 ```
 
-`LINODE_TOKEN` is also accepted where Linode credentials are needed.
+`LINODE_TOKEN` is preferred. `LINODE_CLI_TOKEN` is accepted for convenience.
 
 Use:
 
@@ -787,14 +786,10 @@ Required environment for execution:
 NF_SERVER_DOMAIN=nfweb.dev
 NF_SECRET_SALT=
 DNSIMPLE_TOKEN=
-LINODE_CLI_TOKEN=
-```
-
-or:
-
-```env
 LINODE_TOKEN=
 ```
+
+`LINODE_CLI_TOKEN` is also accepted for convenience.
 
 Provisioning prints a reviewable plan. It can also write or display the generated cloud-init preview.
 
