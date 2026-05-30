@@ -350,9 +350,11 @@ For server provisioning records, keep the Ubuntu/PHP metadata in dedicated `os` 
 
 `nf server list` and `nf site list` read shared state and print tables.
 
-`nf server show` and `nf site show` print matching records as JSON.
+`nf server show`, `nf server root-password`, and `nf site show` print matching records or derived values from shared state.
 
-`nf server provision` is site-agnostic. It uses `--name` and `--hostname`, defaults to Linode plus DNSimple, and writes only `servers.json` with generic provider_id, nested linode, os, php, dns/tls/services, and no secrets.
+`nf server provision` is site-agnostic. It uses `--name` and `--hostname`, defaults to Linode plus DNSimple, and writes only `servers.json` with generic provider_id, nested linode, os, php, firewall, dns/tls/services, and no secrets.
+
+Record root credential metadata as `credentials.root` with `derived: true`, `identity: <hostname>`, `purpose: linode-root`, and `stored: false`; do not store a password.
 
 Ubuntu/PHP provisioning uses a single stock stack picker:
 
@@ -430,6 +432,8 @@ Current Linode responsibilities:
 * server provisioning
 * server inventory from shared state
 * server deletion
+* server root-password lookup
+* UFW and managed firewall allow 22/tcp, 80/tcp, and 443/tcp
 * DNSimple-backed hostnames for `nfweb.dev`
 * writing state records for provisioned servers
 

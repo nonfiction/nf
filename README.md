@@ -34,6 +34,7 @@ Working now:
 * `nf theme package`
 * `nf server list`
 * `nf server show`
+* `nf server root-password <id-or-name>`
 * `nf server provision`
 * `nf server delete`
 * `nf site list`
@@ -50,6 +51,8 @@ Reserved but not implemented yet:
 * `nf site pull`
 
 Linode is the server provider today. DNS/TLS provisioning uses DNSimple by default. `nf server provision` uses a single stock Ubuntu/PHP stack picker: the Ubuntu LTS release determines the Ubuntu-native PHP version, Linode image, service, socket, and package set. Kinsta site records can be represented in shared state, but Kinsta deploy/sync workflows are future adapter work.
+
+`nf server root-password <id-or-name>` derives the Linode root password from `NF_SECRET_SALT` + the server hostname + purpose `linode-root`. The password is not stored in state.
 
 Remote infrastructure workflows are intentionally guarded. Server provisioning defaults toward dry-run/planning behavior unless explicitly executed, and non-interactive execution requires `--execute --yes`.
 
@@ -116,11 +119,19 @@ Inside a project repository, `nf instance` manages the local WordPress instance 
 
 `nf server provision` is site-agnostic. It provisions a Linode server, upserts DNSimple A records for the hostname and wildcard hostname, and writes shared server state only. It does not install WordPress, create databases, or write `sites.json`.
 
+Server access defaults:
+
+* SSH user: `nonfiction`
+* SSH auth: SSH keys only
+* sudo: passwordless
+* root password: derived, not stored, revealable with `nf server root-password <id-or-name>`
+
 Common server provisioning flags:
 
 ```sh
 nf server provision --name app1 --hostname app1.nfweb.dev
 nf server provision --ubuntu-version 24.04
+nf server provision --firewall managed --firewall-id 12345
 nf server provision --provider linode --dns-provider dnsimple --execute --yes
 ```
 
@@ -138,6 +149,10 @@ Defaults:
 * Ubuntu image: `linode/ubuntu24.04`
 * PHP service: `php8.3-fpm`
 * PHP socket: `/run/php/php8.3-fpm.sock`
+* firewall mode: `managed`
+* firewall label: `nf-web`
+* UFW allows 22/tcp, 80/tcp, and 443/tcp before enabling
+* managed Linode Cloud Firewall allows 22/tcp, 80/tcp, and 443/tcp
 
 Supported Ubuntu/PHP matrix:
 
@@ -147,6 +162,8 @@ Supported Ubuntu/PHP matrix:
 * `20.04` -> `linode/ubuntu20.04` / PHP `7.4` (legacy/ESM)
 
 Use `--ubuntu-version` for normal non-interactive selection. `--image` is only an advanced override; it does not replace the recorded Ubuntu/PHP metadata. Arbitrary PHP selection is not supported in this pass, and there is no public socket flag.
+
+If SSH appears to hang after provisioning, test by IP first: `ssh nonfiction@<ipv4>`.
 
 Common WordPress PHP extensions are installed from Ubuntu packages by default: `curl`, `gd`, `imagick`, `intl`, `mbstring`, `xml`, `zip`, `bcmath`, `soap`, `opcache`, and `readline`. Xdebug is intentionally not included.
 
@@ -584,6 +601,7 @@ Project repositories should not duplicate this mutable state.
 ```sh
 nf server list
 nf server show [id-or-name]
+nf server root-password <id-or-name>
 nf server provision [flags]
 nf server delete [flags] [id-or-name]
 ```
