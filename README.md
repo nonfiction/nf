@@ -50,7 +50,7 @@ Reserved but not implemented yet:
 * `nf site push`
 * `nf site pull`
 
-Linode is the server provider today. DNS/TLS provisioning uses DNSimple by default. `nf server provision` uses a single stock Ubuntu/PHP stack picker: the Ubuntu LTS release determines the Ubuntu-native PHP version, Linode image, service, socket, and package set. Kinsta site records can be represented in shared state, but Kinsta deploy/sync workflows are future adapter work.
+Linode is the server provider today. DNS/TLS provisioning uses DNSimple by default through the `dnsimple-go` client. `nf server provision` uses a single stock Ubuntu/PHP stack picker: the Ubuntu LTS release determines the Ubuntu-native PHP version, Linode image, service, socket, and package set. Kinsta site records can be represented in shared state, but Kinsta deploy/sync workflows are future adapter work.
 
 `nf server root-password <id-or-name>` derives the Linode root password from `NF_SECRET_SALT` + the server hostname + purpose `linode-root`. The password is not stored in state.
 
@@ -118,7 +118,7 @@ Commands:
 
 Inside a project repository, `nf instance` manages the local WordPress instance and `nf theme tasks` lists project tasks from `.nf/project.json`.
 
-`nf server provision` is site-agnostic. It uses `--name` as the canonical server identity, derives the hostname, wildcard hostname, and health URL from `NF_SERVER_DOMAIN`, upserts DNSimple A records, then waits for SSH, runs cloud-init/TLS finalization, and checks HTTPS health unless `--no-wait` is supplied. It creates a neutral server health vhost for the derived hostname only. There is no public `--hostname`, `--label`, or `--dns-zone` flag. It does not install WordPress, create databases, create future site vhosts, or write `sites.json`, and reruns resume partial phases instead of recreating the Linode.
+`nf server provision` is site-agnostic. It uses `--name` as the canonical server identity, derives the hostname, wildcard hostname, and health URL from `NF_SERVER_DOMAIN`, upserts DNSimple A records through `dnsimple-go`, waits for DNS distribution when needed, then waits for SSH, runs cloud-init/TLS finalization, and checks HTTPS health unless `--no-wait` is supplied. It creates a neutral server health vhost for the derived hostname only. There is no public `--hostname`, `--label`, or `--dns-zone` flag. It does not install WordPress, create databases, create future site vhosts, or write `sites.json`, and reruns resume partial phases instead of recreating the Linode.
 
 Server baseline details:
 

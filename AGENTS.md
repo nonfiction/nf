@@ -180,7 +180,7 @@ Required/expected environment values:
 
 * `NF_SECRET_SALT` for password derivation
 * `LINODE_TOKEN` for Linode execution (`LINODE_CLI_TOKEN` is accepted for convenience)
-* `DNSIMPLE_TOKEN` for DNSimple operations
+* `DNSIMPLE_TOKEN` for DNSimple operations (`dnsimple-go` handles zone lookup, A-record upsert, and record distribution checks)
 * optional `DNSIMPLE_ACCOUNT_ID`, defaulting to `14`
 
 Treat cloud-init user-data as sensitive because it may include live provider credentials; previews should redact the DNSimple token.
