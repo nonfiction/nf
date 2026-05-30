@@ -809,7 +809,7 @@ func TestRunServerDeleteAcceptsFlagsAfterIdentifier(t *testing.T) {
 			t.Fatalf("Run() = %d, want 0", got)
 		}
 	})
-	if !strings.Contains(output, "Delete server plan:") || !strings.Contains(output, "mode: dry-run") || !strings.Contains(output, "linode-cli linodes delete 98223448 --json") {
+	if !strings.Contains(output, "Delete server plan:") || !strings.Contains(output, "mode: dry-run") || !strings.Contains(output, "Linode API delete instance 98223448") {
 		t.Fatalf("Run() output = %q, want dry-run plan", output)
 	}
 }

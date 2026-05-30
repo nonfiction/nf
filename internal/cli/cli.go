@@ -1,7 +1,7 @@
 package cli
 
 import (
-	"bytes"
+	"context"
 	"encoding/json"
 	"flag"
 	"fmt"
@@ -999,7 +999,7 @@ func configInitRequirements() []envwizard.Requirement {
 		{Keys: []string{"NF_SERVER_DOMAIN"}, Prompt: "NF_SERVER_DOMAIN (server domain): ", Default: "nfweb.dev", WriteKey: "NF_SERVER_DOMAIN"},
 		{Keys: []string{"DNSIMPLE_ACCOUNT_ID"}, Prompt: "DNSIMPLE_ACCOUNT_ID (DNSimple account id): ", Default: "14", WriteKey: "DNSIMPLE_ACCOUNT_ID"},
 		{Keys: []string{"DNSIMPLE_TOKEN"}, Prompt: "DNSimple token: ", Secret: true, WriteKey: "DNSIMPLE_TOKEN", Required: true},
-		{Keys: []string{"LINODE_CLI_TOKEN", "LINODE_TOKEN"}, Prompt: "Linode token: ", Secret: true, WriteKey: "LINODE_CLI_TOKEN", Required: true},
+		{Keys: []string{"LINODE_TOKEN", "LINODE_CLI_TOKEN"}, Prompt: "LINODE_TOKEN (Linode API token): ", Secret: true, WriteKey: "LINODE_TOKEN", Required: true},
 		{Keys: []string{"NF_SECRET_SALT"}, Prompt: "NF_SECRET_SALT (used for derived passwords): ", Secret: true, WriteKey: "NF_SECRET_SALT", Required: true},
 	}
 }
@@ -1225,13 +1225,13 @@ func serverMatchesRecord(record, server map[string]any) bool {
 }
 
 func linodeTokenEnv() (string, error) {
-	if token := envwizard.Value("LINODE_CLI_TOKEN"); token != "" {
-		return token, nil
-	}
 	if token := envwizard.Value("LINODE_TOKEN"); token != "" {
 		return token, nil
 	}
-	return "", fmt.Errorf("Expected LINODE_CLI_TOKEN or LINODE_TOKEN in the environment or %s.", config.EnvFile())
+	if token := envwizard.Value("LINODE_CLI_TOKEN"); token != "" {
+		return token, nil
+	}
+	return "", fmt.Errorf("Expected LINODE_TOKEN in the environment or %s. LINODE_CLI_TOKEN is also accepted for convenience.", config.EnvFile())
 }
 
 func runLinodeDelete(id string) error {
@@ -1239,20 +1239,13 @@ func runLinodeDelete(id string) error {
 	if err != nil {
 		return err
 	}
-	cmd := exec.Command("linode-cli", "linodes", "delete", id, "--json")
-	cmd.Env = append(os.Environ(), "LINODE_CLI_TOKEN="+token, "LINODE_TOKEN="+token)
-	var stdout, stderr bytes.Buffer
-	cmd.Stdout = &stdout
-	cmd.Stderr = &stderr
-	if err := cmd.Run(); err != nil {
-		details := strings.TrimSpace(stderr.String())
-		if details == "" {
-			details = strings.TrimSpace(stdout.String())
-		}
-		if details == "" {
-			details = "linode-cli failed"
-		}
-		return fmt.Errorf("%s", details)
+	linodeID, err := strconv.Atoi(strings.TrimSpace(id))
+	if err != nil {
+		return fmt.Errorf("invalid Linode id %q", id)
+	}
+	client := provision.NewLinodeClient(token)
+	if err := client.DeleteInstance(context.Background(), linodeID); err != nil {
+		return fmt.Errorf("deleting Linode: %w", err)
 	}
 	return nil
 }
@@ -1566,7 +1559,7 @@ func cmdDeleteServer(needle string, dryRun, execute, yes, nonInteractive bool) i
 	fmt.Printf("  provider: %s\n", provider)
 	if remoteID != "" {
 		if provider == "linode" {
-			fmt.Printf("  remote action: linode-cli linodes delete %s --json\n", remoteID)
+			fmt.Printf("  remote action: Linode API delete instance %s\n", remoteID)
 		} else {
 			fmt.Printf("  remote action: unavailable for provider %q\n", provider)
 		}
