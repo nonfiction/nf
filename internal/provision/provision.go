@@ -19,10 +19,12 @@ import (
 	"strings"
 	"time"
 
+	"github.com/linode/linodego"
 	"github.com/nonfiction/nf/internal/config"
 	"github.com/nonfiction/nf/internal/envwizard"
 	"github.com/nonfiction/nf/internal/passwords"
 	"github.com/nonfiction/nf/internal/ui"
+	"golang.org/x/oauth2"
 )
 
 type Error struct{ Msg string }
@@ -590,6 +592,27 @@ type CreatedServer struct {
 	IPv4       string `json:"ipv4"`
 }
 
+type ServerCreatePlan struct {
+	Plan     Plan
+	RootPass string
+	UserData string
+	SSHKeys  []SSHAuthorizedKey
+}
+
+type FirewallResult struct {
+	ID       string
+	DeviceID string
+}
+
+type ServerProvider interface {
+	Name() string
+	ListSSHKeys(ctx context.Context) ([]SSHAuthorizedKey, error)
+	FindServerByLabel(ctx context.Context, label string) (*CreatedServer, error)
+	CreateServer(ctx context.Context, plan ServerCreatePlan) (*CreatedServer, error)
+	EnsureFirewall(ctx context.Context, plan FirewallPlan) (*FirewallResult, error)
+	AssignFirewall(ctx context.Context, firewallID, serverID string) error
+}
+
 type SSHAuthorizedKey struct {
 	Source      string `json:"source"`
 	ID          string `json:"id,omitempty"`
@@ -629,8 +652,6 @@ type ServerCreateResult struct {
 }
 
 var (
-	runLinodeCLICommand      = runLinodeCLI
-	runLinodeCLIValueFn      = runLinodeCLIValue
 	dnsimpleZoneLookup       = findDnsimpleZone
 	dnsimpleRequestFn        = dnsimpleRequest
 	dnsimpleListARecordsFn   = dnsimpleListARecords
@@ -645,7 +666,163 @@ var (
 	multiSelectFn            = ui.MultiSelect
 	secretSaltFn             = passwords.SecretSalt
 	currentTime              = time.Now
+	serverProviderFactory    = newServerProvider
 )
+
+func newServerProvider(plan Plan) (ServerProvider, error) {
+	switch strings.ToLower(strings.TrimSpace(plan.Provider)) {
+	case "linode":
+		token, err := linodeTokenEnv()
+		if err != nil {
+			return nil, err
+		}
+		return &linodeProvider{client: NewLinodeClient(token)}, nil
+	default:
+		return nil, Error{Msg: fmt.Sprintf("Unsupported provider %q. Only linode is available in this slice.", plan.Provider)}
+	}
+}
+
+func NewLinodeClient(token string) linodego.Client {
+	tokenSource := oauth2.StaticTokenSource(&oauth2.Token{AccessToken: token})
+	oauth2Client := &http.Client{Transport: &oauth2.Transport{Source: tokenSource}}
+	client := linodego.NewClient(oauth2Client)
+	client.SetUserAgent("nf")
+	return client
+}
+
+type linodeProvider struct{ client linodego.Client }
+
+func (p *linodeProvider) Name() string { return "linode" }
+
+func (p *linodeProvider) ListSSHKeys(ctx context.Context) ([]SSHAuthorizedKey, error) {
+	keys, err := p.client.ListSSHKeys(ctx, nil)
+	if err != nil {
+		return nil, Error{Msg: fmt.Sprintf("listing SSH keys: %v", err)}
+	}
+	out := make([]SSHAuthorizedKey, 0, len(keys))
+	for _, key := range keys {
+		created := ""
+		if key.Created != nil {
+			created = key.Created.UTC().Format(time.RFC3339)
+		}
+		out = append(out, SSHAuthorizedKey{Source: "linode-profile", ID: strconv.Itoa(key.ID), Label: key.Label, Created: created, PublicKey: key.SSHKey})
+	}
+	return out, nil
+}
+
+func (p *linodeProvider) FindServerByLabel(ctx context.Context, label string) (*CreatedServer, error) {
+	instances, err := p.client.ListInstances(ctx, nil)
+	if err != nil {
+		return nil, Error{Msg: fmt.Sprintf("checking label availability: %v", err)}
+	}
+	for _, inst := range instances {
+		if !strings.EqualFold(strings.TrimSpace(inst.Label), strings.TrimSpace(label)) {
+			continue
+		}
+		return createdServerFromLinodeInstance(inst), nil
+	}
+	return nil, nil
+}
+
+func createdServerFromLinodeInstance(inst linodego.Instance) *CreatedServer {
+	ip := ""
+	for _, candidate := range inst.IPv4 {
+		if candidate != nil {
+			ip = candidate.String()
+			break
+		}
+	}
+	id := strconv.Itoa(inst.ID)
+	return &CreatedServer{Provider: "linode", ProviderID: id, Name: inst.Label, Hostname: inst.Label, IPv4: ip}
+}
+
+func (p *linodeProvider) CreateServer(ctx context.Context, create ServerCreatePlan) (*CreatedServer, error) {
+	inst, err := p.client.CreateInstance(ctx, linodego.InstanceCreateOptions{
+		Region:         create.Plan.Region,
+		Type:           create.Plan.LinodeType,
+		Image:          create.Plan.Image,
+		Label:          create.Plan.Label,
+		RootPass:       create.RootPass,
+		AuthorizedKeys: sshKeyBodies(create.SSHKeys),
+		Metadata:       &linodego.InstanceMetadataOptions{UserData: base64UserData(create.UserData)},
+	})
+	if err != nil {
+		return nil, Error{Msg: fmt.Sprintf("creating Linode: %v", err)}
+	}
+	created := createdServerFromLinodeInstance(*inst)
+	created.Name = create.Plan.Name
+	created.Hostname = create.Plan.Hostname
+	if created.IPv4 == "" {
+		return nil, Error{Msg: "Linode response did not include an IPv4 address."}
+	}
+	return created, nil
+}
+
+func (p *linodeProvider) EnsureFirewall(ctx context.Context, plan FirewallPlan) (*FirewallResult, error) {
+	if strings.TrimSpace(plan.ID) != "" {
+		return &FirewallResult{ID: strings.TrimSpace(plan.ID), DeviceID: strings.TrimSpace(plan.DeviceID)}, nil
+	}
+	label := firstNonEmpty(plan.Label, firewallManagedLabel)
+	firewalls, err := p.client.ListFirewalls(ctx, nil)
+	if err != nil {
+		return nil, Error{Msg: fmt.Sprintf("creating firewall: listing existing firewalls: %v", err)}
+	}
+	for _, firewall := range firewalls {
+		if strings.EqualFold(strings.TrimSpace(firewall.Label), label) {
+			id := strconv.Itoa(firewall.ID)
+			if err := p.updateFirewallRules(ctx, firewall.ID, plan); err != nil {
+				return &FirewallResult{ID: id, DeviceID: strings.TrimSpace(plan.DeviceID)}, err
+			}
+			return &FirewallResult{ID: id, DeviceID: strings.TrimSpace(plan.DeviceID)}, nil
+		}
+	}
+	firewall, err := p.client.CreateFirewall(ctx, linodego.FirewallCreateOptions{Label: label, Rules: linodeFirewallRuleSet(plan)})
+	if err != nil {
+		return nil, Error{Msg: fmt.Sprintf("creating firewall: %v", err)}
+	}
+	return &FirewallResult{ID: strconv.Itoa(firewall.ID), DeviceID: strings.TrimSpace(plan.DeviceID)}, nil
+}
+
+func (p *linodeProvider) updateFirewallRules(ctx context.Context, id int, plan FirewallPlan) error {
+	if _, err := p.client.UpdateFirewallRules(ctx, id, linodeFirewallRuleSet(plan)); err != nil {
+		return Error{Msg: fmt.Sprintf("creating firewall: updating rules: %v", err)}
+	}
+	return nil
+}
+
+func linodeFirewallRuleSet(plan FirewallPlan) linodego.FirewallRuleSet {
+	ipv4 := []string{"0.0.0.0/0"}
+	ipv6 := []string{"::/0"}
+	rules := make([]linodego.FirewallRule, 0, len(firewallRules()))
+	for _, rule := range firewallRules() {
+		rules = append(rules, linodego.FirewallRule{Action: rule.Action, Label: rule.Label, Protocol: linodego.NetworkProtocol(rule.Protocol), Ports: rule.Ports, Addresses: linodego.NetworkAddresses{IPv4: &ipv4, IPv6: &ipv6}})
+	}
+	return linodego.FirewallRuleSet{Inbound: rules, InboundPolicy: firstNonEmpty(plan.InboundPolicy, firewallInboundPolicy), Outbound: []linodego.FirewallRule{}, OutboundPolicy: firstNonEmpty(plan.OutboundPolicy, firewallOutboundPolicy)}
+}
+
+func (p *linodeProvider) AssignFirewall(ctx context.Context, firewallID, serverID string) error {
+	fid, err := strconv.Atoi(strings.TrimSpace(firewallID))
+	if err != nil {
+		return Error{Msg: fmt.Sprintf("assigning firewall: invalid firewall id %q", firewallID)}
+	}
+	sid, err := strconv.Atoi(strings.TrimSpace(serverID))
+	if err != nil {
+		return Error{Msg: fmt.Sprintf("assigning firewall: invalid server id %q", serverID)}
+	}
+	devices, err := p.client.ListFirewallDevices(ctx, fid, nil)
+	if err != nil {
+		return Error{Msg: fmt.Sprintf("assigning firewall: listing devices: %v", err)}
+	}
+	for _, device := range devices {
+		if device.Entity.Type == linodego.FirewallDeviceLinode && device.Entity.ID == sid {
+			return nil
+		}
+	}
+	if _, err := p.client.CreateFirewallDevice(ctx, fid, linodego.FirewallDeviceCreateOptions{ID: sid, Type: linodego.FirewallDeviceLinode}); err != nil {
+		return Error{Msg: fmt.Sprintf("assigning firewall: %v", err)}
+	}
+	return nil
+}
 
 func firstNonEmpty(values ...string) string {
 	for _, v := range values {
@@ -731,7 +908,7 @@ func provisionRequirements() []envwizard.Requirement {
 	return []envwizard.Requirement{
 		{Keys: []string{"NF_SECRET_SALT"}, Prompt: "NF_SECRET_SALT (used for derived passwords): ", Secret: true, WriteKey: "NF_SECRET_SALT", Required: true},
 		{Keys: []string{"DNSIMPLE_TOKEN"}, Prompt: "DNSimple token: ", Secret: true, WriteKey: "DNSIMPLE_TOKEN", Required: true},
-		{Keys: []string{"LINODE_CLI_TOKEN", "LINODE_TOKEN"}, Prompt: "Linode token: ", Secret: true, WriteKey: "LINODE_CLI_TOKEN", Required: true},
+		{Keys: []string{"LINODE_TOKEN", "LINODE_CLI_TOKEN"}, Prompt: "LINODE_TOKEN (Linode API token): ", Secret: true, WriteKey: "LINODE_TOKEN", Required: true},
 	}
 }
 
@@ -1163,8 +1340,8 @@ func validateActualExecution(plan Plan) error {
 	if _, err := secretSaltFn(); err != nil {
 		return err
 	}
-	if envwizard.Value("LINODE_CLI_TOKEN") == "" && envwizard.Value("LINODE_TOKEN") == "" {
-		return Error{Msg: fmt.Sprintf("Expected LINODE_CLI_TOKEN or LINODE_TOKEN in the environment or %s.", config.EnvFile())}
+	if envwizard.Value("LINODE_TOKEN") == "" && envwizard.Value("LINODE_CLI_TOKEN") == "" {
+		return Error{Msg: fmt.Sprintf("Expected LINODE_TOKEN in the environment or %s. LINODE_CLI_TOKEN is also accepted for convenience.", config.EnvFile())}
 	}
 	if _, err := requiredEnv("DNSIMPLE_TOKEN"); err != nil {
 		return err
@@ -1179,87 +1356,13 @@ func validateActualExecution(plan Plan) error {
 }
 
 func linodeTokenEnv() (string, error) {
-	if token := envwizard.Value("LINODE_CLI_TOKEN"); token != "" {
-		return token, nil
-	}
 	if token := envwizard.Value("LINODE_TOKEN"); token != "" {
 		return token, nil
 	}
-	return "", Error{Msg: fmt.Sprintf("Expected LINODE_CLI_TOKEN or LINODE_TOKEN in the environment or %s.", config.EnvFile())}
-}
-
-func runLinodeCLIValue(args []string) (any, error) {
-	token, err := linodeTokenEnv()
-	if err != nil {
-		return nil, err
+	if token := envwizard.Value("LINODE_CLI_TOKEN"); token != "" {
+		return token, nil
 	}
-	cmd := exec.Command("linode-cli", append([]string{"--suppress-warnings", "--json"}, args...)...)
-	cmd.Env = append(os.Environ(), "LINODE_CLI_TOKEN="+token, "LINODE_TOKEN="+token)
-	var stdout, stderr bytes.Buffer
-	cmd.Stdout = &stdout
-	cmd.Stderr = &stderr
-	if err := cmd.Run(); err != nil {
-		details := strings.TrimSpace(stderr.String())
-		if details == "" {
-			details = strings.TrimSpace(stdout.String())
-		}
-		if details == "" {
-			details = "linode-cli failed"
-		}
-		return nil, Error{Msg: details}
-	}
-	dec := json.NewDecoder(bytes.NewReader(stdout.Bytes()))
-	dec.UseNumber()
-	var payload any
-	if err := dec.Decode(&payload); err != nil {
-		return nil, Error{Msg: fmt.Sprintf("Unexpected linode-cli JSON output: %v", err)}
-	}
-	return payload, nil
-}
-
-func runLinodeCLI(args []string) (map[string]any, error) {
-	payload, err := runLinodeCLIValueFn(args)
-	if err != nil {
-		return nil, err
-	}
-	if m, ok := payload.(map[string]any); ok {
-		return m, nil
-	}
-	if list, ok := payload.([]any); ok && len(list) > 0 {
-		if m, ok := list[0].(map[string]any); ok {
-			return m, nil
-		}
-	}
-	return nil, Error{Msg: "Unexpected Linode CLI response while creating the instance."}
-}
-
-func linodeListByLabel(label string) ([]map[string]any, error) {
-	payload, err := runLinodeCLIValueFn([]string{"linodes", "list", "--json"})
-	if err != nil {
-		return nil, err
-	}
-	var items []any
-	switch typed := payload.(type) {
-	case []any:
-		items = typed
-	case map[string]any:
-		if list, ok := typed["data"].([]any); ok {
-			items = list
-		} else if list, ok := typed["linodes"].([]any); ok {
-			items = list
-		}
-	}
-	matched := make([]map[string]any, 0)
-	for _, item := range items {
-		record, ok := item.(map[string]any)
-		if !ok {
-			continue
-		}
-		if strings.EqualFold(valueString(record["label"]), strings.TrimSpace(label)) {
-			matched = append(matched, record)
-		}
-	}
-	return matched, nil
+	return "", Error{Msg: fmt.Sprintf("Expected LINODE_TOKEN in the environment or %s. LINODE_CLI_TOKEN is also accepted for convenience.", config.EnvFile())}
 }
 
 func linodeIPFromRecord(record map[string]any) string {
@@ -1492,43 +1595,11 @@ func firewallStateID(record map[string]any) string {
 	return firewallStateString(record, "id")
 }
 
-func loadManagedFirewallIDByLabel(label string) (string, error) {
-	trimmed := strings.TrimSpace(label)
-	if trimmed == "" {
-		return "", nil
-	}
-	payload, err := runLinodeCLIValueFn([]string{"firewalls", "list", "--json"})
-	if err != nil {
-		return "", err
-	}
-	var items []any
-	switch typed := payload.(type) {
-	case []any:
-		items = typed
-	case map[string]any:
-		if list, ok := typed["data"].([]any); ok {
-			items = list
-		} else if list, ok := typed["firewalls"].([]any); ok {
-			items = list
-		}
-	}
-	for _, item := range items {
-		firewall, ok := item.(map[string]any)
-		if !ok {
-			continue
-		}
-		if strings.EqualFold(valueString(firewall["label"]), trimmed) {
-			return apiIDString(firewall["id"])
-		}
-	}
-	return "", nil
-}
-
 func firewallPlanMode(plan Plan) string {
 	return strings.ToLower(strings.TrimSpace(plan.Firewall.Mode))
 }
 
-func ensureManagedFirewall(plan Plan, created CreatedServer, existingRecord map[string]any, statePath, now string) (string, error) {
+func ensureManagedFirewall(ctx context.Context, provider ServerProvider, plan Plan, created CreatedServer, existingRecord map[string]any, statePath, now string) (string, error) {
 	if firewallPlanMode(plan) != "managed" {
 		return "", nil
 	}
@@ -1538,27 +1609,24 @@ func ensureManagedFirewall(plan Plan, created CreatedServer, existingRecord map[
 	}
 	deviceID := firewallStateDeviceID(existingRecord)
 	if firewallID == "" {
-		var err error
-		firewallID, err = loadManagedFirewallIDByLabel(firstNonEmpty(plan.Firewall.Label, firewallManagedLabel))
+		result, err := provider.EnsureFirewall(ctx, plan.Firewall)
+		if result != nil && strings.TrimSpace(result.ID) != "" {
+			firewallID = result.ID
+			createdPlan := plan
+			createdPlan.Firewall.ID = firewallID
+			createdPlan.Firewall.DeviceID = ""
+			if err := upsertStateRecord(statePath, serverStateRecordWithStatus(createdPlan, created, DNSState{}, TLSState{}, now, now, "provisioning", "linode_created")); err != nil {
+				return "", err
+			}
+		}
 		if err != nil {
 			return "", Error{Msg: renderProvisionFirewallPartialFailure(plan, created, statePath, err)}
 		}
-	}
-	if firewallID == "" {
-		createArgs := []string{"firewalls", "create", "--label", firstNonEmpty(plan.Firewall.Label, firewallManagedLabel), "--rules.inbound_policy", firstNonEmpty(plan.Firewall.InboundPolicy, firewallInboundPolicy), "--rules.outbound_policy", firstNonEmpty(plan.Firewall.OutboundPolicy, firewallOutboundPolicy)}
-		payload, err := runLinodeCLICommand(createArgs)
-		if err != nil {
-			return "", Error{Msg: renderProvisionFirewallPartialFailure(plan, created, statePath, err)}
+		if result == nil {
+			return "", Error{Msg: renderProvisionFirewallPartialFailure(plan, created, statePath, fmt.Errorf("firewall provider did not return a firewall id"))}
 		}
-		firewallID, err = apiIDString(payload["id"])
-		if err != nil {
-			return "", Error{Msg: renderProvisionFirewallPartialFailure(plan, created, statePath, fmt.Errorf("Linode firewall response included an invalid id: %v", err))}
-		}
-		createdPlan := plan
-		createdPlan.Firewall.ID = firewallID
-		createdPlan.Firewall.DeviceID = ""
-		if err := upsertStateRecord(statePath, serverStateRecordWithStatus(createdPlan, created, DNSState{}, TLSState{}, now, now, "provisioning", "linode_created")); err != nil {
-			return "", err
+		if firewallID == "" {
+			firewallID = result.ID
 		}
 	}
 	statePlan := plan
@@ -1567,15 +1635,8 @@ func ensureManagedFirewall(plan Plan, created CreatedServer, existingRecord map[
 	if err := upsertStateRecord(statePath, serverStateRecordWithStatus(statePlan, created, DNSState{}, TLSState{}, now, now, "provisioning", "linode_created")); err != nil {
 		return "", err
 	}
-	rulesJSON, err := firewallRulesJSON()
-	if err != nil {
-		return "", Error{Msg: renderProvisionFirewallPartialFailure(statePlan, created, statePath, err)}
-	}
-	if _, err := runLinodeCLICommand([]string{"firewalls", "rules-update", firewallID, "--inbound", rulesJSON, "--inbound_policy", firstNonEmpty(plan.Firewall.InboundPolicy, firewallInboundPolicy)}); err != nil {
-		return "", Error{Msg: renderProvisionFirewallPartialFailure(statePlan, created, statePath, err)}
-	}
 	if deviceID != created.ProviderID {
-		if _, err := runLinodeCLICommand([]string{"firewalls", "device-create", "--type", "linode", "--id", created.ProviderID, firewallID}); err != nil {
+		if err := provider.AssignFirewall(ctx, firewallID, created.ProviderID); err != nil {
 			return "", Error{Msg: renderProvisionFirewallPartialFailure(statePlan, created, statePath, err)}
 		}
 		deviceID = created.ProviderID
@@ -1827,25 +1888,12 @@ func parseLinodeSSHKeysPayload(payload any) ([]SSHAuthorizedKey, error) {
 	return keys, nil
 }
 
-func loadLinodeProfileSSHKeys(plan Plan) ([]SSHAuthorizedKey, error) {
-	args := []string{"sshkeys", "list", "--json"}
-	if !plan.AllLinodeSshKeys {
-		if plan.SshKeyLabel != "" {
-			args = append(args, "--label", plan.SshKeyLabel)
-		}
-		if plan.SshKeyID != "" {
-			args = append(args, "--id", plan.SshKeyID)
-		}
-	}
-	payload, err := runLinodeCLIValueFn(args)
+func loadLinodeProfileSSHKeys(ctx context.Context, provider ServerProvider, plan Plan) ([]SSHAuthorizedKey, error) {
+	keys, err := provider.ListSSHKeys(ctx)
 	if err != nil {
 		return nil, err
 	}
-	keys, err := parseLinodeSSHKeysPayload(payload)
-	if err != nil {
-		return nil, err
-	}
-	return keys, nil
+	return filterLinodeSSHKeys(keys, plan), nil
 }
 
 func selectLinodeSSHKeys(plan Plan, keys []SSHAuthorizedKey) ([]SSHAuthorizedKey, error) {
@@ -1883,7 +1931,7 @@ func selectLinodeSSHKeys(plan Plan, keys []SSHAuthorizedKey) ([]SSHAuthorizedKey
 	return selected, nil
 }
 
-func resolveAuthorizedKeys(plan Plan, actual bool) ([]SSHAuthorizedKey, error) {
+func resolveAuthorizedKeys(ctx context.Context, provider ServerProvider, plan Plan, actual bool) ([]SSHAuthorizedKey, error) {
 	source := firstNonEmpty(plan.SshKeySource, "linode-profile")
 	switch source {
 	case "file":
@@ -1896,7 +1944,10 @@ func resolveAuthorizedKeys(plan Plan, actual bool) ([]SSHAuthorizedKey, error) {
 		if !actual {
 			return nil, nil
 		}
-		keys, err := loadLinodeProfileSSHKeys(plan)
+		if provider == nil {
+			return nil, Error{Msg: "Missing server provider for Linode profile SSH key lookup."}
+		}
+		keys, err := loadLinodeProfileSSHKeys(ctx, provider, plan)
 		if err != nil {
 			return nil, err
 		}
@@ -2558,7 +2609,11 @@ func preparePlan(plan Plan) (Plan, string, error) {
 		return plan, plan.WriteCloudInit, nil
 	}
 	if len(plan.AuthorizedKeys) == 0 {
-		sshKeys, err := resolveAuthorizedKeys(plan, true)
+		provider, err := serverProviderFactory(plan)
+		if err != nil {
+			return Plan{}, plan.WriteCloudInit, err
+		}
+		sshKeys, err := resolveAuthorizedKeys(context.Background(), provider, plan, true)
 		if err != nil {
 			return Plan{}, plan.WriteCloudInit, err
 		}
@@ -2627,10 +2682,15 @@ func ProvisionServer(plan Plan) (*ServerCreateResult, error) {
 	if err := validateActualExecution(effectivePlan); err != nil {
 		return nil, err
 	}
+	provider, err := serverProviderFactory(effectivePlan)
+	if err != nil {
+		return nil, err
+	}
+	ctx := context.Background()
 	sshKeys := effectivePlan.AuthorizedKeys
 	if len(sshKeys) == 0 {
 		var err error
-		sshKeys, err = resolveAuthorizedKeys(effectivePlan, true)
+		sshKeys, err = resolveAuthorizedKeys(ctx, provider, effectivePlan, true)
 		if err != nil {
 			return nil, err
 		}
@@ -2652,7 +2712,6 @@ func ProvisionServer(plan Plan) (*ServerCreateResult, error) {
 	now := currentTime().UTC().Format(time.RFC3339)
 	createdAt := now
 	var created CreatedServer
-	var linodeID string
 	var linodeIP string
 	currentPhase := ""
 	dnsState := DNSState{}
@@ -2663,7 +2722,6 @@ func ProvisionServer(plan Plan) (*ServerCreateResult, error) {
 			return nil, err
 		}
 		fmt.Println("Reusing Linode")
-		linodeID = created.ProviderID
 		linodeIP = created.IPv4
 		createdAt = existingCreatedAt(existingRecord, now)
 		currentPhase = existingProvisionPhase(existingRecord)
@@ -2672,17 +2730,12 @@ func ProvisionServer(plan Plan) (*ServerCreateResult, error) {
 		effectivePlan.Firewall.ID = firewallStateID(existingRecord)
 		effectivePlan.Firewall.DeviceID = firewallStateDeviceID(existingRecord)
 	} else {
-		linodeMatches, err := linodeListByLabel(effectivePlan.Label)
+		linodeMatch, err := provider.FindServerByLabel(ctx, effectivePlan.Label)
 		if err != nil {
 			return nil, err
 		}
-		if len(linodeMatches) > 0 {
-			label := valueString(linodeMatches[0]["label"])
-			linodeID := valueString(linodeMatches[0]["id"])
-			if linodeID == "" {
-				linodeID = valueString(linodeMatches[0]["instance_id"])
-			}
-			return nil, Error{Msg: fmt.Sprintf("Server name %q is unavailable. Linode label %q already exists (id %s).", effectivePlan.Name, label, linodeID)}
+		if linodeMatch != nil {
+			return nil, Error{Msg: fmt.Sprintf("Server name %q is unavailable. Linode label %q already exists (id %s).", effectivePlan.Name, effectivePlan.Label, linodeMatch.ProviderID)}
 		}
 		dnsZone, err := dnsimpleZoneLookup(effectivePlan, dnsimpleToken)
 		if err != nil {
@@ -2700,29 +2753,12 @@ func ProvisionServer(plan Plan) (*ServerCreateResult, error) {
 		if record, ok := dnsimpleRecordByName(records, wildcardRecordName); ok {
 			return nil, Error{Msg: fmt.Sprintf("Server name %q is unavailable. DNSimple record %s already exists with content %s.", effectivePlan.Name, effectivePlan.WildcardHostname, valueString(record["content"]))}
 		}
-		createArgs := []string{
-			"linodes", "create",
-			"--region", effectivePlan.Region,
-			"--type", effectivePlan.LinodeType,
-			"--image", effectivePlan.Image,
-			"--label", effectivePlan.Label,
-			"--root_pass", rootPass,
-		}
-		createArgs = appendLinodeAuthorizedKeyArgs(createArgs, sshKeys)
-		createArgs = append(createArgs, "--metadata.user_data", base64UserData(rendered))
-		linodePayload, err := runLinodeCLICommand(createArgs)
+		createdPtr, err := provider.CreateServer(ctx, ServerCreatePlan{Plan: effectivePlan, RootPass: rootPass, UserData: rendered, SSHKeys: sshKeys})
 		if err != nil {
 			return nil, err
 		}
-		linodeID, err = apiIDString(linodePayload["id"])
-		if err != nil {
-			return nil, Error{Msg: fmt.Sprintf("Linode response included an invalid id: %v", err)}
-		}
-		linodeIP = linodeIPFromRecord(linodePayload)
-		if linodeIP == "" {
-			return nil, Error{Msg: "Linode response did not include an IPv4 address."}
-		}
-		created = CreatedServer{Provider: effectivePlan.Provider, ProviderID: linodeID, Name: effectivePlan.Name, Hostname: effectivePlan.Hostname, IPv4: linodeIP}
+		created = *createdPtr
+		linodeIP = created.IPv4
 		fmt.Println("Creating Linode")
 		currentPhase = "linode_created"
 		partial := serverStateRecordWithStatus(effectivePlan, created, DNSState{}, TLSState{}, createdAt, now, "provisioning", currentPhase)
@@ -2733,7 +2769,7 @@ func ProvisionServer(plan Plan) (*ServerCreateResult, error) {
 	phaseRank := provisioningPhaseRank(currentPhase)
 	if firewallMode := firewallPlanMode(effectivePlan); firewallMode == "managed" && phaseRank < provisioningPhaseRank("firewall_configured") {
 		fmt.Println("Configuring firewall")
-		firewallID, err := ensureManagedFirewall(effectivePlan, created, existingRecord, serverStatePath, now)
+		firewallID, err := ensureManagedFirewall(ctx, provider, effectivePlan, created, existingRecord, serverStatePath, now)
 		if err != nil {
 			return nil, err
 		}

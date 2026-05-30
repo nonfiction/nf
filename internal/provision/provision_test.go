@@ -2,6 +2,7 @@ package provision
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -930,7 +931,7 @@ func TestResolveAuthorizedKeysFileFallback(t *testing.T) {
 	if err := os.WriteFile(file, []byte("ssh-ed25519 AAAA-file team@example\n"), 0o644); err != nil {
 		t.Fatalf("WriteFile() error = %v", err)
 	}
-	keys, err := resolveAuthorizedKeys(Plan{SshKeySource: "file", SshPublicKeyFile: file}, true)
+	keys, err := resolveAuthorizedKeys(context.Background(), nil, Plan{SshKeySource: "file", SshPublicKeyFile: file}, true)
 	if err != nil {
 		t.Fatalf("resolveAuthorizedKeys() error = %v", err)
 	}
