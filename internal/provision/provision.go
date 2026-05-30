@@ -574,6 +574,17 @@ func defaultHostname(name string) string {
 	return strings.TrimSpace(name) + ".nfweb.dev"
 }
 
+func shortHostname(hostname string) string {
+	trimmed := strings.TrimSpace(hostname)
+	if trimmed == "" {
+		return ""
+	}
+	if idx := strings.IndexByte(trimmed, '.'); idx >= 0 {
+		return trimmed[:idx]
+	}
+	return trimmed
+}
+
 func cleanPath(value string) string {
 	if value == "" {
 		return ""
@@ -591,20 +602,98 @@ func cleanPath(value string) string {
 }
 
 var cloudInitTemplate = strings.TrimSpace(`#cloud-config
+hostname: __SHORT_HOSTNAME__
+fqdn: __HOSTNAME__
+preserve_hostname: false
+manage_etc_hosts: true
+timezone: UTC
 package_update: true
 package_upgrade: true
+ssh_pwauth: false
+swap:
+  filename: /swapfile
+  size: 2G
 packages:
 __PACKAGE_LIST__
 
 users:
   - name: __SSH_USER__
     shell: /bin/bash
+    groups: [sudo, www-data]
     sudo: ALL=(ALL) NOPASSWD:ALL
-    groups: [sudo]
+    lock_passwd: true
     ssh_authorized_keys:
 __SSH_PUBLIC_KEYS__
 
 write_files:
+  - path: /etc/ssh/sshd_config.d/99-nf-hardening.conf
+    permissions: '0644'
+    content: |
+      PasswordAuthentication no
+      PubkeyAuthentication yes
+      PermitRootLogin prohibit-password
+      KbdInteractiveAuthentication no
+      ChallengeResponseAuthentication no
+  - path: /etc/apt/apt.conf.d/20auto-upgrades
+    permissions: '0644'
+    content: |
+      APT::Periodic::Update-Package-Lists "1";
+      APT::Periodic::Unattended-Upgrade "1";
+  - path: /etc/php/__PHP_VERSION__/fpm/conf.d/99-nf-wordpress.ini
+    permissions: '0644'
+    content: |
+      memory_limit = 256M
+      upload_max_filesize = 64M
+      post_max_size = 64M
+      max_execution_time = 120
+      max_input_time = 120
+      max_input_vars = 5000
+      cgi.fix_pathinfo = 0
+      expose_php = Off
+      date.timezone = UTC
+      opcache.enable = 1
+      opcache.memory_consumption = 128
+      opcache.max_accelerated_files = 10000
+  - path: /etc/nginx/snippets/nf-fastcgi-php.conf
+    permissions: '0644'
+    content: |
+      include fastcgi_params;
+      fastcgi_split_path_info ^(.+\.php)(/.*)$;
+      fastcgi_index index.php;
+      fastcgi_param SCRIPT_FILENAME $document_root$fastcgi_script_name;
+      fastcgi_param PATH_INFO $fastcgi_path_info;
+  - path: /etc/nginx/snippets/nf-wordpress.conf
+    permissions: '0644'
+    content: |
+      index index.php index.html;
+      location / {
+          try_files $uri $uri/ /index.php?$args;
+      }
+  - path: /etc/nginx/snippets/nf-static-assets.conf
+    permissions: '0644'
+    content: |
+      location ~* \.(?:css|js|mjs|map|jpg|jpeg|png|gif|ico|svg|webp|avif|woff|woff2|ttf|otf)$ {
+          expires 30d;
+          access_log off;
+          add_header Cache-Control "public, max-age=2592000, immutable";
+      }
+  - path: /etc/nginx/snippets/nf-security-headers.conf
+    permissions: '0644'
+    content: |
+      add_header X-Content-Type-Options nosniff always;
+      add_header X-Frame-Options SAMEORIGIN always;
+      add_header Referrer-Policy strict-origin-when-cross-origin always;
+      add_header Permissions-Policy "geolocation=(), microphone=(), camera=()" always;
+  - path: /etc/nginx/snippets/nf-wildcard-cert.conf
+    permissions: '0644'
+    content: |
+      ssl_certificate /etc/letsencrypt/live/__HOSTNAME__/fullchain.pem;
+      ssl_certificate_key /etc/letsencrypt/live/__HOSTNAME__/privkey.pem;
+      ssl_trusted_certificate /etc/letsencrypt/live/__HOSTNAME__/fullchain.pem;
+      ssl_session_cache shared:NFSSL:10m;
+      ssl_session_timeout 10m;
+      ssl_protocols TLSv1.2 TLSv1.3;
+      ssl_prefer_server_ciphers off;
   - path: /etc/nginx/sites-available/nf-server
     permissions: '0644'
     content: |
@@ -612,23 +701,47 @@ write_files:
           listen 80;
           listen [::]:80;
           server_name __HOSTNAME__;
-          root /var/www/nf-server;
-          index index.html index.htm;
-          client_max_body_size 64M;
 
-          access_log /var/log/nginx/nf-server.access.log;
-          error_log /var/log/nginx/nf-server.error.log;
+          root /var/www/nf-server;
+          index index.html;
+
+          location = /healthz {
+              default_type application/json;
+              return 200 '{ "server": "__NAME__", "hostname": "__HOSTNAME__", "status": "ready" }';
+          }
 
           location / {
-              try_files $uri $uri/ =404;
-          }
-
-          location ~ \.php$ {
-              include fastcgi_params;
-              fastcgi_param SCRIPT_FILENAME $document_root$fastcgi_script_name;
-              fastcgi_pass unix:__PHP_FPM_SOCKET__;
+              try_files $uri $uri/ /index.html;
           }
       }
+  - path: /usr/local/bin/nf-write-server-health-page
+    permissions: '0755'
+    content: |
+      #!/usr/bin/env bash
+      set -euo pipefail
+
+      install -d -o __SSH_USER__ -g www-data -m 2775 /var/www/nf-server
+      cat >/var/www/nf-server/index.html <<'EOF'
+      <!doctype html>
+      <html lang="en">
+      <head>
+        <meta charset="utf-8">
+        <title>nf server __NAME__</title>
+      </head>
+      <body>
+        <h1>nf server __NAME__</h1>
+        <p>hostname: __HOSTNAME__</p>
+        <p>status: ready</p>
+      </body>
+      </html>
+      EOF
+  - path: /etc/letsencrypt/renewal-hooks/deploy/reload-nginx
+    permissions: '0755'
+    content: |
+      #!/usr/bin/env bash
+      set -euo pipefail
+
+      systemctl reload nginx
   - path: /usr/local/bin/nf-enable-wildcard-tls
     permissions: '0755'
     content: |
@@ -643,37 +756,77 @@ write_files:
           listen [::]:80;
           server_name __HOSTNAME__;
 
-          return 301 https://$host$request_uri;
+          root /var/www/nf-server;
+          index index.html;
+
+          location = /healthz {
+              default_type application/json;
+              return 200 '{ "server": "__NAME__", "hostname": "__HOSTNAME__", "status": "ready" }';
+          }
+
+          location / {
+              try_files $uri $uri/ /index.html;
+          }
       }
 
       server {
           listen 443 ssl http2;
           listen [::]:443 ssl http2;
           server_name __HOSTNAME__;
+
+          include /etc/nginx/snippets/nf-wildcard-cert.conf;
           root /var/www/nf-server;
-          index index.html index.htm;
-          client_max_body_size 64M;
+          index index.html;
 
-          ssl_certificate /etc/letsencrypt/live/__HOSTNAME__/fullchain.pem;
-          ssl_certificate_key /etc/letsencrypt/live/__HOSTNAME__/privkey.pem;
-
-          access_log /var/log/nginx/nf-server.access.log;
-          error_log /var/log/nginx/nf-server.error.log;
-
-          location / {
-              try_files $uri $uri/ =404;
+          location = /healthz {
+              default_type application/json;
+              return 200 '{ "server": "__NAME__", "hostname": "__HOSTNAME__", "status": "ready" }';
           }
 
-          location ~ \.php$ {
-              include fastcgi_params;
-              fastcgi_param SCRIPT_FILENAME $document_root$fastcgi_script_name;
-              fastcgi_pass unix:__PHP_FPM_SOCKET__;
+          location / {
+              try_files $uri $uri/ /index.html;
           }
       }
       EOF
 
       nginx -t
       systemctl reload nginx
+  - path: /usr/local/bin/nf-write-server-marker
+    permissions: '0755'
+    content: |
+      #!/usr/bin/env bash
+      set -euo pipefail
+
+      mkdir -p /etc/nf
+      created_at="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+      cat >/etc/nf/server.json <<EOF
+      {
+        "schema": 1,
+        "managed_by": "nf",
+        "name": "__NAME__",
+        "hostname": "__HOSTNAME__",
+        "server_provider": "__SERVER_PROVIDER__",
+        "dns_provider": "__DNS_PROVIDER__",
+        "ubuntu_version": "__UBUNTU_VERSION__",
+        "image": "__IMAGE__",
+        "php_version": "__PHP_VERSION__",
+        "php_service": "__PHP_FPM_SERVICE__",
+        "php_socket": "__PHP_FPM_SOCKET__",
+        "sites_root": "/var/www/sites",
+        "created_at": "${created_at}"
+      }
+      EOF
+  - path: /etc/update-motd.d/99-nf
+    permissions: '0755'
+    content: |
+      #!/usr/bin/env bash
+      set -euo pipefail
+
+      echo 'Managed by nf'
+      echo 'Server: __NAME__'
+      echo 'Hostname: __HOSTNAME__'
+      echo 'PHP: __PHP_VERSION__ (__PHP_FPM_SERVICE__)'
+      echo 'Sites root: /var/www/sites'
   - path: /root/.secrets/certbot/dnsimple.ini
     permissions: '0600'
     content: |
@@ -681,12 +834,16 @@ write_files:
       dns_dnsimple_account = __DNSIMPLE_ACCOUNT_ID__
 
 runcmd:
-  - mkdir -p /var/www/nf-server
-  - chown -R __SSH_USER__:www-data /var/www/nf-server
-  - chmod -R 775 /var/www/nf-server
-  - bash -lc 'cd /tmp && curl -O https://raw.githubusercontent.com/wp-cli/builds/gh-pages/phar/wp-cli.phar && chmod +x wp-cli.phar && mv wp-cli.phar /usr/local/bin/wp'
+  - hostnamectl set-hostname __HOSTNAME__
+  - systemctl enable --now mariadb
+  - systemctl enable --now fail2ban
+  - install -d -o __SSH_USER__ -g www-data -m 2775 /var/www /var/www/nf-server /var/www/sites /var/www/shared /var/log/nginx/sites
+  - usermod -aG www-data __SSH_USER__
+  - chown -R __SSH_USER__:www-data /var/www /var/log/nginx/sites
+  - chmod 2775 /var/www /var/www/sites /var/www/shared /var/log/nginx/sites
   - rm -f /etc/nginx/sites-enabled/default
   - ln -sf /etc/nginx/sites-available/nf-server /etc/nginx/sites-enabled/nf-server
+  - /usr/local/bin/nf-write-server-health-page
   - nginx -t
   - systemctl enable nginx
   - systemctl restart nginx
@@ -698,7 +855,7 @@ runcmd:
   - ufw allow 80/tcp
   - ufw allow 443/tcp
   - ufw --force enable
-  - bash -lc 'echo "nf-server bootstrap complete" > /var/www/nf-server/index.html'
+  - /usr/local/bin/nf-write-server-marker
 `)
 
 func renderTemplate(template string, replacements map[string]string) string {
@@ -715,7 +872,7 @@ func renderTemplate(template string, replacements map[string]string) string {
 }
 
 func serverBasePackages() []string {
-	return []string{"nginx", "mariadb-server", "unzip", "curl", "ufw", "certbot", "python3-certbot-dns-dnsimple", "composer", "rsync", "zip", "imagemagick", "ghostscript"}
+	return []string{"nginx", "mariadb-server", "mariadb-client", "unattended-upgrades", "fail2ban", "unzip", "curl", "ufw", "certbot", "python3-certbot-dns-dnsimple", "composer", "rsync", "zip", "imagemagick", "ghostscript", "ca-certificates", "gnupg", "lsb-release", "acl", "htop", "ncdu", "lsof", "iproute2", "dnsutils", "jq", "vim", "git", "logrotate"}
 }
 
 func cloudInitPackages(plan Plan) []string {
@@ -740,13 +897,20 @@ func cloudInitSSHKeyLines(keys []string) string {
 func cloudInitReplacements(plan Plan, sshPublicKeys []string, dnsimpleToken string) map[string]string {
 	return map[string]string{
 		"__PACKAGE_LIST__":        cloudInitPackageBlock(plan),
+		"__SHORT_HOSTNAME__":      shortHostname(plan.Hostname),
 		"__SSH_USER__":            plan.SshUser,
 		"__SSH_PUBLIC_KEYS__":     cloudInitSSHKeyLines(sshPublicKeys),
+		"__NAME__":                plan.Name,
 		"__HOSTNAME__":            plan.Hostname,
 		"__DNSIMPLE_TOKEN__":      dnsimpleToken,
 		"__DNSIMPLE_ACCOUNT_ID__": plan.DnsimpleAccountID,
+		"__SERVER_PROVIDER__":     plan.Provider,
+		"__DNS_PROVIDER__":        plan.DnsProvider,
+		"__UBUNTU_VERSION__":      plan.UbuntuVersion,
+		"__IMAGE__":               plan.Image,
 		"__PHP_FPM_SERVICE__":     plan.PHP.Service,
 		"__PHP_FPM_SOCKET__":      plan.PHP.Socket,
+		"__PHP_VERSION__":         plan.PHP.Version,
 	}
 }
 
@@ -1107,7 +1271,7 @@ func renderProvisionFirewallPartialFailure(plan Plan, created CreatedServer, sta
 	lines := []string{
 		"Server provisioning paused.",
 		"",
-		"Server",
+		"Host",
 		"  provider: " + plan.Provider,
 		"  name: " + plan.Name,
 		"  hostname: " + plan.Hostname,
@@ -1115,8 +1279,8 @@ func renderProvisionFirewallPartialFailure(plan Plan, created CreatedServer, sta
 		"  ipv4: " + created.IPv4,
 		"  status: provisioning",
 		"  phase: linode_created",
-		"State",
-		"  path: " + statePath,
+		"Paths",
+		"  state: " + statePath,
 		"Firewall error",
 		"  " + strings.TrimSpace(setupErr.Error()),
 		"Next",
@@ -1127,8 +1291,8 @@ func renderProvisionFirewallPartialFailure(plan Plan, created CreatedServer, sta
 
 func sshPlanBlock(plan Plan) []string {
 	return []string{
-		"SSH",
-		"  user: " + plan.SshUser,
+		"Access",
+		"  ssh user: " + plan.SshUser,
 		"  auth: SSH keys only",
 		"  sudo: passwordless",
 		"  key source: " + firstNonEmpty(plan.SshKeySource, "linode-profile"),
@@ -1138,17 +1302,64 @@ func sshPlanBlock(plan Plan) []string {
 
 func rootPlanBlock(plan Plan) []string {
 	return []string{
-		"Root",
-		"  password: derived from hostname + purpose linode-root",
-		"  stored in state: no",
-		"  reveal: nf server root-password " + plan.Name,
+		"  root password: derived from hostname + purpose linode-root",
+		"  root stored in state: no",
+		"  root reveal: nf server root-password " + plan.Name,
 	}
+}
+
+func ubuntuFirewallPlanBlock() []string {
+	return []string{
+		"Ubuntu firewall",
+		"  ufw: enabled",
+		"  ufw default: deny incoming",
+		"  ufw outbound: allow",
+		"  allow: 22/tcp, 80/tcp, 443/tcp",
+	}
+}
+
+func phpBaselinePlanBlock(plan Plan) []string {
+	return []string{
+		"PHP baseline",
+		"  timezone: UTC",
+		"  swap: 2G",
+		"  stack: " + stackSummary(plan),
+		"  ubuntu: " + ubuntuDisplayLabel(plan),
+		"  image: " + plan.OS.Image,
+		"  php version: " + plan.PHP.Version,
+		"  php service: " + plan.PHP.Service,
+		"  php socket: " + plan.PHP.Socket,
+		"  package source: " + plan.OS.PackageSource,
+		"  base packages: " + joinedPackages(plan.OS.Packages),
+		"  packages: " + joinedPackages(plan.PHP.Packages),
+	}
+}
+
+func healthPlanBlock(plan Plan) []string {
+	return []string{
+		"Server health URL: https://" + plan.Hostname,
+	}
+}
+
+func pathsPlanBlock(cloudInitPath string) []string {
+	lines := []string{"Paths"}
+	if cloudInitPath != "" {
+		lines = append(lines, "  cloud-init preview: "+cloudInitPath)
+	}
+	lines = append(lines,
+		"  marker: /etc/nf/server.json",
+		"  motd: /etc/update-motd.d/99-nf",
+		"  sites root: /var/www/sites",
+		"  shared root: /var/www/shared",
+		"  nginx site logs: /var/log/nginx/sites",
+	)
+	return lines
 }
 
 func sshSuccessBlock(plan Plan, keys []SSHAuthorizedKey) []string {
 	lines := []string{
-		"SSH",
-		"  user: " + plan.SshUser,
+		"Access",
+		"  ssh user: " + plan.SshUser,
 		"  auth: SSH keys only",
 		"  sudo: passwordless",
 		"  key source: " + firstNonEmpty(plan.SshKeySource, "linode-profile"),
@@ -1156,10 +1367,15 @@ func sshSuccessBlock(plan Plan, keys []SSHAuthorizedKey) []string {
 	if labels := sshKeyLabels(keys); labels != "" {
 		lines = append(lines, "  authorized keys: "+labels)
 	}
+	lines = append(lines,
+		"  root password: derived from hostname + purpose linode-root",
+		"  root stored in state: no",
+		"  root reveal: nf server root-password "+plan.Name,
+	)
 	return lines
 }
 
-func rootSuccessBlock(plan Plan) []string { return rootPlanBlock(plan) }
+func rootSuccessBlock(plan Plan) []string { return nil }
 
 func sshStateBlock(plan Plan, keys []SSHAuthorizedKey) map[string]any {
 	return map[string]any{
@@ -1182,7 +1398,8 @@ func firewallPlanBlock(plan Plan) []string {
 		return nil
 	}
 	lines := []string{
-		"Firewall",
+		"Linode firewall",
+		"  provider: " + plan.Provider,
 		"  mode: " + plan.Firewall.Mode,
 	}
 	if plan.Firewall.Mode == "managed" {
@@ -1534,41 +1751,34 @@ func planLines(plan Plan, cloudInitPath string) []string {
 		zone = "<inferred during execution>"
 	}
 	lines := []string{
-		"Server",
+		"Host",
 		"  provider: " + plan.Provider,
 		"  name: " + plan.Name,
 		"  hostname: " + plan.Hostname,
 		"  label: " + plan.Label,
 		"  region: " + plan.Region,
 		"  type: " + plan.LinodeType,
-		"OS/PHP",
-		"  stack: " + stackSummary(plan),
-		"  ubuntu: " + ubuntuDisplayLabel(plan),
-		"  image: " + plan.OS.Image,
-		"  php: " + plan.PHP.Version,
-		"  php service: " + plan.PHP.Service,
-		"  php socket: " + plan.PHP.Socket,
-		"  package source: " + plan.OS.PackageSource,
-		"  base packages: " + joinedPackages(plan.OS.Packages),
-		"  packages: " + joinedPackages(plan.PHP.Packages),
-		"DNS",
-		"  provider: " + plan.DnsProvider,
-		"  zone: " + zone + zoneSuffix,
-		"  hostname A: " + plan.Hostname + " -> <created after server IP is known>",
-		"  wildcard A: *." + plan.Hostname + " -> <created after server IP is known>",
-		"TLS",
-		"  provider: certbot-dnsimple",
-		"  domains: " + plan.Hostname + ", *." + plan.Hostname,
-		"  certificate: /etc/letsencrypt/live/" + plan.Hostname + "/fullchain.pem",
-		"  key: /etc/letsencrypt/live/" + plan.Hostname + "/privkey.pem",
 	}
-	lines = append(lines, firewallPlanBlock(plan)...)
 	lines = append(lines, sshPlanBlock(plan)...)
 	lines = append(lines, rootPlanBlock(plan)...)
+	lines = append(lines, ubuntuFirewallPlanBlock()...)
+	lines = append(lines, firewallPlanBlock(plan)...)
+	lines = append(lines, phpBaselinePlanBlock(plan)...)
+	lines = append(lines, healthPlanBlock(plan)...)
+	lines = append(lines,
+		"DNS",
+		"  provider: "+plan.DnsProvider,
+		"  zone: "+zone+zoneSuffix,
+		"  hostname A: "+plan.Hostname+" -> <created after server IP is known>",
+		"  wildcard A: *."+plan.Hostname+" -> <created after server IP is known>",
+		"TLS",
+		"  provider: certbot-dnsimple",
+		"  domains: "+plan.Hostname+", *."+plan.Hostname,
+		"  certificate: /etc/letsencrypt/live/"+plan.Hostname+"/fullchain.pem",
+		"  key: /etc/letsencrypt/live/"+plan.Hostname+"/privkey.pem",
+	)
+	lines = append(lines, pathsPlanBlock(cloudInitPath)...)
 	lines = append(lines, "Mode", "  dry-run: true")
-	if cloudInitPath != "" {
-		lines = append(lines, "  cloud-init preview: "+cloudInitPath)
-	}
 	return lines
 }
 
@@ -1740,42 +1950,44 @@ func renderProvisionSuccess(plan Plan, created CreatedServer, dns DNSState, tls 
 	lines := []string{
 		"Server provisioned.",
 		"",
-		"Server",
+		"Host",
 		"  provider: " + plan.Provider,
 		"  name: " + plan.Name,
 		"  hostname: " + plan.Hostname,
 		"  label: " + plan.Label,
 		"  ipv4: " + created.IPv4,
 		"  linode instance id: " + created.ProviderID,
-		"OS/PHP",
-		"  stack: " + stackSummary(plan),
-		"  ubuntu: " + ubuntuDisplayLabel(plan),
-		"  image: " + plan.OS.Image,
-		"  php: " + plan.PHP.Version,
-		"  php service: " + plan.PHP.Service,
-		"  php socket: " + plan.PHP.Socket,
-		"  package source: " + plan.OS.PackageSource,
-		"  base packages: " + joinedPackages(plan.OS.Packages),
-		"  packages: " + joinedPackages(plan.PHP.Packages),
+	}
+	lines = append(lines, sshSuccessBlock(plan, sshKeys)...)
+	lines = append(lines, rootSuccessBlock(plan)...)
+	lines = append(lines, ubuntuFirewallPlanBlock()...)
+	lines = append(lines, firewallPlanBlock(plan)...)
+	lines = append(lines, phpBaselinePlanBlock(plan)...)
+	lines = append(lines, healthPlanBlock(plan)...)
+	lines = append(lines,
 		"DNS",
-		"  provider: " + dns.Provider,
-		"  zone: " + dns.Zone,
+		"  provider: "+dns.Provider,
+		"  zone: "+dns.Zone,
 		dnsRecordLine("hostname A", dns.HostnameRecord),
 		dnsRecordLine("wildcard A", dns.WildcardRecord),
 		"TLS",
-		"  provider: " + tls.Provider,
-		"  domains: " + strings.Join(tls.Domains, ", "),
-		"  certificate: " + tls.Certificate,
-		"  key: " + tls.Key,
-		"State",
-		"  path: " + statePath,
-	}
-	lines = append(lines, firewallPlanBlock(plan)...)
-	lines = append(lines, sshSuccessBlock(plan, sshKeys)...)
-	lines = append(lines, rootSuccessBlock(plan)...)
+		"  provider: "+tls.Provider,
+		"  domains: "+strings.Join(tls.Domains, ", "),
+		"  certificate: "+tls.Certificate,
+		"  key: "+tls.Key,
+		"Paths",
+		"  state: "+statePath,
+	)
 	if cloudInitPath != "" {
 		lines = append(lines, "  cloud-init: "+cloudInitPath)
 	}
+	lines = append(lines,
+		"  marker: /etc/nf/server.json",
+		"  motd: /etc/update-motd.d/99-nf",
+		"  sites root: /var/www/sites",
+		"  shared root: /var/www/shared",
+		"  nginx site logs: /var/log/nginx/sites",
+	)
 	sshTarget := plan.SshUser + "@" + plan.Hostname
 	sshIPTarget := plan.SshUser + "@" + created.IPv4
 	lines = append(lines,
@@ -1796,7 +2008,7 @@ func renderProvisionPartialFailure(plan Plan, created CreatedServer, statePath s
 	lines := []string{
 		"Server provisioning paused.",
 		"",
-		"Server",
+		"Host",
 		"  provider: " + plan.Provider,
 		"  name: " + plan.Name,
 		"  hostname: " + plan.Hostname,
@@ -1804,8 +2016,8 @@ func renderProvisionPartialFailure(plan Plan, created CreatedServer, statePath s
 		"  ipv4: " + created.IPv4,
 		"  status: provisioning",
 		"  phase: linode_created",
-		"State",
-		"  path: " + statePath,
+		"Paths",
+		"  state: " + statePath,
 		"DNS error",
 		"  " + strings.TrimSpace(dnsErr.Error()),
 		"Next",

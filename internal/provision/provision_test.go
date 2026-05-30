@@ -47,6 +47,19 @@ func TestRelativeRecordName(t *testing.T) {
 	}
 }
 
+func TestShortHostname(t *testing.T) {
+	tests := map[string]string{
+		"app1.nfweb.dev": "app1",
+		"app1":           "app1",
+		"":               "",
+	}
+	for input, want := range tests {
+		if got := shortHostname(input); got != want {
+			t.Fatalf("shortHostname(%q) = %q, want %q", input, got, want)
+		}
+	}
+}
+
 func TestAPIIDString(t *testing.T) {
 	tests := []struct {
 		name  string
@@ -183,6 +196,16 @@ func TestBuildPlanDefaults(t *testing.T) {
 	}
 	if got, want := plan.PHP.PackageSource, packageSourceUbuntuNative; got != want {
 		t.Fatalf("PHP.PackageSource = %q, want %q", got, want)
+	}
+	for _, want := range []string{"ca-certificates", "gnupg", "lsb-release", "acl", "htop", "ncdu", "lsof", "iproute2", "dnsutils", "jq", "vim", "git", "logrotate", "mariadb-client", "unattended-upgrades", "fail2ban"} {
+		if !containsString(plan.OS.Packages, want) {
+			t.Fatalf("OS.Packages missing %q: %#v", want, plan.OS.Packages)
+		}
+	}
+	for _, unwanted := range []string{"node", "npm", "nodejs", "npm-cli"} {
+		if containsString(plan.OS.Packages, unwanted) || containsString(plan.PHP.Packages, unwanted) {
+			t.Fatalf("package lists unexpectedly contained %q: os=%#v php=%#v", unwanted, plan.OS.Packages, plan.PHP.Packages)
+		}
 	}
 	if got, want := plan.Firewall.Mode, "managed"; got != want {
 		t.Fatalf("Firewall.Mode = %q, want %q", got, want)
@@ -669,28 +692,68 @@ func TestCloudInitTemplateIsServerOnly(t *testing.T) {
 	if err != nil {
 		t.Fatalf("phpReleaseForUbuntu() error = %v", err)
 	}
-	plan := Plan{SshUser: "ubuntu", Hostname: "app1.nfweb.dev", DnsimpleAccountID: "14", OS: osPlan, PHP: phpPlan}
+	plan := Plan{Name: "app1", SshUser: "ubuntu", Hostname: "app1.nfweb.dev", DnsimpleAccountID: "14", OS: osPlan, PHP: phpPlan}
 	rendered, err := renderCloudInit(plan, false, "", nil)
 	if err != nil {
 		t.Fatalf("renderCloudInit() error = %v", err)
 	}
 	for _, want := range []string{
-		"php8.3-fpm",
-		"php8.3-cli",
-		"fastcgi_pass unix:/run/php/php8.3-fpm.sock;",
-		"imagemagick",
-		"ghostscript",
-		"ufw",
-		"/var/www/nf-server",
-		"mariadb-server",
+		"hostname: app1",
+		"fqdn: app1.nfweb.dev",
+		"preserve_hostname: false",
+		"manage_etc_hosts: true",
+		"timezone: UTC",
+		"swap:",
+		"lock_passwd: true",
+		"PasswordAuthentication no",
+		"PermitRootLogin prohibit-password",
+		"/etc/php/8.3/fpm/conf.d/99-nf-wordpress.ini",
+		"/etc/nginx/snippets/nf-fastcgi-php.conf",
+		"/etc/nginx/snippets/nf-wordpress.conf",
+		"/etc/nginx/snippets/nf-static-assets.conf",
+		"/etc/nginx/snippets/nf-security-headers.conf",
+		"/etc/nginx/snippets/nf-wildcard-cert.conf",
+		"/etc/nginx/sites-available/nf-server",
+		"server_name app1.nfweb.dev;",
+		"location = /healthz",
+		"default_type application/json;",
+		"{ \"server\": \"app1\", \"hostname\": \"app1.nfweb.dev\", \"status\": \"ready\" }",
+		"/usr/local/bin/nf-write-server-health-page",
+		"/var/www/nf-server/index.html",
+		"<!doctype html>",
+		"<title>nf server app1</title>",
+		"<h1>nf server app1</h1>",
+		"<p>hostname: app1.nfweb.dev</p>",
+		"<p>status: ready</p>",
+		"/etc/letsencrypt/renewal-hooks/deploy/reload-nginx",
 		"/usr/local/bin/nf-enable-wildcard-tls",
-		"python3-certbot-dns-dnsimple",
-		"wp-cli.phar",
-		"rm -f /etc/nginx/sites-enabled/default",
+		"/usr/local/bin/nf-write-server-marker",
+		"/etc/update-motd.d/99-nf",
+		"systemctl enable --now mariadb",
+		"systemctl enable --now fail2ban",
 		"ufw allow 22/tcp",
 		"ufw allow 80/tcp",
 		"ufw allow 443/tcp",
 		"ufw --force enable",
+		"opcache.enable = 1",
+		"opcache.memory_consumption = 128",
+		"opcache.max_accelerated_files = 10000",
+		"php8.3-fpm",
+		"php8.3-cli",
+		"imagemagick",
+		"ghostscript",
+		"mariadb-server",
+		"python3-certbot-dns-dnsimple",
+		"unattended-upgrades",
+		"fail2ban",
+		"install -d -o ubuntu -g www-data -m 2775 /var/www /var/www/nf-server /var/www/sites /var/www/shared /var/log/nginx/sites",
+		"hostnamectl set-hostname app1.nfweb.dev",
+		"mkdir -p /etc/nf",
+		"Managed by nf",
+		"Sites root: /var/www/sites",
+		"certbot certonly --non-interactive --agree-tos --dns-dnsimple --dns-dnsimple-credentials /root/.secrets/certbot/dnsimple.ini -m web@nonfiction.ca -d app1.nfweb.dev -d \"*.app1.nfweb.dev\"",
+		"listen 443 ssl http2;",
+		"include /etc/nginx/snippets/nf-wildcard-cert.conf;",
 	} {
 		if !strings.Contains(rendered, want) {
 			t.Fatalf("renderCloudInit() output missing %q:\n%s", want, rendered)
@@ -701,13 +764,14 @@ func TestCloudInitTemplateIsServerOnly(t *testing.T) {
 		"wp core install",
 		"CREATE DATABASE",
 		"wp config create",
-		"php-fpm\n",
-		"php-mysql\n",
 		"xdebug",
-		"__SITE_DOMAIN__",
-		"__REMOTE_WP_PATH__",
-		"__DB_NAME__",
-		"__WP_ADMIN_USER__",
+		"client.app1.nfweb.dev",
+		"server_name *.app1.nfweb.dev",
+		"CREATE USER",
+		"GRANT ALL PRIVILEGES",
+		"composer install",
+		"npm install",
+		"npx",
 	} {
 		if strings.Contains(rendered, unwanted) {
 			t.Fatalf("renderCloudInit() output unexpectedly contained %q:\n%s", unwanted, rendered)
@@ -736,6 +800,28 @@ func TestRenderCloudInitSupportsMultipleSSHKeys(t *testing.T) {
 		if !strings.Contains(rendered, want) {
 			t.Fatalf("renderCloudInit() output missing %q:\n%s", want, rendered)
 		}
+	}
+}
+
+func TestRenderCloudInitRedactsDnsimpleTokenInPreview(t *testing.T) {
+	osPlan, err := osReleasePlan("24.04", "linode/ubuntu24.04")
+	if err != nil {
+		t.Fatalf("osReleasePlan() error = %v", err)
+	}
+	phpPlan, err := phpReleaseForUbuntu("24.04")
+	if err != nil {
+		t.Fatalf("phpReleaseForUbuntu() error = %v", err)
+	}
+	plan := Plan{SshUser: "ubuntu", Hostname: "app1.nfweb.dev", DnsimpleAccountID: "14", OS: osPlan, PHP: phpPlan}
+	rendered, err := renderCloudInit(plan, false, "dns-token-secret", nil)
+	if err != nil {
+		t.Fatalf("renderCloudInit() error = %v", err)
+	}
+	if !strings.Contains(rendered, "<dnsimple token>") {
+		t.Fatalf("renderCloudInit() preview did not redact token:\n%s", rendered)
+	}
+	if strings.Contains(rendered, "dns-token-secret") {
+		t.Fatalf("renderCloudInit() preview leaked token:\n%s", rendered)
 	}
 }
 
@@ -866,7 +952,7 @@ func TestRenderPlanShowsDnsZoneAndRecords(t *testing.T) {
 	}
 	plan := Plan{Provider: "linode", DnsProvider: "dnsimple", Name: "app1", Hostname: "app1.nfweb.dev", Label: "app1", Region: "ca-central", LinodeType: "g6-standard-1", Image: osPlan.Image, SshUser: "nonfiction", SshKeySource: "file", SshPublicKeyFile: "/tmp/id.pub", OS: osPlan, PHP: phpPlan, Firewall: managedFirewallPlan("")}
 	output := renderPlan(plan, "/tmp/cloud-init.yaml", "")
-	for _, want := range []string{"Server provision dry-run plan", "Server", "Firewall", "  mode: managed", "  managed label: nf-web", "  inbound: 22/tcp, 80/tcp, 443/tcp", "  inbound policy: DROP", "  outbound policy: ACCEPT", "SSH", "Root", "  password: derived from hostname + purpose linode-root", "  stored in state: no", "  reveal: nf server root-password app1", "OS/PHP", "Mode", "  user: nonfiction", "  auth: SSH keys only", "  sudo: passwordless", "  key source: file", "  authorized keys: /tmp/id.pub", "  stack: Ubuntu 24.04 LTS / PHP 8.3", "  ubuntu: 24.04 LTS", "  image: linode/ubuntu24.04", "  php: 8.3", "  php service: php8.3-fpm", "  php socket: /run/php/php8.3-fpm.sock", "  package source: ubuntu-native", "  base packages: nginx, mariadb-server", "  packages: php8.3-fpm, php8.3-cli", "  zone: nfweb.dev (inferred)", "  hostname A: app1.nfweb.dev -> <created after server IP is known>", "  wildcard A: *.app1.nfweb.dev -> <created after server IP is known>"} {
+	for _, want := range []string{"Server provision dry-run plan", "Host", "  provider: linode", "Access", "  ssh user: nonfiction", "  auth: SSH keys only", "  sudo: passwordless", "  key source: file", "  authorized keys: /tmp/id.pub", "  root password: derived from hostname + purpose linode-root", "  root stored in state: no", "  root reveal: nf server root-password app1", "Ubuntu firewall", "  ufw default: deny incoming", "  ufw outbound: allow", "  allow: 22/tcp, 80/tcp, 443/tcp", "Linode firewall", "  provider: linode", "  mode: managed", "  managed label: nf-web", "  inbound: 22/tcp, 80/tcp, 443/tcp", "  inbound policy: DROP", "  outbound policy: ACCEPT", "PHP baseline", "  timezone: UTC", "  swap: 2G", "  stack: Ubuntu 24.04 LTS / PHP 8.3", "  ubuntu: 24.04 LTS", "  image: linode/ubuntu24.04", "  php version: 8.3", "  php service: php8.3-fpm", "  php socket: /run/php/php8.3-fpm.sock", "  package source: ubuntu-native", "  base packages: nginx, mariadb-server", "  packages: php8.3-fpm, php8.3-cli", "Server health URL: https://app1.nfweb.dev", "Paths", "  cloud-init preview: /tmp/cloud-init.yaml", "  marker: /etc/nf/server.json", "  sites root: /var/www/sites", "  shared root: /var/www/shared", "  nginx site logs: /var/log/nginx/sites", "Mode", "  dry-run: true", "DNS", "  zone: nfweb.dev (inferred)", "  hostname A: app1.nfweb.dev -> <created after server IP is known>", "  wildcard A: *.app1.nfweb.dev -> <created after server IP is known>"} {
 		if !strings.Contains(output, want) {
 			t.Fatalf("renderPlan() output missing %q:\n%s", want, output)
 		}
@@ -879,7 +965,7 @@ func TestRenderPlanDefaultSSHSourceShowsLinodeProfile(t *testing.T) {
 		t.Fatalf("BuildPlan() error = %v", err)
 	}
 	output := renderPlan(plan, "/tmp/cloud-init.yaml", "")
-	for _, want := range []string{"  key source: linode-profile", "  authorized keys: all Linode profile keys"} {
+	for _, want := range []string{"Access", "  key source: linode-profile", "  authorized keys: all Linode profile keys", "  root reveal: nf server root-password app1"} {
 		if !strings.Contains(output, want) {
 			t.Fatalf("renderPlan() output missing %q:\n%s", want, output)
 		}
@@ -909,7 +995,7 @@ func TestRenderProvisionSuccessShowsNextSteps(t *testing.T) {
 	plan.Firewall.ID = "fw-123"
 	plan.Firewall.DeviceID = created.ProviderID
 	output := renderProvisionSuccess(plan, created, dns, tls, "/tmp/state/servers.json", "/tmp/cloud-init.yaml", sshKeys)
-	for _, want := range []string{"Server provisioned.", "Server", "Firewall", "  mode: managed", "  managed label: nf-web", "  firewall id: fw-123", "SSH", "  auth: SSH keys only", "  sudo: passwordless", "Root", "  password: derived from hostname + purpose linode-root", "  stored in state: no", "  reveal: nf server root-password app1", "OS/PHP", "DNS", "TLS", "State", "Next", "test SSH by IP:", "ssh -o BatchMode=yes nonfiction@198.51.100.10 \"true\"", "test SSH by host:", "ssh -o BatchMode=yes nonfiction@app1.nfweb.dev \"true\"", "wait for cloud-init to finish", "sudo /usr/local/bin/nf-enable-wildcard-tls", "linode instance id: 12345", "stack: Ubuntu 24.04 LTS / PHP 8.3", "php service: php8.3-fpm", "php socket: /run/php/php8.3-fpm.sock", "authorized keys: team-a, team-b", "hostname A: app1 -> 198.51.100.10", "wildcard A: *.app1 -> 198.51.100.10"} {
+	for _, want := range []string{"Server provisioned.", "Host", "  provider: linode", "Access", "  ssh user: nonfiction", "  auth: SSH keys only", "  sudo: passwordless", "  root password: derived from hostname + purpose linode-root", "  root stored in state: no", "  root reveal: nf server root-password app1", "Ubuntu firewall", "  ufw default: deny incoming", "  ufw outbound: allow", "  allow: 22/tcp, 80/tcp, 443/tcp", "Linode firewall", "  provider: linode", "  mode: managed", "  managed label: nf-web", "  firewall id: fw-123", "PHP baseline", "  timezone: UTC", "  swap: 2G", "Server health URL: https://app1.nfweb.dev", "DNS", "TLS", "Paths", "  state: /tmp/state/servers.json", "  cloud-init: /tmp/cloud-init.yaml", "  marker: /etc/nf/server.json", "  sites root: /var/www/sites", "  shared root: /var/www/shared", "  nginx site logs: /var/log/nginx/sites", "Next", "test SSH by IP:", "ssh -o BatchMode=yes nonfiction@198.51.100.10 \"true\"", "test SSH by host:", "ssh -o BatchMode=yes nonfiction@app1.nfweb.dev \"true\"", "wait for cloud-init to finish", "sudo /usr/local/bin/nf-enable-wildcard-tls", "linode instance id: 12345", "stack: Ubuntu 24.04 LTS / PHP 8.3", "php service: php8.3-fpm", "php socket: /run/php/php8.3-fpm.sock", "authorized keys: team-a, team-b", "hostname A: app1 -> 198.51.100.10", "wildcard A: *.app1 -> 198.51.100.10"} {
 		if !strings.Contains(output, want) {
 			t.Fatalf("renderProvisionSuccess() output missing %q:\n%s", want, output)
 		}
