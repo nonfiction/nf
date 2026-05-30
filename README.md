@@ -119,7 +119,7 @@ Commands:
 
 Inside a project repository, `nf instance` manages the local WordPress instance and `nf theme tasks` lists project tasks from `.nf/project.json`.
 
-`nf server provision` is site-agnostic. It provisions a Linode server, upserts DNSimple A records for the hostname and wildcard hostname, and creates a neutral server health vhost for the server hostname only. It does not install WordPress, create databases, create future site vhosts, or write `sites.json`.
+`nf server provision` is site-agnostic. It provisions a Linode server, upserts DNSimple A records for the hostname and wildcard hostname, then waits for SSH, runs cloud-init/TLS finalization, and checks HTTPS health unless `--no-wait` is supplied. It creates a neutral server health vhost for the server hostname only. It does not install WordPress, create databases, create future site vhosts, or write `sites.json`, and reruns resume partial phases instead of recreating the Linode.
 
 Server baseline details:
 
@@ -134,6 +134,7 @@ Server baseline details:
 * `/etc/nf/server.json` records non-secret server facts only
 * Node/npm are not installed by default for the server baseline
 * the server health vhost serves `/var/www/nf-server` at `https://<hostname>` and exposes `/healthz`
+* that health page is server-level only; future site vhosts are separate subdomains
 * cloud-init previews redact the DNSimple token
 
 Server access defaults:
@@ -151,6 +152,7 @@ nf server provision --name app1 --hostname app1.nfweb.dev
 nf server provision --ubuntu-version 24.04
 nf server provision --firewall managed --firewall-id 12345
 nf server provision --provider linode --dns-provider dnsimple --execute --yes
+nf server provision --no-wait --execute --yes
 ```
 
 Defaults:
@@ -632,7 +634,7 @@ nf server delete [flags] [id-or-name]
 
 `nf server show` prints the matching server record as JSON. Without an identifier, interactive mode opens a selector.
 
-`nf server provision` builds a guarded provisioning plan and can create a Linode server with DNS/TLS bootstrap. It does not install WordPress or write site state.
+`nf server provision` builds a guarded provisioning plan and can create a Linode server with DNS/TLS bootstrap. By default it waits for SSH, completes cloud-init/TLS, and verifies `/healthz`; `--no-wait` leaves the server in provisioning state so you can finish it manually or resume later. It does not install WordPress or write site state.
 
 `nf server delete` prints a deletion plan first. In non-interactive mode it remains dry-run unless `--execute --yes` is supplied.
 
@@ -709,6 +711,22 @@ nf server provision \
   --yes
 ```
 
+Use `--no-wait` to stop after DNS if you want to finish cloud-init, TLS, and health checks yourself:
+
+```sh
+nf server provision \
+  --non-interactive \
+  --name app1 \
+  --hostname app1.nfweb.dev \
+  --execute \
+  --yes \
+  --no-wait
+```
+
+Rerunning the same provision command resumes from the saved partial phase instead of creating a new Linode.
+
+If TLS finalization fails, rerun the recovery helper over SSH: `ssh nonfiction@<hostname> "sudo /usr/local/bin/nf-enable-wildcard-tls"`.
+
 Useful flags:
 
 ```text
@@ -728,6 +746,12 @@ Useful flags:
 --write-cloud-init
 --show-cloud-init
 --non-interactive
+--wait
+--no-wait
+--ssh-timeout
+--cloud-init-timeout
+--tls-timeout
+--health-timeout
 --dry-run
 --execute
 --yes

@@ -3066,6 +3066,12 @@ func runProvision(argv []string) int {
 	fs.BoolVar(&args.AllLinodeSshKeys, "all-linode-ssh-keys", false, "use all Linode profile SSH keys")
 	fs.StringVar(&args.SshPublicKeyFile, "ssh-public-key-file", "", "SSH public key file fallback for --ssh-key-source file")
 	fs.StringVar(&args.DnsimpleAccountID, "dnsimple-account-id", "", "DNSimple account ID")
+	fs.BoolVar(&args.Wait, "wait", false, "wait for SSH, TLS, and health checks")
+	fs.BoolVar(&args.NoWait, "no-wait", false, "skip SSH, TLS, and health checks")
+	fs.DurationVar(&args.SshTimeout, "ssh-timeout", 5*time.Minute, "timeout for waiting on SSH port 22")
+	fs.DurationVar(&args.CloudInitTimeout, "cloud-init-timeout", 10*time.Minute, "timeout for cloud-init and TLS setup")
+	fs.DurationVar(&args.TLSTimeout, "tls-timeout", 5*time.Minute, "timeout budget for TLS setup")
+	fs.DurationVar(&args.HealthTimeout, "health-timeout", 2*time.Minute, "timeout for HTTPS health checks")
 	fs.StringVar(&args.WriteCloudInit, "write-cloud-init", "", "write cloud-init preview to a file")
 	fs.BoolVar(&args.NonInteractive, "non-interactive", false, "")
 	fs.BoolVar(&args.ShowCloudInit, "show-cloud-init", false, "show cloud-init preview in the terminal")
@@ -3088,8 +3094,15 @@ func runProvision(argv []string) int {
 		fmt.Fprintln(os.Stderr, "Choose either --execute or --dry-run, not both.")
 		return 1
 	}
+	if args.Wait && args.NoWait {
+		fmt.Fprintln(os.Stderr, "Choose either --wait or --no-wait, not both.")
+		return 1
+	}
 	if !args.Execute {
 		args.DryRun = true
+	}
+	if args.Execute && !args.NoWait {
+		args.Wait = true
 	}
 	if args.NonInteractive && args.Execute && !args.Yes {
 		fmt.Fprintln(os.Stderr, "Remote execution requires both --execute and --yes in non-interactive mode.")

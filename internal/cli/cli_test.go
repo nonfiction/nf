@@ -279,7 +279,7 @@ func TestRunServerProvisionHelpOmitsPhpVersionAndSocketFlags(t *testing.T) {
 			t.Fatalf("Run() = %d, want 1", got)
 		}
 	})
-	for _, want := range []string{"-firewall string", "-firewall-id string"} {
+	for _, want := range []string{"-firewall string", "-firewall-id string", "-no-wait", "-wait", "-ssh-timeout duration", "-cloud-init-timeout duration", "-tls-timeout duration", "-health-timeout duration"} {
 		if !strings.Contains(output, want) {
 			t.Fatalf("Run() help output missing %q:\n%s", want, output)
 		}
@@ -288,6 +288,17 @@ func TestRunServerProvisionHelpOmitsPhpVersionAndSocketFlags(t *testing.T) {
 		if strings.Contains(output, unwanted) {
 			t.Fatalf("Run() help output unexpectedly contained %q:\n%s", unwanted, output)
 		}
+	}
+}
+
+func TestRunServerProvisionRejectsWaitAndNoWaitTogether(t *testing.T) {
+	output := captureStderr(t, func() {
+		if got := Run([]string{"server", "provision", "--non-interactive", "--wait", "--no-wait"}); got != 1 {
+			t.Fatalf("Run() = %d, want 1", got)
+		}
+	})
+	if !strings.Contains(output, "Choose either --wait or --no-wait, not both.") {
+		t.Fatalf("Run() stderr = %q, want wait/no-wait conflict", output)
 	}
 }
 

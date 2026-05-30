@@ -354,7 +354,7 @@ For server provisioning records, keep the Ubuntu/PHP metadata in dedicated `os` 
 
 `nf server show`, `nf server root-password`, and `nf site show` print matching records or derived values from shared state.
 
-`nf server provision` is site-agnostic. It uses `--name` and `--hostname`, defaults to Linode plus DNSimple, and writes only `servers.json` with generic provider_id, nested linode, os, php, firewall, dns/tls/services, and no secrets.
+`nf server provision` is site-agnostic. It uses `--name` and `--hostname`, defaults to Linode plus DNSimple, and writes only `servers.json` with generic provider_id, nested linode, os, php, firewall, dns/tls/services, and no secrets. It waits for SSH/TLS/health by default, `--no-wait` skips that finalization, and reruns resume partial phases instead of recreating the Linode.
 
 Server baseline expectations:
 
@@ -363,10 +363,11 @@ Server baseline expectations:
 * baseline directories are `/var/www`, `/var/www/sites`, `/var/www/shared`, and `/var/log/nginx/sites`
 * PHP tuning lands in `/etc/php/<version>/fpm/conf.d/99-nf-wordpress.ini`
 * MariaDB is enabled but no database/users/grants are created at provision time
-* Nginx snippets are written for future site vhost generation, and a neutral server health vhost is created for the server hostname only; future site vhosts are not created during provisioning
+* Nginx snippets are written for future site vhost generation, and a neutral server health vhost is created for the server hostname only; that health page lives at `https://<hostname>` and `/healthz`, while future site vhosts are separate subdomains and are not created during provisioning
 * certbot renewal hooks reload nginx
 * `/etc/nf/server.json` stores non-secret machine facts only
 * Node/npm are not installed by default
+* if TLS finalization fails, the recovery helper is `ssh nonfiction@<hostname> "sudo /usr/local/bin/nf-enable-wildcard-tls"`
 
 Record root credential metadata as `credentials.root` with `derived: true`, `identity: <hostname>`, `purpose: linode-root`, and `stored: false`; do not store a password.
 
