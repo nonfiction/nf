@@ -183,6 +183,8 @@ Required/expected environment values:
 * `DNSIMPLE_TOKEN` for DNSimple operations
 * optional `DNSIMPLE_ACCOUNT_ID`, defaulting to `14`
 
+Treat cloud-init user-data as sensitive because it may include live provider credentials; previews should redact the DNSimple token.
+
 ## Project-context behavior
 
 `nf instance ...`, `nf init`, and `nf theme ...` commands are the local project command surface.
@@ -354,7 +356,21 @@ For server provisioning records, keep the Ubuntu/PHP metadata in dedicated `os` 
 
 `nf server provision` is site-agnostic. It uses `--name` and `--hostname`, defaults to Linode plus DNSimple, and writes only `servers.json` with generic provider_id, nested linode, os, php, firewall, dns/tls/services, and no secrets.
 
+Server baseline expectations:
+
+* cloud-init sets `hostname`/`fqdn`, manages `/etc/hosts`, and hardens SSH for key-only access
+* UFW is configured before enable, and the managed Linode firewall mirrors the same 22/80/443 inbound set when used
+* baseline directories are `/var/www`, `/var/www/sites`, `/var/www/shared`, and `/var/log/nginx/sites`
+* PHP tuning lands in `/etc/php/<version>/fpm/conf.d/99-nf-wordpress.ini`
+* MariaDB is enabled but no database/users/grants are created at provision time
+* Nginx snippets are written for future site vhost generation, and a neutral server health vhost is created for the server hostname only; future site vhosts are not created during provisioning
+* certbot renewal hooks reload nginx
+* `/etc/nf/server.json` stores non-secret machine facts only
+* Node/npm are not installed by default
+
 Record root credential metadata as `credentials.root` with `derived: true`, `identity: <hostname>`, `purpose: linode-root`, and `stored: false`; do not store a password.
+
+The DNSimple token is used to render cloud-init but is not stored in state.
 
 Ubuntu/PHP provisioning uses a single stock stack picker:
 

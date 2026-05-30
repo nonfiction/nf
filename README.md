@@ -99,6 +99,8 @@ For remote Linode provisioning:
 * `NF_SECRET_SALT`
 * an SSH public key
 
+Treat cloud-init user-data as sensitive because it can contain live provider credentials.
+
 ## Command overview
 
 ```text
@@ -117,14 +119,30 @@ Commands:
 
 Inside a project repository, `nf instance` manages the local WordPress instance and `nf theme tasks` lists project tasks from `.nf/project.json`.
 
-`nf server provision` is site-agnostic. It provisions a Linode server, upserts DNSimple A records for the hostname and wildcard hostname, and writes shared server state only. It does not install WordPress, create databases, or write `sites.json`.
+`nf server provision` is site-agnostic. It provisions a Linode server, upserts DNSimple A records for the hostname and wildcard hostname, and creates a neutral server health vhost for the server hostname only. It does not install WordPress, create databases, create future site vhosts, or write `sites.json`.
+
+Server baseline details:
+
+* cloud-init sets both `hostname` and `fqdn`, uses `preserve_hostname: false`, and manages `/etc/hosts`
+* SSH is key-only with `PermitRootLogin prohibit-password`, `PasswordAuthentication no`, and passwordless sudo for the deployment user
+* UFW allows 22/tcp, 80/tcp, and 443/tcp before enable; the Linode cloud firewall uses the same inbound set when enabled
+* baseline directories are `/var/www`, `/var/www/sites`, `/var/www/shared`, and `/var/log/nginx/sites`
+* PHP tuning is written to `/etc/php/<version>/fpm/conf.d/99-nf-wordpress.ini`
+* MariaDB is enabled without creating databases, users, or grants
+* a neutral nginx server health vhost is created for the server hostname only; future site vhosts are not created during provisioning
+* certbot's deploy hook reloads nginx after renewal
+* `/etc/nf/server.json` records non-secret server facts only
+* Node/npm are not installed by default for the server baseline
+* the server health vhost serves `/var/www/nf-server` at `https://<hostname>` and exposes `/healthz`
+* cloud-init previews redact the DNSimple token
 
 Server access defaults:
 
 * SSH user: `nonfiction`
 * SSH auth: SSH keys only
 * sudo: passwordless
-* root password: derived, not stored, revealable with `nf server root-password <id-or-name>`
+* root password: derived, not stored in state, revealable with `nf server root-password <id-or-name>`
+* DNSimple token: used for cloud-init rendering and not stored in state
 
 Common server provisioning flags:
 
@@ -160,6 +178,10 @@ Supported Ubuntu/PHP matrix:
 * `24.04` -> `linode/ubuntu24.04` / PHP `8.3`
 * `22.04` -> `linode/ubuntu22.04` / PHP `8.1`
 * `20.04` -> `linode/ubuntu20.04` / PHP `7.4` (legacy/ESM)
+
+Server health URL:
+
+* `https://<hostname>`
 
 Use `--ubuntu-version` for normal non-interactive selection. `--image` is only an advanced override; it does not replace the recorded Ubuntu/PHP metadata. Arbitrary PHP selection is not supported in this pass, and there is no public socket flag.
 
