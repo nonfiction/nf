@@ -17,7 +17,7 @@
           src = ./.;
           modRoot = ".";
           subPackages = ["cmd/nf"];
-          vendorHash = "sha256-JGQ/UHaGj8t8G/stfcTTnGtifw8ZfbxCzByzH5METyo=";
+          vendorHash = "sha256-uOrWzzmgalT5FgFXHxw8O+6yo9YUpoLC2xQnZlOkFDA=";
         };
       in {
         packages.default = nf;
