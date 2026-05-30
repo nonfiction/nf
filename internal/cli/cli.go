@@ -996,10 +996,11 @@ func copyFile(sourcePath, destinationPath string) error {
 
 func configInitRequirements() []envwizard.Requirement {
 	return []envwizard.Requirement{
-		{Keys: []string{"NF_SECRET_SALT"}, Prompt: "NF_SECRET_SALT (used for derived passwords): ", Secret: true, WriteKey: "NF_SECRET_SALT", Required: true},
+		{Keys: []string{"NF_SERVER_DOMAIN"}, Prompt: "NF_SERVER_DOMAIN (server domain): ", Default: "nfweb.dev", WriteKey: "NF_SERVER_DOMAIN"},
+		{Keys: []string{"DNSIMPLE_ACCOUNT_ID"}, Prompt: "DNSIMPLE_ACCOUNT_ID (DNSimple account id): ", Default: "14", WriteKey: "DNSIMPLE_ACCOUNT_ID"},
 		{Keys: []string{"DNSIMPLE_TOKEN"}, Prompt: "DNSimple token: ", Secret: true, WriteKey: "DNSIMPLE_TOKEN", Required: true},
 		{Keys: []string{"LINODE_CLI_TOKEN", "LINODE_TOKEN"}, Prompt: "Linode token: ", Secret: true, WriteKey: "LINODE_CLI_TOKEN", Required: true},
-		{Keys: []string{"DNSIMPLE_ACCOUNT_ID"}, Prompt: "DNSimple account id: ", Default: "14", WriteKey: "DNSIMPLE_ACCOUNT_ID"},
+		{Keys: []string{"NF_SECRET_SALT"}, Prompt: "NF_SECRET_SALT (used for derived passwords): ", Secret: true, WriteKey: "NF_SECRET_SALT", Required: true},
 	}
 }
 
@@ -2926,7 +2927,7 @@ func runPassword(argv []string) int {
 }
 
 func runConfig(argv []string) int {
-	if len(argv) == 0 || argv[0] == "help" {
+	if len(argv) == 0 || argv[0] == "help" || argv[0] == "--help" || argv[0] == "-h" {
 		return runConfigHelp()
 	}
 	if argv[0] != "init" {
@@ -2937,6 +2938,9 @@ func runConfig(argv []string) int {
 	nonInteractive := fs.Bool("non-interactive", false, "")
 	fs.SetOutput(os.Stderr)
 	if err := fs.Parse(argv[1:]); err != nil {
+		if err == flag.ErrHelp {
+			return 0
+		}
 		return 1
 	}
 	if err := envwizard.Init(configInitRequirements(), *nonInteractive); err != nil {
@@ -3049,13 +3053,10 @@ func runProvision(argv []string) int {
 	args := provision.Args{}
 	fs.StringVar(&args.Provider, "provider", "", "server provider (linode)")
 	fs.StringVar(&args.DnsProvider, "dns-provider", "", "DNS provider (dnsimple)")
-	fs.StringVar(&args.DnsZone, "dns-zone", "", "DNS zone name")
 	fs.StringVar(&args.UbuntuVersion, "ubuntu-version", "", "Ubuntu LTS version to use (26.04, 24.04, 22.04, 20.04)")
 	fs.StringVar(&args.Firewall, "firewall", "", "Linode cloud firewall mode (managed or none)")
 	fs.StringVar(&args.FirewallID, "firewall-id", "", "existing Linode cloud firewall id")
 	fs.StringVar(&args.Name, "name", "", "server name")
-	fs.StringVar(&args.Hostname, "hostname", "", "server hostname")
-	fs.StringVar(&args.Label, "label", "", "Linode label")
 	fs.StringVar(&args.Region, "region", "", "Linode region")
 	fs.StringVar(&args.Type, "type", "", "Linode type")
 	fs.StringVar(&args.Image, "image", "", "advanced Linode image override")

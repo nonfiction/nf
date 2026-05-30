@@ -255,18 +255,19 @@ func TestRunServerRootPasswordMissingServerFailsClearly(t *testing.T) {
 	}
 }
 
-func TestRunServerProvisionDryRunShowsDnsZoneFlag(t *testing.T) {
+func TestRunServerProvisionDryRunShowsDerivedIdentity(t *testing.T) {
+	t.Setenv("NF_SERVER_DOMAIN", "example.test")
 	output := captureStdout(t, func() {
-		if got := Run([]string{"server", "provision", "--non-interactive", "--dry-run", "--dns-zone", "example.test", "--ubuntu-version", "24.04"}); got != 0 {
+		if got := Run([]string{"server", "provision", "--non-interactive", "--dry-run", "--name", "prod2", "--ubuntu-version", "24.04"}); got != 0 {
 			t.Fatalf("Run() = %d, want 0", got)
 		}
 	})
-	for _, want := range []string{"Server provision dry-run plan", "Host", "  provider: linode", "Access", "  ssh user: nonfiction", "  auth: SSH keys only", "  sudo: passwordless", "  key source: linode-profile", "  authorized keys: all Linode profile keys", "  root password: derived from hostname + purpose linode-root", "  root stored in state: no", "  root reveal: nf server root-password app1", "Ubuntu firewall", "  ufw default: deny incoming", "  ufw outbound: allow", "  allow: 22/tcp, 80/tcp, 443/tcp", "Linode firewall", "  provider: linode", "  mode: managed", "  managed label: nf-web", "  inbound: 22/tcp, 80/tcp, 443/tcp", "  inbound policy: DROP", "  outbound policy: ACCEPT", "PHP baseline", "  timezone: UTC", "  swap: 2G", "  zone: example.test (explicit)", "  stack: Ubuntu 24.04 LTS / PHP 8.3", "  ubuntu: 24.04 LTS", "  image: linode/ubuntu24.04", "  php version: 8.3", "  php service: php8.3-fpm", "  php socket: /run/php/php8.3-fpm.sock", "  package source: ubuntu-native", "  packages: php8.3-fpm, php8.3-cli", "Server health URL: https://app1.nfweb.dev", "Paths", "  marker: /etc/nf/server.json", "  motd: /etc/update-motd.d/99-nf", "  sites root: /var/www/sites", "  shared root: /var/www/shared", "  nginx site logs: /var/log/nginx/sites", "Mode", "  dry-run: true", "  hostname A: app1.nfweb.dev -> <created after server IP is known>", "  wildcard A: *.app1.nfweb.dev -> <created after server IP is known>"} {
+	for _, want := range []string{"Server provision dry-run plan", "Server", "  provider: linode", "  name: prod2", "  hostname: prod2.example.test", "  label: prod2", "  wildcard hostname: *.prod2.example.test", "  health url: https://prod2.example.test", "Config", "  server domain: example.test", "Access", "  ssh user: nonfiction", "  root reveal: nf server root-password prod2", "PHP baseline", "  stack: Ubuntu 24.04 LTS / PHP 8.3", "DNS", "  zone: example.test", "  hostname A: prod2 -> <created after server IP is known>", "  wildcard A: *.prod2 -> <created after server IP is known>", "Mode", "  dry-run: true"} {
 		if !strings.Contains(output, want) {
 			t.Fatalf("Run() output missing %q:\n%s", want, output)
 		}
 	}
-	for _, unwanted := range []string{"PHP-FPM socket:", "php-fpm socket:", "--php-version", "--php-fpm-socket"} {
+	for _, unwanted := range []string{"PHP-FPM socket:", "php-fpm socket:", "--php-version", "--php-fpm-socket", "--hostname", "--label", "--dns-zone"} {
 		if strings.Contains(output, unwanted) {
 			t.Fatalf("Run() output unexpectedly contained %q:\n%s", unwanted, output)
 		}
