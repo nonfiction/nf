@@ -1,8 +1,12 @@
 package provision
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
+	"io"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strings"
@@ -193,6 +197,16 @@ func TestBuildPlanDefaults(t *testing.T) {
 	}
 	if got, want := plan.PHP.Socket, filepath.Clean("/run/php/php8.3-fpm.sock"); got != want {
 		t.Fatalf("PHP.Socket = %q, want %q", got, want)
+	}
+	if !plan.Wait {
+		t.Fatalf("Wait = false, want true")
+	}
+	planNoWait, err := BuildPlan(Args{NoWait: true, NonInteractive: true, DnsZone: "example.test"})
+	if err != nil {
+		t.Fatalf("BuildPlan(NoWait) error = %v", err)
+	}
+	if planNoWait.Wait {
+		t.Fatalf("NoWait plan Wait = true, want false")
 	}
 	if got, want := plan.PHP.PackageSource, packageSourceUbuntuNative; got != want {
 		t.Fatalf("PHP.PackageSource = %q, want %q", got, want)
@@ -422,7 +436,7 @@ func TestPreparePlanInteractiveExecutePromptsForKeysBeforeConfirmAndReusesThem(t
 	secretSaltFn = func() (string, error) { return "test-salt", nil }
 	currentTime = func() time.Time { return time.Date(2026, 5, 29, 12, 0, 0, 0, time.UTC) }
 
-	plan, err := BuildPlan(Args{Execute: true, Firewall: "none", Name: "app1", Hostname: "app1.nfweb.dev", Label: "app1", Region: "ca-central", Type: "g6-standard-1", SshUser: "nonfiction", DnsimpleAccountID: "14", UbuntuVersion: "24.04"})
+	plan, err := BuildPlan(Args{Execute: true, NoWait: true, Firewall: "none", Name: "app1", Hostname: "app1.nfweb.dev", Label: "app1", Region: "ca-central", Type: "g6-standard-1", SshUser: "nonfiction", DnsimpleAccountID: "14", UbuntuVersion: "24.04"})
 	if err != nil {
 		t.Fatalf("BuildPlan() error = %v", err)
 	}
@@ -505,7 +519,7 @@ func TestPreparePlanInteractiveDefaultPromptsForKeysBeforeConfirmAndReusesThem(t
 	secretSaltFn = func() (string, error) { return "test-salt", nil }
 	currentTime = func() time.Time { return time.Date(2026, 5, 29, 12, 0, 0, 0, time.UTC) }
 
-	plan, err := BuildPlan(Args{Execute: false, Firewall: "none", Name: "app1", Hostname: "app1.nfweb.dev", Label: "app1", Region: "ca-central", Type: "g6-standard-1", SshUser: "nonfiction", DnsimpleAccountID: "14", UbuntuVersion: "24.04"})
+	plan, err := BuildPlan(Args{Execute: false, NoWait: true, Firewall: "none", Name: "app1", Hostname: "app1.nfweb.dev", Label: "app1", Region: "ca-central", Type: "g6-standard-1", SshUser: "nonfiction", DnsimpleAccountID: "14", UbuntuVersion: "24.04"})
 	if err != nil {
 		t.Fatalf("BuildPlan() error = %v", err)
 	}
@@ -720,11 +734,17 @@ func TestCloudInitTemplateIsServerOnly(t *testing.T) {
 		"{ \"server\": \"app1\", \"hostname\": \"app1.nfweb.dev\", \"status\": \"ready\" }",
 		"/usr/local/bin/nf-write-server-health-page",
 		"/var/www/nf-server/index.html",
+		"cat >/var/www/nf-server/index.html <<'EOF'",
 		"<!doctype html>",
+		"</html>",
+		"EOF",
 		"<title>nf server app1</title>",
+		"font-family: system-ui, -apple-system, BlinkMacSystemFont, \"Segoe UI\", sans-serif;",
+		"<main>",
+		"<div class=\"pill\">ready</div>",
 		"<h1>nf server app1</h1>",
-		"<p>hostname: app1.nfweb.dev</p>",
-		"<p>status: ready</p>",
+		"<span class=\"label\">hostname:</span> app1.nfweb.dev",
+		"<span class=\"label\">health:</span> https://app1.nfweb.dev",
 		"/etc/letsencrypt/renewal-hooks/deploy/reload-nginx",
 		"/usr/local/bin/nf-enable-wildcard-tls",
 		"/usr/local/bin/nf-write-server-marker",
@@ -758,6 +778,23 @@ func TestCloudInitTemplateIsServerOnly(t *testing.T) {
 		if !strings.Contains(rendered, want) {
 			t.Fatalf("renderCloudInit() output missing %q:\n%s", want, rendered)
 		}
+	}
+	lines := strings.Split(strings.ReplaceAll(rendered, "\r\n", "\n"), "\n")
+	openerIdx, closerIdx := -1, -1
+	for i, line := range lines {
+		if line == "      cat >/var/www/nf-server/index.html <<'EOF'" {
+			openerIdx = i
+			for j := i + 1; j < len(lines); j++ {
+				if lines[j] == "      EOF" {
+					closerIdx = j
+					break
+				}
+			}
+			break
+		}
+	}
+	if openerIdx == -1 || closerIdx == -1 || openerIdx+1 >= len(lines) || closerIdx+1 >= len(lines) || lines[closerIdx+1] != "  - path: /etc/letsencrypt/renewal-hooks/deploy/reload-nginx" {
+		t.Fatalf("renderCloudInit() output missing normalized heredoc delimiters:\n%s", rendered)
 	}
 	for _, unwanted := range []string{
 		"wordpress.org/latest.zip",
@@ -995,7 +1032,7 @@ func TestRenderProvisionSuccessShowsNextSteps(t *testing.T) {
 	plan.Firewall.ID = "fw-123"
 	plan.Firewall.DeviceID = created.ProviderID
 	output := renderProvisionSuccess(plan, created, dns, tls, "/tmp/state/servers.json", "/tmp/cloud-init.yaml", sshKeys)
-	for _, want := range []string{"Server provisioned.", "Host", "  provider: linode", "Access", "  ssh user: nonfiction", "  auth: SSH keys only", "  sudo: passwordless", "  root password: derived from hostname + purpose linode-root", "  root stored in state: no", "  root reveal: nf server root-password app1", "Ubuntu firewall", "  ufw default: deny incoming", "  ufw outbound: allow", "  allow: 22/tcp, 80/tcp, 443/tcp", "Linode firewall", "  provider: linode", "  mode: managed", "  managed label: nf-web", "  firewall id: fw-123", "PHP baseline", "  timezone: UTC", "  swap: 2G", "Server health URL: https://app1.nfweb.dev", "DNS", "TLS", "Paths", "  state: /tmp/state/servers.json", "  cloud-init: /tmp/cloud-init.yaml", "  marker: /etc/nf/server.json", "  sites root: /var/www/sites", "  shared root: /var/www/shared", "  nginx site logs: /var/log/nginx/sites", "Next", "test SSH by IP:", "ssh -o BatchMode=yes nonfiction@198.51.100.10 \"true\"", "test SSH by host:", "ssh -o BatchMode=yes nonfiction@app1.nfweb.dev \"true\"", "wait for cloud-init to finish", "sudo /usr/local/bin/nf-enable-wildcard-tls", "linode instance id: 12345", "stack: Ubuntu 24.04 LTS / PHP 8.3", "php service: php8.3-fpm", "php socket: /run/php/php8.3-fpm.sock", "authorized keys: team-a, team-b", "hostname A: app1 -> 198.51.100.10", "wildcard A: *.app1 -> 198.51.100.10"} {
+	for _, want := range []string{"Server provisioned.", "Host", "  provider: linode", "Access", "  ssh user: nonfiction", "  auth: SSH keys only", "  sudo: passwordless", "  root password: derived from hostname + purpose linode-root", "  root stored in state: no", "  root reveal: nf server root-password app1", "Ubuntu firewall", "  ufw default: deny incoming", "  ufw outbound: allow", "  allow: 22/tcp, 80/tcp, 443/tcp", "Linode firewall", "  provider: linode", "  mode: managed", "  managed label: nf-web", "  firewall id: fw-123", "PHP baseline", "  timezone: UTC", "  swap: 2G", "Server", "  health: https://app1.nfweb.dev", "  health check: https://app1.nfweb.dev/healthz", "  status: ready", "DNS", "TLS", "Paths", "  state: /tmp/state/servers.json", "  cloud-init: /tmp/cloud-init.yaml", "  marker: /etc/nf/server.json", "  sites root: /var/www/sites", "  shared root: /var/www/shared", "  nginx site logs: /var/log/nginx/sites", "linode instance id: 12345", "stack: Ubuntu 24.04 LTS / PHP 8.3", "php service: php8.3-fpm", "php socket: /run/php/php8.3-fpm.sock", "authorized keys: team-a, team-b", "hostname A: app1 -> 198.51.100.10", "wildcard A: *.app1 -> 198.51.100.10"} {
 		if !strings.Contains(output, want) {
 			t.Fatalf("renderProvisionSuccess() output missing %q:\n%s", want, output)
 		}
@@ -1013,6 +1050,9 @@ func TestProvisionServerWritesOnlyServersJSON(t *testing.T) {
 	oldRunLinodeValue := runLinodeCLIValueFn
 	oldZoneLookup := dnsimpleZoneLookup
 	oldUpsert := dnsimpleUpsertARecordRun
+	oldWaitForTCP := waitForTCPPortFn
+	oldRunSSH := runSSHCommandFn
+	oldHealthCheck := checkHTTPSHealthFn
 	oldSalt := secretSaltFn
 	oldNow := currentTime
 	t.Cleanup(func() {
@@ -1020,6 +1060,9 @@ func TestProvisionServerWritesOnlyServersJSON(t *testing.T) {
 		runLinodeCLIValueFn = oldRunLinodeValue
 		dnsimpleZoneLookup = oldZoneLookup
 		dnsimpleUpsertARecordRun = oldUpsert
+		waitForTCPPortFn = oldWaitForTCP
+		runSSHCommandFn = oldRunSSH
+		checkHTTPSHealthFn = oldHealthCheck
 		secretSaltFn = oldSalt
 		currentTime = oldNow
 	})
@@ -1059,6 +1102,25 @@ func TestProvisionServerWritesOnlyServersJSON(t *testing.T) {
 		recordedNames = append(recordedNames, name)
 		return nil
 	}
+	waitForTCPPortFn = func(host string, port int, timeout time.Duration) error { return nil }
+	runSSHCommandFn = func(user, host, command string, timeout time.Duration) error { return nil }
+	checkHTTPSHealthFn = func(url, name, hostname string, timeout time.Duration) error {
+		data, err := os.ReadFile(filepath.Join(configHome, "state", "servers.json"))
+		if err != nil {
+			t.Fatalf("ReadFile(servers.json) during health check error = %v", err)
+		}
+		var records []map[string]any
+		if err := json.Unmarshal(data, &records); err != nil {
+			t.Fatalf("Unmarshal(servers.json) during health check error = %v", err)
+		}
+		if got, want := valueString(records[0]["phase"]), "tls_configured"; got != want {
+			t.Fatalf("phase before health check = %q, want %q", got, want)
+		}
+		if got, want := valueString(records[0]["status"]), "provisioning"; got != want {
+			t.Fatalf("status before health check = %q, want %q", got, want)
+		}
+		return nil
+	}
 	secretSaltFn = func() (string, error) { return "test-salt", nil }
 	currentTime = func() time.Time { return time.Date(2026, 5, 29, 12, 0, 0, 0, time.UTC) }
 
@@ -1066,9 +1128,18 @@ func TestProvisionServerWritesOnlyServersJSON(t *testing.T) {
 	if err != nil {
 		t.Fatalf("BuildPlan() error = %v", err)
 	}
-	result, err := ProvisionServer(plan)
-	if err != nil {
-		t.Fatalf("ProvisionServer() error = %v", err)
+	var result *ServerCreateResult
+	var provisionErr error
+	output := captureStdout(t, func() {
+		result, provisionErr = ProvisionServer(plan)
+	})
+	if provisionErr != nil {
+		t.Fatalf("ProvisionServer() error = %v", provisionErr)
+	}
+	for _, want := range []string{"Creating Linode", "Configuring DNS", "Waiting for SSH", "Waiting for cloud-init and enabling wildcard TLS", "Checking server health"} {
+		if !strings.Contains(output, want) {
+			t.Fatalf("output missing %q:\n%s", want, output)
+		}
 	}
 	if result == nil || result.StatePath == "" {
 		t.Fatalf("ProvisionServer() result = %#v, want state path", result)
@@ -1159,6 +1230,19 @@ func TestProvisionServerWritesOnlyServersJSON(t *testing.T) {
 	if len(recordedNames) != 2 || recordedNames[0] != "app1" || recordedNames[1] != "*.app1" {
 		t.Fatalf("DNS record names = %#v, want [app1 *.app1]", recordedNames)
 	}
+	data, err = os.ReadFile(serverStatePath)
+	if err != nil {
+		t.Fatalf("ReadFile(servers.json) error = %v", err)
+	}
+	if err := json.Unmarshal(data, &records); err != nil {
+		t.Fatalf("Unmarshal(servers.json) error = %v", err)
+	}
+	if got, want := valueString(records[0]["status"]), "provisioned"; got != want {
+		t.Fatalf("status = %q, want %q", got, want)
+	}
+	if got, want := valueString(records[0]["phase"]), "complete"; got != want {
+		t.Fatalf("phase = %q, want %q", got, want)
+	}
 }
 
 func TestProvisionServerManagedFirewallCreatesRulesAndAttachesDevice(t *testing.T) {
@@ -1172,6 +1256,9 @@ func TestProvisionServerManagedFirewallCreatesRulesAndAttachesDevice(t *testing.
 	oldRunLinodeValue := runLinodeCLIValueFn
 	oldZoneLookup := dnsimpleZoneLookup
 	oldUpsert := dnsimpleUpsertARecordRun
+	oldWaitForTCP := waitForTCPPortFn
+	oldRunSSH := runSSHCommandFn
+	oldHealthCheck := checkHTTPSHealthFn
 	oldSalt := secretSaltFn
 	oldNow := currentTime
 	t.Cleanup(func() {
@@ -1179,6 +1266,9 @@ func TestProvisionServerManagedFirewallCreatesRulesAndAttachesDevice(t *testing.
 		runLinodeCLIValueFn = oldRunLinodeValue
 		dnsimpleZoneLookup = oldZoneLookup
 		dnsimpleUpsertARecordRun = oldUpsert
+		waitForTCPPortFn = oldWaitForTCP
+		runSSHCommandFn = oldRunSSH
+		checkHTTPSHealthFn = oldHealthCheck
 		secretSaltFn = oldSalt
 		currentTime = oldNow
 	})
@@ -1243,7 +1333,7 @@ func TestProvisionServerManagedFirewallCreatesRulesAndAttachesDevice(t *testing.
 	secretSaltFn = func() (string, error) { return "test-salt", nil }
 	currentTime = func() time.Time { return time.Date(2026, 5, 29, 12, 0, 0, 0, time.UTC) }
 
-	plan, err := BuildPlan(Args{NonInteractive: true, Execute: true, Yes: true, Name: "app1", Hostname: "app1.nfweb.dev"})
+	plan, err := BuildPlan(Args{NonInteractive: true, Execute: true, Yes: true, NoWait: true, Name: "app1", Hostname: "app1.nfweb.dev"})
 	if err != nil {
 		t.Fatalf("BuildPlan() error = %v", err)
 	}
@@ -1338,7 +1428,7 @@ func TestProvisionServerManagedFirewallReusesExistingFirewallByLabel(t *testing.
 	secretSaltFn = func() (string, error) { return "test-salt", nil }
 	currentTime = func() time.Time { return time.Date(2026, 5, 29, 12, 0, 0, 0, time.UTC) }
 
-	plan, err := BuildPlan(Args{NonInteractive: true, Execute: true, Yes: true, Name: "app1", Hostname: "app1.nfweb.dev"})
+	plan, err := BuildPlan(Args{NonInteractive: true, Execute: true, Yes: true, NoWait: true, Name: "app1", Hostname: "app1.nfweb.dev"})
 	if err != nil {
 		t.Fatalf("BuildPlan() error = %v", err)
 	}
@@ -1429,7 +1519,7 @@ func TestProvisionServerFirewallFailureKeepsPartialStateAndExplainsRecovery(t *t
 	secretSaltFn = func() (string, error) { return "test-salt", nil }
 	currentTime = func() time.Time { return time.Date(2026, 5, 29, 12, 0, 0, 0, time.UTC) }
 
-	plan, err := BuildPlan(Args{NonInteractive: true, Execute: true, Yes: true, Name: "app1", Hostname: "app1.nfweb.dev"})
+	plan, err := BuildPlan(Args{NonInteractive: true, Execute: true, Yes: true, NoWait: true, Name: "app1", Hostname: "app1.nfweb.dev"})
 	if err != nil {
 		t.Fatalf("BuildPlan() error = %v", err)
 	}
@@ -1497,7 +1587,7 @@ func TestProvisionServerWritesPartialStateOnDNSFailure(t *testing.T) {
 	secretSaltFn = func() (string, error) { return "test-salt", nil }
 	currentTime = func() time.Time { return time.Date(2026, 5, 29, 12, 0, 0, 0, time.UTC) }
 
-	plan, err := BuildPlan(Args{NonInteractive: true, Execute: true, Yes: true, Firewall: "none", Name: "app1", Hostname: "app1.nfweb.dev"})
+	plan, err := BuildPlan(Args{NonInteractive: true, Execute: true, Yes: true, NoWait: true, Firewall: "none", Name: "app1", Hostname: "app1.nfweb.dev"})
 	if err != nil {
 		t.Fatalf("BuildPlan() error = %v", err)
 	}
@@ -1538,6 +1628,104 @@ func TestProvisionServerWritesPartialStateOnDNSFailure(t *testing.T) {
 	}
 	if ssh, ok := record["ssh"].(map[string]any); !ok || ssh["source"] != "linode-profile" {
 		t.Fatalf("ssh block = %#v, want profile metadata", record["ssh"])
+	}
+}
+
+func TestProvisionServerHealthFailureExplainsRecovery(t *testing.T) {
+	configHome := t.TempDir()
+	t.Setenv("NF_CONFIG_HOME", configHome)
+	t.Setenv("NF_SECRET_SALT", "test-salt")
+	t.Setenv("DNSIMPLE_TOKEN", "dns-token")
+	t.Setenv("LINODE_CLI_TOKEN", "linode-token")
+
+	oldRunLinode := runLinodeCLICommand
+	oldRunLinodeValue := runLinodeCLIValueFn
+	oldZoneLookup := dnsimpleZoneLookup
+	oldUpsert := dnsimpleUpsertARecordRun
+	oldWaitForTCP := waitForTCPPortFn
+	oldRunSSH := runSSHCommandFn
+	oldHealthCheck := checkHTTPSHealthFn
+	oldSalt := secretSaltFn
+	oldNow := currentTime
+	t.Cleanup(func() {
+		runLinodeCLICommand = oldRunLinode
+		runLinodeCLIValueFn = oldRunLinodeValue
+		dnsimpleZoneLookup = oldZoneLookup
+		dnsimpleUpsertARecordRun = oldUpsert
+		waitForTCPPortFn = oldWaitForTCP
+		runSSHCommandFn = oldRunSSH
+		checkHTTPSHealthFn = oldHealthCheck
+		secretSaltFn = oldSalt
+		currentTime = oldNow
+	})
+
+	runLinodeCLIValueFn = func(args []string) (any, error) {
+		if len(args) >= 2 && args[0] == "sshkeys" && args[1] == "list" {
+			return []any{map[string]any{"id": json.Number("77496734"), "label": "team-a", "fingerprint": "fp-a", "created": "2026-05-29", "ssh_key": "ssh-rsa AAAA team-a"}}, nil
+		}
+		if len(args) >= 2 && args[0] == "firewalls" && args[1] == "list" {
+			return []any{}, nil
+		}
+		t.Fatalf("unexpected linode-cli value args: %v", args)
+		return nil, nil
+	}
+	runLinodeCLICommand = func(args []string) (map[string]any, error) {
+		switch {
+		case len(args) >= 2 && args[0] == "linodes" && args[1] == "create":
+			return map[string]any{"id": "12345", "ipv4": "198.51.100.10"}, nil
+		case len(args) >= 2 && args[0] == "firewalls" && args[1] == "create":
+			return map[string]any{}, nil
+		case len(args) >= 2 && args[0] == "firewalls" && args[1] == "rules-update":
+			return map[string]any{}, nil
+		case len(args) >= 2 && args[0] == "firewalls" && args[1] == "device-create":
+			return map[string]any{}, nil
+		default:
+			t.Fatalf("unexpected linode-cli command args: %v", args)
+			return nil, nil
+		}
+	}
+	dnsimpleZoneLookup = func(plan Plan, token string) (string, error) { return "nfweb.dev", nil }
+	dnsimpleUpsertARecordRun = func(token, accountID, zone, name, ip string) error { return nil }
+	waitForTCPPortFn = func(host string, port int, timeout time.Duration) error { return nil }
+	runSSHCommandFn = func(user, host, command string, timeout time.Duration) error { return nil }
+	checkHTTPSHealthFn = func(url, name, hostname string, timeout time.Duration) error {
+		data, err := os.ReadFile(filepath.Join(configHome, "state", "servers.json"))
+		if err != nil {
+			t.Fatalf("ReadFile(servers.json) during health check error = %v", err)
+		}
+		var records []map[string]any
+		if err := json.Unmarshal(data, &records); err != nil {
+			t.Fatalf("Unmarshal(servers.json) during health check error = %v", err)
+		}
+		if got, want := valueString(records[0]["phase"]), "tls_configured"; got != want {
+			t.Fatalf("phase before health failure = %q, want %q", got, want)
+		}
+		return fmt.Errorf("unexpected health body")
+	}
+	secretSaltFn = func() (string, error) { return "test-salt", nil }
+	currentTime = func() time.Time { return time.Date(2026, 5, 29, 12, 0, 0, 0, time.UTC) }
+
+	plan, err := BuildPlan(Args{NonInteractive: true, Execute: true, Yes: true, Firewall: "none", Name: "app1", Hostname: "app1.nfweb.dev"})
+	if err != nil {
+		t.Fatalf("BuildPlan() error = %v", err)
+	}
+	_, err = ProvisionServer(plan)
+	if err == nil || !strings.Contains(err.Error(), "Health error") || !strings.Contains(err.Error(), "ssh nonfiction@app1.nfweb.dev \"sudo nginx -t && sudo systemctl status nginx\"") || !strings.Contains(err.Error(), "curl -I https://app1.nfweb.dev") {
+		t.Fatalf("ProvisionServer() error = %v, want health recovery message", err)
+	}
+	data, err := os.ReadFile(filepath.Join(configHome, "state", "servers.json"))
+	if err != nil {
+		t.Fatalf("ReadFile(servers.json) error = %v", err)
+	}
+	var records []map[string]any
+	if err := json.Unmarshal(data, &records); err != nil {
+		t.Fatalf("Unmarshal(servers.json) error = %v", err)
+	}
+	if got, want := valueString(records[0]["phase"]), "tls_configured"; got != want {
+		t.Fatalf("phase = %q, want %q", got, want)
+	}
+	if got, want := valueString(records[0]["status"]), "provisioning"; got != want {
+		t.Fatalf("status = %q, want %q", got, want)
 	}
 }
 
@@ -1597,6 +1785,9 @@ func TestProvisionServerResumesProvisioningRecordWithoutCreatingNewLinode(t *tes
 	}
 	dnsimpleZoneLookup = func(plan Plan, token string) (string, error) { return "nfweb.dev", nil }
 	dnsimpleUpsertARecordRun = func(token, accountID, zone, name, ip string) error { return nil }
+	waitForTCPPortFn = func(host string, port int, timeout time.Duration) error { return nil }
+	runSSHCommandFn = func(user, host, command string, timeout time.Duration) error { return nil }
+	checkHTTPSHealthFn = func(url, name, hostname string, timeout time.Duration) error { return nil }
 	secretSaltFn = func() (string, error) { return "test-salt", nil }
 	currentTime = func() time.Time { return time.Date(2026, 5, 29, 12, 0, 0, 0, time.UTC) }
 
@@ -1669,7 +1860,7 @@ func TestProvisionServerStopsWhenAlreadyProvisioned(t *testing.T) {
 		return nil
 	}
 
-	plan, err := BuildPlan(Args{NonInteractive: true, Execute: true, Yes: true, Firewall: "none", Name: "app1", Hostname: "app1.nfweb.dev"})
+	plan, err := BuildPlan(Args{NonInteractive: true, Execute: true, Yes: true, Firewall: "none", NoWait: true, Name: "app1", Hostname: "app1.nfweb.dev"})
 	if err != nil {
 		t.Fatalf("BuildPlan() error = %v", err)
 	}
@@ -1680,6 +1871,369 @@ func TestProvisionServerStopsWhenAlreadyProvisioned(t *testing.T) {
 	if createCalled {
 		t.Fatal("runLinodeCLICommand was called for an already provisioned record")
 	}
+}
+
+func TestCheckHTTPSHealthRequiresReadyIdentityAndStatus(t *testing.T) {
+	oldClientFn := healthHTTPClientFn
+	t.Cleanup(func() { healthHTTPClientFn = oldClientFn })
+
+	t.Run("success", func(t *testing.T) {
+		srv := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			w.WriteHeader(http.StatusOK)
+			_, _ = io.WriteString(w, `{"server":"app1","hostname":"app1.nfweb.dev","status":"ready"}`)
+		}))
+		defer srv.Close()
+		healthHTTPClientFn = srv.Client
+		if err := checkHTTPSHealth(srv.URL, "app1", "app1.nfweb.dev", time.Second); err != nil {
+			t.Fatalf("checkHTTPSHealth() error = %v", err)
+		}
+	})
+
+	t.Run("missing identity fails", func(t *testing.T) {
+		srv := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			w.WriteHeader(http.StatusOK)
+			_, _ = io.WriteString(w, `{"status":"ready"}`)
+		}))
+		defer srv.Close()
+		healthHTTPClientFn = srv.Client
+		if err := checkHTTPSHealth(srv.URL, "app1", "app1.nfweb.dev", time.Nanosecond); err == nil || !strings.Contains(err.Error(), "unexpected health response") {
+			t.Fatalf("checkHTTPSHealth() error = %v, want unexpected health response", err)
+		}
+	})
+
+	t.Run("bad status fails", func(t *testing.T) {
+		srv := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			w.WriteHeader(http.StatusServiceUnavailable)
+			_, _ = io.WriteString(w, `{"server":"app1","hostname":"app1.nfweb.dev","status":"ready"}`)
+		}))
+		defer srv.Close()
+		healthHTTPClientFn = srv.Client
+		if err := checkHTTPSHealth(srv.URL, "app1", "app1.nfweb.dev", time.Nanosecond); err == nil || !strings.Contains(err.Error(), "unexpected health response") {
+			t.Fatalf("checkHTTPSHealth() error = %v, want unexpected health response", err)
+		}
+	})
+}
+
+func TestProvisionServerNoWaitLeavesDnsConfiguredAndPrintsManualSteps(t *testing.T) {
+	configHome := t.TempDir()
+	t.Setenv("NF_CONFIG_HOME", configHome)
+	t.Setenv("NF_SECRET_SALT", "test-salt")
+	t.Setenv("DNSIMPLE_TOKEN", "dns-token")
+	t.Setenv("LINODE_CLI_TOKEN", "linode-token")
+
+	oldRunLinode := runLinodeCLICommand
+	oldRunLinodeValue := runLinodeCLIValueFn
+	oldZoneLookup := dnsimpleZoneLookup
+	oldUpsert := dnsimpleUpsertARecordRun
+	oldWaitForTCP := waitForTCPPortFn
+	oldRunSSH := runSSHCommandFn
+	oldHealthCheck := checkHTTPSHealthFn
+	oldSalt := secretSaltFn
+	oldNow := currentTime
+	t.Cleanup(func() {
+		runLinodeCLICommand = oldRunLinode
+		runLinodeCLIValueFn = oldRunLinodeValue
+		dnsimpleZoneLookup = oldZoneLookup
+		dnsimpleUpsertARecordRun = oldUpsert
+		waitForTCPPortFn = oldWaitForTCP
+		runSSHCommandFn = oldRunSSH
+		checkHTTPSHealthFn = oldHealthCheck
+		secretSaltFn = oldSalt
+		currentTime = oldNow
+	})
+
+	runLinodeCLIValueFn = func(args []string) (any, error) {
+		if len(args) >= 2 && args[0] == "sshkeys" && args[1] == "list" {
+			return []any{map[string]any{"id": json.Number("77496734"), "label": "team-a", "fingerprint": "fp-a", "created": "2026-05-29", "ssh_key": "ssh-rsa AAAA team-a"}}, nil
+		}
+		t.Fatalf("unexpected linode-cli value args: %v", args)
+		return nil, nil
+	}
+	runLinodeCLICommand = func(args []string) (map[string]any, error) {
+		return map[string]any{"id": "12345", "ipv4": "198.51.100.10"}, nil
+	}
+	dnsimpleZoneLookup = func(plan Plan, token string) (string, error) { return "nfweb.dev", nil }
+	dnsimpleUpsertARecordRun = func(token, accountID, zone, name, ip string) error { return nil }
+	waitForTCPPortFn = func(host string, port int, timeout time.Duration) error {
+		t.Fatal("waitForTCPPortFn should not run in --no-wait mode")
+		return nil
+	}
+	runSSHCommandFn = func(user, host, command string, timeout time.Duration) error {
+		t.Fatal("runSSHCommandFn should not run in --no-wait mode")
+		return nil
+	}
+	checkHTTPSHealthFn = func(url, name, hostname string, timeout time.Duration) error {
+		t.Fatal("checkHTTPSHealthFn should not run in --no-wait mode")
+		return nil
+	}
+	secretSaltFn = func() (string, error) { return "test-salt", nil }
+	currentTime = func() time.Time { return time.Date(2026, 5, 29, 12, 0, 0, 0, time.UTC) }
+
+	plan, err := BuildPlan(Args{NonInteractive: true, Execute: true, Yes: true, NoWait: true, Firewall: "none", Name: "app1", Hostname: "app1.nfweb.dev"})
+	if err != nil {
+		t.Fatalf("BuildPlan() error = %v", err)
+	}
+	output := captureStdout(t, func() {
+		if _, err := ProvisionServer(plan); err != nil {
+			t.Fatalf("ProvisionServer() error = %v", err)
+		}
+	})
+	for _, want := range []string{"Server provisioning paused.", "phase: dns_configured", "ssh -o BatchMode=yes nonfiction@app1.nfweb.dev \"cloud-init status --wait\"", "ssh nonfiction@app1.nfweb.dev \"sudo /usr/local/bin/nf-enable-wildcard-tls\"", "curl -fsS https://app1.nfweb.dev/healthz"} {
+		if !strings.Contains(output, want) {
+			t.Fatalf("output missing %q:\n%s", want, output)
+		}
+	}
+	data, err := os.ReadFile(filepath.Join(configHome, "state", "servers.json"))
+	if err != nil {
+		t.Fatalf("ReadFile(servers.json) error = %v", err)
+	}
+	var records []map[string]any
+	if err := json.Unmarshal(data, &records); err != nil {
+		t.Fatalf("Unmarshal(servers.json) error = %v", err)
+	}
+	if got, want := valueString(records[0]["status"]), "provisioning"; got != want {
+		t.Fatalf("status = %q, want %q", got, want)
+	}
+	if got, want := valueString(records[0]["phase"]), "dns_configured"; got != want {
+		t.Fatalf("phase = %q, want %q", got, want)
+	}
+}
+
+func TestProvisionServerResumesFromDnsConfigured(t *testing.T) {
+	configHome := t.TempDir()
+	t.Setenv("NF_CONFIG_HOME", configHome)
+	t.Setenv("NF_SECRET_SALT", "test-salt")
+	t.Setenv("DNSIMPLE_TOKEN", "dns-token")
+	t.Setenv("LINODE_CLI_TOKEN", "linode-token")
+	record := map[string]any{"provider": "linode", "provider_id": "12345", "name": "app1", "hostname": "app1.nfweb.dev", "label": "app1", "status": "provisioning", "phase": "dns_configured", "ipv4": "198.51.100.10", "dns": map[string]any{"provider": "dnsimple", "zone": "nfweb.dev", "hostname_record": map[string]any{"name": "app1", "type": "A", "content": "198.51.100.10"}, "wildcard_record": map[string]any{"name": "*.app1", "type": "A", "content": "198.51.100.10"}}}
+	if err := saveStatePayload(filepath.Join(configHome, "state", "servers.json"), []map[string]any{record}); err != nil {
+		t.Fatalf("saveStatePayload() error = %v", err)
+	}
+
+	oldRunLinode := runLinodeCLICommand
+	oldRunLinodeValue := runLinodeCLIValueFn
+	oldZoneLookup := dnsimpleZoneLookup
+	oldUpsert := dnsimpleUpsertARecordRun
+	oldWaitForTCP := waitForTCPPortFn
+	oldRunSSH := runSSHCommandFn
+	oldHealthCheck := checkHTTPSHealthFn
+	oldSalt := secretSaltFn
+	oldNow := currentTime
+	t.Cleanup(func() {
+		runLinodeCLICommand = oldRunLinode
+		runLinodeCLIValueFn = oldRunLinodeValue
+		dnsimpleZoneLookup = oldZoneLookup
+		dnsimpleUpsertARecordRun = oldUpsert
+		waitForTCPPortFn = oldWaitForTCP
+		runSSHCommandFn = oldRunSSH
+		checkHTTPSHealthFn = oldHealthCheck
+		secretSaltFn = oldSalt
+		currentTime = oldNow
+	})
+
+	createCalled := false
+	runLinodeCLICommand = func(args []string) (map[string]any, error) {
+		createCalled = true
+		return nil, fmt.Errorf("should not create")
+	}
+	runLinodeCLIValueFn = func(args []string) (any, error) {
+		if len(args) >= 2 && args[0] == "sshkeys" && args[1] == "list" {
+			return []any{map[string]any{"id": json.Number("77496734"), "label": "team-a", "fingerprint": "fp-a", "created": "2026-05-29", "ssh_key": "ssh-rsa AAAA team-a"}}, nil
+		}
+		t.Fatalf("unexpected linode-cli value args for dns-configured resume: %v", args)
+		return nil, nil
+	}
+	dnsimpleZoneLookup = func(plan Plan, token string) (string, error) {
+		t.Fatalf("dns lookup should not run for dns-configured resume: %v", plan.Hostname)
+		return "", nil
+	}
+	dnsimpleUpsertARecordRun = func(token, accountID, zone, name, ip string) error {
+		t.Fatalf("dns upsert should not run for dns-configured resume")
+		return nil
+	}
+	waitForTCPPortFn = func(host string, port int, timeout time.Duration) error { return nil }
+	var events []string
+	runSSHCommandFn = func(user, host, command string, timeout time.Duration) error {
+		events = append(events, "ssh")
+		return nil
+	}
+	checkHTTPSHealthFn = func(url, name, hostname string, timeout time.Duration) error {
+		events = append(events, "health")
+		data, err := os.ReadFile(filepath.Join(configHome, "state", "servers.json"))
+		if err != nil {
+			t.Fatalf("ReadFile(servers.json) during health check error = %v", err)
+		}
+		var records []map[string]any
+		if err := json.Unmarshal(data, &records); err != nil {
+			t.Fatalf("Unmarshal(servers.json) during health check error = %v", err)
+		}
+		if got, want := valueString(records[0]["phase"]), "tls_configured"; got != want {
+			t.Fatalf("phase before health check = %q, want %q", got, want)
+		}
+		return nil
+	}
+	secretSaltFn = func() (string, error) { return "test-salt", nil }
+	currentTime = func() time.Time { return time.Date(2026, 5, 29, 12, 0, 0, 0, time.UTC) }
+
+	plan, err := BuildPlan(Args{NonInteractive: true, Execute: true, Yes: true, Firewall: "none", Name: "app1", Hostname: "app1.nfweb.dev"})
+	if err != nil {
+		t.Fatalf("BuildPlan() error = %v", err)
+	}
+	result, err := ProvisionServer(plan)
+	if err != nil {
+		t.Fatalf("ProvisionServer() error = %v", err)
+	}
+	if createCalled {
+		t.Fatal("runLinodeCLICommand was called for dns_configured resume")
+	}
+	if got, want := strings.Join(events, ","), "ssh,health"; got != want {
+		t.Fatalf("event sequence = %q, want %q", got, want)
+	}
+	if result == nil || result.Server.ProviderID != "12345" {
+		t.Fatalf("ProvisionServer() result = %#v, want resumed provider id", result)
+	}
+	data, err := os.ReadFile(filepath.Join(configHome, "state", "servers.json"))
+	if err != nil {
+		t.Fatalf("ReadFile(servers.json) error = %v", err)
+	}
+	var records []map[string]any
+	if err := json.Unmarshal(data, &records); err != nil {
+		t.Fatalf("Unmarshal(servers.json) error = %v", err)
+	}
+	if got, want := valueString(records[0]["status"]), "provisioned"; got != want {
+		t.Fatalf("status = %q, want %q", got, want)
+	}
+	if got, want := valueString(records[0]["phase"]), "complete"; got != want {
+		t.Fatalf("phase = %q, want %q", got, want)
+	}
+}
+
+func TestProvisionServerResumesFromTLSConfigured(t *testing.T) {
+	configHome := t.TempDir()
+	t.Setenv("NF_CONFIG_HOME", configHome)
+	t.Setenv("NF_SECRET_SALT", "test-salt")
+	t.Setenv("DNSIMPLE_TOKEN", "dns-token")
+	t.Setenv("LINODE_CLI_TOKEN", "linode-token")
+	record := map[string]any{"provider": "linode", "provider_id": "12345", "name": "app1", "hostname": "app1.nfweb.dev", "label": "app1", "status": "provisioning", "phase": "tls_configured", "ipv4": "198.51.100.10", "dns": map[string]any{"provider": "dnsimple", "zone": "nfweb.dev", "hostname_record": map[string]any{"name": "app1", "type": "A", "content": "198.51.100.10"}, "wildcard_record": map[string]any{"name": "*.app1", "type": "A", "content": "198.51.100.10"}}, "tls": map[string]any{"provider": "certbot-dnsimple", "domains": []any{"app1.nfweb.dev", "*.app1.nfweb.dev"}, "certificate": "/etc/letsencrypt/live/app1.nfweb.dev/fullchain.pem", "key": "/etc/letsencrypt/live/app1.nfweb.dev/privkey.pem"}}
+	if err := saveStatePayload(filepath.Join(configHome, "state", "servers.json"), []map[string]any{record}); err != nil {
+		t.Fatalf("saveStatePayload() error = %v", err)
+	}
+
+	oldRunLinode := runLinodeCLICommand
+	oldRunLinodeValue := runLinodeCLIValueFn
+	oldZoneLookup := dnsimpleZoneLookup
+	oldUpsert := dnsimpleUpsertARecordRun
+	oldWaitForTCP := waitForTCPPortFn
+	oldRunSSH := runSSHCommandFn
+	oldHealthCheck := checkHTTPSHealthFn
+	oldSalt := secretSaltFn
+	oldNow := currentTime
+	t.Cleanup(func() {
+		runLinodeCLICommand = oldRunLinode
+		runLinodeCLIValueFn = oldRunLinodeValue
+		dnsimpleZoneLookup = oldZoneLookup
+		dnsimpleUpsertARecordRun = oldUpsert
+		waitForTCPPortFn = oldWaitForTCP
+		runSSHCommandFn = oldRunSSH
+		checkHTTPSHealthFn = oldHealthCheck
+		secretSaltFn = oldSalt
+		currentTime = oldNow
+	})
+
+	createCalled := false
+	runLinodeCLICommand = func(args []string) (map[string]any, error) {
+		createCalled = true
+		return nil, fmt.Errorf("should not create")
+	}
+	runLinodeCLIValueFn = func(args []string) (any, error) {
+		if len(args) >= 2 && args[0] == "sshkeys" && args[1] == "list" {
+			return []any{map[string]any{"id": json.Number("77496734"), "label": "team-a", "fingerprint": "fp-a", "created": "2026-05-29", "ssh_key": "ssh-rsa AAAA team-a"}}, nil
+		}
+		t.Fatalf("unexpected linode-cli value args for tls-configured resume: %v", args)
+		return nil, nil
+	}
+	dnsimpleZoneLookup = func(plan Plan, token string) (string, error) {
+		t.Fatalf("dns lookup should not run for tls-configured resume")
+		return "", nil
+	}
+	dnsimpleUpsertARecordRun = func(token, accountID, zone, name, ip string) error {
+		t.Fatalf("dns upsert should not run for tls-configured resume")
+		return nil
+	}
+	waitForTCPPortFn = func(host string, port int, timeout time.Duration) error {
+		t.Fatalf("waitForTCPPortFn should not run for tls-configured resume")
+		return nil
+	}
+	runSSHCommandFn = func(user, host, command string, timeout time.Duration) error {
+		t.Fatalf("runSSHCommandFn should not run for tls-configured resume")
+		return nil
+	}
+	checkHTTPSHealthFn = func(url, name, hostname string, timeout time.Duration) error {
+		data, err := os.ReadFile(filepath.Join(configHome, "state", "servers.json"))
+		if err != nil {
+			t.Fatalf("ReadFile(servers.json) during health check error = %v", err)
+		}
+		var records []map[string]any
+		if err := json.Unmarshal(data, &records); err != nil {
+			t.Fatalf("Unmarshal(servers.json) during health check error = %v", err)
+		}
+		if got, want := valueString(records[0]["phase"]), "tls_configured"; got != want {
+			t.Fatalf("phase before health check = %q, want %q", got, want)
+		}
+		return nil
+	}
+	secretSaltFn = func() (string, error) { return "test-salt", nil }
+	currentTime = func() time.Time { return time.Date(2026, 5, 29, 12, 0, 0, 0, time.UTC) }
+
+	plan, err := BuildPlan(Args{NonInteractive: true, Execute: true, Yes: true, Firewall: "none", Name: "app1", Hostname: "app1.nfweb.dev"})
+	if err != nil {
+		t.Fatalf("BuildPlan() error = %v", err)
+	}
+	result, err := ProvisionServer(plan)
+	if err != nil {
+		t.Fatalf("ProvisionServer() error = %v", err)
+	}
+	if createCalled {
+		t.Fatal("runLinodeCLICommand was called for tls_configured resume")
+	}
+	if result == nil || result.Server.ProviderID != "12345" {
+		t.Fatalf("ProvisionServer() result = %#v, want resumed provider id", result)
+	}
+	data, err := os.ReadFile(filepath.Join(configHome, "state", "servers.json"))
+	if err != nil {
+		t.Fatalf("ReadFile(servers.json) error = %v", err)
+	}
+	var records []map[string]any
+	if err := json.Unmarshal(data, &records); err != nil {
+		t.Fatalf("Unmarshal(servers.json) error = %v", err)
+	}
+	if got, want := valueString(records[0]["status"]), "provisioned"; got != want {
+		t.Fatalf("status = %q, want %q", got, want)
+	}
+	if got, want := valueString(records[0]["phase"]), "complete"; got != want {
+		t.Fatalf("phase = %q, want %q", got, want)
+	}
+}
+
+func captureStdout(t *testing.T, fn func()) string {
+	t.Helper()
+	old := os.Stdout
+	r, w, err := os.Pipe()
+	if err != nil {
+		t.Fatalf("os.Pipe() error = %v", err)
+	}
+	os.Stdout = w
+	defer func() { os.Stdout = old }()
+
+	fn()
+	if err := w.Close(); err != nil {
+		t.Fatalf("Close() error = %v", err)
+	}
+	var buf bytes.Buffer
+	if _, err := io.Copy(&buf, r); err != nil {
+		t.Fatalf("io.Copy() error = %v", err)
+	}
+	return buf.String()
 }
 
 func TestFindProvisionStateRecordMatchesExactServer(t *testing.T) {

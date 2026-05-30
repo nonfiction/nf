@@ -2,11 +2,13 @@ package provision
 
 import (
 	"bytes"
+	"context"
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"io"
 	"math"
+	"net"
 	"net/http"
 	"net/url"
 	"os"
@@ -47,6 +49,12 @@ type Args struct {
 	AllLinodeSshKeys  bool
 	SshPublicKeyFile  string
 	DnsimpleAccountID string
+	Wait              bool
+	NoWait            bool
+	SshTimeout        time.Duration
+	CloudInitTimeout  time.Duration
+	TLSTimeout        time.Duration
+	HealthTimeout     time.Duration
 	WriteCloudInit    string
 	NonInteractive    bool
 	ShowCloudInit     bool
@@ -108,6 +116,11 @@ type Plan struct {
 	AllLinodeSshKeys  bool
 	SshPublicKeyFile  string
 	DnsimpleAccountID string
+	Wait              bool
+	SshTimeout        time.Duration
+	CloudInitTimeout  time.Duration
+	TLSTimeout        time.Duration
+	HealthTimeout     time.Duration
 	WriteCloudInit    string
 	OS                OSPlan
 	PHP               PHPPlan
@@ -388,6 +401,100 @@ func valueString(value any) string {
 	return text
 }
 
+func waitForTCPPort(host string, port int, timeout time.Duration) error {
+	if timeout <= 0 {
+		timeout = 5 * time.Minute
+	}
+	deadline := time.Now().Add(timeout)
+	address := net.JoinHostPort(host, strconv.Itoa(port))
+	lastErr := error(nil)
+	for {
+		conn, err := net.DialTimeout("tcp", address, 10*time.Second)
+		if err == nil {
+			_ = conn.Close()
+			return nil
+		}
+		lastErr = err
+		if time.Now().After(deadline) {
+			return Error{Msg: fmt.Sprintf("Timed out waiting for %s:%d to accept TCP connections: %v", host, port, lastErr)}
+		}
+		time.Sleep(5 * time.Second)
+	}
+}
+
+func runSSHCommand(user, host, command string, timeout time.Duration) error {
+	if timeout <= 0 {
+		timeout = 5 * time.Minute
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), timeout)
+	defer cancel()
+	args := []string{
+		"-o", "BatchMode=yes",
+		"-o", "ConnectTimeout=10",
+		"-o", "ServerAliveInterval=15",
+		"-o", "ServerAliveCountMax=2",
+		user + "@" + host,
+		command,
+	}
+	cmd := exec.CommandContext(ctx, "ssh", args...)
+	var stdout, stderr bytes.Buffer
+	cmd.Stdout = &stdout
+	cmd.Stderr = &stderr
+	if err := cmd.Run(); err != nil {
+		details := strings.TrimSpace(stderr.String())
+		if details == "" {
+			details = strings.TrimSpace(stdout.String())
+		}
+		if details == "" {
+			details = err.Error()
+		}
+		return Error{Msg: details}
+	}
+	return nil
+}
+
+func checkHTTPSHealth(url, name, hostname string, timeout time.Duration) error {
+	if timeout <= 0 {
+		timeout = 2 * time.Minute
+	}
+	deadline := time.Now().Add(timeout)
+	client := healthHTTPClientFn()
+	if client == nil {
+		client = defaultHealthHTTPClient()
+	}
+	nameLower := strings.ToLower(strings.TrimSpace(name))
+	hostnameLower := strings.ToLower(strings.TrimSpace(hostname))
+	var lastErr error
+	for {
+		req, err := http.NewRequest(http.MethodGet, url, nil)
+		if err != nil {
+			return err
+		}
+		resp, err := client.Do(req)
+		if err == nil {
+			body, readErr := io.ReadAll(io.LimitReader(resp.Body, 8192))
+			_ = resp.Body.Close()
+			if readErr != nil {
+				lastErr = readErr
+			} else {
+				text := strings.ToLower(string(body))
+				if resp.StatusCode == http.StatusOK && strings.Contains(text, "ready") && (strings.Contains(text, nameLower) || strings.Contains(text, hostnameLower)) {
+					return nil
+				}
+				lastErr = Error{Msg: fmt.Sprintf("unexpected health response: status=%d body=%s", resp.StatusCode, dnsimpleResponseExcerpt(body))}
+			}
+		} else {
+			lastErr = err
+		}
+		if time.Now().After(deadline) {
+			return Error{Msg: fmt.Sprintf("Timed out waiting for %s to report ready: %v", url, lastErr)}
+		}
+		time.Sleep(5 * time.Second)
+	}
+}
+
+func defaultHealthHTTPClient() *http.Client { return &http.Client{Timeout: 20 * time.Second} }
+
 func sshAuthorizedKeyMetadata(keys []SSHAuthorizedKey) []map[string]any {
 	if len(keys) == 0 {
 		return nil
@@ -523,6 +630,10 @@ var (
 	runLinodeCLIValueFn      = runLinodeCLIValue
 	dnsimpleZoneLookup       = findDnsimpleZone
 	dnsimpleUpsertARecordRun = dnsimpleUpsertARecord
+	waitForTCPPortFn         = waitForTCPPort
+	runSSHCommandFn          = runSSHCommand
+	checkHTTPSHealthFn       = checkHTTPSHealth
+	healthHTTPClientFn       = defaultHealthHTTPClient
 	selectVersionFn          = ui.Select
 	promptStringFn           = ui.PromptString
 	confirmFn                = ui.Confirm
@@ -726,12 +837,68 @@ write_files:
       <html lang="en">
       <head>
         <meta charset="utf-8">
+        <meta name="viewport" content="width=device-width, initial-scale=1">
         <title>nf server __NAME__</title>
+        <style>
+          :root {
+            color-scheme: light;
+          }
+
+          body {
+            margin: 0;
+            min-height: 100vh;
+            display: grid;
+            place-items: center;
+            background: #f4f7fb;
+            color: #0f172a;
+            font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+          }
+
+          main {
+            width: min(92vw, 28rem);
+            padding: 2rem;
+            border-radius: 1.25rem;
+            background: #fff;
+            box-shadow: 0 1rem 3rem rgba(15, 23, 42, 0.12);
+            text-align: center;
+          }
+
+          .pill {
+            display: inline-block;
+            margin-bottom: 1rem;
+            padding: 0.35rem 0.8rem;
+            border-radius: 999px;
+            background: #dcfce7;
+            color: #166534;
+            font-size: 0.875rem;
+            font-weight: 700;
+            letter-spacing: 0.04em;
+            text-transform: uppercase;
+          }
+
+          h1 {
+            margin: 0 0 0.75rem;
+            font-size: clamp(2rem, 5vw, 3rem);
+            line-height: 1.1;
+          }
+
+          p {
+            margin: 0.5rem 0;
+            font-size: 1rem;
+          }
+
+          .label {
+            color: #475569;
+          }
+        </style>
       </head>
       <body>
-        <h1>nf server __NAME__</h1>
-        <p>hostname: __HOSTNAME__</p>
-        <p>status: ready</p>
+        <main>
+          <div class="pill">ready</div>
+          <h1>nf server __NAME__</h1>
+          <p><span class="label">hostname:</span> __HOSTNAME__</p>
+          <p><span class="label">health:</span> https://__HOSTNAME__</p>
+        </main>
       </body>
       </html>
       EOF
@@ -1130,6 +1297,44 @@ func tlsStateRecord(plan Plan) TLSState {
 		Certificate: "/etc/letsencrypt/live/" + hostname + "/fullchain.pem",
 		Key:         "/etc/letsencrypt/live/" + hostname + "/privkey.pem",
 	}
+}
+
+func dnsStateFromRecord(record map[string]any) DNSState {
+	if record == nil {
+		return DNSState{}
+	}
+	block, _ := record["dns"].(map[string]any)
+	if block == nil {
+		return DNSState{}
+	}
+	state := DNSState{Provider: valueString(block["provider"]), Zone: valueString(block["zone"])}
+	if hostnameRecord, ok := block["hostname_record"].(map[string]any); ok {
+		state.HostnameRecord = DNSRecord{Name: valueString(hostnameRecord["name"]), Type: valueString(hostnameRecord["type"]), Content: valueString(hostnameRecord["content"])}
+	}
+	if wildcardRecord, ok := block["wildcard_record"].(map[string]any); ok {
+		state.WildcardRecord = DNSRecord{Name: valueString(wildcardRecord["name"]), Type: valueString(wildcardRecord["type"]), Content: valueString(wildcardRecord["content"])}
+	}
+	return state
+}
+
+func tlsStateFromRecord(record map[string]any) TLSState {
+	if record == nil {
+		return TLSState{}
+	}
+	block, _ := record["tls"].(map[string]any)
+	if block == nil {
+		return TLSState{}
+	}
+	state := TLSState{Provider: valueString(block["provider"]), Certificate: valueString(block["certificate"]), Key: valueString(block["key"])}
+	if domains, ok := block["domains"].([]any); ok {
+		state.Domains = make([]string, 0, len(domains))
+		for _, domain := range domains {
+			if text := valueString(domain); text != "" {
+				state.Domains = append(state.Domains, text)
+			}
+		}
+	}
+	return state
 }
 
 func firewallStateFromRecord(record map[string]any) map[string]any {
@@ -1612,6 +1817,47 @@ func existingProvisionPhase(record map[string]any) string {
 	return strings.ToLower(valueString(record["phase"]))
 }
 
+func provisioningPhaseRank(phase string) int {
+	switch strings.ToLower(strings.TrimSpace(phase)) {
+	case "complete":
+		return 5
+	case "tls_configured":
+		return 4
+	case "cloud_init_ready":
+		return 3
+	case "dns_configured":
+		return 2
+	case "firewall_configured":
+		return 1
+	case "linode_created", "":
+		return 0
+	default:
+		return 0
+	}
+}
+
+func createdServerFromRecord(plan Plan, record map[string]any) (CreatedServer, error) {
+	providerID, err := apiIDString(record["provider_id"])
+	if err != nil {
+		providerID, err = apiIDString(record["id"])
+		if err != nil {
+			return CreatedServer{}, Error{Msg: fmt.Sprintf("Existing provisioning record for %q is missing a usable provider id.", plan.Hostname)}
+		}
+	}
+	ipv4 := valueString(record["ipv4"])
+	if ipv4 == "" {
+		return CreatedServer{}, Error{Msg: fmt.Sprintf("Existing provisioning record for %q is missing an IPv4 address and cannot resume.", plan.Hostname)}
+	}
+	return CreatedServer{Provider: plan.Provider, ProviderID: providerID, Name: plan.Name, Hostname: plan.Hostname, IPv4: ipv4}, nil
+}
+
+func existingCreatedAt(record map[string]any, fallback string) string {
+	if createdAt := strings.TrimSpace(valueString(record["created_at"])); createdAt != "" {
+		return createdAt
+	}
+	return fallback
+}
+
 func serverStateRecord(plan Plan, created CreatedServer, dns DNSState, tls TLSState, createdAt string) map[string]any {
 	return serverStateRecordWithStatus(plan, created, dns, tls, createdAt, createdAt, "provisioned", "complete")
 }
@@ -1928,10 +2174,22 @@ func BuildPlan(args Args) (Plan, error) {
 		PHP:               phpPlan,
 		Execute:           args.Execute,
 		Yes:               args.Yes,
+		Wait:              !args.NoWait,
+		SshTimeout:        firstDuration(args.SshTimeout, 5*time.Minute),
+		CloudInitTimeout:  firstDuration(args.CloudInitTimeout, 10*time.Minute),
+		TLSTimeout:        firstDuration(args.TLSTimeout, 5*time.Minute),
+		HealthTimeout:     firstDuration(args.HealthTimeout, 2*time.Minute),
 		DryRun:            args.DryRun || !args.Execute,
 		NonInteractive:    nonInteractive,
 		ShowCloudInit:     args.ShowCloudInit,
 	}, nil
+}
+
+func firstDuration(value, fallback time.Duration) time.Duration {
+	if value > 0 {
+		return value
+	}
+	return fallback
 }
 
 func inferredDnsimpleZone(hostname string) string {
@@ -1944,6 +2202,15 @@ func inferredDnsimpleZone(hostname string) string {
 
 func dnsRecordLine(label string, record DNSRecord) string {
 	return fmt.Sprintf("  %s: %s -> %s", label, record.Name, record.Content)
+}
+
+func healthSuccessBlock(plan Plan) []string {
+	return []string{
+		"Server",
+		"  health: https://" + plan.Hostname,
+		"  health check: https://" + plan.Hostname + "/healthz",
+		"  status: ready",
+	}
 }
 
 func renderProvisionSuccess(plan Plan, created CreatedServer, dns DNSState, tls TLSState, statePath, cloudInitPath string, sshKeys []SSHAuthorizedKey) string {
@@ -1963,7 +2230,7 @@ func renderProvisionSuccess(plan Plan, created CreatedServer, dns DNSState, tls 
 	lines = append(lines, ubuntuFirewallPlanBlock()...)
 	lines = append(lines, firewallPlanBlock(plan)...)
 	lines = append(lines, phpBaselinePlanBlock(plan)...)
-	lines = append(lines, healthPlanBlock(plan)...)
+	lines = append(lines, healthSuccessBlock(plan)...)
 	lines = append(lines,
 		"DNS",
 		"  provider: "+dns.Provider,
@@ -1988,18 +2255,101 @@ func renderProvisionSuccess(plan Plan, created CreatedServer, dns DNSState, tls 
 		"  shared root: /var/www/shared",
 		"  nginx site logs: /var/log/nginx/sites",
 	)
+	return strings.Join(lines, "\n") + "\n"
+}
+
+func renderProvisionPaused(plan Plan, created CreatedServer, dns DNSState, statePath string, phase string, sshKeys []SSHAuthorizedKey) string {
 	sshTarget := plan.SshUser + "@" + plan.Hostname
-	sshIPTarget := plan.SshUser + "@" + created.IPv4
+	lines := []string{
+		"Server provisioning paused.",
+		"",
+		"Host",
+		"  provider: " + plan.Provider,
+		"  name: " + plan.Name,
+		"  hostname: " + plan.Hostname,
+		"  label: " + plan.Label,
+		"  ipv4: " + created.IPv4,
+		"  linode instance id: " + created.ProviderID,
+	}
+	lines = append(lines, sshSuccessBlock(plan, sshKeys)...)
+	lines = append(lines, rootSuccessBlock(plan)...)
+	lines = append(lines, ubuntuFirewallPlanBlock()...)
+	lines = append(lines, firewallPlanBlock(plan)...)
+	lines = append(lines, phpBaselinePlanBlock(plan)...)
 	lines = append(lines,
+		"Server",
+		"  health: https://"+plan.Hostname,
+		"  health check: https://"+plan.Hostname+"/healthz",
+		"  status: provisioning",
+		"  phase: "+phase,
+		"DNS",
+		"  provider: "+dns.Provider,
+		"  zone: "+dns.Zone,
+		dnsRecordLine("hostname A", dns.HostnameRecord),
+		dnsRecordLine("wildcard A", dns.WildcardRecord),
+		"Paths",
+		"  state: "+statePath,
+		"  marker: /etc/nf/server.json",
+		"  motd: /etc/update-motd.d/99-nf",
+		"  sites root: /var/www/sites",
+		"  shared root: /var/www/shared",
+		"  nginx site logs: /var/log/nginx/sites",
 		"Next",
-		"  test SSH by IP:",
-		"  ssh -o BatchMode=yes "+sshIPTarget+" \"true\"",
-		"  test SSH by host:",
-		"  ssh -o BatchMode=yes "+sshTarget+" \"true\"",
-		"  wait for cloud-init to finish:",
-		"  ssh "+sshTarget+" \"cloud-init status --wait\"",
+		"  wait for SSH:",
+		"  ssh -o BatchMode=yes "+sshTarget+" \"cloud-init status --wait\"",
 		"  enable wildcard TLS:",
 		"  ssh "+sshTarget+" \"sudo /usr/local/bin/nf-enable-wildcard-tls\"",
+		"  check HTTPS health:",
+		"  curl -fsS https://"+plan.Hostname+"/healthz",
+	)
+	return strings.Join(lines, "\n") + "\n"
+}
+
+func renderProvisionHealthFailure(plan Plan, created CreatedServer, dns DNSState, tls TLSState, statePath string, sshKeys []SSHAuthorizedKey, err error) string {
+	sshTarget := plan.SshUser + "@" + plan.Hostname
+	lines := []string{
+		"Server provisioning paused.",
+		"",
+		"Host",
+		"  provider: " + plan.Provider,
+		"  name: " + plan.Name,
+		"  hostname: " + plan.Hostname,
+		"  label: " + plan.Label,
+		"  ipv4: " + created.IPv4,
+		"  linode instance id: " + created.ProviderID,
+	}
+	lines = append(lines, sshSuccessBlock(plan, sshKeys)...)
+	lines = append(lines, rootSuccessBlock(plan)...)
+	lines = append(lines, ubuntuFirewallPlanBlock()...)
+	lines = append(lines, firewallPlanBlock(plan)...)
+	lines = append(lines, phpBaselinePlanBlock(plan)...)
+	lines = append(lines,
+		"Server",
+		"  health: https://"+plan.Hostname,
+		"  health check: https://"+plan.Hostname+"/healthz",
+		"  status: tls_configured",
+		"DNS",
+		"  provider: "+dns.Provider,
+		"  zone: "+dns.Zone,
+		dnsRecordLine("hostname A", dns.HostnameRecord),
+		dnsRecordLine("wildcard A", dns.WildcardRecord),
+		"TLS",
+		"  provider: "+tls.Provider,
+		"  domains: "+strings.Join(tls.Domains, ", "),
+		"  certificate: "+tls.Certificate,
+		"  key: "+tls.Key,
+		"Paths",
+		"  state: "+statePath,
+		"  marker: /etc/nf/server.json",
+		"  motd: /etc/update-motd.d/99-nf",
+		"  sites root: /var/www/sites",
+		"  shared root: /var/www/shared",
+		"  nginx site logs: /var/log/nginx/sites",
+		"Health error",
+		"  "+strings.TrimSpace(err.Error()),
+		"Recovery",
+		"  ssh "+sshTarget+" \"sudo nginx -t && sudo systemctl status nginx\"",
+		"  curl -I https://"+plan.Hostname,
 	)
 	return strings.Join(lines, "\n") + "\n"
 }
@@ -2139,22 +2489,27 @@ func ProvisionServer(plan Plan) (*ServerCreateResult, error) {
 		return nil, err
 	}
 	now := currentTime().UTC().Format(time.RFC3339)
+	createdAt := now
 	var created CreatedServer
 	var linodeID string
 	var linodeIP string
+	currentPhase := ""
+	dnsState := DNSState{}
+	tlsState := TLSState{}
 	if existingRecord != nil {
-		linodeID, err = apiIDString(existingRecord["provider_id"])
+		created, err = createdServerFromRecord(effectivePlan, existingRecord)
 		if err != nil {
-			linodeID, err = apiIDString(existingRecord["id"])
-			if err != nil {
-				return nil, Error{Msg: fmt.Sprintf("Existing provisioning record for %q is missing a usable provider id.", effectivePlan.Hostname)}
-			}
+			return nil, err
 		}
-		linodeIP = valueString(existingRecord["ipv4"])
-		if linodeIP == "" {
-			return nil, Error{Msg: fmt.Sprintf("Existing provisioning record for %q is missing an IPv4 address and cannot resume.", effectivePlan.Hostname)}
-		}
-		created = CreatedServer{Provider: effectivePlan.Provider, ProviderID: linodeID, Name: effectivePlan.Name, Hostname: effectivePlan.Hostname, IPv4: linodeIP}
+		fmt.Println("Reusing Linode")
+		linodeID = created.ProviderID
+		linodeIP = created.IPv4
+		createdAt = existingCreatedAt(existingRecord, now)
+		currentPhase = existingProvisionPhase(existingRecord)
+		dnsState = dnsStateFromRecord(existingRecord)
+		tlsState = tlsStateFromRecord(existingRecord)
+		effectivePlan.Firewall.ID = firewallStateID(existingRecord)
+		effectivePlan.Firewall.DeviceID = firewallStateDeviceID(existingRecord)
 	} else {
 		createArgs := []string{
 			"linodes", "create",
@@ -2186,35 +2541,73 @@ func ProvisionServer(plan Plan) (*ServerCreateResult, error) {
 			return nil, Error{Msg: "Linode response did not include an IPv4 address."}
 		}
 		created = CreatedServer{Provider: effectivePlan.Provider, ProviderID: linodeID, Name: effectivePlan.Name, Hostname: effectivePlan.Hostname, IPv4: linodeIP}
-		partial := serverStateRecordWithStatus(effectivePlan, created, DNSState{}, TLSState{}, now, now, "provisioning", "linode_created")
+		fmt.Println("Creating Linode")
+		currentPhase = "linode_created"
+		partial := serverStateRecordWithStatus(effectivePlan, created, DNSState{}, TLSState{}, createdAt, now, "provisioning", currentPhase)
 		if err := upsertStateRecord(serverStatePath, partial); err != nil {
 			return nil, err
 		}
 	}
-	if firewallMode := firewallPlanMode(effectivePlan); firewallMode == "managed" {
+	phaseRank := provisioningPhaseRank(currentPhase)
+	if firewallMode := firewallPlanMode(effectivePlan); firewallMode == "managed" && phaseRank < provisioningPhaseRank("firewall_configured") {
+		fmt.Println("Configuring firewall")
 		firewallID, err := ensureManagedFirewall(effectivePlan, created, existingRecord, serverStatePath, now)
 		if err != nil {
 			return nil, err
 		}
 		effectivePlan.Firewall.ID = firewallID
 		effectivePlan.Firewall.DeviceID = created.ProviderID
-		if err := upsertStateRecord(serverStatePath, serverStateRecordWithStatus(effectivePlan, created, DNSState{}, TLSState{}, now, now, "provisioning", "linode_created")); err != nil {
+		phaseRank = provisioningPhaseRank("firewall_configured")
+		currentPhase = "firewall_configured"
+		if err := upsertStateRecord(serverStatePath, serverStateRecordWithStatus(effectivePlan, created, DNSState{}, TLSState{}, createdAt, now, "provisioning", currentPhase)); err != nil {
 			return nil, err
 		}
 	}
-	dnsZone, err := dnsimpleZoneLookup(effectivePlan, dnsimpleToken)
-	if err != nil {
-		return nil, Error{Msg: renderProvisionPartialFailure(effectivePlan, created, serverStatePath, err)}
+	if phaseRank < provisioningPhaseRank("dns_configured") {
+		fmt.Println("Configuring DNS")
+		dnsZone, err := dnsimpleZoneLookup(effectivePlan, dnsimpleToken)
+		if err != nil {
+			return nil, Error{Msg: renderProvisionPartialFailure(effectivePlan, created, serverStatePath, err)}
+		}
+		if err := dnsimpleUpsertHostnameRecords(dnsimpleToken, effectivePlan.DnsimpleAccountID, dnsZone, effectivePlan.Hostname, linodeIP); err != nil {
+			return nil, Error{Msg: renderProvisionPartialFailure(effectivePlan, created, serverStatePath, err)}
+		}
+		dnsState = dnsStateRecord(effectivePlan, dnsZone, linodeIP)
+		if tlsState.Provider == "" {
+			tlsState = tlsStateRecord(effectivePlan)
+		}
+		currentPhase = "dns_configured"
+		if err := upsertStateRecord(serverStatePath, serverStateRecordWithStatus(effectivePlan, created, dnsState, TLSState{}, createdAt, now, "provisioning", currentPhase)); err != nil {
+			return nil, err
+		}
 	}
-	if err := dnsimpleUpsertHostnameRecords(dnsimpleToken, effectivePlan.DnsimpleAccountID, dnsZone, effectivePlan.Hostname, linodeIP); err != nil {
-		return nil, Error{Msg: renderProvisionPartialFailure(effectivePlan, created, serverStatePath, err)}
+	if !effectivePlan.Wait {
+		fmt.Print(renderProvisionPaused(effectivePlan, created, dnsState, serverStatePath, currentPhase, sshKeys))
+		return &ServerCreateResult{Server: created, DNS: dnsState, TLS: tlsState, StatePath: serverStatePath, CloudInitPath: previewPath}, nil
 	}
-	dnsState := dnsStateRecord(effectivePlan, dnsZone, linodeIP)
-	tlsState := tlsStateRecord(effectivePlan)
-	if err := upsertStateRecord(serverStatePath, serverStateRecordWithStatus(effectivePlan, created, dnsState, TLSState{}, now, now, "provisioning", "dns_configured")); err != nil {
-		return nil, err
+	if phaseRank < provisioningPhaseRank("cloud_init_ready") {
+		fmt.Println("Waiting for SSH")
+		if err := waitForTCPPortFn(created.IPv4, 22, effectivePlan.SshTimeout); err != nil {
+			return nil, err
+		}
+		fmt.Println("Waiting for cloud-init and enabling wildcard TLS")
+		if err := runSSHCommandFn(effectivePlan.SshUser, created.IPv4, "cloud-init status --wait && sudo /usr/local/bin/nf-enable-wildcard-tls", effectivePlan.CloudInitTimeout+effectivePlan.TLSTimeout); err != nil {
+			return nil, Error{Msg: fmt.Sprintf("%s\nRecovery: ssh %s@%s \"sudo /usr/local/bin/nf-enable-wildcard-tls\"", strings.TrimSpace(err.Error()), effectivePlan.SshUser, effectivePlan.Hostname)}
+		}
+		currentPhase = "tls_configured"
+		if err := upsertStateRecord(serverStatePath, serverStateRecordWithStatus(effectivePlan, created, dnsState, tlsStateRecord(effectivePlan), createdAt, now, "provisioning", currentPhase)); err != nil {
+			return nil, err
+		}
+	} else if currentPhase != "tls_configured" {
+		currentPhase = "tls_configured"
 	}
-	if err := upsertStateRecord(serverStatePath, serverStateRecordWithStatus(effectivePlan, created, dnsState, tlsState, now, now, "provisioned", "complete")); err != nil {
+	tlsState = tlsStateRecord(effectivePlan)
+	fmt.Println("Checking server health")
+	healthURL := "https://" + effectivePlan.Hostname + "/healthz"
+	if err := checkHTTPSHealthFn(healthURL, effectivePlan.Name, effectivePlan.Hostname, effectivePlan.HealthTimeout); err != nil {
+		return nil, Error{Msg: renderProvisionHealthFailure(effectivePlan, created, dnsState, tlsState, serverStatePath, sshKeys, err)}
+	}
+	if err := upsertStateRecord(serverStatePath, serverStateRecordWithStatus(effectivePlan, created, dnsState, tlsState, createdAt, now, "provisioned", "complete")); err != nil {
 		return nil, err
 	}
 	fmt.Print(renderProvisionSuccess(effectivePlan, created, dnsState, tlsState, serverStatePath, firstNonEmpty(previewPath, "not written"), sshKeys))
