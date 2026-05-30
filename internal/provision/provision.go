@@ -32,6 +32,8 @@ type Args struct {
 	DnsProvider       string
 	DnsZone           string
 	UbuntuVersion     string
+	Firewall          string
+	FirewallID        string
 	Name              string
 	Hostname          string
 	Label             string
@@ -69,12 +71,30 @@ type PHPPlan struct {
 	Packages      []string `json:"packages"`
 }
 
+type FirewallRulePlan struct {
+	Label    string `json:"label"`
+	Action   string `json:"action"`
+	Protocol string `json:"protocol"`
+	Ports    string `json:"ports"`
+}
+
+type FirewallPlan struct {
+	Mode           string             `json:"mode"`
+	ID             string             `json:"id,omitempty"`
+	DeviceID       string             `json:"device_id,omitempty"`
+	Label          string             `json:"label,omitempty"`
+	InboundPolicy  string             `json:"inbound_policy,omitempty"`
+	OutboundPolicy string             `json:"outbound_policy,omitempty"`
+	Rules          []FirewallRulePlan `json:"rules,omitempty"`
+}
+
 type Plan struct {
 	Provider          string
 	DnsProvider       string
 	DnsZone           string
 	UbuntuVersion     string
 	PHPVersion        string
+	Firewall          FirewallPlan
 	Name              string
 	Hostname          string
 	Label             string
@@ -115,6 +135,11 @@ type ubuntuStack struct {
 }
 
 const packageSourceUbuntuNative = "ubuntu-native"
+const firewallManagedLabel = "nf-web"
+const firewallInboundPolicy = "DROP"
+const firewallOutboundPolicy = "ACCEPT"
+
+var firewallInboundPorts = []string{"22", "80", "443"}
 
 var ubuntuStackMatrix = []ubuntuStack{
 	{version: "26.04", label: "Ubuntu 26.04 LTS", image: "linode/ubuntu26.04", php: "8.5", menuLabel: "Ubuntu 26.04 LTS / PHP 8.5"},
@@ -155,6 +180,68 @@ func phpPackages(version string) []string {
 		prefix + "soap",
 		prefix + "opcache",
 		prefix + "readline",
+	}
+}
+
+func firewallRules() []FirewallRulePlan {
+	return []FirewallRulePlan{
+		{Label: "allow-ssh", Action: "ACCEPT", Protocol: "TCP", Ports: "22"},
+		{Label: "allow-http", Action: "ACCEPT", Protocol: "TCP", Ports: "80"},
+		{Label: "allow-https", Action: "ACCEPT", Protocol: "TCP", Ports: "443"},
+	}
+}
+
+func managedFirewallPlan(id string) FirewallPlan {
+	return FirewallPlan{
+		Mode:           "managed",
+		ID:             strings.TrimSpace(id),
+		Label:          firewallManagedLabel,
+		InboundPolicy:  firewallInboundPolicy,
+		OutboundPolicy: firewallOutboundPolicy,
+		Rules:          firewallRules(),
+	}
+}
+
+func firewallRulesPayload() []map[string]any {
+	rules := make([]map[string]any, 0, len(firewallInboundPorts))
+	for _, port := range firewallInboundPorts {
+		var label string
+		switch port {
+		case "22":
+			label = "allow-ssh"
+		case "80":
+			label = "allow-http"
+		case "443":
+			label = "allow-https"
+		}
+		rules = append(rules, map[string]any{
+			"label":    label,
+			"action":   "ACCEPT",
+			"protocol": "TCP",
+			"ports":    port,
+			"addresses": map[string]any{
+				"ipv4": []string{"0.0.0.0/0"},
+				"ipv6": []string{"::/0"},
+			},
+		})
+	}
+	return rules
+}
+
+func firewallRulesJSON() (string, error) {
+	data, err := json.Marshal(firewallRulesPayload())
+	if err != nil {
+		return "", err
+	}
+	return string(data), nil
+}
+
+func rootCredentialState(hostname string) map[string]any {
+	return map[string]any{
+		"derived":  true,
+		"identity": hostname,
+		"purpose":  "linode-root",
+		"stored":   false,
 	}
 }
 
@@ -605,6 +692,12 @@ runcmd:
   - systemctl restart nginx
   - systemctl enable __PHP_FPM_SERVICE__
   - systemctl restart __PHP_FPM_SERVICE__
+  - ufw default deny incoming
+  - ufw default allow outgoing
+  - ufw allow 22/tcp
+  - ufw allow 80/tcp
+  - ufw allow 443/tcp
+  - ufw --force enable
   - bash -lc 'echo "nf-server bootstrap complete" > /var/www/nf-server/index.html'
 `)
 
@@ -622,7 +715,7 @@ func renderTemplate(template string, replacements map[string]string) string {
 }
 
 func serverBasePackages() []string {
-	return []string{"nginx", "mariadb-server", "unzip", "curl", "certbot", "python3-certbot-dns-dnsimple", "composer", "rsync", "zip", "imagemagick", "ghostscript"}
+	return []string{"nginx", "mariadb-server", "unzip", "curl", "ufw", "certbot", "python3-certbot-dns-dnsimple", "composer", "rsync", "zip", "imagemagick", "ghostscript"}
 }
 
 func cloudInitPackages(plan Plan) []string {
@@ -875,12 +968,180 @@ func tlsStateRecord(plan Plan) TLSState {
 	}
 }
 
+func firewallStateFromRecord(record map[string]any) map[string]any {
+	if record == nil {
+		return nil
+	}
+	firewall, _ := record["firewall"].(map[string]any)
+	return firewall
+}
+
+func firewallStateString(record map[string]any, keys ...string) string {
+	firewall := firewallStateFromRecord(record)
+	if firewall == nil {
+		return ""
+	}
+	for _, key := range keys {
+		if value := valueString(firewall[key]); value != "" {
+			return value
+		}
+	}
+	return ""
+}
+
+func firewallStateDeviceID(record map[string]any) string {
+	firewall := firewallStateFromRecord(record)
+	if firewall == nil {
+		return ""
+	}
+	if device, ok := firewall["device"].(map[string]any); ok {
+		return valueString(device["id"])
+	}
+	return ""
+}
+
+func firewallStateID(record map[string]any) string {
+	return firewallStateString(record, "id")
+}
+
+func loadManagedFirewallIDByLabel(label string) (string, error) {
+	trimmed := strings.TrimSpace(label)
+	if trimmed == "" {
+		return "", nil
+	}
+	payload, err := runLinodeCLIValueFn([]string{"firewalls", "list", "--json"})
+	if err != nil {
+		return "", err
+	}
+	var items []any
+	switch typed := payload.(type) {
+	case []any:
+		items = typed
+	case map[string]any:
+		if list, ok := typed["data"].([]any); ok {
+			items = list
+		} else if list, ok := typed["firewalls"].([]any); ok {
+			items = list
+		}
+	}
+	for _, item := range items {
+		firewall, ok := item.(map[string]any)
+		if !ok {
+			continue
+		}
+		if strings.EqualFold(valueString(firewall["label"]), trimmed) {
+			return apiIDString(firewall["id"])
+		}
+	}
+	return "", nil
+}
+
+func firewallPlanMode(plan Plan) string {
+	return strings.ToLower(strings.TrimSpace(plan.Firewall.Mode))
+}
+
+func ensureManagedFirewall(plan Plan, created CreatedServer, existingRecord map[string]any, statePath, now string) (string, error) {
+	if firewallPlanMode(plan) != "managed" {
+		return "", nil
+	}
+	firewallID := strings.TrimSpace(plan.Firewall.ID)
+	if firewallID == "" {
+		firewallID = firewallStateID(existingRecord)
+	}
+	deviceID := firewallStateDeviceID(existingRecord)
+	if firewallID == "" {
+		var err error
+		firewallID, err = loadManagedFirewallIDByLabel(firstNonEmpty(plan.Firewall.Label, firewallManagedLabel))
+		if err != nil {
+			return "", Error{Msg: renderProvisionFirewallPartialFailure(plan, created, statePath, err)}
+		}
+	}
+	if firewallID == "" {
+		createArgs := []string{"firewalls", "create", "--label", firstNonEmpty(plan.Firewall.Label, firewallManagedLabel), "--rules.inbound_policy", firstNonEmpty(plan.Firewall.InboundPolicy, firewallInboundPolicy), "--rules.outbound_policy", firstNonEmpty(plan.Firewall.OutboundPolicy, firewallOutboundPolicy)}
+		payload, err := runLinodeCLICommand(createArgs)
+		if err != nil {
+			return "", Error{Msg: renderProvisionFirewallPartialFailure(plan, created, statePath, err)}
+		}
+		firewallID, err = apiIDString(payload["id"])
+		if err != nil {
+			return "", Error{Msg: renderProvisionFirewallPartialFailure(plan, created, statePath, fmt.Errorf("Linode firewall response included an invalid id: %v", err))}
+		}
+		createdPlan := plan
+		createdPlan.Firewall.ID = firewallID
+		createdPlan.Firewall.DeviceID = ""
+		if err := upsertStateRecord(statePath, serverStateRecordWithStatus(createdPlan, created, DNSState{}, TLSState{}, now, now, "provisioning", "linode_created")); err != nil {
+			return "", err
+		}
+	}
+	statePlan := plan
+	statePlan.Firewall.ID = firewallID
+	statePlan.Firewall.DeviceID = deviceID
+	if err := upsertStateRecord(statePath, serverStateRecordWithStatus(statePlan, created, DNSState{}, TLSState{}, now, now, "provisioning", "linode_created")); err != nil {
+		return "", err
+	}
+	rulesJSON, err := firewallRulesJSON()
+	if err != nil {
+		return "", Error{Msg: renderProvisionFirewallPartialFailure(statePlan, created, statePath, err)}
+	}
+	if _, err := runLinodeCLICommand([]string{"firewalls", "rules-update", firewallID, "--inbound", rulesJSON, "--inbound_policy", firstNonEmpty(plan.Firewall.InboundPolicy, firewallInboundPolicy)}); err != nil {
+		return "", Error{Msg: renderProvisionFirewallPartialFailure(statePlan, created, statePath, err)}
+	}
+	if deviceID != created.ProviderID {
+		if _, err := runLinodeCLICommand([]string{"firewalls", "device-create", "--type", "linode", "--id", created.ProviderID, firewallID}); err != nil {
+			return "", Error{Msg: renderProvisionFirewallPartialFailure(statePlan, created, statePath, err)}
+		}
+		deviceID = created.ProviderID
+	}
+	if deviceID == created.ProviderID {
+		createdPlan := plan
+		createdPlan.Firewall.ID = firewallID
+		createdPlan.Firewall.DeviceID = deviceID
+		if err := upsertStateRecord(statePath, serverStateRecordWithStatus(createdPlan, created, DNSState{}, TLSState{}, now, now, "provisioning", "linode_created")); err != nil {
+			return "", err
+		}
+	}
+	return firewallID, nil
+}
+
+func renderProvisionFirewallPartialFailure(plan Plan, created CreatedServer, statePath string, setupErr error) string {
+	lines := []string{
+		"Server provisioning paused.",
+		"",
+		"Server",
+		"  provider: " + plan.Provider,
+		"  name: " + plan.Name,
+		"  hostname: " + plan.Hostname,
+		"  provider id: " + created.ProviderID,
+		"  ipv4: " + created.IPv4,
+		"  status: provisioning",
+		"  phase: linode_created",
+		"State",
+		"  path: " + statePath,
+		"Firewall error",
+		"  " + strings.TrimSpace(setupErr.Error()),
+		"Next",
+		"  rerun the same provision command to resume firewall, DNS, and TLS setup.",
+	}
+	return strings.Join(lines, "\n") + "\n"
+}
+
 func sshPlanBlock(plan Plan) []string {
 	return []string{
 		"SSH",
 		"  user: " + plan.SshUser,
+		"  auth: SSH keys only",
+		"  sudo: passwordless",
 		"  key source: " + firstNonEmpty(plan.SshKeySource, "linode-profile"),
 		"  authorized keys: " + sshKeySummary(plan),
+	}
+}
+
+func rootPlanBlock(plan Plan) []string {
+	return []string{
+		"Root",
+		"  password: derived from hostname + purpose linode-root",
+		"  stored in state: no",
+		"  reveal: nf server root-password " + plan.Name,
 	}
 }
 
@@ -888,6 +1149,8 @@ func sshSuccessBlock(plan Plan, keys []SSHAuthorizedKey) []string {
 	lines := []string{
 		"SSH",
 		"  user: " + plan.SshUser,
+		"  auth: SSH keys only",
+		"  sudo: passwordless",
 		"  key source: " + firstNonEmpty(plan.SshKeySource, "linode-profile"),
 	}
 	if labels := sshKeyLabels(keys); labels != "" {
@@ -896,14 +1159,66 @@ func sshSuccessBlock(plan Plan, keys []SSHAuthorizedKey) []string {
 	return lines
 }
 
+func rootSuccessBlock(plan Plan) []string { return rootPlanBlock(plan) }
+
 func sshStateBlock(plan Plan, keys []SSHAuthorizedKey) map[string]any {
 	return map[string]any{
 		"user":            plan.SshUser,
 		"host":            plan.Hostname,
 		"port":            22,
+		"auth":            "ssh_keys_only",
+		"sudo":            "passwordless",
 		"source":          firstNonEmpty(plan.SshKeySource, "linode-profile"),
 		"authorized_keys": sshAuthorizedKeyMetadata(keys),
 	}
+}
+
+func credentialsStateBlock(plan Plan) map[string]any {
+	return map[string]any{"root": rootCredentialState(plan.Hostname)}
+}
+
+func firewallPlanBlock(plan Plan) []string {
+	if plan.Firewall.Mode == "" {
+		return nil
+	}
+	lines := []string{
+		"Firewall",
+		"  mode: " + plan.Firewall.Mode,
+	}
+	if plan.Firewall.Mode == "managed" {
+		lines = append(lines,
+			"  managed label: "+firstNonEmpty(plan.Firewall.Label, firewallManagedLabel),
+			"  inbound: 22/tcp, 80/tcp, 443/tcp",
+			"  inbound policy: "+firstNonEmpty(plan.Firewall.InboundPolicy, firewallInboundPolicy),
+			"  outbound policy: "+firstNonEmpty(plan.Firewall.OutboundPolicy, firewallOutboundPolicy),
+		)
+		if plan.Firewall.ID != "" {
+			lines = append(lines, "  firewall id: "+plan.Firewall.ID)
+		}
+	}
+	return lines
+}
+
+func firewallStateBlock(plan Plan, firewallID, deviceID string) map[string]any {
+	if plan.Firewall.Mode == "" {
+		return nil
+	}
+	block := map[string]any{
+		"mode": plan.Firewall.Mode,
+	}
+	if plan.Firewall.Mode == "managed" {
+		block["label"] = firstNonEmpty(plan.Firewall.Label, firewallManagedLabel)
+		block["inbound_policy"] = firstNonEmpty(plan.Firewall.InboundPolicy, firewallInboundPolicy)
+		block["outbound_policy"] = firstNonEmpty(plan.Firewall.OutboundPolicy, firewallOutboundPolicy)
+		block["rules"] = firewallRulesPayload()
+		if firewallID != "" {
+			block["id"] = firewallID
+		}
+		if deviceID != "" {
+			block["device"] = map[string]any{"type": "linode", "id": deviceID}
+		}
+	}
+	return block
 }
 
 func sshKeyPlanValue(plan Plan) string {
@@ -1102,6 +1417,10 @@ func serverStateRecordWithStatus(plan Plan, created CreatedServer, dns DNSState,
 		"created_at":  createdAt,
 		"updated_at":  updatedAt,
 	}
+	if firewall := firewallStateBlock(plan, plan.Firewall.ID, plan.Firewall.DeviceID); firewall != nil {
+		record["firewall"] = firewall
+	}
+	record["credentials"] = credentialsStateBlock(plan)
 	record["linode"] = map[string]any{
 		"id":          created.ProviderID,
 		"instance_id": created.ProviderID,
@@ -1243,7 +1562,9 @@ func planLines(plan Plan, cloudInitPath string) []string {
 		"  certificate: /etc/letsencrypt/live/" + plan.Hostname + "/fullchain.pem",
 		"  key: /etc/letsencrypt/live/" + plan.Hostname + "/privkey.pem",
 	}
+	lines = append(lines, firewallPlanBlock(plan)...)
 	lines = append(lines, sshPlanBlock(plan)...)
+	lines = append(lines, rootPlanBlock(plan)...)
 	lines = append(lines, "Mode", "  dry-run: true")
 	if cloudInitPath != "" {
 		lines = append(lines, "  cloud-init preview: "+cloudInitPath)
@@ -1306,6 +1627,15 @@ func BuildPlan(args Args) (Plan, error) {
 	if err != nil {
 		return Plan{}, err
 	}
+	firewallMode := strings.ToLower(firstNonEmpty(args.Firewall, "managed"))
+	switch firewallMode {
+	case "managed", "none":
+	default:
+		return Plan{}, Error{Msg: fmt.Sprintf("Unsupported firewall mode %q. Use managed or none.", firewallMode)}
+	}
+	if firewallMode == "none" && strings.TrimSpace(args.FirewallID) != "" {
+		return Plan{}, Error{Msg: "--firewall-id requires --firewall managed."}
+	}
 	name, err := resolveValue(args.Name, "Server name: ", "app1", nonInteractive, false)
 	if err != nil {
 		return Plan{}, err
@@ -1351,6 +1681,10 @@ func BuildPlan(args Args) (Plan, error) {
 	if dnsProvider != "dnsimple" {
 		return Plan{}, Error{Msg: fmt.Sprintf("Unsupported DNS provider %q. Only dnsimple is available in this slice.", dnsProvider)}
 	}
+	firewallPlan := FirewallPlan{Mode: "none"}
+	if firewallMode == "managed" {
+		firewallPlan = managedFirewallPlan(args.FirewallID)
+	}
 	osPlan, err := osReleasePlan(ubuntuRelease.version, args.Image)
 	if err != nil {
 		return Plan{}, err
@@ -1365,6 +1699,7 @@ func BuildPlan(args Args) (Plan, error) {
 		DnsZone:           dnsZone,
 		UbuntuVersion:     ubuntuRelease.version,
 		PHPVersion:        ubuntuRelease.php,
+		Firewall:          firewallPlan,
 		Name:              firstNonEmpty(name, "app1"),
 		Hostname:          firstNonEmpty(hostname, defaultHostname(name)),
 		Label:             firstNonEmpty(label, name, hostname),
@@ -1435,13 +1770,20 @@ func renderProvisionSuccess(plan Plan, created CreatedServer, dns DNSState, tls 
 		"State",
 		"  path: " + statePath,
 	}
+	lines = append(lines, firewallPlanBlock(plan)...)
 	lines = append(lines, sshSuccessBlock(plan, sshKeys)...)
+	lines = append(lines, rootSuccessBlock(plan)...)
 	if cloudInitPath != "" {
 		lines = append(lines, "  cloud-init: "+cloudInitPath)
 	}
 	sshTarget := plan.SshUser + "@" + plan.Hostname
+	sshIPTarget := plan.SshUser + "@" + created.IPv4
 	lines = append(lines,
 		"Next",
+		"  test SSH by IP:",
+		"  ssh -o BatchMode=yes "+sshIPTarget+" \"true\"",
+		"  test SSH by host:",
+		"  ssh -o BatchMode=yes "+sshTarget+" \"true\"",
 		"  wait for cloud-init to finish:",
 		"  ssh "+sshTarget+" \"cloud-init status --wait\"",
 		"  enable wildcard TLS:",
@@ -1575,7 +1917,7 @@ func ProvisionServer(plan Plan) (*ServerCreateResult, error) {
 	if err != nil {
 		return nil, err
 	}
-	rootPass := passwords.DerivePassword(firstNonEmpty(effectivePlan.Hostname, effectivePlan.Name), "linode-root", salt)
+	rootPass := passwords.DerivePassword(effectivePlan.Hostname, "linode-root", salt)
 	dnsimpleToken, err := requiredEnv("DNSIMPLE_TOKEN")
 	if err != nil {
 		return nil, err
@@ -1634,6 +1976,17 @@ func ProvisionServer(plan Plan) (*ServerCreateResult, error) {
 		created = CreatedServer{Provider: effectivePlan.Provider, ProviderID: linodeID, Name: effectivePlan.Name, Hostname: effectivePlan.Hostname, IPv4: linodeIP}
 		partial := serverStateRecordWithStatus(effectivePlan, created, DNSState{}, TLSState{}, now, now, "provisioning", "linode_created")
 		if err := upsertStateRecord(serverStatePath, partial); err != nil {
+			return nil, err
+		}
+	}
+	if firewallMode := firewallPlanMode(effectivePlan); firewallMode == "managed" {
+		firewallID, err := ensureManagedFirewall(effectivePlan, created, existingRecord, serverStatePath, now)
+		if err != nil {
+			return nil, err
+		}
+		effectivePlan.Firewall.ID = firewallID
+		effectivePlan.Firewall.DeviceID = created.ProviderID
+		if err := upsertStateRecord(serverStatePath, serverStateRecordWithStatus(effectivePlan, created, DNSState{}, TLSState{}, now, now, "provisioning", "linode_created")); err != nil {
 			return nil, err
 		}
 	}
