@@ -1912,6 +1912,89 @@ func findProvisionStateRecord(plan Plan) (map[string]any, int, error) {
 	return nil, -1, nil
 }
 
+func nestedMapValue(record map[string]any, keys ...string) string {
+	var current any = record
+	for _, key := range keys {
+		m, ok := current.(map[string]any)
+		if !ok {
+			return ""
+		}
+		current = m[key]
+	}
+	return valueString(current)
+}
+
+func sshAuthorizedKeysFromRecord(record map[string]any) []SSHAuthorizedKey {
+	ssh, ok := record["ssh"].(map[string]any)
+	if !ok {
+		return nil
+	}
+	rawKeys, ok := ssh["authorized_keys"].([]any)
+	if !ok {
+		return nil
+	}
+	keys := make([]SSHAuthorizedKey, 0, len(rawKeys))
+	for _, raw := range rawKeys {
+		m, ok := raw.(map[string]any)
+		if !ok {
+			continue
+		}
+		keys = append(keys, SSHAuthorizedKey{
+			Source:      firstNonEmpty(valueString(m["source"]), "linode-profile"),
+			ID:          valueString(m["id"]),
+			Label:       valueString(m["label"]),
+			Fingerprint: valueString(m["fingerprint"]),
+			Path:        valueString(m["path"]),
+			Created:     valueString(m["created"]),
+		})
+	}
+	if len(keys) == 0 {
+		return nil
+	}
+	return keys
+}
+
+func applyProvisionResumeDefaults(args Args, record map[string]any) (Args, []SSHAuthorizedKey) {
+	if args.UbuntuVersion == "" {
+		args.UbuntuVersion = firstNonEmpty(
+			nestedMapValue(record, "os", "ubuntu_version"),
+			nestedMapValue(record, "os", "version"),
+			valueString(record["ubuntu_version"]),
+		)
+	}
+	if args.Firewall == "" {
+		args.Firewall = firstNonEmpty(nestedMapValue(record, "firewall", "mode"), "managed")
+	}
+	if args.FirewallID == "" {
+		args.FirewallID = firewallStateID(record)
+	}
+	if args.Region == "" {
+		args.Region = firstNonEmpty(valueString(record["region"]), nestedMapValue(record, "linode", "region"))
+	}
+	if args.Type == "" {
+		args.Type = firstNonEmpty(valueString(record["type"]), nestedMapValue(record, "linode", "type"))
+	}
+	if args.Image == "" {
+		args.Image = firstNonEmpty(valueString(record["image"]), nestedMapValue(record, "os", "image"))
+	}
+	if args.SshUser == "" {
+		args.SshUser = nestedMapValue(record, "ssh", "user")
+	}
+	if args.SshKeySource == "" {
+		args.SshKeySource = nestedMapValue(record, "ssh", "source")
+	}
+	if args.SshPublicKeyFile == "" {
+		args.SshPublicKeyFile = firstNonEmpty(
+			nestedMapValue(record, "ssh", "public_key_file"),
+			nestedMapValue(record, "ssh", "path"),
+		)
+	}
+	if args.DnsimpleAccountID == "" {
+		args.DnsimpleAccountID = nestedMapValue(record, "dns", "account_id")
+	}
+	return args, sshAuthorizedKeysFromRecord(record)
+}
+
 func existingProvisionStatus(record map[string]any) string {
 	return strings.ToLower(valueString(record["status"]))
 }
@@ -2002,6 +2085,7 @@ func serverStateRecordWithStatus(plan Plan, created CreatedServer, dns DNSState,
 	if dns.Provider != "" {
 		record["dns"] = map[string]any{
 			"provider":        dns.Provider,
+			"account_id":      plan.DnsimpleAccountID,
 			"zone":            dns.Zone,
 			"hostname_name":   dns.HostnameRecord.Name,
 			"wildcard_name":   dns.WildcardRecord.Name,
@@ -2232,19 +2316,6 @@ func BuildPlan(args Args) (Plan, error) {
 	nonInteractive := args.NonInteractive
 	provider := firstNonEmpty(args.Provider, "linode")
 	dnsProvider := firstNonEmpty(args.DnsProvider, "dnsimple")
-	ubuntuRelease, err := selectUbuntuStack(args.UbuntuVersion, nonInteractive)
-	if err != nil {
-		return Plan{}, err
-	}
-	firewallMode := strings.ToLower(firstNonEmpty(args.Firewall, "managed"))
-	switch firewallMode {
-	case "managed", "none":
-	default:
-		return Plan{}, Error{Msg: fmt.Sprintf("Unsupported firewall mode %q. Use managed or none.", firewallMode)}
-	}
-	if firewallMode == "none" && strings.TrimSpace(args.FirewallID) != "" {
-		return Plan{}, Error{Msg: "--firewall-id requires --firewall managed."}
-	}
 	name, err := resolveServerName(args.Name, nonInteractive)
 	if err != nil {
 		return Plan{}, err
@@ -2262,6 +2333,31 @@ func BuildPlan(args Args) (Plan, error) {
 	label := name
 	if strings.TrimSpace(label) == "" {
 		return Plan{}, Error{Msg: "Server name cannot be empty."}
+	}
+	resumeKeys := []SSHAuthorizedKey(nil)
+	resumeRecord, _, err := findProvisionStateRecord(Plan{Provider: provider, Name: name, Hostname: hostname, Label: label})
+	if err != nil {
+		return Plan{}, err
+	}
+	if resumeRecord != nil {
+		status := existingProvisionStatus(resumeRecord)
+		phase := existingProvisionPhase(resumeRecord)
+		if status != "provisioned" && phase != "complete" {
+			args, resumeKeys = applyProvisionResumeDefaults(args, resumeRecord)
+		}
+	}
+	ubuntuRelease, err := selectUbuntuStack(args.UbuntuVersion, nonInteractive)
+	if err != nil {
+		return Plan{}, err
+	}
+	firewallMode := strings.ToLower(firstNonEmpty(args.Firewall, "managed"))
+	switch firewallMode {
+	case "managed", "none":
+	default:
+		return Plan{}, Error{Msg: fmt.Sprintf("Unsupported firewall mode %q. Use managed or none.", firewallMode)}
+	}
+	if firewallMode == "none" && strings.TrimSpace(args.FirewallID) != "" {
+		return Plan{}, Error{Msg: "--firewall-id requires --firewall managed."}
 	}
 	region, err := resolveValue(args.Region, "Linode region: ", "ca-central", nonInteractive, false)
 	if err != nil {
@@ -2308,7 +2404,7 @@ func BuildPlan(args Args) (Plan, error) {
 	if err != nil {
 		return Plan{}, err
 	}
-	return normalizePlan(Plan{
+	plan := normalizePlan(Plan{
 		Provider:          provider,
 		DnsProvider:       dnsProvider,
 		DnsZone:           domain,
@@ -2344,7 +2440,9 @@ func BuildPlan(args Args) (Plan, error) {
 		DryRun:            args.DryRun || !args.Execute,
 		NonInteractive:    nonInteractive,
 		ShowCloudInit:     args.ShowCloudInit,
-	}), nil
+	})
+	plan.AuthorizedKeys = resumeKeys
+	return plan, nil
 }
 
 func firstDuration(value, fallback time.Duration) time.Duration {

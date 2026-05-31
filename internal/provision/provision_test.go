@@ -10,6 +10,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -387,6 +388,90 @@ func TestBuildPlanInteractiveFileSSHSourcePromptsForKeyPath(t *testing.T) {
 	}
 	if len(selectCalls) != 1 {
 		t.Fatalf("select calls = %#v, want 1 call", selectCalls)
+	}
+}
+
+func TestBuildPlanInteractiveResumeUsesSavedProvisioningRecord(t *testing.T) {
+	configHome := t.TempDir()
+	t.Setenv("NF_CONFIG_HOME", configHome)
+	t.Setenv("NF_SERVER_DOMAIN", "nfweb.dev")
+	record := map[string]any{
+		"provider": "linode",
+		"provider_id": "98375388",
+		"name": "prod3",
+		"hostname": "prod3.nfweb.dev",
+		"label": "prod3",
+		"status": "provisioning",
+		"phase": "linode_created",
+		"ipv4": "172.105.101.108",
+		"region": "ca-central",
+		"type": "g6-standard-1",
+		"ssh": map[string]any{
+			"user": "nonfiction",
+			"source": "linode-profile",
+			"authorized_keys": []any{
+				map[string]any{"source": "linode-profile", "id": "77496734", "label": "jon", "fingerprint": "fp-jon"},
+			},
+		},
+		"dns": map[string]any{"provider": "dnsimple", "account_id": "14", "zone": "nfweb.dev"},
+		"os": map[string]any{"ubuntu_version": "24.04", "version": "24.04", "image": "linode/ubuntu24.04"},
+		"firewall": map[string]any{"mode": "managed", "id": "27516345"},
+	}
+	if err := saveStatePayload(filepath.Join(configHome, "state", "servers.json"), []map[string]any{record}); err != nil {
+		t.Fatalf("saveStatePayload() error = %v", err)
+	}
+
+	oldSelect := selectVersionFn
+	oldPrompt := promptStringFn
+	t.Cleanup(func() { selectVersionFn = oldSelect })
+	t.Cleanup(func() { promptStringFn = oldPrompt })
+
+	var prompts []string
+	selectVersionFn = func(title string, options []ui.SelectOption) (string, error) {
+		t.Fatalf("unexpected select during resume: %q", title)
+		return "", nil
+	}
+	promptStringFn = func(prompt, defaultValue string, allowBlank bool) (string, error) {
+		prompts = append(prompts, prompt)
+		if prompt != "Server name: " {
+			t.Fatalf("unexpected prompt during resume: %q", prompt)
+		}
+		return "prod3", nil
+	}
+
+	plan, err := BuildPlan(Args{Execute: true})
+	if err != nil {
+		t.Fatalf("BuildPlan() error = %v", err)
+	}
+	if got, want := prompts, []string{"Server name: "}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("prompts = %#v, want %#v", got, want)
+	}
+	if got, want := plan.Name, "prod3"; got != want {
+		t.Fatalf("Name = %q, want %q", got, want)
+	}
+	if got, want := plan.UbuntuVersion, "24.04"; got != want {
+		t.Fatalf("UbuntuVersion = %q, want %q", got, want)
+	}
+	if got, want := plan.Region, "ca-central"; got != want {
+		t.Fatalf("Region = %q, want %q", got, want)
+	}
+	if got, want := plan.LinodeType, "g6-standard-1"; got != want {
+		t.Fatalf("LinodeType = %q, want %q", got, want)
+	}
+	if got, want := plan.SshUser, "nonfiction"; got != want {
+		t.Fatalf("SshUser = %q, want %q", got, want)
+	}
+	if got, want := plan.DnsimpleAccountID, "14"; got != want {
+		t.Fatalf("DnsimpleAccountID = %q, want %q", got, want)
+	}
+	if got, want := plan.Firewall.ID, "27516345"; got != want {
+		t.Fatalf("Firewall.ID = %q, want %q", got, want)
+	}
+	if len(plan.AuthorizedKeys) != 1 || plan.AuthorizedKeys[0].Label != "jon" {
+		t.Fatalf("AuthorizedKeys = %#v, want saved SSH key metadata", plan.AuthorizedKeys)
+	}
+	if !plan.Wait {
+		t.Fatal("Wait = false, want true for execute resume")
 	}
 }
 
