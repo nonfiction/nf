@@ -30,6 +30,11 @@ type ProjectError struct{ Msg string }
 
 func (e ProjectError) Error() string { return e.Msg }
 
+var (
+	runLinodeDeleteFn = runLinodeDelete
+	deleteDNSRecordFn = provision.DeleteDNSimpleARecord
+)
+
 type repoCommandRunner interface {
 	Execute(root string, extraArgs []string) error
 	Render() string
@@ -1258,6 +1263,76 @@ func isLinodeNotFoundError(err error) bool {
 	return strings.Contains(message, "request failed: 404") || strings.Contains(message, "not found")
 }
 
+type serverDNSDeleteTarget struct {
+	provider  string
+	accountID string
+	zone      string
+	name      string
+}
+
+func serverDNSDeleteTargets(server map[string]any) []serverDNSDeleteTarget {
+	dns, _ := server["dns"].(map[string]any)
+	if dns == nil {
+		return nil
+	}
+	provider := strings.ToLower(strings.TrimSpace(firstRecordString(dns, "provider")))
+	zone := firstRecordString(dns, "zone")
+	if provider == "" || zone == "" {
+		return nil
+	}
+	accountID := firstRecordString(dns, "account_id")
+	if provider == "dnsimple" && accountID == "" {
+		accountID = firstNonEmpty(envwizard.Value("DNSIMPLE_ACCOUNT_ID"), "14")
+	}
+	seen := map[string]struct{}{}
+	targets := make([]serverDNSDeleteTarget, 0, 2)
+	for _, name := range []string{
+		mapStringAtPath(server, "dns", "hostname_record", "name"),
+		mapStringAtPath(server, "dns", "wildcard_record", "name"),
+		firstRecordString(dns, "hostname_name"),
+		firstRecordString(dns, "wildcard_name"),
+	} {
+		name = strings.TrimSpace(name)
+		if name == "" {
+			continue
+		}
+		if _, ok := seen[name]; ok {
+			continue
+		}
+		seen[name] = struct{}{}
+		targets = append(targets, serverDNSDeleteTarget{provider: provider, accountID: accountID, zone: zone, name: name})
+	}
+	return targets
+}
+
+func provisionDNSRecordFQDN(target serverDNSDeleteTarget) string {
+	name := strings.TrimSpace(target.name)
+	zone := strings.TrimSpace(target.zone)
+	switch {
+	case name == "":
+		return zone
+	case zone == "":
+		return name
+	default:
+		return name + "." + zone
+	}
+}
+
+func deleteServerDNSRecord(target serverDNSDeleteTarget) error {
+	switch target.provider {
+	case "", "none":
+		return nil
+	case "dnsimple":
+		token := envwizard.Value("DNSIMPLE_TOKEN")
+		if strings.TrimSpace(token) == "" {
+			return fmt.Errorf("Expected DNSIMPLE_TOKEN in the environment or %s.", config.EnvFile())
+		}
+		return deleteDNSRecordFn(token, target.accountID, target.zone, target.name)
+	default:
+		return fmt.Errorf("unsupported DNS provider %q for server deletion", target.provider)
+	}
+}
+
 func defaultProjectTasks() map[string]map[string]any {
 	return map[string]map[string]any{
 		"composer": map[string]any{"description": "Update theme Composer dependencies", "run": "composer --working-dir=theme update && composer --working-dir=theme dump-autoload -o"},
@@ -1526,6 +1601,7 @@ func cmdDeleteServer(needle string, dryRun, execute, yes, nonInteractive bool) i
 		}
 	}
 	remoteID := firstRecordString(server, "linode_id", "id", "_state_key")
+	dnsDeletes := serverDNSDeleteTargets(server)
 	if !execute && (dryRun || nonInteractive) {
 		dryRun = true
 	}
@@ -1564,6 +1640,13 @@ func cmdDeleteServer(needle string, dryRun, execute, yes, nonInteractive bool) i
 			fmt.Printf("  remote action: unavailable for provider %q\n", provider)
 		}
 	}
+	if len(dnsDeletes) == 0 {
+		fmt.Println("  dns actions: none")
+	} else {
+		for _, target := range dnsDeletes {
+			fmt.Printf("  dns action: delete %s %s\n", target.provider, provisionDNSRecordFQDN(target))
+		}
+	}
 	if len(matchedSites) == 0 {
 		fmt.Println("  related sites: none")
 	} else {
@@ -1594,10 +1677,16 @@ func cmdDeleteServer(needle string, dryRun, execute, yes, nonInteractive bool) i
 			return 1
 		}
 	}
-	if err := runLinodeDelete(remoteID); err != nil {
+	if err := runLinodeDeleteFn(remoteID); err != nil {
 		if isLinodeNotFoundError(err) {
 			fmt.Fprintln(os.Stderr, "Remote Linode was not found; removing stale local state.")
 		} else {
+			fmt.Fprintln(os.Stderr, err)
+			return 1
+		}
+	}
+	for _, target := range dnsDeletes {
+		if err := deleteServerDNSRecord(target); err != nil {
 			fmt.Fprintln(os.Stderr, err)
 			return 1
 		}

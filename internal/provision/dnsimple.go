@@ -102,6 +102,27 @@ func (p *dnsimpleProvider) upsertARecord(ctx context.Context, zone, name, ip str
 	return created, "created", nil
 }
 
+func (p *dnsimpleProvider) deleteARecord(ctx context.Context, zone, name string) (DNSRecord, string, error) {
+	records, err := p.listARecords(ctx, zone)
+	if err != nil {
+		return DNSRecord{}, "", err
+	}
+	for _, record := range records {
+		if record.Name != name {
+			continue
+		}
+		recordID, err := strconv.ParseInt(record.ID, 10, 64)
+		if err != nil {
+			return DNSRecord{}, "", Error{Msg: fmt.Sprintf("DNSimple record %s has invalid id %q", name, record.ID)}
+		}
+		if _, err := p.client.Zones.DeleteRecord(ctx, p.accountID, zone, recordID); err != nil {
+			return DNSRecord{}, "", Error{Msg: fmt.Sprintf("Deleting DNSimple A record %s in zone %s: %v", name, zone, err)}
+		}
+		return record, "deleted", nil
+	}
+	return DNSRecord{Name: strings.TrimSpace(name), Type: "A"}, "already absent", nil
+}
+
 func (p *dnsimpleProvider) waitForRecordDistribution(ctx context.Context, zone, recordID string, timeout time.Duration) error {
 	recordID = strings.TrimSpace(recordID)
 	if recordID == "" {
@@ -194,6 +215,28 @@ func defaultDNSimpleUpsertARecord(token, accountID, zone, name, ip string) error
 	}
 	_ = record
 	return nil
+}
+
+func defaultDNSimpleDeleteARecord(token, accountID, zone, name string) error {
+	provider, err := dnsimpleProviderFactory(context.Background(), token, accountID)
+	if err != nil {
+		return err
+	}
+	record, action, err := provider.deleteARecord(context.Background(), zone, name)
+	if err != nil {
+		return err
+	}
+	switch action {
+	case "deleted":
+		fmt.Printf("Deleted DNS %s\n", fqdnForDNSRecordName(name, zone))
+	default:
+		fmt.Printf("DNS %s already absent\n", fqdnForDNSRecordName(record.Name, zone))
+	}
+	return nil
+}
+
+func DeleteDNSimpleARecord(token, accountID, zone, name string) error {
+	return defaultDNSimpleDeleteARecord(token, accountID, zone, name)
 }
 
 func defaultDNSimpleWaitForRecordDistribution(token, accountID, zone, name string, timeout time.Duration) error {

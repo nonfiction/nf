@@ -225,6 +225,124 @@ func TestDefaultDNSimpleUpsertARecordPrintsFQDNs(t *testing.T) {
 	}
 }
 
+func TestDNSimpleProviderDeleteARecordDeletesAndUsesDecimalIDs(t *testing.T) {
+	t.Run("deleted", func(t *testing.T) {
+		calls := 0
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			calls++
+			switch calls {
+			case 1:
+				if r.Method != http.MethodGet || r.URL.Path != "/v2/14/zones/example.test/records" {
+					t.Fatalf("unexpected list request: %s %s", r.Method, r.URL.Path)
+				}
+				_ = json.NewEncoder(w).Encode(map[string]any{"data": []any{map[string]any{"id": 77496734, "name": "app1", "type": "A", "content": "198.51.100.10", "ttl": 60}}})
+			case 2:
+				if r.Method != http.MethodDelete || r.URL.Path != "/v2/14/zones/example.test/records/77496734" {
+					t.Fatalf("unexpected delete request: %s %s", r.Method, r.URL.Path)
+				}
+				w.WriteHeader(http.StatusNoContent)
+			default:
+				t.Fatalf("unexpected request count %d", calls)
+			}
+		}))
+		defer srv.Close()
+
+		provider, err := newDNSimpleProvider(context.Background(), "secret-token", "14")
+		if err != nil {
+			t.Fatalf("newDNSimpleProvider() error = %v", err)
+		}
+		provider.client.BaseURL = srv.URL
+		record, action, err := provider.deleteARecord(context.Background(), "example.test", "app1")
+		if err != nil {
+			t.Fatalf("deleteARecord() error = %v", err)
+		}
+		if got, want := action, "deleted"; got != want {
+			t.Fatalf("action = %q, want %q", got, want)
+		}
+		if got, want := record.ID, "77496734"; got != want {
+			t.Fatalf("record.ID = %q, want %q", got, want)
+		}
+	})
+
+	t.Run("already absent", func(t *testing.T) {
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if r.Method != http.MethodGet || r.URL.Path != "/v2/14/zones/example.test/records" {
+				t.Fatalf("unexpected request: %s %s", r.Method, r.URL.Path)
+			}
+			_ = json.NewEncoder(w).Encode(map[string]any{"data": []any{}})
+		}))
+		defer srv.Close()
+
+		provider, err := newDNSimpleProvider(context.Background(), "secret-token", "14")
+		if err != nil {
+			t.Fatalf("newDNSimpleProvider() error = %v", err)
+		}
+		provider.client.BaseURL = srv.URL
+		record, action, err := provider.deleteARecord(context.Background(), "example.test", "app1")
+		if err != nil {
+			t.Fatalf("deleteARecord() error = %v", err)
+		}
+		if got, want := action, "already absent"; got != want {
+			t.Fatalf("action = %q, want %q", got, want)
+		}
+		if got, want := record.Name, "app1"; got != want {
+			t.Fatalf("record.Name = %q, want %q", got, want)
+		}
+	})
+}
+
+func TestDefaultDNSimpleDeleteARecordPrintsFQDNs(t *testing.T) {
+	tests := []struct {
+		name   string
+		list   map[string]any
+		status int
+		expect string
+	}{
+		{name: "deleted", list: map[string]any{"data": []any{map[string]any{"id": 1, "name": "prod2", "type": "A", "content": "203.0.113.10", "ttl": 60}}}, status: http.StatusNoContent, expect: "Deleted DNS prod2.nfweb.dev\n"},
+		{name: "already absent", list: map[string]any{"data": []any{}}, expect: "DNS prod2.nfweb.dev already absent\n"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			calls := 0
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				calls++
+				if calls == 1 {
+					if r.Method != http.MethodGet || r.URL.Path != "/v2/14/zones/nfweb.dev/records" {
+						t.Fatalf("unexpected list request: %s %s", r.Method, r.URL.Path)
+					}
+					_ = json.NewEncoder(w).Encode(tt.list)
+					return
+				}
+				if r.Method != http.MethodDelete || r.URL.Path != "/v2/14/zones/nfweb.dev/records/1" {
+					t.Fatalf("unexpected delete request: %s %s", r.Method, r.URL.Path)
+				}
+				w.WriteHeader(tt.status)
+			}))
+			defer srv.Close()
+
+			oldFactory := dnsimpleProviderFactory
+			dnsimpleProviderFactory = func(ctx context.Context, token, accountID string) (*dnsimpleProvider, error) {
+				provider, err := newDNSimpleProvider(ctx, token, accountID)
+				if err != nil {
+					return nil, err
+				}
+				provider.client.BaseURL = srv.URL
+				return provider, nil
+			}
+			t.Cleanup(func() { dnsimpleProviderFactory = oldFactory })
+
+			output := captureStdout(t, func() {
+				if err := defaultDNSimpleDeleteARecord("secret-token", "14", "nfweb.dev", "prod2"); err != nil {
+					t.Fatalf("defaultDNSimpleDeleteARecord() error = %v", err)
+				}
+			})
+			if got := output; got != tt.expect {
+				t.Fatalf("output = %q, want %q", got, tt.expect)
+			}
+		})
+	}
+}
+
 func TestDNSimpleProviderWaitForRecordDistribution(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodGet || r.URL.Path != "/v2/14/zones/example.test/records/77496734/distribution" {

@@ -784,7 +784,7 @@ func TestRunServerDeleteAcceptsFlagsAfterIdentifier(t *testing.T) {
 	if err := os.MkdirAll(stateDir, 0o755); err != nil {
 		t.Fatalf("MkdirAll() error = %v", err)
 	}
-	servers := []map[string]any{{"id": 98223448, "name": "test2", "provider": "linode"}}
+	servers := []map[string]any{{"id": 98223448, "name": "test2", "provider": "linode", "dns": map[string]any{"provider": "dnsimple", "zone": "nfweb.dev", "hostname_record": map[string]any{"name": "test2"}, "wildcard_record": map[string]any{"name": "*.test2"}}}}
 	data, err := json.MarshalIndent(servers, "", "  ")
 	if err != nil {
 		t.Fatalf("MarshalIndent() error = %v", err)
@@ -809,8 +809,167 @@ func TestRunServerDeleteAcceptsFlagsAfterIdentifier(t *testing.T) {
 			t.Fatalf("Run() = %d, want 0", got)
 		}
 	})
-	if !strings.Contains(output, "Delete server plan:") || !strings.Contains(output, "mode: dry-run") || !strings.Contains(output, "Linode API delete instance 98223448") {
+	if !strings.Contains(output, "Delete server plan:") || !strings.Contains(output, "mode: dry-run") || !strings.Contains(output, "Linode API delete instance 98223448") || !strings.Contains(output, "dns action: delete dnsimple test2.nfweb.dev") || !strings.Contains(output, "dns action: delete dnsimple *.test2.nfweb.dev") {
 		t.Fatalf("Run() output = %q, want dry-run plan", output)
+	}
+}
+
+func TestCmdDeleteServerDeletesDNSRecordsAndState(t *testing.T) {
+	configHome := t.TempDir()
+	stateDir := filepath.Join(configHome, "state")
+	if err := os.MkdirAll(stateDir, 0o755); err != nil {
+		t.Fatalf("MkdirAll() error = %v", err)
+	}
+	servers := []map[string]any{{
+		"id":       98223448,
+		"name":     "prod1",
+		"provider": "linode",
+		"hostname": "prod1.nfweb.dev",
+		"dns": map[string]any{
+			"provider":        "dnsimple",
+			"account_id":      "99",
+			"zone":            "nfweb.dev",
+			"hostname_record": map[string]any{"name": "prod1"},
+			"wildcard_record": map[string]any{"name": "*.prod1"},
+		},
+	}}
+	serverData, err := json.MarshalIndent(servers, "", "  ")
+	if err != nil {
+		t.Fatalf("MarshalIndent() error = %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(stateDir, "servers.json"), append(serverData, '\n'), 0o644); err != nil {
+		t.Fatalf("WriteFile() error = %v", err)
+	}
+	sites := []map[string]any{{"hostname": "client.prod1.nfweb.dev", "server": "prod1"}}
+	siteData, err := json.MarshalIndent(sites, "", "  ")
+	if err != nil {
+		t.Fatalf("MarshalIndent() error = %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(stateDir, "sites.json"), append(siteData, '\n'), 0o644); err != nil {
+		t.Fatalf("WriteFile() error = %v", err)
+	}
+
+	oldConfigHome := os.Getenv("NF_CONFIG_HOME")
+	oldDNS := os.Getenv("DNSIMPLE_TOKEN")
+	if err := os.Setenv("NF_CONFIG_HOME", configHome); err != nil {
+		t.Fatalf("Setenv() error = %v", err)
+	}
+	if err := os.Setenv("DNSIMPLE_TOKEN", "secret-token"); err != nil {
+		t.Fatalf("Setenv() error = %v", err)
+	}
+	t.Cleanup(func() {
+		_ = os.Setenv("NF_CONFIG_HOME", oldConfigHome)
+		_ = os.Setenv("DNSIMPLE_TOKEN", oldDNS)
+	})
+
+	oldRunLinodeDeleteFn := runLinodeDeleteFn
+	oldDeleteDNSRecordFn := deleteDNSRecordFn
+	t.Cleanup(func() {
+		runLinodeDeleteFn = oldRunLinodeDeleteFn
+		deleteDNSRecordFn = oldDeleteDNSRecordFn
+	})
+
+	var deletedLinodeID string
+	var deletedDNS []string
+	runLinodeDeleteFn = func(id string) error {
+		deletedLinodeID = id
+		return nil
+	}
+	deleteDNSRecordFn = func(token, accountID, zone, name string) error {
+		deletedDNS = append(deletedDNS, strings.Join([]string{token, accountID, zone, name}, "|"))
+		return nil
+	}
+
+	if got := cmdDeleteServer("prod1", false, true, true, true); got != 0 {
+		t.Fatalf("cmdDeleteServer() = %d, want 0", got)
+	}
+	if got, want := deletedLinodeID, "98223448"; got != want {
+		t.Fatalf("deletedLinodeID = %q, want %q", got, want)
+	}
+	if got, want := deletedDNS, []string{"secret-token|99|nfweb.dev|prod1", "secret-token|99|nfweb.dev|*.prod1"}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("deletedDNS = %#v, want %#v", got, want)
+	}
+	remainingServers, err := state.LoadStateRecords("servers")
+	if err != nil {
+		t.Fatalf("LoadStateRecords(servers) error = %v", err)
+	}
+	if len(remainingServers) != 0 {
+		t.Fatalf("remaining servers = %#v, want empty", remainingServers)
+	}
+	remainingSites, err := state.LoadStateRecords("sites")
+	if err != nil {
+		t.Fatalf("LoadStateRecords(sites) error = %v", err)
+	}
+	if len(remainingSites) != 0 {
+		t.Fatalf("remaining sites = %#v, want empty", remainingSites)
+	}
+}
+
+func TestCmdDeleteServerStopsOnDNSDeleteFailure(t *testing.T) {
+	configHome := t.TempDir()
+	stateDir := filepath.Join(configHome, "state")
+	if err := os.MkdirAll(stateDir, 0o755); err != nil {
+		t.Fatalf("MkdirAll() error = %v", err)
+	}
+	servers := []map[string]any{{"id": 98223448, "name": "prod1", "provider": "linode", "dns": map[string]any{"provider": "dnsimple", "zone": "nfweb.dev", "hostname_record": map[string]any{"name": "prod1"}}}}
+	serverData, err := json.MarshalIndent(servers, "", "  ")
+	if err != nil {
+		t.Fatalf("MarshalIndent() error = %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(stateDir, "servers.json"), append(serverData, '\n'), 0o644); err != nil {
+		t.Fatalf("WriteFile() error = %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(stateDir, "sites.json"), []byte("[]\n"), 0o644); err != nil {
+		t.Fatalf("WriteFile() error = %v", err)
+	}
+
+	oldConfigHome := os.Getenv("NF_CONFIG_HOME")
+	oldDNS := os.Getenv("DNSIMPLE_TOKEN")
+	oldDNSAccount := os.Getenv("DNSIMPLE_ACCOUNT_ID")
+	if err := os.Setenv("NF_CONFIG_HOME", configHome); err != nil {
+		t.Fatalf("Setenv() error = %v", err)
+	}
+	if err := os.Setenv("DNSIMPLE_TOKEN", "secret-token"); err != nil {
+		t.Fatalf("Setenv() error = %v", err)
+	}
+	if err := os.Setenv("DNSIMPLE_ACCOUNT_ID", "14"); err != nil {
+		t.Fatalf("Setenv() error = %v", err)
+	}
+	t.Cleanup(func() {
+		_ = os.Setenv("NF_CONFIG_HOME", oldConfigHome)
+		_ = os.Setenv("DNSIMPLE_TOKEN", oldDNS)
+		_ = os.Setenv("DNSIMPLE_ACCOUNT_ID", oldDNSAccount)
+	})
+
+	oldRunLinodeDeleteFn := runLinodeDeleteFn
+	oldDeleteDNSRecordFn := deleteDNSRecordFn
+	t.Cleanup(func() {
+		runLinodeDeleteFn = oldRunLinodeDeleteFn
+		deleteDNSRecordFn = oldDeleteDNSRecordFn
+	})
+
+	runLinodeDeleteFn = func(id string) error { return nil }
+	deleteDNSRecordFn = func(token, accountID, zone, name string) error {
+		if got, want := accountID, "14"; got != want {
+			return fmt.Errorf("accountID = %s, want %s", got, want)
+		}
+		return fmt.Errorf("dns delete failed")
+	}
+
+	stderr := captureStderr(t, func() {
+		if got := cmdDeleteServer("prod1", false, true, true, true); got != 1 {
+			t.Fatalf("cmdDeleteServer() = %d, want 1", got)
+		}
+	})
+	if !strings.Contains(stderr, "dns delete failed") {
+		t.Fatalf("stderr = %q, want dns failure", stderr)
+	}
+	remainingServers, err := state.LoadStateRecords("servers")
+	if err != nil {
+		t.Fatalf("LoadStateRecords(servers) error = %v", err)
+	}
+	if len(remainingServers) != 1 {
+		t.Fatalf("remaining servers = %#v, want original record", remainingServers)
 	}
 }
 
