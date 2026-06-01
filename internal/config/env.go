@@ -85,6 +85,14 @@ func formatEnvAssignments(values map[string]string) []string {
 }
 
 func UpdateEnvFile(path string, updates map[string]string) ([]string, error) {
+	return updateEnvFile(path, updates, false)
+}
+
+func SetEnvFile(path string, updates map[string]string) ([]string, error) {
+	return updateEnvFile(path, updates, true)
+}
+
+func updateEnvFile(path string, updates map[string]string, overwrite bool) ([]string, error) {
 	if len(updates) == 0 {
 		return nil, nil
 	}
@@ -134,7 +142,7 @@ func UpdateEnvFile(path string, updates map[string]string) ([]string, error) {
 		if !ok {
 			continue
 		}
-		if strings.TrimSpace(value) != "" {
+		if strings.TrimSpace(value) != "" && !overwrite {
 			continue
 		}
 		lines[i] = fmt.Sprintf("%s%s=%s", prefix, key, update)

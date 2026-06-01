@@ -61,15 +61,15 @@ func TestReadAndUpdateEnvFile(t *testing.T) {
 	}
 }
 
-func TestSnapshotPathsUseConfigHome(t *testing.T) {
-	t.Setenv("NF_CONFIG_HOME", t.TempDir())
-	if got, want := SnapshotsDir(), filepath.Join(os.Getenv("NF_CONFIG_HOME"), "snapshots"); got != want {
+func TestSnapshotPathsUseDataHome(t *testing.T) {
+	t.Setenv("NF_DATA_HOME", t.TempDir())
+	if got, want := SnapshotsDir(), filepath.Join(os.Getenv("NF_DATA_HOME"), "snapshots"); got != want {
 		t.Fatalf("SnapshotsDir() = %q, want %q", got, want)
 	}
-	if got, want := SnapshotProjectDir("client"), filepath.Join(os.Getenv("NF_CONFIG_HOME"), "snapshots", "client"); got != want {
+	if got, want := SnapshotProjectDir("client"), filepath.Join(os.Getenv("NF_DATA_HOME"), "snapshots", "client"); got != want {
 		t.Fatalf("SnapshotProjectDir() = %q, want %q", got, want)
 	}
-	if got, want := SnapshotDir("client", "2026-05-28-120000"), filepath.Join(os.Getenv("NF_CONFIG_HOME"), "snapshots", "client", "2026-05-28-120000"); got != want {
+	if got, want := SnapshotDir("client", "2026-05-28-120000"), filepath.Join(os.Getenv("NF_DATA_HOME"), "snapshots", "client", "2026-05-28-120000"); got != want {
 		t.Fatalf("SnapshotDir() = %q, want %q", got, want)
 	}
 }

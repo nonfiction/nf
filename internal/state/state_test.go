@@ -8,7 +8,7 @@ import (
 )
 
 func TestSaveStateRecordsWritesPrettyJSON(t *testing.T) {
-	t.Setenv("NF_CONFIG_HOME", t.TempDir())
+	t.Setenv("NF_STATE_HOME", t.TempDir())
 
 	records := []map[string]any{
 		{"id": 1, "name": "alpha"},
@@ -18,7 +18,7 @@ func TestSaveStateRecordsWritesPrettyJSON(t *testing.T) {
 		t.Fatalf("SaveStateRecords() error = %v", err)
 	}
 
-	data, err := os.ReadFile(filepath.Join(os.Getenv("NF_CONFIG_HOME"), "state", "servers.json"))
+	data, err := os.ReadFile(filepath.Join(os.Getenv("NF_STATE_HOME"), "servers.json"))
 	if err != nil {
 		t.Fatalf("ReadFile() error = %v", err)
 	}
@@ -29,7 +29,7 @@ func TestSaveStateRecordsWritesPrettyJSON(t *testing.T) {
 }
 
 func TestDeleteStateRecordsRemovesMatchingRecordAndPreservesMissingFile(t *testing.T) {
-	t.Setenv("NF_CONFIG_HOME", t.TempDir())
+	t.Setenv("NF_STATE_HOME", t.TempDir())
 
 	removed, err := DeleteStateRecords("projects", func(map[string]any) bool { return true })
 	if err != nil {
@@ -38,7 +38,7 @@ func TestDeleteStateRecordsRemovesMatchingRecordAndPreservesMissingFile(t *testi
 	if removed != 0 {
 		t.Fatalf("DeleteStateRecords() removed = %d, want 0", removed)
 	}
-	if _, err := os.Stat(filepath.Join(os.Getenv("NF_CONFIG_HOME"), "state", "projects.json")); !os.IsNotExist(err) {
+	if _, err := os.Stat(filepath.Join(os.Getenv("NF_STATE_HOME"), "projects.json")); !os.IsNotExist(err) {
 		t.Fatalf("missing-file delete created state file or returned unexpected error: %v", err)
 	}
 
@@ -59,7 +59,7 @@ func TestDeleteStateRecordsRemovesMatchingRecordAndPreservesMissingFile(t *testi
 		t.Fatalf("DeleteStateRecords() removed = %d, want 1", removed)
 	}
 
-	data, err := os.ReadFile(filepath.Join(os.Getenv("NF_CONFIG_HOME"), "state", "sites.json"))
+	data, err := os.ReadFile(filepath.Join(os.Getenv("NF_STATE_HOME"), "sites.json"))
 	if err != nil {
 		t.Fatalf("ReadFile() error = %v", err)
 	}
@@ -70,7 +70,7 @@ func TestDeleteStateRecordsRemovesMatchingRecordAndPreservesMissingFile(t *testi
 }
 
 func TestLoadStateRecordsSupportsWrappedObjectShapes(t *testing.T) {
-	t.Setenv("NF_CONFIG_HOME", t.TempDir())
+	t.Setenv("NF_STATE_HOME", t.TempDir())
 
 	servers := map[string]any{
 		"servers": map[string]any{
@@ -81,10 +81,10 @@ func TestLoadStateRecordsSupportsWrappedObjectShapes(t *testing.T) {
 	if err != nil {
 		t.Fatalf("MarshalIndent() error = %v", err)
 	}
-	if err := os.MkdirAll(filepath.Join(os.Getenv("NF_CONFIG_HOME"), "state"), 0o755); err != nil {
+	if err := os.MkdirAll(os.Getenv("NF_STATE_HOME"), 0o755); err != nil {
 		t.Fatalf("MkdirAll() error = %v", err)
 	}
-	if err := os.WriteFile(filepath.Join(os.Getenv("NF_CONFIG_HOME"), "state", "servers.json"), append(serverData, '\n'), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(os.Getenv("NF_STATE_HOME"), "servers.json"), append(serverData, '\n'), 0o644); err != nil {
 		t.Fatalf("WriteFile() error = %v", err)
 	}
 	sites := map[string]any{
@@ -96,7 +96,7 @@ func TestLoadStateRecordsSupportsWrappedObjectShapes(t *testing.T) {
 	if err != nil {
 		t.Fatalf("MarshalIndent() error = %v", err)
 	}
-	if err := os.WriteFile(filepath.Join(os.Getenv("NF_CONFIG_HOME"), "state", "sites.json"), append(siteData, '\n'), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(os.Getenv("NF_STATE_HOME"), "sites.json"), append(siteData, '\n'), 0o644); err != nil {
 		t.Fatalf("WriteFile() error = %v", err)
 	}
 

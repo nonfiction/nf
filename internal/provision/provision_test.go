@@ -394,30 +394,31 @@ func TestBuildPlanInteractiveFileSSHSourcePromptsForKeyPath(t *testing.T) {
 func TestBuildPlanInteractiveResumeUsesSavedProvisioningRecord(t *testing.T) {
 	configHome := t.TempDir()
 	t.Setenv("NF_CONFIG_HOME", configHome)
+	t.Setenv("NF_STATE_HOME", filepath.Join(configHome, "state"))
 	t.Setenv("NF_SERVER_DOMAIN", "nfweb.dev")
 	record := map[string]any{
-		"provider": "linode",
+		"provider":    "linode",
 		"provider_id": "98375388",
-		"name": "prod3",
-		"hostname": "prod3.nfweb.dev",
-		"label": "prod3",
-		"status": "provisioning",
-		"phase": "linode_created",
-		"ipv4": "172.105.101.108",
-		"region": "ca-central",
-		"type": "g6-standard-1",
+		"name":        "prod3",
+		"hostname":    "prod3.nfweb.dev",
+		"label":       "prod3",
+		"status":      "provisioning",
+		"phase":       "linode_created",
+		"ipv4":        "172.105.101.108",
+		"region":      "ca-central",
+		"type":        "g6-standard-1",
 		"ssh": map[string]any{
-			"user": "nonfiction",
+			"user":   "nonfiction",
 			"source": "linode-profile",
 			"authorized_keys": []any{
 				map[string]any{"source": "linode-profile", "id": "77496734", "label": "jon", "fingerprint": "fp-jon"},
 			},
 		},
-		"dns": map[string]any{"provider": "dnsimple", "account_id": "14", "zone": "nfweb.dev"},
-		"os": map[string]any{"ubuntu_version": "24.04", "version": "24.04", "image": "linode/ubuntu24.04"},
+		"dns":      map[string]any{"provider": "dnsimple", "account_id": "14", "zone": "nfweb.dev"},
+		"os":       map[string]any{"ubuntu_version": "24.04", "version": "24.04", "image": "linode/ubuntu24.04"},
 		"firewall": map[string]any{"mode": "managed", "id": "27516345"},
 	}
-	if err := saveStatePayload(filepath.Join(configHome, "state", "servers.json"), []map[string]any{record}); err != nil {
+	if err := saveStatePayload(filepath.Join(os.Getenv("NF_STATE_HOME"), "servers.json"), []map[string]any{record}); err != nil {
 		t.Fatalf("saveStatePayload() error = %v", err)
 	}
 
@@ -478,6 +479,7 @@ func TestBuildPlanInteractiveResumeUsesSavedProvisioningRecord(t *testing.T) {
 func TestPreparePlanInteractiveExecutePromptsForKeysBeforeConfirmAndReusesThem(t *testing.T) {
 	configHome := t.TempDir()
 	t.Setenv("NF_CONFIG_HOME", configHome)
+	t.Setenv("NF_STATE_HOME", filepath.Join(configHome, "state"))
 	t.Setenv("NF_SERVER_DOMAIN", "example.test")
 	t.Setenv("NF_SECRET_SALT", "test-salt")
 	t.Setenv("DNSIMPLE_TOKEN", "dns-token")
@@ -565,6 +567,7 @@ func TestPreparePlanInteractiveExecutePromptsForKeysBeforeConfirmAndReusesThem(t
 func TestPreparePlanInteractiveDefaultPromptsForKeysBeforeConfirmAndReusesThem(t *testing.T) {
 	configHome := t.TempDir()
 	t.Setenv("NF_CONFIG_HOME", configHome)
+	t.Setenv("NF_STATE_HOME", filepath.Join(configHome, "state"))
 	t.Setenv("NF_SERVER_DOMAIN", "example.test")
 	t.Setenv("NF_SECRET_SALT", "test-salt")
 	t.Setenv("DNSIMPLE_TOKEN", "dns-token")
@@ -1158,6 +1161,7 @@ func TestRenderProvisionSuccessShowsNextSteps(t *testing.T) {
 func TestProvisionServerWritesOnlyServersJSON(t *testing.T) {
 	configHome := t.TempDir()
 	t.Setenv("NF_CONFIG_HOME", configHome)
+	t.Setenv("NF_STATE_HOME", filepath.Join(configHome, "state"))
 	t.Setenv("NF_SECRET_SALT", "test-salt")
 	t.Setenv("DNSIMPLE_TOKEN", "dns-token")
 	t.Setenv("LINODE_CLI_TOKEN", "linode-token")
@@ -1225,7 +1229,7 @@ func TestProvisionServerWritesOnlyServersJSON(t *testing.T) {
 	waitForTCPPortFn = func(host string, port int, timeout time.Duration) error { return nil }
 	runSSHCommandFn = func(user, host, command string, timeout time.Duration) error { return nil }
 	checkHTTPSHealthFn = func(url, name, hostname string, timeout time.Duration) error {
-		data, err := os.ReadFile(filepath.Join(configHome, "state", "servers.json"))
+		data, err := os.ReadFile(filepath.Join(os.Getenv("NF_STATE_HOME"), "servers.json"))
 		if err != nil {
 			t.Fatalf("ReadFile(servers.json) during health check error = %v", err)
 		}
@@ -1264,12 +1268,12 @@ func TestProvisionServerWritesOnlyServersJSON(t *testing.T) {
 	if result == nil || result.StatePath == "" {
 		t.Fatalf("ProvisionServer() result = %#v, want state path", result)
 	}
-	serverStatePath := filepath.Join(configHome, "state", "servers.json")
+	serverStatePath := filepath.Join(os.Getenv("NF_STATE_HOME"), "servers.json")
 	data, err := os.ReadFile(serverStatePath)
 	if err != nil {
 		t.Fatalf("ReadFile(servers.json) error = %v", err)
 	}
-	if _, err := os.Stat(filepath.Join(configHome, "state", "sites.json")); !os.IsNotExist(err) {
+	if _, err := os.Stat(filepath.Join(os.Getenv("NF_STATE_HOME"), "sites.json")); !os.IsNotExist(err) {
 		t.Fatalf("sites.json unexpectedly exists: %v", err)
 	}
 	var records []map[string]any
@@ -1368,6 +1372,7 @@ func TestProvisionServerWritesOnlyServersJSON(t *testing.T) {
 func TestProvisionServerManagedFirewallCreatesRulesAndAttachesDevice(t *testing.T) {
 	configHome := t.TempDir()
 	t.Setenv("NF_CONFIG_HOME", configHome)
+	t.Setenv("NF_STATE_HOME", filepath.Join(configHome, "state"))
 	t.Setenv("NF_SECRET_SALT", "test-salt")
 	t.Setenv("DNSIMPLE_TOKEN", "dns-token")
 	t.Setenv("LINODE_CLI_TOKEN", "linode-token")
@@ -1476,7 +1481,7 @@ func TestProvisionServerManagedFirewallCreatesRulesAndAttachesDevice(t *testing.
 			t.Fatalf("linode-cli call[%d] = %q, want %q", i, got, want)
 		}
 	}
-	data, err := os.ReadFile(filepath.Join(configHome, "state", "servers.json"))
+	data, err := os.ReadFile(filepath.Join(os.Getenv("NF_STATE_HOME"), "servers.json"))
 	if err != nil {
 		t.Fatalf("ReadFile(servers.json) error = %v", err)
 	}
@@ -1497,6 +1502,7 @@ func TestProvisionServerManagedFirewallCreatesRulesAndAttachesDevice(t *testing.
 func TestProvisionServerManagedFirewallReusesExistingFirewallByLabel(t *testing.T) {
 	configHome := t.TempDir()
 	t.Setenv("NF_CONFIG_HOME", configHome)
+	t.Setenv("NF_STATE_HOME", filepath.Join(configHome, "state"))
 	t.Setenv("NF_SECRET_SALT", "test-salt")
 	t.Setenv("DNSIMPLE_TOKEN", "dns-token")
 	t.Setenv("LINODE_CLI_TOKEN", "linode-token")
@@ -1579,7 +1585,7 @@ func TestProvisionServerManagedFirewallReusesExistingFirewallByLabel(t *testing.
 			t.Fatalf("linode-cli call[%d] = %q, want %q", i, got, want)
 		}
 	}
-	data, err := os.ReadFile(filepath.Join(configHome, "state", "servers.json"))
+	data, err := os.ReadFile(filepath.Join(os.Getenv("NF_STATE_HOME"), "servers.json"))
 	if err != nil {
 		t.Fatalf("ReadFile(servers.json) error = %v", err)
 	}
@@ -1598,6 +1604,7 @@ func TestProvisionServerManagedFirewallReusesExistingFirewallByLabel(t *testing.
 func TestProvisionServerFirewallFailureKeepsPartialStateAndExplainsRecovery(t *testing.T) {
 	configHome := t.TempDir()
 	t.Setenv("NF_CONFIG_HOME", configHome)
+	t.Setenv("NF_STATE_HOME", filepath.Join(configHome, "state"))
 	t.Setenv("NF_SECRET_SALT", "test-salt")
 	t.Setenv("DNSIMPLE_TOKEN", "dns-token")
 	t.Setenv("LINODE_CLI_TOKEN", "linode-token")
@@ -1664,7 +1671,7 @@ func TestProvisionServerFirewallFailureKeepsPartialStateAndExplainsRecovery(t *t
 	if err == nil || !strings.Contains(err.Error(), "Server provisioning paused.") || !strings.Contains(err.Error(), "Firewall error") || !strings.Contains(err.Error(), "rerun the same provision command") {
 		t.Fatalf("ProvisionServer() error = %v, want firewall recovery message", err)
 	}
-	data, err := os.ReadFile(filepath.Join(configHome, "state", "servers.json"))
+	data, err := os.ReadFile(filepath.Join(os.Getenv("NF_STATE_HOME"), "servers.json"))
 	if err != nil {
 		t.Fatalf("ReadFile(servers.json) error = %v", err)
 	}
@@ -1686,6 +1693,7 @@ func TestProvisionServerFirewallFailureKeepsPartialStateAndExplainsRecovery(t *t
 func TestProvisionServerWritesPartialStateOnDNSFailure(t *testing.T) {
 	configHome := t.TempDir()
 	t.Setenv("NF_CONFIG_HOME", configHome)
+	t.Setenv("NF_STATE_HOME", filepath.Join(configHome, "state"))
 	t.Setenv("NF_SECRET_SALT", "test-salt")
 	t.Setenv("DNSIMPLE_TOKEN", "dns-token")
 	t.Setenv("LINODE_CLI_TOKEN", "linode-token")
@@ -1739,12 +1747,12 @@ func TestProvisionServerWritesPartialStateOnDNSFailure(t *testing.T) {
 	if callCount != 1 {
 		t.Fatalf("dnsimpleUpsertARecordRun called %d times, want 1", callCount)
 	}
-	serverStatePath := filepath.Join(configHome, "state", "servers.json")
+	serverStatePath := filepath.Join(os.Getenv("NF_STATE_HOME"), "servers.json")
 	data, err := os.ReadFile(serverStatePath)
 	if err != nil {
 		t.Fatalf("ReadFile(servers.json) error = %v", err)
 	}
-	if _, err := os.Stat(filepath.Join(configHome, "state", "sites.json")); !os.IsNotExist(err) {
+	if _, err := os.Stat(filepath.Join(os.Getenv("NF_STATE_HOME"), "sites.json")); !os.IsNotExist(err) {
 		t.Fatalf("sites.json unexpectedly exists: %v", err)
 	}
 	var records []map[string]any
@@ -1775,6 +1783,7 @@ func TestProvisionServerWritesPartialStateOnDNSFailure(t *testing.T) {
 func TestProvisionServerHealthFailureExplainsRecovery(t *testing.T) {
 	configHome := t.TempDir()
 	t.Setenv("NF_CONFIG_HOME", configHome)
+	t.Setenv("NF_STATE_HOME", filepath.Join(configHome, "state"))
 	t.Setenv("NF_SECRET_SALT", "test-salt")
 	t.Setenv("DNSIMPLE_TOKEN", "dns-token")
 	t.Setenv("LINODE_CLI_TOKEN", "linode-token")
@@ -1836,7 +1845,7 @@ func TestProvisionServerHealthFailureExplainsRecovery(t *testing.T) {
 	waitForTCPPortFn = func(host string, port int, timeout time.Duration) error { return nil }
 	runSSHCommandFn = func(user, host, command string, timeout time.Duration) error { return nil }
 	checkHTTPSHealthFn = func(url, name, hostname string, timeout time.Duration) error {
-		data, err := os.ReadFile(filepath.Join(configHome, "state", "servers.json"))
+		data, err := os.ReadFile(filepath.Join(os.Getenv("NF_STATE_HOME"), "servers.json"))
 		if err != nil {
 			t.Fatalf("ReadFile(servers.json) during health check error = %v", err)
 		}
@@ -1860,7 +1869,7 @@ func TestProvisionServerHealthFailureExplainsRecovery(t *testing.T) {
 	if err == nil || !strings.Contains(err.Error(), "Health error") || !strings.Contains(err.Error(), "ssh nonfiction@app1.nfweb.dev \"sudo nginx -t && sudo systemctl status nginx\"") || !strings.Contains(err.Error(), "curl -I https://app1.nfweb.dev") {
 		t.Fatalf("ProvisionServer() error = %v, want health recovery message", err)
 	}
-	data, err := os.ReadFile(filepath.Join(configHome, "state", "servers.json"))
+	data, err := os.ReadFile(filepath.Join(os.Getenv("NF_STATE_HOME"), "servers.json"))
 	if err != nil {
 		t.Fatalf("ReadFile(servers.json) error = %v", err)
 	}
@@ -1879,6 +1888,7 @@ func TestProvisionServerHealthFailureExplainsRecovery(t *testing.T) {
 func TestProvisionServerResumesProvisioningRecordWithoutCreatingNewLinode(t *testing.T) {
 	configHome := t.TempDir()
 	t.Setenv("NF_CONFIG_HOME", configHome)
+	t.Setenv("NF_STATE_HOME", filepath.Join(configHome, "state"))
 	t.Setenv("NF_SECRET_SALT", "test-salt")
 	t.Setenv("DNSIMPLE_TOKEN", "dns-token")
 	t.Setenv("LINODE_CLI_TOKEN", "linode-token")
@@ -1899,7 +1909,7 @@ func TestProvisionServerResumesProvisioningRecordWithoutCreatingNewLinode(t *tes
 		"updated_at":  "2026-05-29T12:00:00Z",
 		"ssh":         map[string]any{"user": "nonfiction", "host": "app1.nfweb.dev", "port": 22, "source": "linode-profile", "authorized_keys": []map[string]any{{"source": "linode-profile", "id": "77496734", "label": "team-a", "fingerprint": "fp-a"}}},
 	}
-	if err := saveStatePayload(filepath.Join(configHome, "state", "servers.json"), []map[string]any{record}); err != nil {
+	if err := saveStatePayload(filepath.Join(os.Getenv("NF_STATE_HOME"), "servers.json"), []map[string]any{record}); err != nil {
 		t.Fatalf("saveStatePayload() error = %v", err)
 	}
 
@@ -1957,7 +1967,7 @@ func TestProvisionServerResumesProvisioningRecordWithoutCreatingNewLinode(t *tes
 	if result == nil || result.Server.ProviderID != "12345" {
 		t.Fatalf("ProvisionServer() result = %#v, want resumed provider id", result)
 	}
-	data, err := os.ReadFile(filepath.Join(configHome, "state", "servers.json"))
+	data, err := os.ReadFile(filepath.Join(os.Getenv("NF_STATE_HOME"), "servers.json"))
 	if err != nil {
 		t.Fatalf("ReadFile(servers.json) error = %v", err)
 	}
@@ -1976,11 +1986,12 @@ func TestProvisionServerResumesProvisioningRecordWithoutCreatingNewLinode(t *tes
 func TestProvisionServerStopsWhenAlreadyProvisioned(t *testing.T) {
 	configHome := t.TempDir()
 	t.Setenv("NF_CONFIG_HOME", configHome)
+	t.Setenv("NF_STATE_HOME", filepath.Join(configHome, "state"))
 	t.Setenv("NF_SECRET_SALT", "test-salt")
 	t.Setenv("DNSIMPLE_TOKEN", "dns-token")
 	t.Setenv("LINODE_CLI_TOKEN", "linode-token")
 	record := map[string]any{"provider": "linode", "provider_id": "12345", "name": "app1", "hostname": "app1.nfweb.dev", "label": "app1", "status": "provisioned", "phase": "complete", "ipv4": "198.51.100.10"}
-	if err := saveStatePayload(filepath.Join(configHome, "state", "servers.json"), []map[string]any{record}); err != nil {
+	if err := saveStatePayload(filepath.Join(os.Getenv("NF_STATE_HOME"), "servers.json"), []map[string]any{record}); err != nil {
 		t.Fatalf("saveStatePayload() error = %v", err)
 	}
 
@@ -2069,6 +2080,7 @@ func TestCheckHTTPSHealthRequiresReadyIdentityAndStatus(t *testing.T) {
 func TestProvisionServerNoWaitLeavesDnsConfiguredAndPrintsManualSteps(t *testing.T) {
 	configHome := t.TempDir()
 	t.Setenv("NF_CONFIG_HOME", configHome)
+	t.Setenv("NF_STATE_HOME", filepath.Join(configHome, "state"))
 	t.Setenv("NF_SECRET_SALT", "test-salt")
 	t.Setenv("DNSIMPLE_TOKEN", "dns-token")
 	t.Setenv("LINODE_CLI_TOKEN", "linode-token")
@@ -2139,7 +2151,7 @@ func TestProvisionServerNoWaitLeavesDnsConfiguredAndPrintsManualSteps(t *testing
 			t.Fatalf("output missing %q:\n%s", want, output)
 		}
 	}
-	data, err := os.ReadFile(filepath.Join(configHome, "state", "servers.json"))
+	data, err := os.ReadFile(filepath.Join(os.Getenv("NF_STATE_HOME"), "servers.json"))
 	if err != nil {
 		t.Fatalf("ReadFile(servers.json) error = %v", err)
 	}
@@ -2158,11 +2170,12 @@ func TestProvisionServerNoWaitLeavesDnsConfiguredAndPrintsManualSteps(t *testing
 func TestProvisionServerResumesFromDnsConfigured(t *testing.T) {
 	configHome := t.TempDir()
 	t.Setenv("NF_CONFIG_HOME", configHome)
+	t.Setenv("NF_STATE_HOME", filepath.Join(configHome, "state"))
 	t.Setenv("NF_SECRET_SALT", "test-salt")
 	t.Setenv("DNSIMPLE_TOKEN", "dns-token")
 	t.Setenv("LINODE_CLI_TOKEN", "linode-token")
 	record := map[string]any{"provider": "linode", "provider_id": "12345", "name": "app1", "hostname": "app1.nfweb.dev", "label": "app1", "status": "provisioning", "phase": "dns_configured", "ipv4": "198.51.100.10", "dns": map[string]any{"provider": "dnsimple", "zone": "nfweb.dev", "hostname_record": map[string]any{"name": "app1", "type": "A", "content": "198.51.100.10"}, "wildcard_record": map[string]any{"name": "*.app1", "type": "A", "content": "198.51.100.10"}}}
-	if err := saveStatePayload(filepath.Join(configHome, "state", "servers.json"), []map[string]any{record}); err != nil {
+	if err := saveStatePayload(filepath.Join(os.Getenv("NF_STATE_HOME"), "servers.json"), []map[string]any{record}); err != nil {
 		t.Fatalf("saveStatePayload() error = %v", err)
 	}
 
@@ -2215,7 +2228,7 @@ func TestProvisionServerResumesFromDnsConfigured(t *testing.T) {
 	}
 	checkHTTPSHealthFn = func(url, name, hostname string, timeout time.Duration) error {
 		events = append(events, "health")
-		data, err := os.ReadFile(filepath.Join(configHome, "state", "servers.json"))
+		data, err := os.ReadFile(filepath.Join(os.Getenv("NF_STATE_HOME"), "servers.json"))
 		if err != nil {
 			t.Fatalf("ReadFile(servers.json) during health check error = %v", err)
 		}
@@ -2248,7 +2261,7 @@ func TestProvisionServerResumesFromDnsConfigured(t *testing.T) {
 	if result == nil || result.Server.ProviderID != "12345" {
 		t.Fatalf("ProvisionServer() result = %#v, want resumed provider id", result)
 	}
-	data, err := os.ReadFile(filepath.Join(configHome, "state", "servers.json"))
+	data, err := os.ReadFile(filepath.Join(os.Getenv("NF_STATE_HOME"), "servers.json"))
 	if err != nil {
 		t.Fatalf("ReadFile(servers.json) error = %v", err)
 	}
@@ -2267,11 +2280,12 @@ func TestProvisionServerResumesFromDnsConfigured(t *testing.T) {
 func TestProvisionServerResumesFromTLSConfigured(t *testing.T) {
 	configHome := t.TempDir()
 	t.Setenv("NF_CONFIG_HOME", configHome)
+	t.Setenv("NF_STATE_HOME", filepath.Join(configHome, "state"))
 	t.Setenv("NF_SECRET_SALT", "test-salt")
 	t.Setenv("DNSIMPLE_TOKEN", "dns-token")
 	t.Setenv("LINODE_CLI_TOKEN", "linode-token")
 	record := map[string]any{"provider": "linode", "provider_id": "12345", "name": "app1", "hostname": "app1.nfweb.dev", "label": "app1", "status": "provisioning", "phase": "tls_configured", "ipv4": "198.51.100.10", "dns": map[string]any{"provider": "dnsimple", "zone": "nfweb.dev", "hostname_record": map[string]any{"name": "app1", "type": "A", "content": "198.51.100.10"}, "wildcard_record": map[string]any{"name": "*.app1", "type": "A", "content": "198.51.100.10"}}, "tls": map[string]any{"provider": "certbot-dnsimple", "domains": []any{"app1.nfweb.dev", "*.app1.nfweb.dev"}, "certificate": "/etc/letsencrypt/live/app1.nfweb.dev/fullchain.pem", "key": "/etc/letsencrypt/live/app1.nfweb.dev/privkey.pem"}}
-	if err := saveStatePayload(filepath.Join(configHome, "state", "servers.json"), []map[string]any{record}); err != nil {
+	if err := saveStatePayload(filepath.Join(os.Getenv("NF_STATE_HOME"), "servers.json"), []map[string]any{record}); err != nil {
 		t.Fatalf("saveStatePayload() error = %v", err)
 	}
 
@@ -2325,7 +2339,7 @@ func TestProvisionServerResumesFromTLSConfigured(t *testing.T) {
 		return nil
 	}
 	checkHTTPSHealthFn = func(url, name, hostname string, timeout time.Duration) error {
-		data, err := os.ReadFile(filepath.Join(configHome, "state", "servers.json"))
+		data, err := os.ReadFile(filepath.Join(os.Getenv("NF_STATE_HOME"), "servers.json"))
 		if err != nil {
 			t.Fatalf("ReadFile(servers.json) during health check error = %v", err)
 		}
@@ -2355,7 +2369,7 @@ func TestProvisionServerResumesFromTLSConfigured(t *testing.T) {
 	if result == nil || result.Server.ProviderID != "12345" {
 		t.Fatalf("ProvisionServer() result = %#v, want resumed provider id", result)
 	}
-	data, err := os.ReadFile(filepath.Join(configHome, "state", "servers.json"))
+	data, err := os.ReadFile(filepath.Join(os.Getenv("NF_STATE_HOME"), "servers.json"))
 	if err != nil {
 		t.Fatalf("ReadFile(servers.json) error = %v", err)
 	}
@@ -2395,8 +2409,9 @@ func captureStdout(t *testing.T, fn func()) string {
 func TestFindProvisionStateRecordMatchesExactServer(t *testing.T) {
 	configHome := t.TempDir()
 	t.Setenv("NF_CONFIG_HOME", configHome)
+	t.Setenv("NF_STATE_HOME", filepath.Join(configHome, "state"))
 	record := map[string]any{"provider": "linode", "provider_id": "98323103", "linode_id": "98323103", "id": "98323103", "name": "prod2", "hostname": "prod2.nfweb.dev", "label": "prod2", "status": "provisioned", "phase": "complete"}
-	if err := saveStatePayload(filepath.Join(configHome, "state", "servers.json"), []map[string]any{record}); err != nil {
+	if err := saveStatePayload(filepath.Join(os.Getenv("NF_STATE_HOME"), "servers.json"), []map[string]any{record}); err != nil {
 		t.Fatalf("saveStatePayload() error = %v", err)
 	}
 
@@ -2415,8 +2430,9 @@ func TestFindProvisionStateRecordMatchesExactServer(t *testing.T) {
 func TestFindProvisionStateRecordRejectsDifferentServer(t *testing.T) {
 	configHome := t.TempDir()
 	t.Setenv("NF_CONFIG_HOME", configHome)
+	t.Setenv("NF_STATE_HOME", filepath.Join(configHome, "state"))
 	record := map[string]any{"provider": "linode", "provider_id": "98323103", "linode_id": "98323103", "id": "98323103", "name": "prod2", "hostname": "prod2.nfweb.dev", "label": "prod2", "status": "provisioned", "phase": "complete"}
-	if err := saveStatePayload(filepath.Join(configHome, "state", "servers.json"), []map[string]any{record}); err != nil {
+	if err := saveStatePayload(filepath.Join(os.Getenv("NF_STATE_HOME"), "servers.json"), []map[string]any{record}); err != nil {
 		t.Fatalf("saveStatePayload() error = %v", err)
 	}
 
@@ -2432,9 +2448,10 @@ func TestFindProvisionStateRecordRejectsDifferentServer(t *testing.T) {
 func TestUpsertStateRecordDoesNotReplaceDifferentServerWithEmptyLabel(t *testing.T) {
 	configHome := t.TempDir()
 	t.Setenv("NF_CONFIG_HOME", configHome)
+	t.Setenv("NF_STATE_HOME", filepath.Join(configHome, "state"))
 	existing := map[string]any{"provider": "linode", "provider_id": "98323103", "linode_id": "98323103", "id": "98323103", "name": "prod2", "hostname": "prod2.nfweb.dev", "label": "", "status": "provisioned", "phase": "complete"}
 	candidate := map[string]any{"provider": "linode", "provider_id": "98323104", "linode_id": "98323104", "id": "98323104", "name": "prod3", "hostname": "prod3.nfweb.dev", "label": "", "status": "provisioning", "phase": "linode_created"}
-	path := filepath.Join(configHome, "state", "servers.json")
+	path := filepath.Join(os.Getenv("NF_STATE_HOME"), "servers.json")
 	if err := saveStatePayload(path, []map[string]any{existing}); err != nil {
 		t.Fatalf("saveStatePayload() error = %v", err)
 	}

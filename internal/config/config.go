@@ -37,20 +37,42 @@ func ConfigHome() string {
 	return filepath.Join(homeDir(), ".config", "nf")
 }
 
-func StateDir() string { return filepath.Join(ConfigHome(), "state") }
+func StateHome() string {
+	if override := os.Getenv("NF_STATE_HOME"); override != "" {
+		return filepath.Clean(expandHome(override))
+	}
+	if xdg := os.Getenv("XDG_STATE_HOME"); xdg != "" {
+		return filepath.Join(expandHome(xdg), "nf")
+	}
+	return filepath.Join(homeDir(), ".local", "state", "nf")
+}
+
+func DataHome() string {
+	if override := os.Getenv("NF_DATA_HOME"); override != "" {
+		return filepath.Clean(expandHome(override))
+	}
+	if xdg := os.Getenv("XDG_DATA_HOME"); xdg != "" {
+		return filepath.Join(expandHome(xdg), "nf")
+	}
+	return filepath.Join(homeDir(), ".local", "share", "nf")
+}
+
+func ConfigFile() string { return filepath.Join(ConfigHome(), "config.json") }
+
+func StateDir() string { return StateHome() }
 
 func EnvFile() string { return filepath.Join(ConfigHome(), ".env") }
 
-func InstancesDir() string { return filepath.Join(ConfigHome(), "instances") }
+func EnvsDir() string { return filepath.Join(DataHome(), "envs") }
 
-func SnapshotsDir() string { return filepath.Join(ConfigHome(), "snapshots") }
+func SnapshotsDir() string { return filepath.Join(DataHome(), "snapshots") }
 
-func InstanceDir(projectSlug string) string {
+func EnvDir(projectSlug string) string {
 	projectSlug = strings.TrimSpace(projectSlug)
 	if projectSlug == "" {
 		projectSlug = "project"
 	}
-	return filepath.Join(InstancesDir(), projectSlug)
+	return filepath.Join(EnvsDir(), projectSlug)
 }
 
 func SnapshotProjectDir(projectSlug string) string {
