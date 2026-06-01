@@ -29,8 +29,8 @@
 * `nf site show <site-id-or-alias>`
 * `nf site env list [site-id]`
 * `nf site env show <site-id> <env>`
-* `nf site env shell <site-id> <env>` (stub)
-* `nf site env wp <site-id> <env> -- <args>` (stub)
+* `nf site env shell <site-id> <env>` (preflight only; remote execution not implemented yet)
+* `nf site env wp <site-id> <env> -- <args>` (preflight only; remote execution not implemented yet)
 * `nf remote add <name> <site-id> <env>`
 * `nf remote remove <name>`
 * `nf remote list`

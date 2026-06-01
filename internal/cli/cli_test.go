@@ -295,6 +295,51 @@ func TestRunSiteEnvListAndShowUseCachedSites(t *testing.T) {
 	}
 }
 
+func TestRunSiteEnvShellAndWpPreflightWithoutRunningRemoteCommands(t *testing.T) {
+	stateDir := t.TempDir()
+	t.Setenv("NF_STATE_HOME", stateDir)
+	sites := map[string]any{"sites": map[string]any{"live-client-kinsta": map[string]any{"provider": "kinsta", "site_id": "client-kinsta", "env": "live", "url": "https://www.example.com/", "kinsta": map[string]any{"site_id": "ksite123", "environment_id": "kenv-live"}}}}
+	data, err := json.MarshalIndent(sites, "", "  ")
+	if err != nil {
+		t.Fatalf("MarshalIndent(sites) error = %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(stateDir, "sites.json"), append(data, '\n'), 0o644); err != nil {
+		t.Fatalf("WriteFile(sites) error = %v", err)
+	}
+
+	shellStderr := captureStderr(t, func() {
+		stdout := captureStdout(t, func() {
+			if got := Run([]string{"site", "env", "shell", "client-kinsta", "live"}); got != 1 {
+				t.Fatalf("Run(site env shell) = %d, want 1 while remote shell is unimplemented", got)
+			}
+		})
+		for _, want := range []string{"Site env shell preflight:", "site:     client-kinsta", "env:      live", "provider: kinsta", "url:      https://www.example.com/"} {
+			if !strings.Contains(stdout, want) {
+				t.Fatalf("site env shell stdout missing %q:\n%s", want, stdout)
+			}
+		}
+	})
+	if !strings.Contains(shellStderr, "Remote site env shell is not implemented yet; no command was run.") {
+		t.Fatalf("site env shell stderr = %q", shellStderr)
+	}
+
+	wpStderr := captureStderr(t, func() {
+		stdout := captureStdout(t, func() {
+			if got := Run([]string{"site", "env", "wp", "client-kinsta", "live", "--", "plugin", "list"}); got != 1 {
+				t.Fatalf("Run(site env wp) = %d, want 1 while remote wp is unimplemented", got)
+			}
+		})
+		for _, want := range []string{"Site env wp preflight:", "site:     client-kinsta", "env:      live", "provider: kinsta", "wp args:  plugin list"} {
+			if !strings.Contains(stdout, want) {
+				t.Fatalf("site env wp stdout missing %q:\n%s", want, stdout)
+			}
+		}
+	})
+	if !strings.Contains(wpStderr, "Remote site env wp is not implemented yet; no command was run.") {
+		t.Fatalf("site env wp stderr = %q", wpStderr)
+	}
+}
+
 func TestRunEnvPushPreflightsRepoRemoteWithoutSyncing(t *testing.T) {
 	stateDir := t.TempDir()
 	t.Setenv("NF_STATE_HOME", stateDir)

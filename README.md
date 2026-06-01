@@ -18,7 +18,7 @@ Working or stubbed now:
 * `nf site show`
 * `nf site env list [site-id]`
 * `nf site env show <site-id> <env>`
-* `nf site env shell/wp ...` (stubbed)
+* `nf site env shell/wp ...` (preflight only; remote execution not implemented yet)
 * `nf remote add|remove|list`
 * `nf theme tasks`
 * `nf theme package`
@@ -339,7 +339,7 @@ nf remote list
 
 `nf target list/show`, `nf site list/show`, and `nf site env list/show` read the local disposable state cache for now. `nf site refresh` currently reports the cache paths and does not fetch providers yet. `nf remote add/remove/list` stores repo-local remotes in `.nf/project.json` under `deploy.remotes`.
 
-Remote execution commands under `nf site env shell/wp ...` remain stubs in this pass.
+Remote execution commands under `nf site env shell/wp ...` currently preflight against the local cache, then stop without running remote commands.
 
 ## Password derivation
 

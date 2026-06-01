@@ -2306,6 +2306,58 @@ func cmdEnvRemoteSyncPlan(action, remoteName string, cfg envConfig, metadata map
 	return 1
 }
 
+func cmdSiteEnvRemoteCommandPlan(action, siteID, env string, args []string) int {
+	siteID = strings.TrimSpace(siteID)
+	env = strings.TrimSpace(env)
+	if siteID == "" || env == "" {
+		fmt.Fprintf(os.Stderr, "site env %s requires site-id and env\n", action)
+		return 1
+	}
+	if action == "wp" {
+		args = normalizePassthroughArgs(args)
+		if len(args) == 0 {
+			fmt.Fprintln(os.Stderr, "site env wp requires a wp-cli command")
+			return 1
+		}
+	}
+	record, servers, err := cachedSiteEnv(siteID, env)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		return 1
+	}
+	if record == nil {
+		fmt.Fprintf(os.Stderr, "No cached remote env matched site %q env %q.\n", siteID, env)
+		return 1
+	}
+	if err := validateSiteRecord(record); err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		return 1
+	}
+	provider := strings.ToLower(strings.TrimSpace(recordValueString(record["provider"])))
+	fmt.Printf("Site env %s preflight:\n", action)
+	fmt.Printf("  site:     %s\n", siteID)
+	fmt.Printf("  env:      %s\n", env)
+	fmt.Printf("  provider: %s\n", provider)
+	fmt.Printf("  target:   %s\n", siteTargetName(record))
+	if url := firstRecordString(record, "url", "site_url", "home_url", "hostname"); url != "" {
+		fmt.Printf("  url:      %s\n", url)
+	}
+	if provider == "linode" {
+		serverRef := siteServerReference(record)
+		server := state.MatchingRecord(servers, serverRef)
+		if server == nil {
+			fmt.Fprintf(os.Stderr, "Linode site %q references server %q, but no server matched that target.\n", siteSummary(record), serverRef)
+			return 1
+		}
+		fmt.Printf("  server:   %s\n", serverSummary(server))
+	}
+	if action == "wp" {
+		fmt.Printf("  wp args:  %s\n", strings.Join(args, " "))
+	}
+	fmt.Fprintf(os.Stderr, "Remote site env %s is not implemented yet; no command was run.\n", action)
+	return 1
+}
+
 func cmdShowServer(needle string) int {
 	bundle, err := state.LoadStateBundle()
 	if err != nil {
@@ -3807,15 +3859,13 @@ func runSiteEnv(argv []string) int {
 			fmt.Fprintln(os.Stderr, "site env shell takes exactly site-id and env")
 			return 1
 		}
-		fmt.Fprintf(os.Stderr, "site env %s is not implemented yet\n", argv[0])
-		return 1
+		return cmdSiteEnvRemoteCommandPlan("shell", argv[1], argv[2], nil)
 	case "wp":
 		if len(argv) < 4 {
 			fmt.Fprintln(os.Stderr, "site env wp takes site-id, env, and command")
 			return 1
 		}
-		fmt.Fprintln(os.Stderr, "site env wp is not implemented yet")
-		return 1
+		return cmdSiteEnvRemoteCommandPlan("wp", argv[1], argv[2], argv[3:])
 	default:
 		fmt.Fprintln(os.Stderr, "unsupported site env command")
 		return 1
