@@ -6,66 +6,57 @@
 * The executable entrypoint is `cmd/nf/main.go`.
 * The entrypoint calls `internal/cli.Run`.
 * Main command groups are:
-  * `nf server ...`
-  * `nf site ...`
-  * `nf instance ...`
   * `nf init`
+  * `nf provider ...`
+  * `nf target ...`
+  * `nf site ...`
+  * `nf site env ...`
+  * `nf remote ...`
   * `nf theme ...`
+  * `nf env ...`
   * `nf config ...`
   * `nf password ...`
 * Do not add old compatibility routes or alternate top-level command shapes unless explicitly requested.
-* Keep the command surface grouped by responsibility. Provider-specific behavior should live behind these command groups, not in new unrelated top-level commands.
+* Do not re-add `nf server ...`, `nf instance ...`, or top-level `nf up/down/logs/reset/info/shell/wp` aliases unless explicitly requested.
 
-## Command surface
-
-The current project command surface is intentionally small:
+## Current command surface
 
 * `nf init`
+* `nf provider list`
+* `nf target list` / `nf target show <target>` (currently stubs)
+* `nf site refresh` (stub)
+* `nf site list [--refresh]`
+* `nf site show <site-id-or-alias>`
+* `nf site env list [site-id]` (stub)
+* `nf site env show <site-id> <env>` (stub)
+* `nf site env shell <site-id> <env>` (stub)
+* `nf site env wp <site-id> <env> -- <args>` (stub)
+* `nf remote add <name> <site-id> <env>` (stub)
+* `nf remote remove <name>` (stub)
+* `nf remote list` (stub)
 * `nf theme tasks`
 * `nf theme package`
-* `nf instance up`
-* `nf instance down`
-* `nf instance logs`
-* `nf instance reset`
-* `nf instance info`
-* `nf instance shell`
-* `nf instance wp`
-* `nf instance snapshot create [name]`
-* `nf instance snapshot list`
-* `nf instance snapshot restore [name]`
-* `nf instance snapshot delete [name]`
-* `nf instance snapshots` (alias for `nf instance snapshot list`)
-* `nf up`
-* `nf down`
-* `nf logs`
-* `nf reset`
-* `nf info`
-* `nf shell`
-* `nf wp`
 * direct theme tasks from `.nf/project.json`
-
-Do not re-add public routes such as:
-
-* `legacy run route`
-* `setup`
-* `fresh`
-* `restart`
-* `install-theme`
-* `activate-theme`
-* top-level legacy aliases
-* top-level `list` / `show`
-
-unless the user explicitly asks for that command design.
-
-Reserved site commands exist in help output but are not implemented yet:
-
-* `nf site install`
-* `nf site delete`
-* `nf site deploy`
-* `nf site push`
-* `nf site pull`
-
-If implementing them, keep them policy-gated and provider-aware.
+* `nf env up`
+* `nf env down`
+* `nf env logs`
+* `nf env reset`
+* `nf env show`
+* `nf env shell`
+* `nf env wp -- <args>`
+* `nf env push <remote>` (stub)
+* `nf env pull <remote>` (stub)
+* `nf env snapshot add [name]`
+* `nf env snapshot list`
+* `nf env snapshot use [name]`
+* `nf env snapshot remove [name]`
+* `nf config init`
+* `nf config set-default-wp-email <email>`
+* `nf config set-default-wp-user <user>`
+* `nf config show`
+* `nf password set-salt <salt>`
+* `nf password show-salt`
+* `nf password derive <scope> <value...>`
 
 ## Commands worth using
 
@@ -80,9 +71,10 @@ CLI smoke checks:
 
 ```sh
 go run ./cmd/nf --help
-go run ./cmd/nf server list
+go run ./cmd/nf provider list
 go run ./cmd/nf site list
-go run ./cmd/nf theme help
+go run ./cmd/nf env help
+go run ./cmd/nf site env help
 ```
 
 Nix smoke checks:
@@ -95,9 +87,9 @@ nix develop -c nf --help
 
 Flake builds use the git source snapshot. Stage newly added files before trusting `nix run .#nf` or `nix build .#nf`; otherwise Nix may silently build without untracked Go files.
 
-## Config, state, and secrets
+## Config, state, data, and secrets
 
-Local config defaults to:
+Config defaults to:
 
 ```text
 ~/.config/nf/
@@ -115,17 +107,54 @@ Tests and isolated runs may override this with:
 NF_CONFIG_HOME=/path/to/nf-config
 ```
 
+State/cache defaults to:
+
+```text
+~/.local/state/nf/
+```
+
+If `XDG_STATE_HOME` is set, state lives under:
+
+```text
+$XDG_STATE_HOME/nf
+```
+
+Tests and isolated runs may override this with:
+
+```sh
+NF_STATE_HOME=/path/to/nf-state
+```
+
+Generated env data defaults to:
+
+```text
+~/.local/share/nf/
+```
+
+If `XDG_DATA_HOME` is set, data lives under:
+
+```text
+$XDG_DATA_HOME/nf
+```
+
+Tests and isolated runs may override this with:
+
+```sh
+NF_DATA_HOME=/path/to/nf-data
+```
+
 Expected local layout:
 
 ```text
 ~/.config/nf/
+  config.json
   .env
-  state/
-    servers.json
-    sites.json
-    projects.json
-  instances/
-    <project-slug>/
+~/.local/state/nf/
+  sites.json
+  projects.json
+~/.local/share/nf/
+  envs/<project-slug>/
+  snapshots/<project-slug>/<snapshot-name>/
 ```
 
 Local secrets/config are read from:
@@ -136,58 +165,51 @@ Local secrets/config are read from:
 
 `nf config init` can populate missing values interactively.
 
-Shared state lives under:
-
-```text
-~/.config/nf/state/
-```
-
-Current shared state files:
-
-* `servers.json`
-* `sites.json`
-* `projects.json`
-
-Local WordPress instance lives under:
-
-```text
-~/.config/nf/instances/<project-slug>/
-```
-
-or the equivalent `NF_CONFIG_HOME` test path.
-
-An instance is `nf`'s generated local WordPress environment for a project. It contains the Docker/WordPress scaffolding and mutable local state used to run, reset, snapshot, and sync the project during development.
-
-The instance is generated and owned by `nf`. Do not scaffold Docker instance files into project repos by default.
-
-Project metadata lives at:
-
-```text
-.nf/project.json
-```
-
-This file is safe project intent/config only. Do not put any of the following in `.nf/project.json`:
-
-* API tokens
-* SSH keys
-* database credentials
-* live passwords
-* mutable server state
-* mutable site state
-* provider secrets
-
 Required/expected environment values:
 
 * `NF_SECRET_SALT` for password derivation
 * `LINODE_TOKEN` for Linode execution (`LINODE_CLI_TOKEN` is accepted for convenience)
-* `DNSIMPLE_TOKEN` for DNSimple operations (`dnsimple-go` handles zone lookup, A-record upsert, and record distribution checks)
+* `DNSIMPLE_TOKEN` for DNSimple operations
 * optional `DNSIMPLE_ACCOUNT_ID`, defaulting to `14`
 
-Treat cloud-init user-data as sensitive because it may include live provider credentials; previews should redact the DNSimple token.
+Do not store secrets in `.nf/project.json`, local state cache, or generated env metadata.
+
+## Provider/target/site/env model
+
+There are two contexts:
+
+* global/provider context: provider inventory and remote envs
+* repo/local context: local env, theme tasks, packaging, and repo remotes
+
+Global hierarchy:
+
+```text
+provider -> target -> site -> env
+```
+
+Providers:
+
+* `dnsimple`
+* `kinsta`
+* `linode`
+
+Targets are deployable places, such as `kinsta` or `app1-linode`.
+
+Sites are named `<site>-<target>`.
+
+Remote env display IDs are `<env>-<site>-<target>`, with env values such as `live` and `staging`.
+
+Provider truth is canonical remotely:
+
+* Kinsta API is canonical for Kinsta sites/envs.
+* Linode API is canonical for Linode servers/targets.
+* Linode-hosted site/env truth lives on each target at `/var/lib/nf/sites.json`, read over SSH as the standard user.
+
+Local inventory cache under `NF_STATE_HOME` is disposable. Repo-local config should store remotes only, not global inventory.
 
 ## Project-context behavior
 
-`nf instance ...`, `nf init`, and `nf theme ...` commands are the local project command surface.
+`nf env ...`, `nf init`, `nf theme ...`, and `nf remote ...` are the local project command surface.
 
 Theme tasks come from:
 
@@ -209,7 +231,7 @@ Generated metadata should default these values to `theme` unless an explicit ove
 
 * `wordpress.theme_path`
 * `wordpress.theme_slug`
-* `instance.theme_mount_slug`
+* `env.theme_mount_slug`
 
 String tasks run through:
 
@@ -232,22 +254,16 @@ Deploy artifacts must include built files when the project expects them, such as
 * `vendor/`
 * `assets/dist/`
 
-`artifact.path` may contain:
-
-```text
-{version}
-```
-
-Resolve `{version}` from:
+`artifact.path` may contain `{version}`. Resolve `{version}` from:
 
 1. `theme/style.css` `Version:`
 2. `theme/package.json` `version`
 
 Fail clearly if neither exists.
 
-## Instance behavior
+## Local env behavior
 
-Built-in instance commands come from `instance` metadata in `.nf/project.json`.
+Built-in env commands come from `env` metadata in `.nf/project.json`.
 
 Current built-ins:
 
@@ -255,33 +271,33 @@ Current built-ins:
 * `down`
 * `logs`
 * `reset`
-* `info`
+* `show`
 * `shell`
 * `wp`
 
-Instance ports are derived deterministically from the project slug. `instance.ports.wordpress` and `instance.ports.mailpit` may override them individually; zero or missing values fall back to the derived ports.
+Env ports are derived deterministically from the project slug. `env.ports.wordpress` and `env.ports.mailpit` may override them individually; zero or missing values fall back to the derived ports.
 
-`nf instance up` should be idempotent:
+`nf env up` should be idempotent:
 
-* ensure the managed instance exists
+* ensure the managed env exists
 * start Docker Compose
 * install WordPress if missing
 * ensure the mounted theme is active
 
-`nf instance up` should preflight the WordPress and Mailpit host ports before Docker Compose starts. `nf instance info` should print the local instance paths, compose project name, and URLs without starting Docker.
+`nf env up` should preflight the WordPress and Mailpit host ports before Docker Compose starts. `nf env show` should print the local env paths, compose project name, and URLs without starting Docker.
 
-`nf instance up` and `nf instance reset` should print a success line followed by the full instance info block. `nf instance down` should print a success line followed by the short instance info block.
+`nf env up` and `nf env reset` should print a success line followed by the full env info block. `nf env down` should print a success line followed by the short env info block.
 
-`nf instance reset` is destructive for the local instance only:
+`nf env reset` is destructive for the local env only:
 
 * run Docker Compose down with volumes removed
-* recreate the instance
+* recreate the env
 * reinstall WordPress if missing
 * ensure the mounted theme is active
 
-Instance-generated files should stay under `~/.config/nf/instances/<project-slug>/`.
+Env-generated files should stay under `~/.local/share/nf/envs/<project-slug>/` or equivalent `NF_DATA_HOME` path.
 
-Instance snapshots should stay under `~/.config/nf/snapshots/<project-slug>/<snapshot-name>/`.
+Env snapshots should stay under `~/.local/share/nf/snapshots/<project-slug>/<snapshot-name>/` or equivalent `NF_DATA_HOME` path.
 
 Snapshot contents:
 
@@ -291,128 +307,38 @@ Snapshot contents:
 
 The `wp-content` archive should include only `uploads/`, `plugins/`, `mu-plugins/`, and `languages/`. Do not include themes.
 
-`nf instance snapshot restore` should create a safety snapshot named `YYYY-MM-DD-HHMMSS-pre-restore` before importing the selected snapshot.
+`nf env snapshot use` should create a safety snapshot named `YYYY-MM-DD-HHMMSS-pre-restore` before importing the selected snapshot.
 
-Do not write generated instance scaffolding into project repos unless the user explicitly changes that design.
-
-## Theme packaging behavior
-
-`nf theme package` should:
-
-* load project metadata from `.nf/project.json`
-* default source to `wordpress.theme_path`, falling back to `theme`
-* default output to `artifact.path`, falling back to `dist/<project-slug>-v{version}.zip`
-* resolve `{version}` from the theme source
-* create a ZIP from existing files
-* skip `.git`, `.DS_Store`, `node_modules`, and the output ZIP itself
-* support `--dry-run`
-
-It should not:
-
-* run Composer
-* run npm
-* build assets
-* install dependencies
-* deploy the artifact
-
-Build/test/prep steps belong in theme tasks such as:
-
-* `nf theme build`
-* `nf theme test`
-* `nf theme composer`
-* `nf theme npm`
+Do not write generated env scaffolding into project repos unless the user explicitly changes that design.
 
 ## State behavior
 
-Shared state should stay separate from project metadata.
+Shared state/cache stays separate from project metadata.
 
 Project repos should track:
 
 * project slug/type
 * WordPress/theme structure
-* instance intent
+* local env intent
 * build/artifact recipe
-* target aliases
+* repo remotes
 * theme tasks
 
-Shared state should track:
+Shared state/cache should track normalized provider inventory only. It is disposable and must not be treated as canonical provider truth.
 
-* providers
-* servers
-* sites
-* projects
-* server-to-site relationships
-* environment labels
-* hostnames
-* provider IDs
-* remote paths
-* last known operational metadata when needed
+`nf site list` and `nf site show` read local cached site records for now.
 
-For server provisioning records, keep the Ubuntu/PHP metadata in dedicated `os` and `php` objects with `os.family: ubuntu`, `os.version`, `package_source: ubuntu-native`, the derived PHP service/socket, and the versioned package list.
-
-`nf server list` and `nf site list` read shared state and print tables.
-
-`nf server show`, `nf server root-password`, and `nf site show` print matching records or derived values from shared state.
-
-`nf server provision` is site-agnostic. It uses `--name` as the canonical server identity, derives hostname/label/wildcard/health URL from `NF_SERVER_DOMAIN`, defaults to Linode plus DNSimple, and writes only `servers.json` with generic provider_id, nested linode, os, php, firewall, dns/tls/services, and no secrets. It waits for SSH/TLS/health by default, `--no-wait` skips that finalization, and reruns resume partial phases instead of recreating the Linode. There is no public `--hostname`, `--label`, or `--dns-zone` flag.
-
-Server baseline expectations:
-
-* cloud-init sets `hostname`/`fqdn`, manages `/etc/hosts`, and hardens SSH for key-only access
-* UFW is configured before enable, and the managed Linode firewall mirrors the same 22/80/443 inbound set when used
-* baseline directories are `/var/www`, `/var/www/sites`, `/var/www/shared`, and `/var/log/nginx/sites`
-* PHP tuning lands in `/etc/php/<version>/fpm/conf.d/99-nf-wordpress.ini`
-* MariaDB is enabled but no database/users/grants are created at provision time
-* Nginx snippets are written for future site vhost generation, and a neutral server health vhost is created for the server hostname only; that health page lives at `https://<hostname>` and `/healthz`, while future site vhosts are separate subdomains and are not created during provisioning
-* certbot renewal hooks reload nginx
-* `/etc/nf/server.json` stores non-secret machine facts only
-* Node/npm are not installed by default
-* if TLS finalization fails, the recovery helper is `ssh nonfiction@<hostname> "sudo /usr/local/bin/nf-enable-wildcard-tls"`
-* `NF_SERVER_DOMAIN` drives the derived hostname, wildcard hostname, and health URL for `nf server provision`
-
-Record root credential metadata as `credentials.root` with `derived: true`, `identity: <hostname>`, `purpose: linode-root`, and `stored: false`; do not store a password.
-
-The DNSimple token is used to render cloud-init but is not stored in state.
-
-Ubuntu/PHP provisioning uses a single stock stack picker:
-
-* supported Ubuntu LTS values are `26.04`, `24.04` (default), `22.04`, and `20.04`
-* matching native PHP versions are `8.5`, `8.3` (default), `8.1`, and `7.4`
-* `--ubuntu-version` is the normal non-interactive selector; there is no public `--php-version`
-* `--image` is an advanced override; it does not replace the Ubuntu/PHP metadata
-* do not treat PHP-FPM socket path as user input; derive the service and socket from the selected stack
-* keep the base image and PHP packages Ubuntu-native for now
-* common WordPress PHP extensions are `curl`, `gd`, `imagick`, `intl`, `mbstring`, `xml`, `zip`, `bcmath`, `soap`, `opcache`, and `readline`; do not include Xdebug
-
-When no identifier is supplied in interactive mode, `server show`, `site show`, and `server delete` should prefer selectors over forcing positional arguments.
-
-`nf site show` may resolve target aliases from `.nf/project.json`.
-
-Target aliases map project-local names like `staging`, `production`, and `app1` to shared `nf` site records.
-
-Example placeholder target alias shape:
-
-```json
-{
-  "deploy": {
-    "targets": {
-      "app1": "client-app1-production",
-      "staging": "client-kinsta-staging",
-      "production": "client-kinsta-production"
-    }
-  }
-}
-```
+`nf site show` may resolve repo remote aliases from `.nf/project.json`.
 
 Use neutral placeholder examples such as:
 
 * project slug: `client`
 * project name: `Client`
-* server: `app1`
-* server hostname: `app1.nfweb.dev`
-* Linode site target: `client-app1-production`
+* target: `app1-linode`
+* target hostname: `app1.nfweb.dev`
+* Linode site ID: `client-app1-linode`
 * Linode site URL: `https://client.app1.nfweb.dev/`
-* Kinsta target: `client-kinsta-production`
+* Kinsta site ID: `client-kinsta`
 * Kinsta placeholder URL: `https://www.example.com/`
 
 Do not use real client names in docs, tests, or examples unless the user explicitly asks.
@@ -439,63 +365,18 @@ If a remote operation is potentially destructive or creates infrastructure, non-
 
 ## Provider rules
 
-`nf server` manages infrastructure hosts owned by nonfiction, currently Linode and potentially DigitalOcean later. Kinsta is not modeled as a server provider; Kinsta environments are modeled as site targets.
+Provider commands are being refit around `provider -> target -> site -> env`.
 
-### Linode
-
-Linode is the only implemented remote provider right now.
-
-Current Linode responsibilities:
-
-* server provisioning
-* server inventory from shared state
-* server deletion
-* server root-password lookup
-* UFW and managed firewall allow 22/tcp, 80/tcp, and 443/tcp
-* DNSimple-backed hostnames for `nfweb.dev`
-* writing state records for provisioned servers
-
-`nf server provision` is dry-run by default.
-
-Actual remote execution requires:
-
-```text
---execute --yes
-```
-
-in non-interactive mode, plus credentials.
-
-`nf server delete` is interactive by default with a picker and confirmation.
-
-In non-interactive mode, deletion remains dry-run unless:
-
-```text
---execute --yes
-```
-
-is supplied.
-
-A Linode 404/not-found during deletion means the remote server is already gone and stale local state can still be cleaned.
-
-### Kinsta
-
-Kinsta is future adapter work.
-
-Kinsta records should use Kinsta IDs from site state.
+Kinsta records should use Kinsta IDs from site/env state.
 
 Kinsta must not:
 
 * use Linode provisioning paths
-* require SSH server fields
+* require SSH target fields unless the API/env requires them
 * assume an `nfweb.dev` host
 * share Linode-specific delete/provision behavior
 
-Future Kinsta work should focus on:
-
-* deploying packaged theme artifacts
-* inspecting environments
-* pulling/pushing database and uploads where supported
-* respecting production safety policies
+Linode target work should remain provider-aware and must not recreate the old public `nf server ...` command surface without explicit approval.
 
 ## Safety rules
 
@@ -524,12 +405,13 @@ The key rule: never silently clobber production credentials.
 
 Near-term order:
 
-1. Keep the standard agency WordPress theme repo workflow comfortable enough to replace per-project scripts.
-2. Implement Linode site lifecycle after server provisioning.
-3. Add theme artifact deployment.
-4. Add database/uploads pull-push workflows with production protections.
-5. Add Kinsta deploy/sync adapters.
-6. Polish team distribution and shared state sync.
+1. Finish the provider/target/site/env command refactor.
+2. Keep the standard agency WordPress theme repo workflow comfortable enough to replace per-project scripts.
+3. Implement provider inventory refresh.
+4. Add theme artifact deployment through repo remotes.
+5. Add database/uploads pull-push workflows with production protections.
+6. Add Kinsta deploy/sync adapters.
+7. Polish team distribution and shared state sync.
 
 Keep README and this file aligned as command names, state layout, safety posture, and provider behavior change.
 
@@ -544,7 +426,7 @@ Do not commit:
 * `.direnv`
 * build outputs
 * local state
-* instance files
+* generated env files
 * temporary artifacts
 
 Keep examples neutral and fictional.
