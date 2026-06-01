@@ -257,6 +257,104 @@ func TestRunSiteRefreshReportsStateCachePaths(t *testing.T) {
 	}
 }
 
+func TestRunSiteEnvListAndShowUseCachedSites(t *testing.T) {
+	stateDir := t.TempDir()
+	t.Setenv("NF_STATE_HOME", stateDir)
+	sites := map[string]any{"sites": map[string]any{
+		"live-client-kinsta":    map[string]any{"provider": "kinsta", "site_id": "client-kinsta", "env": "live", "url": "https://www.example.com/", "branch": "main", "kinsta": map[string]any{"site_id": "ksite123", "environment_id": "kenv-live"}},
+		"staging-client-kinsta": map[string]any{"provider": "kinsta", "site_id": "client-kinsta", "env": "staging", "url": "https://staging.example.com/", "branch": "develop", "kinsta": map[string]any{"site_id": "ksite123", "environment_id": "kenv-staging"}},
+	}}
+	data, err := json.MarshalIndent(sites, "", "  ")
+	if err != nil {
+		t.Fatalf("MarshalIndent() error = %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(stateDir, "sites.json"), append(data, '\n'), 0o644); err != nil {
+		t.Fatalf("WriteFile(sites) error = %v", err)
+	}
+
+	listOutput := captureStdout(t, func() {
+		if got := Run([]string{"site", "env", "list", "client-kinsta"}); got != 0 {
+			t.Fatalf("Run(site env list) = %d, want 0", got)
+		}
+	})
+	for _, want := range []string{"env", "site", "live", "staging", "client-kinsta", "https://www.example.com/", "develop"} {
+		if !strings.Contains(listOutput, want) {
+			t.Fatalf("site env list output missing %q:\n%s", want, listOutput)
+		}
+	}
+
+	showOutput := captureStdout(t, func() {
+		if got := Run([]string{"site", "env", "show", "client-kinsta", "staging"}); got != 0 {
+			t.Fatalf("Run(site env show) = %d, want 0", got)
+		}
+	})
+	for _, want := range []string{`"requested_site": "client-kinsta"`, `"requested_env": "staging"`, `"resolved_site": "client-kinsta"`, `"resolved_env": "staging"`, `"kinsta_environment_id": "kenv-staging"`} {
+		if !strings.Contains(showOutput, want) {
+			t.Fatalf("site env show output missing %q:\n%s", want, showOutput)
+		}
+	}
+}
+
+func TestRunEnvPushPreflightsRepoRemoteWithoutSyncing(t *testing.T) {
+	stateDir := t.TempDir()
+	t.Setenv("NF_STATE_HOME", stateDir)
+	t.Setenv("NF_DATA_HOME", t.TempDir())
+	sites := map[string]any{"sites": map[string]any{"live-client-kinsta": map[string]any{"provider": "kinsta", "site_id": "client-kinsta", "env": "live", "url": "https://www.example.com/", "kinsta": map[string]any{"site_id": "ksite123", "environment_id": "kenv-live"}}}}
+	data, err := json.MarshalIndent(sites, "", "  ")
+	if err != nil {
+		t.Fatalf("MarshalIndent(sites) error = %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(stateDir, "sites.json"), append(data, '\n'), 0o644); err != nil {
+		t.Fatalf("WriteFile(sites) error = %v", err)
+	}
+
+	repoRoot := t.TempDir()
+	if err := os.Mkdir(filepath.Join(repoRoot, ".git"), 0o755); err != nil {
+		t.Fatalf("Mkdir(.git) error = %v", err)
+	}
+	if err := os.MkdirAll(filepath.Join(repoRoot, ".nf"), 0o755); err != nil {
+		t.Fatalf("MkdirAll(.nf) error = %v", err)
+	}
+	project := map[string]any{
+		"schema":    1,
+		"project":   map[string]any{"slug": "client", "name": "Client"},
+		"wordpress": map[string]any{"theme_path": "theme", "theme_slug": "theme"},
+		"env":       map[string]any{"compose": "docker compose", "wordpress_service": "wordpress", "cli_service": "cli", "theme_mount_slug": "theme", "uploads_path": "uploads"},
+		"deploy":    map[string]any{"remotes": map[string]any{"production": map[string]any{"site_id": "client-kinsta", "env": "live"}}},
+	}
+	projectData, err := json.MarshalIndent(project, "", "  ")
+	if err != nil {
+		t.Fatalf("MarshalIndent(project) error = %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(repoRoot, ".nf", "project.json"), append(projectData, '\n'), 0o644); err != nil {
+		t.Fatalf("WriteFile(project) error = %v", err)
+	}
+	oldwd, err := os.Getwd()
+	if err != nil {
+		t.Fatalf("Getwd() error = %v", err)
+	}
+	if err := os.Chdir(repoRoot); err != nil {
+		t.Fatalf("Chdir() error = %v", err)
+	}
+	t.Cleanup(func() { _ = os.Chdir(oldwd) })
+
+	stderr := captureStderr(t, func() {
+		stdout := captureStdout(t, func() {
+			if got := Run([]string{"env", "push", "production"}); got != 1 {
+				t.Fatalf("Run(env push) = %d, want 1 while sync is unimplemented", got)
+			}
+		})
+		for _, want := range []string{"Env push preflight:", "local project: client", "remote:        production", "site:          client-kinsta", "env:           live", "provider:      kinsta", "url:           https://www.example.com/"} {
+			if !strings.Contains(stdout, want) {
+				t.Fatalf("env push stdout missing %q:\n%s", want, stdout)
+			}
+		}
+	})
+	if !strings.Contains(stderr, "Remote env sync is not implemented yet; no data was changed.") {
+		t.Fatalf("env push stderr = %q", stderr)
+	}
+}
+
 func TestRunRemoteAddListRemoveWritesProjectMetadata(t *testing.T) {
 	repoRoot := t.TempDir()
 	if err := os.Mkdir(filepath.Join(repoRoot, ".git"), 0o755); err != nil {
@@ -336,7 +434,7 @@ func TestRunRemoteAddListRemoveWritesProjectMetadata(t *testing.T) {
 
 func TestRunEnvHelpShowsCommandsWithoutShortcuts(t *testing.T) {
 	output := captureStdout(t, func() { _ = runEnvHelp() })
-	for _, wanted := range []string{"env\n\nCommands:\n", "\n  show                show local env paths, ports, and URLs\n", "\n  up                  start the local env\n", "\n  down                stop the local env\n", "\n  shell               open a shell in the local env\n", "\n  logs                tail WordPress logs\n", "\n  reset               destroy and recreate the local env\n", "\n  wp -- <args>        run wp-cli in the local env\n", "\n  push <remote>       not implemented yet\n", "\n  pull <remote>       not implemented yet\n", "\n  snapshot            manage/list env snapshots\n"} {
+	for _, wanted := range []string{"env\n\nCommands:\n", "\n  show                show local env paths, ports, and URLs\n", "\n  up                  start the local env\n", "\n  down                stop the local env\n", "\n  shell               open a shell in the local env\n", "\n  logs                tail WordPress logs\n", "\n  reset               destroy and recreate the local env\n", "\n  wp -- <args>        run wp-cli in the local env\n", "\n  push <remote>       preflight a remote env push\n", "\n  pull <remote>       preflight a remote env pull\n", "\n  snapshot            manage/list env snapshots\n"} {
 		if !strings.Contains(output, wanted) {
 			t.Fatalf("runEnvHelp() output missing %q:\n%s", wanted, output)
 		}

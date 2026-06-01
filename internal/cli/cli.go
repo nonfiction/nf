@@ -1953,6 +1953,78 @@ func siteKinstaID(site map[string]any, key string) string {
 	return firstRecordString(site, "kinsta_"+key, key)
 }
 
+func normalizedRecordString(value string) string {
+	return strings.ToLower(strings.TrimSpace(value))
+}
+
+func siteEnvName(site map[string]any) string {
+	return firstRecordString(site, "env", "environment", "environment_name", "environment_slug")
+}
+
+func siteEnvSiteID(site map[string]any) string {
+	return firstRecordString(site, "site_id", "site", "site_name", "project", "project_slug", "wordpress_site")
+}
+
+func siteEnvMatchesSite(site map[string]any, siteID string) bool {
+	needle := normalizedRecordString(siteID)
+	if needle == "" {
+		return true
+	}
+	for _, candidate := range []string{siteEnvSiteID(site), siteTargetName(site), siteSummary(site), firstRecordString(site, "hostname", "url", "site_url", "home_url")} {
+		if normalizedRecordString(candidate) == needle {
+			return true
+		}
+	}
+	return false
+}
+
+func siteEnvMatchesEnv(site map[string]any, env string) bool {
+	needle := normalizedRecordString(env)
+	if needle == "" {
+		return true
+	}
+	if normalizedRecordString(siteEnvName(site)) == needle {
+		return true
+	}
+	stateKey := normalizedRecordString(siteTargetName(site))
+	return strings.HasPrefix(stateKey, needle+"-") || strings.HasSuffix(stateKey, "-"+needle)
+}
+
+func siteEnvDisplaySite(site map[string]any) string {
+	if siteID := siteEnvSiteID(site); siteID != "" {
+		return siteID
+	}
+	return siteTargetName(site)
+}
+
+func enrichSiteOutput(out map[string]any, record map[string]any, servers []map[string]any) error {
+	provider := strings.ToLower(strings.TrimSpace(recordValueString(record["provider"])))
+	if provider == "linode" {
+		serverRef := siteServerReference(record)
+		server := state.MatchingRecord(servers, serverRef)
+		if server == nil {
+			return ProjectError{Msg: fmt.Sprintf("Linode site %q references server %q, but no server matched that target.", siteSummary(record), serverRef)}
+		}
+		if err := validateServerRecord(server); err != nil {
+			return err
+		}
+		out["resolved_server_summary"] = serverSummary(server)
+		out["resolved_server"] = server
+	}
+	if provider == "kinsta" {
+		if value := siteKinstaID(record, "company_id"); value != "" {
+			out["kinsta_company_id"] = value
+		}
+		if value := siteKinstaID(record, "site_id"); value != "" {
+			out["kinsta_site_id"] = value
+		}
+		if value := siteKinstaID(record, "environment_id"); value != "" {
+			out["kinsta_environment_id"] = value
+		}
+	}
+	return nil
+}
+
 func projectDeployTargetAlias(metadata map[string]any, targetAlias string) (string, bool, error) {
 	deploy := mapMapAtPath(metadata, "deploy")
 	if deploy == nil {
@@ -2094,6 +2166,146 @@ func cmdListSites(records, servers []map[string]any) int {
 	return 0
 }
 
+func cmdListSiteEnvs(siteID string) int {
+	bundle, err := state.LoadStateBundle()
+	if err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		return 1
+	}
+	rows := [][]string{{"env", "site", "provider", "url", "branch", "target"}}
+	for _, record := range bundle.Sites {
+		if !siteEnvMatchesSite(record, siteID) {
+			continue
+		}
+		rows = append(rows, []string{
+			siteEnvName(record),
+			siteEnvDisplaySite(record),
+			recordValueString(record["provider"]),
+			firstRecordString(record, "url", "site_url", "home_url", "hostname"),
+			firstRecordString(record, "branch", "git_branch"),
+			siteTargetName(record),
+		})
+	}
+	if len(rows) == 1 {
+		if strings.TrimSpace(siteID) != "" {
+			fmt.Printf("No remote envs found for %q.\n", siteID)
+		} else {
+			fmt.Println("No remote envs found.")
+		}
+		return 0
+	}
+	fmt.Println(formatTable(rows))
+	return 0
+}
+
+func cmdShowSiteEnv(siteID, env string) int {
+	siteID = strings.TrimSpace(siteID)
+	env = strings.TrimSpace(env)
+	if siteID == "" || env == "" {
+		fmt.Fprintln(os.Stderr, "site env show requires site-id and env")
+		return 1
+	}
+	bundle, err := state.LoadStateBundle()
+	if err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		return 1
+	}
+	var record map[string]any
+	for _, candidate := range bundle.Sites {
+		if siteEnvMatchesSite(candidate, siteID) && siteEnvMatchesEnv(candidate, env) {
+			record = candidate
+			break
+		}
+	}
+	if record == nil {
+		fmt.Fprintf(os.Stderr, "No remote env matched site %q env %q.\n", siteID, env)
+		return 1
+	}
+	if err := validateSiteRecord(record); err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		return 1
+	}
+	out := cloneRecord(record)
+	out["requested_site"] = siteID
+	out["requested_env"] = env
+	out["resolved_site"] = siteEnvDisplaySite(record)
+	out["resolved_env"] = siteEnvName(record)
+	out["resolved_target"] = siteTargetName(record)
+	if err := enrichSiteOutput(out, record, bundle.Servers); err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		return 1
+	}
+	data, _ := json.MarshalIndent(out, "", "  ")
+	fmt.Println(string(data))
+	return 0
+}
+
+func cachedSiteEnv(siteID, env string) (map[string]any, []map[string]any, error) {
+	bundle, err := state.LoadStateBundle()
+	if err != nil {
+		return nil, nil, err
+	}
+	for _, candidate := range bundle.Sites {
+		if siteEnvMatchesSite(candidate, siteID) && siteEnvMatchesEnv(candidate, env) {
+			return candidate, bundle.Servers, nil
+		}
+	}
+	return nil, bundle.Servers, nil
+}
+
+func cmdEnvRemoteSyncPlan(action, remoteName string, cfg envConfig, metadata map[string]any) int {
+	remoteName = strings.TrimSpace(remoteName)
+	if remoteName == "" {
+		fmt.Fprintf(os.Stderr, "env %s requires a non-empty remote\n", action)
+		return 1
+	}
+	siteID, remoteEnv, ok, err := projectRemoteAlias(metadata, remoteName)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		return 1
+	}
+	if !ok {
+		fmt.Fprintf(os.Stderr, "No remote named %q in .nf/project.json deploy.remotes.\n", remoteName)
+		return 1
+	}
+	record, servers, err := cachedSiteEnv(siteID, remoteEnv)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		return 1
+	}
+	if record == nil {
+		fmt.Fprintf(os.Stderr, "No cached remote env matched site %q env %q. Run nf site refresh when provider refresh is implemented, or update the local state cache.\n", siteID, remoteEnv)
+		return 1
+	}
+	if err := validateSiteRecord(record); err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		return 1
+	}
+	provider := strings.ToLower(strings.TrimSpace(recordValueString(record["provider"])))
+	fmt.Printf("Env %s preflight:\n", action)
+	fmt.Printf("  local project: %s\n", cfg.ProjectSlug)
+	fmt.Printf("  local env:     %s\n", localEnvDir(cfg))
+	fmt.Printf("  remote:        %s\n", remoteName)
+	fmt.Printf("  site:          %s\n", siteID)
+	fmt.Printf("  env:           %s\n", remoteEnv)
+	fmt.Printf("  provider:      %s\n", provider)
+	fmt.Printf("  target:        %s\n", siteTargetName(record))
+	if url := firstRecordString(record, "url", "site_url", "home_url", "hostname"); url != "" {
+		fmt.Printf("  url:           %s\n", url)
+	}
+	if provider == "linode" {
+		serverRef := siteServerReference(record)
+		server := state.MatchingRecord(servers, serverRef)
+		if server == nil {
+			fmt.Fprintf(os.Stderr, "Linode site %q references server %q, but no server matched that target.\n", siteSummary(record), serverRef)
+			return 1
+		}
+		fmt.Printf("  server:        %s\n", serverSummary(server))
+	}
+	fmt.Fprintln(os.Stderr, "Remote env sync is not implemented yet; no data was changed.")
+	return 1
+}
+
 func cmdShowServer(needle string) int {
 	bundle, err := state.LoadStateBundle()
 	if err != nil {
@@ -2199,34 +2411,12 @@ func cmdShowSite(needle string) int {
 		fmt.Fprintln(os.Stderr, err)
 		return 1
 	}
-	provider := strings.ToLower(strings.TrimSpace(recordValueString(record["provider"])))
 	out := cloneRecord(record)
 	out["requested_target"] = needle
 	out["resolved_target"] = resolved
-	if provider == "linode" {
-		serverRef := siteServerReference(record)
-		server := state.MatchingRecord(bundle.Servers, serverRef)
-		if server == nil {
-			fmt.Fprintf(os.Stderr, "Linode site %q references server %q, but no server matched that target.\n", siteSummary(record), serverRef)
-			return 1
-		}
-		if err := validateServerRecord(server); err != nil {
-			fmt.Fprintln(os.Stderr, err)
-			return 1
-		}
-		out["resolved_server_summary"] = serverSummary(server)
-		out["resolved_server"] = server
-	}
-	if provider == "kinsta" {
-		if value := siteKinstaID(record, "company_id"); value != "" {
-			out["kinsta_company_id"] = value
-		}
-		if value := siteKinstaID(record, "site_id"); value != "" {
-			out["kinsta_site_id"] = value
-		}
-		if value := siteKinstaID(record, "environment_id"); value != "" {
-			out["kinsta_environment_id"] = value
-		}
+	if err := enrichSiteOutput(out, record, bundle.Servers); err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		return 1
 	}
 	data, _ := json.MarshalIndent(out, "", "  ")
 	fmt.Println(string(data))
@@ -2742,8 +2932,8 @@ func runEnvHelp() int {
 		"logs                tail WordPress logs",
 		"reset               destroy and recreate the local env",
 		"wp -- <args>        run wp-cli in the local env",
-		"push <remote>       not implemented yet",
-		"pull <remote>       not implemented yet",
+		"push <remote>       preflight a remote env push",
+		"pull <remote>       preflight a remote env pull",
 		"snapshot            manage/list env snapshots",
 	})
 	return 0
@@ -2882,8 +3072,6 @@ func runEnv(argv []string) int {
 			fmt.Fprintf(os.Stderr, "env %s takes exactly one remote\n", name)
 			return 1
 		}
-		fmt.Fprintf(os.Stderr, "env %s is not implemented yet\n", name)
-		return 1
 	}
 	if err := requireProjectContext("env " + name); err != nil {
 		fmt.Fprintln(os.Stderr, err)
@@ -2913,6 +3101,9 @@ func runEnv(argv []string) int {
 	if name == "show" {
 		fmt.Println(renderEnvInfo(cfg, true))
 		return 0
+	}
+	if name == "push" || name == "pull" {
+		return cmdEnvRemoteSyncPlan(name, argv[1], cfg, metadata)
 	}
 	if name == "up" {
 		if err := preflightEnvPorts(cfg); err != nil {
@@ -3600,11 +3791,20 @@ func runSiteEnv(argv []string) int {
 			fmt.Fprintln(os.Stderr, "site env list takes at most one site-id")
 			return 1
 		}
-		fmt.Fprintln(os.Stderr, "site env list is not implemented yet")
-		return 1
-	case "show", "shell":
+		siteID := ""
+		if len(argv) == 2 {
+			siteID = argv[1]
+		}
+		return cmdListSiteEnvs(siteID)
+	case "show":
 		if len(argv) != 3 {
-			fmt.Fprintf(os.Stderr, "site env %s takes exactly site-id and env\n", argv[0])
+			fmt.Fprintln(os.Stderr, "site env show takes exactly site-id and env")
+			return 1
+		}
+		return cmdShowSiteEnv(argv[1], argv[2])
+	case "shell":
+		if len(argv) != 3 {
+			fmt.Fprintln(os.Stderr, "site env shell takes exactly site-id and env")
 			return 1
 		}
 		fmt.Fprintf(os.Stderr, "site env %s is not implemented yet\n", argv[0])
