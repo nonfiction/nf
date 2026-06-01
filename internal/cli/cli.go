@@ -76,7 +76,7 @@ type instanceConfig struct {
 	ProjectName      string
 	RepoRoot         string
 	ThemePath        string
-	InstanceDir      string
+	EnvDir           string
 	WordpressPort    int
 	MailpitPort      int
 	Compose          string
@@ -98,7 +98,7 @@ type instanceSnapshotMetadata struct {
 	Name           string                   `json:"name"`
 	ProjectSlug    string                   `json:"project_slug"`
 	CreatedAt      string                   `json:"created_at"`
-	InstancePath   string                   `json:"instance_path"`
+	EnvPath        string                   `json:"env_path"`
 	ComposeProject string                   `json:"compose_project"`
 	WordpressURL   string                   `json:"wordpress_url"`
 	Contents       instanceSnapshotContents `json:"contents"`
@@ -140,7 +140,7 @@ func instanceSnapshotDir(cfg instanceConfig, name string) string {
 }
 
 func instanceSnapshotContainerDir(name string) string {
-	return path.Join("/instance-snapshots", name)
+	return path.Join("/env-snapshots", name)
 }
 
 func instanceSnapshotContainerDatabaseArchive(name string) string {
@@ -172,12 +172,13 @@ func instanceSnapshotContentPaths() []string {
 }
 
 func newInstanceSnapshotMetadata(cfg instanceConfig, name string, createdAt time.Time) instanceSnapshotMetadata {
+	envDir := localEnvDir(cfg)
 	return instanceSnapshotMetadata{
 		Schema:         instanceSnapshotSchema,
 		Name:           name,
 		ProjectSlug:    cfg.ProjectSlug,
 		CreatedAt:      createdAt.Format(time.RFC3339),
-		InstancePath:   cfg.InstanceDir,
+		EnvPath:        envDir,
 		ComposeProject: instanceComposeProjectName(cfg.ProjectSlug),
 		WordpressURL:   instanceSnapshotWordPressURL(cfg),
 		Contents: instanceSnapshotContents{
@@ -195,26 +196,26 @@ func instanceSnapshotWordPressURL(cfg instanceConfig) string {
 func instanceSnapshotNormalizedName(input string) (string, error) {
 	name := strings.TrimSpace(input)
 	if name == "" {
-		return "", ProjectError{Msg: "instance snapshot name cannot be empty"}
+		return "", ProjectError{Msg: "env snapshot name cannot be empty"}
 	}
 	name = strings.Join(strings.Fields(name), "-")
 	if name == "" {
-		return "", ProjectError{Msg: "instance snapshot name cannot be empty"}
+		return "", ProjectError{Msg: "env snapshot name cannot be empty"}
 	}
 	if filepath.IsAbs(name) {
-		return "", ProjectError{Msg: fmt.Sprintf("instance snapshot name %q must not be absolute", input)}
+		return "", ProjectError{Msg: fmt.Sprintf("env snapshot name %q must not be absolute", input)}
 	}
 	if strings.ContainsAny(name, "/\\") {
-		return "", ProjectError{Msg: fmt.Sprintf("instance snapshot name %q must not contain path separators", input)}
+		return "", ProjectError{Msg: fmt.Sprintf("env snapshot name %q must not contain path separators", input)}
 	}
 	if strings.Contains(name, "..") {
-		return "", ProjectError{Msg: fmt.Sprintf("instance snapshot name %q must not contain path traversal", input)}
+		return "", ProjectError{Msg: fmt.Sprintf("env snapshot name %q must not contain path traversal", input)}
 	}
 	for _, r := range name {
 		if r >= 'a' && r <= 'z' || r >= 'A' && r <= 'Z' || r >= '0' && r <= '9' || r == '-' || r == '_' {
 			continue
 		}
-		return "", ProjectError{Msg: fmt.Sprintf("instance snapshot name %q contains unsafe characters", input)}
+		return "", ProjectError{Msg: fmt.Sprintf("env snapshot name %q contains unsafe characters", input)}
 	}
 	return name, nil
 }
@@ -241,11 +242,15 @@ func instanceSnapshotMetadataJSON(meta instanceSnapshotMetadata) (string, error)
 }
 
 func (c instanceConfig) managedUploadsDir() string {
-	return filepath.Join(c.InstanceDir, firstNonEmpty(c.UploadsPath, "uploads"))
+	return filepath.Join(localEnvDir(c), firstNonEmpty(c.UploadsPath, "uploads"))
 }
 
 func (c instanceConfig) uploadsContainerPath() string {
-	return path.Join("/", "instance", firstNonEmpty(c.UploadsPath, "uploads"))
+	return path.Join("/", "env", firstNonEmpty(c.UploadsPath, "uploads"))
+}
+
+func localEnvDir(cfg instanceConfig) string {
+	return cfg.EnvDir
 }
 
 func instancePortBlockStart(projectSlug string) int {
@@ -315,7 +320,7 @@ func (c instanceCommandRunner) Execute(root string, extraArgs []string) error {
 	if err := ensureManagedInstance(c.cfg); err != nil {
 		return err
 	}
-	instanceDir := c.cfg.InstanceDir
+	instanceDir := localEnvDir(c.cfg)
 	switch c.name {
 	case "up":
 		return c.ensureUpInstalledActive(instanceDir)
@@ -346,7 +351,7 @@ func (c instanceCommandRunner) Render() string {
 	case "logs":
 		return "docker compose logs -f " + c.cfg.WordpressService
 	case "reset":
-		return "docker compose down -v --remove-orphans; nuke instance data and recreate it with docker compose up -d, install WordPress if missing, and ensure the mounted theme is active"
+		return "docker compose down -v --remove-orphans; nuke env data and recreate it with docker compose up -d, install WordPress if missing, and ensure the mounted theme is active"
 	case "shell":
 		return "docker compose exec " + firstNonEmpty(c.cfg.WordpressService, "wordpress") + " sh"
 	case "wp":
@@ -361,10 +366,10 @@ func ensureInstanceReadyForSnapshot(cfg instanceConfig) error {
 		return err
 	}
 	runner := instanceCommandRunner{name: "up", cfg: cfg}
-	if runner.instanceReadyForSnapshot(cfg.InstanceDir) {
+	if runner.instanceReadyForSnapshot(localEnvDir(cfg)) {
 		return nil
 	}
-	return runner.ensureUpInstalledActive(cfg.InstanceDir)
+	return runner.ensureUpInstalledActive(localEnvDir(cfg))
 }
 
 func instanceSnapshotCreateScript(name string) string {
@@ -427,14 +432,14 @@ func instanceSnapshotCreateArchives(cfg instanceConfig, name string) error {
 	if err := os.Chmod(instanceSnapshotDir(cfg, name), 0o777); err != nil {
 		return err
 	}
-	if err := runCommandSpecNoPreview(execSpec{Dir: cfg.InstanceDir, Args: instanceSnapshotComposeArgs(cfg, instanceSnapshotCreateScript(name))}); err != nil {
+	if err := runCommandSpecNoPreview(execSpec{Dir: localEnvDir(cfg), Args: instanceSnapshotComposeArgs(cfg, instanceSnapshotCreateScript(name))}); err != nil {
 		return err
 	}
 	return nil
 }
 
 func instanceSnapshotRestoreArchives(cfg instanceConfig, name string) error {
-	if err := runCommandSpecNoPreview(execSpec{Dir: cfg.InstanceDir, Args: instanceSnapshotComposeArgs(cfg, instanceSnapshotRestoreScript(name))}); err != nil {
+	if err := runCommandSpecNoPreview(execSpec{Dir: localEnvDir(cfg), Args: instanceSnapshotComposeArgs(cfg, instanceSnapshotRestoreScript(name))}); err != nil {
 		return err
 	}
 	return nil
@@ -569,9 +574,9 @@ func chooseInstanceSnapshot(records []instanceSnapshotRecord, action string) (in
 		options = append(options, ui.SelectOption{Label: label, Value: name})
 	}
 	if len(options) == 0 {
-		return instanceSnapshotRecord{}, fmt.Errorf("No instance snapshots found.")
+		return instanceSnapshotRecord{}, fmt.Errorf("No env snapshots found.")
 	}
-	selected, err := instanceSnapshotSelect(fmt.Sprintf("Choose an instance snapshot to %s", action), options)
+	selected, err := instanceSnapshotSelect(fmt.Sprintf("Choose an env snapshot to %s", action), options)
 	if err != nil {
 		return instanceSnapshotRecord{}, err
 	}
@@ -580,13 +585,13 @@ func chooseInstanceSnapshot(records []instanceSnapshotRecord, action string) (in
 			return record, nil
 		}
 	}
-	return instanceSnapshotRecord{}, fmt.Errorf("instance snapshot %q was not found", selected)
+	return instanceSnapshotRecord{}, fmt.Errorf("env snapshot %q was not found", selected)
 }
 
 func cmdInstanceSnapshotCreate(cfg instanceConfig, name string, nonInteractive bool) int {
 	if strings.TrimSpace(name) == "" {
 		if nonInteractive || !instanceSnapshotIsInteractive() {
-			fmt.Fprintln(os.Stderr, "instance snapshot create requires a name when stdin is not interactive")
+			fmt.Fprintln(os.Stderr, "env snapshot add requires a name when stdin is not interactive")
 			return 1
 		}
 		defaultName := defaultInstanceSnapshotName(time.Now())
@@ -603,7 +608,7 @@ func cmdInstanceSnapshotCreate(cfg instanceConfig, name string, nonInteractive b
 		return 1
 	}
 	if instanceSnapshotExists(cfg, normalized) {
-		fmt.Fprintf(os.Stderr, "instance snapshot %q already exists.\n", normalized)
+		fmt.Fprintf(os.Stderr, "env snapshot %q already exists.\n", normalized)
 		return 1
 	}
 	if err := ensureInstanceReadyForSnapshot(cfg); err != nil {
@@ -635,7 +640,7 @@ func cmdInstanceSnapshotList(cfg instanceConfig) int {
 		return 1
 	}
 	if len(records) == 0 {
-		fmt.Println("No instance snapshots found.")
+		fmt.Println("No env snapshots found.")
 		return 0
 	}
 	fmt.Println(formatTable(instanceSnapshotRows(records)))
@@ -651,7 +656,7 @@ func cmdInstanceSnapshotDelete(cfg instanceConfig, name string, nonInteractive b
 	selectedName := strings.TrimSpace(name)
 	if selectedName == "" {
 		if nonInteractive || !instanceSnapshotIsInteractive() {
-			fmt.Fprintln(os.Stderr, "instance snapshot delete requires a name when stdin is not interactive")
+			fmt.Fprintln(os.Stderr, "env snapshot remove requires a name when stdin is not interactive")
 			return 1
 		}
 		record, err := chooseInstanceSnapshot(records, "delete")
@@ -669,17 +674,17 @@ func cmdInstanceSnapshotDelete(cfg instanceConfig, name string, nonInteractive b
 	path := instanceSnapshotDir(cfg, normalized)
 	if _, err := os.Stat(path); err != nil {
 		if os.IsNotExist(err) {
-			fmt.Fprintf(os.Stderr, "No instance snapshot matched %q.\n", normalized)
+			fmt.Fprintf(os.Stderr, "No env snapshot matched %q.\n", normalized)
 			return 1
 		}
 		fmt.Fprintln(os.Stderr, err)
 		return 1
 	}
 	if nonInteractive || !instanceSnapshotIsInteractive() {
-		fmt.Fprintln(os.Stderr, "instance snapshot delete requires an interactive terminal for confirmation")
+		fmt.Fprintln(os.Stderr, "env snapshot remove requires an interactive terminal for confirmation")
 		return 1
 	}
-	confirmed, err := instanceSnapshotConfirm(fmt.Sprintf("Delete instance snapshot %q? This removes %s.", normalized, path), false)
+	confirmed, err := instanceSnapshotConfirm(fmt.Sprintf("Delete env snapshot %q? This removes %s.", normalized, path), false)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		return 1
@@ -692,7 +697,7 @@ func cmdInstanceSnapshotDelete(cfg instanceConfig, name string, nonInteractive b
 		fmt.Fprintln(os.Stderr, err)
 		return 1
 	}
-	fmt.Printf("Deleted instance snapshot.\n\nDeleted:\n  name: %s\n  path: %s\n", normalized, path)
+	fmt.Printf("Deleted env snapshot.\n\nDeleted:\n  name: %s\n  path: %s\n", normalized, path)
 	return 0
 }
 
@@ -705,7 +710,7 @@ func cmdInstanceSnapshotRestore(cfg instanceConfig, name string, nonInteractive 
 	selectedName := strings.TrimSpace(name)
 	if selectedName == "" {
 		if nonInteractive || !instanceSnapshotIsInteractive() {
-			fmt.Fprintln(os.Stderr, "instance snapshot restore requires a name when stdin is not interactive")
+			fmt.Fprintln(os.Stderr, "env snapshot use requires a name when stdin is not interactive")
 			return 1
 		}
 		record, err := chooseInstanceSnapshot(records, "restore")
@@ -723,17 +728,17 @@ func cmdInstanceSnapshotRestore(cfg instanceConfig, name string, nonInteractive 
 	path := instanceSnapshotDir(cfg, normalized)
 	if _, err := os.Stat(path); err != nil {
 		if os.IsNotExist(err) {
-			fmt.Fprintf(os.Stderr, "No instance snapshot matched %q.\n", normalized)
+			fmt.Fprintf(os.Stderr, "No env snapshot matched %q.\n", normalized)
 			return 1
 		}
 		fmt.Fprintln(os.Stderr, err)
 		return 1
 	}
 	if nonInteractive || !instanceSnapshotIsInteractive() {
-		fmt.Fprintln(os.Stderr, "instance snapshot restore requires an interactive terminal for confirmation")
+		fmt.Fprintln(os.Stderr, "env snapshot use requires an interactive terminal for confirmation")
 		return 1
 	}
-	confirmed, err := instanceSnapshotConfirm(fmt.Sprintf("Restore instance snapshot %q? This will overwrite the current instance database and mutable wp-content.", normalized), false)
+	confirmed, err := instanceSnapshotConfirm(fmt.Sprintf("Restore env snapshot %q? This will overwrite the current local env database and mutable wp-content.", normalized), false)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		return 1
@@ -748,7 +753,7 @@ func cmdInstanceSnapshotRestore(cfg instanceConfig, name string, nonInteractive 
 	}
 	safetyName := defaultPreRestoreSnapshotName(time.Now())
 	if instanceSnapshotExists(cfg, safetyName) {
-		fmt.Fprintf(os.Stderr, "instance snapshot %q already exists.\n", safetyName)
+		fmt.Fprintf(os.Stderr, "env snapshot %q already exists.\n", safetyName)
 		return 1
 	}
 	if err := instanceSnapshotCreateArchives(cfg, safetyName); err != nil {
@@ -835,14 +840,15 @@ func shellQuoteArg(arg string) string {
 }
 
 func instanceCommandDir(cfg instanceConfig) string {
-	return cfg.InstanceDir
+	return localEnvDir(cfg)
 }
 
 func ensureManagedInstance(cfg instanceConfig) error {
-	if strings.TrimSpace(cfg.InstanceDir) == "" {
-		return fmt.Errorf("missing managed instance directory")
+	envDir := localEnvDir(cfg)
+	if strings.TrimSpace(envDir) == "" {
+		return fmt.Errorf("missing managed env directory")
 	}
-	if err := os.MkdirAll(cfg.InstanceDir, 0o755); err != nil {
+	if err := os.MkdirAll(envDir, 0o755); err != nil {
 		return err
 	}
 	if err := os.MkdirAll(instanceSnapshotProjectDir(cfg), 0o755); err != nil {
@@ -852,12 +858,12 @@ func ensureManagedInstance(cfg instanceConfig) error {
 		return err
 	}
 	files := map[string]string{
-		filepath.Join(cfg.InstanceDir, "docker-compose.yml"):                                  renderInstanceCompose(cfg),
-		filepath.Join(cfg.InstanceDir, ".env"):                                                renderInstanceEnv(cfg),
-		filepath.Join(cfg.InstanceDir, "php", "uploads.ini"):                                  renderInstanceUploadsINI(),
-		filepath.Join(cfg.InstanceDir, "wordpress", "Dockerfile"):                             renderInstanceDockerfile(),
-		filepath.Join(cfg.InstanceDir, "wordpress", "wordpress-rewrites.conf"):                renderInstanceRewritesConf(),
-		filepath.Join(cfg.InstanceDir, firstNonEmpty(cfg.UploadsPath, "uploads"), ".gitkeep"): "",
+		filepath.Join(envDir, "docker-compose.yml"):                                  renderInstanceCompose(cfg),
+		filepath.Join(envDir, ".env"):                                                renderInstanceEnv(cfg),
+		filepath.Join(envDir, "php", "uploads.ini"):                                  renderInstanceUploadsINI(),
+		filepath.Join(envDir, "wordpress", "Dockerfile"):                             renderInstanceDockerfile(),
+		filepath.Join(envDir, "wordpress", "wordpress-rewrites.conf"):                renderInstanceRewritesConf(),
+		filepath.Join(envDir, firstNonEmpty(cfg.UploadsPath, "uploads"), ".gitkeep"): "",
 	}
 	for path, contents := range files {
 		if err := writeManagedFile(path, contents, 0o644); err != nil {
@@ -913,7 +919,7 @@ func instancePortCollisionMessage(cfg instanceConfig, occupied []int) string {
 	ports := append([]int(nil), occupied...)
 	sort.Ints(ports)
 	projectLabel := firstNonEmpty(cfg.ProjectSlug, "project")
-	block := fmt.Sprintf("The %s instance wants:\n  WordPress: http://localhost:%d\n  Mailpit:   http://localhost:%d\n\nSet instance.ports.wordpress and instance.ports.mailpit in .nf/project.json to override.", projectLabel, cfg.WordpressPort, cfg.MailpitPort)
+	block := fmt.Sprintf("The %s env wants:\n  WordPress: http://localhost:%d\n  Mailpit:   http://localhost:%d\n\nSet env.ports.wordpress and env.ports.mailpit in .nf/project.json to override.", projectLabel, cfg.WordpressPort, cfg.MailpitPort)
 	if len(ports) == 1 {
 		return fmt.Sprintf("Port %d is already in use.\n\n%s", ports[0], block)
 	}
@@ -968,7 +974,7 @@ func instanceWpThemeActivateArgs(cfg instanceConfig, slug string) []string {
 func instanceThemeArchivePaths(cfg instanceConfig, sourcePath string) (string, string) {
 	base := filepath.Base(sourcePath)
 	host := filepath.Join(instanceCommandDir(cfg), firstNonEmpty(cfg.UploadsPath, "uploads"), base)
-	container := path.Join("/", "instance", firstNonEmpty(cfg.UploadsPath, "uploads"), base)
+	container := path.Join("/", "env", firstNonEmpty(cfg.UploadsPath, "uploads"), base)
 	return host, container
 }
 
@@ -1034,6 +1040,18 @@ func firstNonEmpty(values ...string) string {
 		}
 	}
 	return ""
+}
+
+func maskSecret(value string) string {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return ""
+	}
+	prefix := 3
+	if len(value) < prefix {
+		prefix = len(value)
+	}
+	return value[:prefix] + strings.Repeat("*", 11)
 }
 
 func currentGitRoot() (string, bool) {
@@ -1437,7 +1455,7 @@ func formatProjectTaskLines(tasks map[string]projectCommand) []string {
 }
 
 func loadInstanceConfig(root string, metadata map[string]any) (instanceConfig, bool) {
-	raw, ok := metadata["instance"].(map[string]any)
+	raw, ok := metadata["env"].(map[string]any)
 	if !ok || raw == nil {
 		return instanceConfig{}, false
 	}
@@ -1453,7 +1471,7 @@ func loadInstanceConfig(root string, metadata map[string]any) (instanceConfig, b
 		ProjectName:      projectName,
 		RepoRoot:         root,
 		ThemePath:        themePath,
-		InstanceDir:      config.InstanceDir(projectSlug),
+		EnvDir:           config.EnvDir(projectSlug),
 		WordpressPort:    firstInstancePort(raw, "wordpress", projectSlug),
 		MailpitPort:      firstInstancePort(raw, "mailpit", projectSlug),
 		Compose:          firstNonEmpty(mapStringAtPath(raw, "compose"), "docker compose"),
@@ -1538,7 +1556,7 @@ func defaultInstanceCommands(cfg instanceConfig) map[string]projectCommand {
 		"up":    {Description: "Start the managed instance, install WordPress if missing, and ensure the mounted theme is active", Run: instanceCommandRunner{name: "up", cfg: cfg}},
 		"down":  {Description: "Stop the managed instance", Run: instanceCommandRunner{name: "down", cfg: cfg}},
 		"logs":  {Description: "Tail WordPress logs", Run: instanceCommandRunner{name: "logs", cfg: cfg}},
-		"reset": {Description: "Destroy and recreate the local instance", Run: instanceCommandRunner{name: "reset", cfg: cfg}},
+		"reset": {Description: "Destroy and recreate the local env", Run: instanceCommandRunner{name: "reset", cfg: cfg}},
 		"shell": {Description: "Open a shell in the WordPress container", Run: instanceCommandRunner{name: "shell", cfg: cfg}},
 		"wp":    {Description: "Run wp-cli passthrough", Run: instanceCommandRunner{name: "wp", cfg: cfg}},
 	}
@@ -1548,7 +1566,7 @@ func discoverProjectRootOrError() (string, error) {
 	if root, ok := config.DiscoverProjectRoot(""); ok {
 		return root, nil
 	}
-	return "", ProjectError{Msg: "No project metadata found above the current directory. Add .nf/project.json with instance metadata or tasks.<name>."}
+	return "", ProjectError{Msg: "No project metadata found above the current directory. Add .nf/project.json with env metadata or tasks.<name>."}
 }
 
 func cmdThemeTasks() int {
@@ -2149,7 +2167,7 @@ func writeProjectInit(root string, args projectInitArgs) error {
 func ensureInstanceProjectMetadata() error {
 	root, ok := currentGitRoot()
 	if !ok {
-		return ProjectError{Msg: "instance up requires a .git repository above the current directory"}
+		return ProjectError{Msg: "env up requires a .git repository above the current directory"}
 	}
 	projectPath := config.ProjectFile(root)
 	if _, err := os.Stat(projectPath); err == nil {
@@ -2181,7 +2199,7 @@ func projectInitMetadata(args projectInitArgs) map[string]any {
 			"theme_slug":  themeSlug,
 			"theme_path":  themePath,
 		},
-		"instance": map[string]any{
+		"env": map[string]any{
 			"compose":           "docker compose",
 			"wordpress_service": "wordpress",
 			"cli_service":       "cli",
@@ -2293,7 +2311,7 @@ func renderInstanceCompose(cfg instanceConfig) string {
       - wp_data:/var/www/html
       - %s:/var/www/html/wp-content/themes/%s
       - ./%s:%s
-      - %s:/instance-snapshots
+      - %s:/env-snapshots
 
   mailpit:
     image: axllent/mailpit
@@ -2303,7 +2321,7 @@ func renderInstanceCompose(cfg instanceConfig) string {
 volumes:
   db_data:
   wp_data:
-`, wordpressService, themePath, themeMountSlug, cliService, wordpressService, themePath, themeMountSlug, uploadsPath, path.Join("/", "instance", uploadsPath), instanceSnapshotComposeMount(cfg))
+`, wordpressService, themePath, themeMountSlug, cliService, wordpressService, themePath, themeMountSlug, uploadsPath, path.Join("/", "env", uploadsPath), instanceSnapshotComposeMount(cfg))
 }
 
 func renderInstanceEnv(cfg instanceConfig) string {
@@ -2324,14 +2342,14 @@ ADMIN_EMAIL=web@nonfiction.ca
 }
 
 func instanceComposeProjectName(projectSlug string) string {
-	return "nf_" + cleanInstanceSlug(projectSlug) + "_instance"
+	return "nf_" + cleanInstanceSlug(projectSlug) + "_env"
 }
 
 func renderInstanceInfo(cfg instanceConfig, includeURLs bool) string {
 	lines := []string{
-		"Instance:",
+		"Env:",
 		"  project: " + cfg.ProjectSlug,
-		"  path: " + cfg.InstanceDir,
+		"  path: " + localEnvDir(cfg),
 		"  compose project: " + instanceComposeProjectName(cfg.ProjectSlug),
 	}
 	if includeURLs {
@@ -2539,29 +2557,58 @@ func runServerHelp() int {
 	return 0
 }
 
+func runProviderHelp() int {
+	printGroupHelp("provider", []string{
+		"list                list provider integrations",
+		"dnsimple            configure DNSimple integration",
+		"kinsta              configure Kinsta integration",
+		"linode              configure Linode integration and targets",
+	})
+	return 0
+}
+
+func runTargetHelp() int {
+	printGroupHelp("target", []string{
+		"list                list deployable targets",
+		"show <target>       show a deployable target",
+	})
+	return 0
+}
+
+func runRemoteHelp() int {
+	printGroupHelp("remote", []string{
+		"add <name> <site-id> <env>   add a repo remote",
+		"remove <name>                remove a repo remote",
+		"list                         list repo remotes",
+	})
+	return 0
+}
+
 func runSiteHelp() int {
 	printGroupHelp("site", []string{
+		"refresh             refresh local inventory cache",
 		"list                list sites",
 		"show <id-or-name>   show a site",
-		"install             not implemented yet",
-		"delete              not implemented yet",
-		"deploy              not implemented yet",
-		"push                not implemented yet",
-		"pull                not implemented yet",
+		"env                 list, show, shell into, or run wp-cli against remote envs",
 	})
 	return 0
 }
 
 func runConfigHelp() int {
 	printGroupHelp("config", []string{
-		"init                initialize local config",
+		"init                         initialize local secret config",
+		"set-default-wp-email <email>  set default WordPress email",
+		"set-default-wp-user <user>    set default WordPress user",
+		"show                         show global config",
 	})
 	return 0
 }
 
 func runPasswordHelp() int {
 	printGroupHelp("password", []string{
-		"derive [--non-interactive] <project-slug> <purpose>   derive a password",
+		"set-salt <salt>             save the shared password salt",
+		"show-salt                   show the masked password salt",
+		"derive <scope> [args...]    derive a password",
 	})
 	return 0
 }
@@ -2584,29 +2631,19 @@ func runInitHelp() int {
 	return 0
 }
 
-func runInstanceHelp() int {
-	printGroupHelp("instance", []string{
-		"up                  start the local instance",
-		"down                stop the local instance",
-		"shell               open a shell in the local instance",
+func runEnvHelp() int {
+	printGroupHelp("env", []string{
+		"show                show local env paths, ports, and URLs",
+		"up                  start the local env",
+		"down                stop the local env",
+		"shell               open a shell in the local env",
 		"logs                tail WordPress logs",
-		"reset               destroy and recreate the local instance",
-		"wp -- <args>        run wp-cli in the local instance",
-		"info                show local instance paths, ports, and URLs",
-		"snapshot            manage/list instance snapshots",
+		"reset               destroy and recreate the local env",
+		"wp -- <args>        run wp-cli in the local env",
+		"push <remote>       not implemented yet",
+		"pull <remote>       not implemented yet",
+		"snapshot            manage/list env snapshots",
 	})
-	fmt.Println("\nShortcuts:")
-	for _, line := range []string{
-		"nf up               shortcut for nf instance up",
-		"nf down             shortcut for nf instance down",
-		"nf logs             shortcut for nf instance logs",
-		"nf reset            shortcut for nf instance reset",
-		"nf shell            shortcut for nf instance shell",
-		"nf wp -- <args>     shortcut for nf instance wp -- <args>",
-		"nf info             shortcut for nf instance info",
-	} {
-		fmt.Printf("  %s\n", line)
-	}
 	return 0
 }
 
@@ -2716,32 +2753,37 @@ func runTheme(argv []string) int {
 	}
 }
 
-func runInstance(argv []string) int {
+func runEnv(argv []string) int {
 	if len(argv) == 0 || argv[0] == "help" {
-		return runInstanceHelp()
+		return runEnvHelp()
 	}
 	name := argv[0]
 	switch name {
-	case "info", "up", "down", "logs", "reset", "shell", "wp", "snapshot", "snapshots":
+	case "show", "up", "down", "logs", "reset", "shell", "wp", "push", "pull", "snapshot":
 	default:
-		fmt.Fprintln(os.Stderr, "unsupported instance command")
+		fmt.Fprintln(os.Stderr, "unsupported env command")
 		return 1
-	}
-	if name == "snapshots" {
-		return runInstanceSnapshot([]string{"list"})
 	}
 	if name == "snapshot" {
 		return runInstanceSnapshot(argv[1:])
 	}
-	if name == "info" && len(argv) != 1 {
-		fmt.Fprintln(os.Stderr, "instance info takes no arguments")
+	if name == "show" && len(argv) != 1 {
+		fmt.Fprintln(os.Stderr, "env show takes no arguments")
 		return 1
 	}
 	if name == "shell" && len(argv) != 1 {
-		fmt.Fprintln(os.Stderr, "instance shell takes no arguments")
+		fmt.Fprintln(os.Stderr, "env shell takes no arguments")
 		return 1
 	}
-	if err := requireProjectContext("instance " + name); err != nil {
+	if name == "push" || name == "pull" {
+		if len(argv) != 2 {
+			fmt.Fprintf(os.Stderr, "env %s takes exactly one remote\n", name)
+			return 1
+		}
+		fmt.Fprintf(os.Stderr, "env %s is not implemented yet\n", name)
+		return 1
+	}
+	if err := requireProjectContext("env " + name); err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		return 1
 	}
@@ -2763,10 +2805,10 @@ func runInstance(argv []string) int {
 	}
 	cfg, ok := loadInstanceConfig(root, metadata)
 	if !ok {
-		fmt.Fprintln(os.Stderr, "Missing instance metadata in .nf/project.json. Run nf instance up first.")
+		fmt.Fprintln(os.Stderr, "Missing env metadata in .nf/project.json. Run nf env up first.")
 		return 1
 	}
-	if name == "info" {
+	if name == "show" {
 		fmt.Println(renderInstanceInfo(cfg, true))
 		return 0
 	}
@@ -2786,15 +2828,15 @@ func runInstance(argv []string) int {
 	}
 	switch name {
 	case "up":
-		fmt.Println("Instance started.")
+		fmt.Println("Env started.")
 		fmt.Println()
 		fmt.Println(renderInstanceInfo(cfg, true))
 	case "reset":
-		fmt.Println("Instance reset.")
+		fmt.Println("Env reset.")
 		fmt.Println()
 		fmt.Println(renderInstanceInfo(cfg, true))
 	case "down":
-		fmt.Println("Instance stopped.")
+		fmt.Println("Env stopped.")
 		fmt.Println()
 		fmt.Println(renderInstanceInfo(cfg, false))
 	}
@@ -2803,33 +2845,32 @@ func runInstance(argv []string) int {
 
 func runInstanceSnapshot(argv []string) int {
 	if len(argv) == 0 || argv[0] == "help" {
-		printGroupHelp("instance snapshot", []string{
-			"create [name]       create an instance snapshot",
-			"list                list instance snapshots",
-			"ls                  alias for list",
-			"restore [name]      restore an instance snapshot",
-			"delete [name]       delete an instance snapshot",
+		printGroupHelp("env snapshot", []string{
+			"add [name]          create an env snapshot",
+			"list                list env snapshots",
+			"use [name]          restore an env snapshot",
+			"remove [name]       delete an env snapshot",
 		})
 		return 0
 	}
 	cmd := argv[0]
 	args := argv[1:]
 	switch cmd {
-	case "list", "ls":
+	case "list":
 		if len(args) != 0 {
-			fmt.Fprintln(os.Stderr, "instance snapshot list takes no arguments")
+			fmt.Fprintln(os.Stderr, "env snapshot list takes no arguments")
 			return 1
 		}
-	case "create", "restore", "delete":
+	case "add", "use", "remove":
 		if len(args) > 1 {
-			fmt.Fprintln(os.Stderr, "instance snapshot command takes at most one name")
+			fmt.Fprintln(os.Stderr, "env snapshot command takes at most one name")
 			return 1
 		}
 	default:
-		fmt.Fprintln(os.Stderr, "unsupported instance snapshot command")
+		fmt.Fprintln(os.Stderr, "unsupported env snapshot command")
 		return 1
 	}
-	if err := requireProjectContext("instance snapshot " + cmd); err != nil {
+	if err := requireProjectContext("env snapshot " + cmd); err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		return 1
 	}
@@ -2845,25 +2886,25 @@ func runInstanceSnapshot(argv []string) int {
 	}
 	cfg, ok := loadInstanceConfig(root, metadata)
 	if !ok {
-		fmt.Fprintln(os.Stderr, "Missing instance metadata in .nf/project.json. Run nf instance up first.")
+		fmt.Fprintln(os.Stderr, "Missing env metadata in .nf/project.json. Run nf env up first.")
 		return 1
 	}
 	switch cmd {
-	case "list", "ls":
+	case "list":
 		return cmdInstanceSnapshotList(cfg)
-	case "create":
+	case "add":
 		name := ""
 		if len(args) == 1 {
 			name = args[0]
 		}
 		return cmdInstanceSnapshotCreate(cfg, name, false)
-	case "restore":
+	case "use":
 		name := ""
 		if len(args) == 1 {
 			name = args[0]
 		}
 		return cmdInstanceSnapshotRestore(cfg, name, false)
-	case "delete":
+	case "remove":
 		name := ""
 		if len(args) == 1 {
 			name = args[0]
@@ -2878,11 +2919,13 @@ func runHelp() int {
 	fmt.Println("nf")
 	fmt.Println("\nCommands:")
 	fmt.Println("  init          initialize project metadata")
+	fmt.Println("  provider      manage provider integrations")
+	fmt.Println("  target        list and show deployable targets")
+	fmt.Println("  site          refresh, list, and show remote sites/envs")
+	fmt.Println("  remote        manage repo deploy remotes")
 	fmt.Println("  theme         package artifacts and run theme tasks")
-	fmt.Println("  instance      manage the local WordPress instance")
-	fmt.Println("  site          list, show, deploy/sync remote sites")
-	fmt.Println("  server        provision, list, show, delete infrastructure hosts")
-	fmt.Println("  config        init local config")
+	fmt.Println("  env           manage the local development env")
+	fmt.Println("  config        manage global config")
 	fmt.Println("  password      derive passwords")
 	fmt.Println("  help          show help")
 	return 0
@@ -2938,12 +2981,16 @@ func Run(argv []string) int {
 			return runHelp()
 		}
 		return runTopicHelp(argv[1:])
-	case "server":
-		return runServer(argv[1:])
+	case "provider":
+		return runProvider(argv[1:])
+	case "target":
+		return runTarget(argv[1:])
 	case "site":
 		return runSite(argv[1:])
-	case "instance":
-		return runInstance(argv[1:])
+	case "remote":
+		return runRemote(argv[1:])
+	case "env":
+		return runEnv(argv[1:])
 	case "init":
 		return runInit(argv[1:])
 	case "theme":
@@ -2952,10 +2999,6 @@ func Run(argv []string) int {
 		return runConfig(argv[1:])
 	case "password":
 		return runPassword(argv[1:])
-	case "info":
-		return runInstance([]string{"info"})
-	case "up", "down", "logs", "reset", "shell", "wp":
-		return runInstance(argv)
 	default:
 		fmt.Fprintf(os.Stderr, "unsupported command: %s\n", argv[0])
 		return 1
@@ -2967,16 +3010,20 @@ func runTopicHelp(argv []string) int {
 		return runHelp()
 	}
 	switch argv[0] {
-	case "server":
-		return runServerHelp()
+	case "provider":
+		return runProviderHelp()
+	case "target":
+		return runTargetHelp()
 	case "site":
 		return runSiteHelp()
+	case "remote":
+		return runRemoteHelp()
+	case "env":
+		return runEnvHelp()
 	case "init":
 		return runInitHelp()
 	case "theme":
 		return runThemeHelp()
-	case "instance":
-		return runInstanceHelp()
 	case "config":
 		return runConfigHelp()
 	case "password":
@@ -2987,49 +3034,230 @@ func runTopicHelp(argv []string) int {
 }
 
 func runPassword(argv []string) int {
-	if len(argv) == 0 || argv[0] == "help" {
+	if len(argv) == 0 || argv[0] == "help" || argv[0] == "--help" || argv[0] == "-h" {
 		return runPasswordHelp()
 	}
-	if argv[0] != "derive" {
+	switch argv[0] {
+	case "set-salt":
+		if len(argv) != 2 || strings.TrimSpace(argv[1]) == "" {
+			fmt.Fprintln(os.Stderr, "password set-salt takes exactly one salt")
+			return 1
+		}
+		if _, err := config.SetEnvFile(config.EnvFile(), map[string]string{"NF_SECRET_SALT": argv[1]}); err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			return 1
+		}
+		fmt.Println("Password Salt: Set")
+		return 0
+	case "show-salt":
+		if len(argv) != 1 {
+			fmt.Fprintln(os.Stderr, "password show-salt takes no arguments")
+			return 1
+		}
+		salt, err := passwords.SecretSalt()
+		if err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			return 1
+		}
+		fmt.Printf("Password Salt: %s\n", maskSecret(salt))
+		return 0
+	case "derive":
+		if len(argv) < 3 {
+			fmt.Fprintln(os.Stderr, "password derive requires a scope and at least one value")
+			return 1
+		}
+		return cmdPasswordDerive(argv[1], strings.Join(argv[2:], ":"), false)
+	default:
 		fmt.Fprintln(os.Stderr, "unsupported password command")
 		return 1
 	}
-	fs := flag.NewFlagSet("password derive", flag.ContinueOnError)
-	nonInteractive := fs.Bool("non-interactive", false, "")
-	fs.SetOutput(os.Stderr)
-	if err := fs.Parse(argv[1:]); err != nil {
-		return 1
-	}
-	args := fs.Args()
-	if len(args) < 2 {
-		fmt.Fprintln(os.Stderr, "password derive requires a project slug and purpose")
-		return 1
-	}
-	return cmdPasswordDerive(args[0], args[1], *nonInteractive)
 }
 
 func runConfig(argv []string) int {
 	if len(argv) == 0 || argv[0] == "help" || argv[0] == "--help" || argv[0] == "-h" {
 		return runConfigHelp()
 	}
-	if argv[0] != "init" {
+	switch argv[0] {
+	case "init":
+		fs := flag.NewFlagSet("config init", flag.ContinueOnError)
+		nonInteractive := fs.Bool("non-interactive", false, "")
+		fs.SetOutput(os.Stderr)
+		if err := fs.Parse(argv[1:]); err != nil {
+			if err == flag.ErrHelp {
+				return 0
+			}
+			return 1
+		}
+		if err := envwizard.Init(configInitRequirements(), *nonInteractive); err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			return 1
+		}
+		return 0
+	case "set-default-wp-email":
+		if len(argv) != 2 || strings.TrimSpace(argv[1]) == "" {
+			fmt.Fprintln(os.Stderr, "config set-default-wp-email takes exactly one email")
+			return 1
+		}
+		return cmdConfigSet("default_wp_email", argv[1])
+	case "set-default-wp-user":
+		if len(argv) != 2 || strings.TrimSpace(argv[1]) == "" {
+			fmt.Fprintln(os.Stderr, "config set-default-wp-user takes exactly one user")
+			return 1
+		}
+		return cmdConfigSet("default_wp_user", argv[1])
+	case "show":
+		if len(argv) != 1 {
+			fmt.Fprintln(os.Stderr, "config show takes no arguments")
+			return 1
+		}
+		return cmdConfigShow()
+	default:
 		fmt.Fprintln(os.Stderr, "unsupported config command")
 		return 1
 	}
-	fs := flag.NewFlagSet("config init", flag.ContinueOnError)
-	nonInteractive := fs.Bool("non-interactive", false, "")
-	fs.SetOutput(os.Stderr)
-	if err := fs.Parse(argv[1:]); err != nil {
-		if err == flag.ErrHelp {
-			return 0
+}
+
+func loadGlobalConfig() (map[string]string, error) {
+	path := config.ConfigFile()
+	data, err := os.ReadFile(path)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return map[string]string{}, nil
 		}
-		return 1
+		return nil, err
 	}
-	if err := envwizard.Init(configInitRequirements(), *nonInteractive); err != nil {
+	values := map[string]string{}
+	if err := json.Unmarshal(data, &values); err != nil {
+		return nil, err
+	}
+	return values, nil
+}
+
+func saveGlobalConfig(values map[string]string) error {
+	path := config.ConfigFile()
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+		return err
+	}
+	data, err := json.MarshalIndent(values, "", "  ")
+	if err != nil {
+		return err
+	}
+	return os.WriteFile(path, append(data, '\n'), 0o600)
+}
+
+func cmdConfigSet(key, value string) int {
+	values, err := loadGlobalConfig()
+	if err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		return 1
 	}
+	values[key] = strings.TrimSpace(value)
+	if err := saveGlobalConfig(values); err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		return 1
+	}
+	fmt.Printf("Set %s\n", key)
 	return 0
+}
+
+func cmdConfigShow() int {
+	values, err := loadGlobalConfig()
+	if err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		return 1
+	}
+	saltStatus := "Unset"
+	if _, err := passwords.SecretSalt(); err == nil {
+		saltStatus = "Set"
+	}
+	fmt.Printf("Default WP Email: %s\n", values["default_wp_email"])
+	fmt.Printf("Default WP User: %s\n", values["default_wp_user"])
+	fmt.Printf("Password Salt: %s\n", saltStatus)
+	return 0
+}
+
+func runProvider(argv []string) int {
+	if len(argv) == 0 || argv[0] == "help" || argv[0] == "--help" || argv[0] == "-h" {
+		return runProviderHelp()
+	}
+	switch argv[0] {
+	case "list":
+		if len(argv) != 1 {
+			fmt.Fprintln(os.Stderr, "provider list takes no arguments")
+			return 1
+		}
+		fmt.Println("dnsimple")
+		fmt.Println("kinsta")
+		fmt.Println("linode")
+		return 0
+	case "dnsimple", "kinsta", "linode":
+		fmt.Fprintf(os.Stderr, "provider %s commands are not implemented yet\n", argv[0])
+		return 1
+	default:
+		fmt.Fprintln(os.Stderr, "unsupported provider command")
+		return 1
+	}
+}
+
+func runTarget(argv []string) int {
+	if len(argv) == 0 || argv[0] == "help" || argv[0] == "--help" || argv[0] == "-h" {
+		return runTargetHelp()
+	}
+	switch argv[0] {
+	case "list":
+		if len(argv) != 1 {
+			fmt.Fprintln(os.Stderr, "target list takes no arguments")
+			return 1
+		}
+		fmt.Fprintln(os.Stderr, "target list is not implemented yet")
+		return 1
+	case "show":
+		if len(argv) != 2 {
+			fmt.Fprintln(os.Stderr, "target show takes exactly one target")
+			return 1
+		}
+		fmt.Fprintln(os.Stderr, "target show is not implemented yet")
+		return 1
+	default:
+		fmt.Fprintln(os.Stderr, "unsupported target command")
+		return 1
+	}
+}
+
+func runRemote(argv []string) int {
+	if len(argv) == 0 || argv[0] == "help" || argv[0] == "--help" || argv[0] == "-h" {
+		return runRemoteHelp()
+	}
+	if err := requireProjectContext("remote " + argv[0]); err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		return 1
+	}
+	switch argv[0] {
+	case "add":
+		if len(argv) != 4 {
+			fmt.Fprintln(os.Stderr, "remote add takes exactly name, site-id, and env")
+			return 1
+		}
+		fmt.Fprintln(os.Stderr, "remote add is not implemented yet")
+		return 1
+	case "remove":
+		if len(argv) != 2 {
+			fmt.Fprintln(os.Stderr, "remote remove takes exactly one name")
+			return 1
+		}
+		fmt.Fprintln(os.Stderr, "remote remove is not implemented yet")
+		return 1
+	case "list":
+		if len(argv) != 1 {
+			fmt.Fprintln(os.Stderr, "remote list takes no arguments")
+			return 1
+		}
+		fmt.Fprintln(os.Stderr, "remote list is not implemented yet")
+		return 1
+	default:
+		fmt.Fprintln(os.Stderr, "unsupported remote command")
+		return 1
+	}
 }
 
 func runServer(argv []string) int {
@@ -3098,9 +3326,26 @@ func runSite(argv []string) int {
 		return runSiteHelp()
 	}
 	switch argv[0] {
-	case "list":
+	case "refresh":
 		if len(argv) != 1 {
+			fmt.Fprintln(os.Stderr, "site refresh takes no arguments")
+			return 1
+		}
+		fmt.Fprintln(os.Stderr, "site refresh is not implemented yet")
+		return 1
+	case "list":
+		fs := flag.NewFlagSet("site list", flag.ContinueOnError)
+		refresh := fs.Bool("refresh", false, "")
+		fs.SetOutput(os.Stderr)
+		if err := fs.Parse(argv[1:]); err != nil {
+			return 1
+		}
+		if len(fs.Args()) != 0 {
 			fmt.Fprintln(os.Stderr, "site list takes no arguments")
+			return 1
+		}
+		if *refresh {
+			fmt.Fprintln(os.Stderr, "site refresh is not implemented yet")
 			return 1
 		}
 		return cmdList("sites")
@@ -3121,11 +3366,48 @@ func runSite(argv []string) int {
 			needle = selected
 		}
 		return cmdShowSite(needle)
-	case "install", "delete", "deploy", "push", "pull":
-		fmt.Fprintf(os.Stderr, "site %s is not implemented yet\n", argv[0])
-		return 1
+	case "env":
+		return runSiteEnv(argv[1:])
 	default:
 		fmt.Fprintln(os.Stderr, "unsupported site command")
+		return 1
+	}
+}
+
+func runSiteEnv(argv []string) int {
+	if len(argv) == 0 || argv[0] == "help" || argv[0] == "--help" || argv[0] == "-h" {
+		printGroupHelp("site env", []string{
+			"list [site-id]              list remote envs",
+			"show <site-id> <env>        show one remote env",
+			"shell <site-id> <env>       shell into a remote env",
+			"wp <site-id> <env> <cmd>    run wp-cli against a remote env",
+		})
+		return 0
+	}
+	switch argv[0] {
+	case "list":
+		if len(argv) > 2 {
+			fmt.Fprintln(os.Stderr, "site env list takes at most one site-id")
+			return 1
+		}
+		fmt.Fprintln(os.Stderr, "site env list is not implemented yet")
+		return 1
+	case "show", "shell":
+		if len(argv) != 3 {
+			fmt.Fprintf(os.Stderr, "site env %s takes exactly site-id and env\n", argv[0])
+			return 1
+		}
+		fmt.Fprintf(os.Stderr, "site env %s is not implemented yet\n", argv[0])
+		return 1
+	case "wp":
+		if len(argv) < 4 {
+			fmt.Fprintln(os.Stderr, "site env wp takes site-id, env, and command")
+			return 1
+		}
+		fmt.Fprintln(os.Stderr, "site env wp is not implemented yet")
+		return 1
+	default:
+		fmt.Fprintln(os.Stderr, "unsupported site env command")
 		return 1
 	}
 }
