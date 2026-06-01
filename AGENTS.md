@@ -27,8 +27,8 @@
 * `nf site refresh` (local cache path only; provider fetch not implemented yet)
 * `nf site list [--refresh]`
 * `nf site show <site-id-or-alias>`
-* `nf site env list [site-id]` (stub)
-* `nf site env show <site-id> <env>` (stub)
+* `nf site env list [site-id]`
+* `nf site env show <site-id> <env>`
 * `nf site env shell <site-id> <env>` (stub)
 * `nf site env wp <site-id> <env> -- <args>` (stub)
 * `nf remote add <name> <site-id> <env>`
@@ -44,8 +44,8 @@
 * `nf env show`
 * `nf env shell`
 * `nf env wp -- <args>`
-* `nf env push <remote>` (stub)
-* `nf env pull <remote>` (stub)
+* `nf env push <remote>` (preflight only; sync not implemented yet)
+* `nf env pull <remote>` (preflight only; sync not implemented yet)
 * `nf env snapshot add [name]`
 * `nf env snapshot list`
 * `nf env snapshot use [name]`
@@ -330,7 +330,7 @@ Shared state/cache should track normalized provider inventory only. It is dispos
 
 `nf site refresh` currently reports local cache paths only. It must not claim provider refresh until remote provider fetch is implemented.
 
-`nf site list` and `nf site show` read local cached site records for now.
+`nf site list`, `nf site show`, and `nf site env list/show` read local cached site records for now.
 
 `nf site show` may resolve repo remote aliases from `.nf/project.json`.
 
