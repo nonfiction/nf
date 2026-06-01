@@ -23,17 +23,17 @@
 
 * `nf init`
 * `nf provider list`
-* `nf target list` / `nf target show <target>` (currently stubs)
-* `nf site refresh` (stub)
+* `nf target list` / `nf target show <target>`
+* `nf site refresh` (local cache path only; provider fetch not implemented yet)
 * `nf site list [--refresh]`
 * `nf site show <site-id-or-alias>`
 * `nf site env list [site-id]` (stub)
 * `nf site env show <site-id> <env>` (stub)
 * `nf site env shell <site-id> <env>` (stub)
 * `nf site env wp <site-id> <env> -- <args>` (stub)
-* `nf remote add <name> <site-id> <env>` (stub)
-* `nf remote remove <name>` (stub)
-* `nf remote list` (stub)
+* `nf remote add <name> <site-id> <env>`
+* `nf remote remove <name>`
+* `nf remote list`
 * `nf theme tasks`
 * `nf theme package`
 * direct theme tasks from `.nf/project.json`
@@ -325,6 +325,10 @@ Project repos should track:
 * theme tasks
 
 Shared state/cache should track normalized provider inventory only. It is disposable and must not be treated as canonical provider truth.
+
+`nf target list/show` read target records from the local `servers.json` cache for now. Keep user-facing wording as target.
+
+`nf site refresh` currently reports local cache paths only. It must not claim provider refresh until remote provider fetch is implemented.
 
 `nf site list` and `nf site show` read local cached site records for now.
 

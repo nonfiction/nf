@@ -12,12 +12,12 @@ Working or stubbed now:
 
 * `nf init`
 * `nf provider list`
-* `nf target list` / `nf target show` (stubbed)
-* `nf site refresh` (stubbed)
-* `nf site list`
+* `nf target list` / `nf target show`
+* `nf site refresh` (local cache path only; provider fetch not implemented yet)
+* `nf site list [--refresh]`
 * `nf site show`
 * `nf site env ...` (stubbed)
-* `nf remote add|remove|list` (stubbed)
+* `nf remote add|remove|list`
 * `nf theme tasks`
 * `nf theme package`
 * direct theme tasks from `.nf/project.json`
@@ -153,6 +153,7 @@ Example `.nf/project.json` shape:
     }
   },
   "deploy": {
+    "targets": {},
     "remotes": {}
   },
   "tasks": {
@@ -334,7 +335,9 @@ nf remote remove <name>
 nf remote list
 ```
 
-Remote env and repo remote commands are stubs in this pass unless noted by command output.
+`nf target list/show` and `nf site list/show` read the local disposable state cache for now. `nf site refresh` currently reports the cache paths and does not fetch providers yet. `nf remote add/remove/list` stores repo-local remotes in `.nf/project.json` under `deploy.remotes`.
+
+Remote env commands under `nf site env ...` remain stubs in this pass.
 
 ## Password derivation
 
