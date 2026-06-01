@@ -12,6 +12,8 @@ Working or stubbed now:
 
 * `nf init`
 * `nf provider list`
+* `nf provider show <provider>`
+* `nf provider check <provider>` (config preflight only; no remote API call)
 * `nf target list` / `nf target show`
 * `nf site refresh` (local cache path only; provider fetch not implemented yet)
 * `nf site list [--refresh]`
@@ -297,6 +299,7 @@ Expected values include:
 NF_SECRET_SALT=
 DNSIMPLE_TOKEN=
 LINODE_TOKEN=
+KINSTA_API_KEY=
 DNSIMPLE_ACCOUNT_ID=14
 ```
 
@@ -323,6 +326,8 @@ Commands:
 
 ```sh
 nf provider list
+nf provider show <provider>
+nf provider check <provider>
 nf target list
 nf target show <target>
 nf site refresh

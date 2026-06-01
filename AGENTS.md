@@ -23,6 +23,8 @@
 
 * `nf init`
 * `nf provider list`
+* `nf provider show <provider>`
+* `nf provider check <provider>` (config preflight only; no remote API call)
 * `nf target list` / `nf target show <target>`
 * `nf site refresh` (local cache path only; provider fetch not implemented yet)
 * `nf site list [--refresh]`
@@ -72,6 +74,7 @@ CLI smoke checks:
 ```sh
 go run ./cmd/nf --help
 go run ./cmd/nf provider list
+go run ./cmd/nf provider check linode
 go run ./cmd/nf site list
 go run ./cmd/nf env help
 go run ./cmd/nf site env help
@@ -170,6 +173,7 @@ Required/expected environment values:
 * `NF_SECRET_SALT` for password derivation
 * `LINODE_TOKEN` for Linode execution (`LINODE_CLI_TOKEN` is accepted for convenience)
 * `DNSIMPLE_TOKEN` for DNSimple operations
+* `KINSTA_API_KEY` for Kinsta operations
 * optional `DNSIMPLE_ACCOUNT_ID`, defaulting to `14`
 
 Do not store secrets in `.nf/project.json`, local state cache, or generated env metadata.
