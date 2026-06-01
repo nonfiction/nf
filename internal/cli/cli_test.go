@@ -206,6 +206,134 @@ func TestRunProviderListShowsProviders(t *testing.T) {
 	}
 }
 
+func TestRunTargetListAndShowUseStateTargets(t *testing.T) {
+	stateDir := t.TempDir()
+	t.Setenv("NF_STATE_HOME", stateDir)
+	servers := map[string]any{"servers": map[string]any{"app1-linode": map[string]any{"id": 98222343, "name": "app1-linode", "provider": "linode", "hostname": "app1.nfweb.dev", "status": "active", "ssh": map[string]any{"user": "nonfiction", "host": "app1.nfweb.dev"}}}}
+	data, err := json.MarshalIndent(servers, "", "  ")
+	if err != nil {
+		t.Fatalf("MarshalIndent() error = %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(stateDir, "servers.json"), append(data, '\n'), 0o644); err != nil {
+		t.Fatalf("WriteFile() error = %v", err)
+	}
+
+	listOutput := captureStdout(t, func() {
+		if got := Run([]string{"target", "list"}); got != 0 {
+			t.Fatalf("Run(target list) = %d, want 0", got)
+		}
+	})
+	for _, want := range []string{"target", "app1-linode", "linode", "app1.nfweb.dev", "active"} {
+		if !strings.Contains(listOutput, want) {
+			t.Fatalf("target list output missing %q:\n%s", want, listOutput)
+		}
+	}
+
+	showOutput := captureStdout(t, func() {
+		if got := Run([]string{"target", "show", "app1-linode"}); got != 0 {
+			t.Fatalf("Run(target show) = %d, want 0", got)
+		}
+	})
+	for _, want := range []string{`"name": "app1-linode"`, `"provider": "linode"`, `"hostname": "app1.nfweb.dev"`} {
+		if !strings.Contains(showOutput, want) {
+			t.Fatalf("target show output missing %q:\n%s", want, showOutput)
+		}
+	}
+}
+
+func TestRunSiteRefreshReportsStateCachePaths(t *testing.T) {
+	stateDir := t.TempDir()
+	t.Setenv("NF_STATE_HOME", stateDir)
+
+	output := captureStdout(t, func() {
+		if got := Run([]string{"site", "list", "--refresh"}); got != 0 {
+			t.Fatalf("Run(site list --refresh) = %d, want 0", got)
+		}
+	})
+	for _, want := range []string{"Provider refresh is not implemented yet; using local state cache.", filepath.Join(stateDir, "sites.json"), filepath.Join(stateDir, "servers.json"), "No sites found."} {
+		if !strings.Contains(output, want) {
+			t.Fatalf("site list --refresh output missing %q:\n%s", want, output)
+		}
+	}
+}
+
+func TestRunRemoteAddListRemoveWritesProjectMetadata(t *testing.T) {
+	repoRoot := t.TempDir()
+	if err := os.Mkdir(filepath.Join(repoRoot, ".git"), 0o755); err != nil {
+		t.Fatalf("Mkdir(.git) error = %v", err)
+	}
+	if err := os.MkdirAll(filepath.Join(repoRoot, ".nf"), 0o755); err != nil {
+		t.Fatalf("MkdirAll(.nf) error = %v", err)
+	}
+	project := map[string]any{"schema": 1, "project": map[string]any{"slug": "client"}, "deploy": map[string]any{"targets": map[string]any{}}}
+	data, err := json.MarshalIndent(project, "", "  ")
+	if err != nil {
+		t.Fatalf("MarshalIndent() error = %v", err)
+	}
+	projectPath := filepath.Join(repoRoot, ".nf", "project.json")
+	if err := os.WriteFile(projectPath, append(data, '\n'), 0o644); err != nil {
+		t.Fatalf("WriteFile(project) error = %v", err)
+	}
+	oldwd, err := os.Getwd()
+	if err != nil {
+		t.Fatalf("Getwd() error = %v", err)
+	}
+	if err := os.Chdir(repoRoot); err != nil {
+		t.Fatalf("Chdir() error = %v", err)
+	}
+	t.Cleanup(func() { _ = os.Chdir(oldwd) })
+
+	addOutput := captureStdout(t, func() {
+		if got := Run([]string{"remote", "add", "production", "client-app1-linode", "live"}); got != 0 {
+			t.Fatalf("Run(remote add) = %d, want 0", got)
+		}
+	})
+	if !strings.Contains(addOutput, "Added remote production -> client-app1-linode live") {
+		t.Fatalf("remote add output = %q", addOutput)
+	}
+
+	listOutput := captureStdout(t, func() {
+		if got := Run([]string{"remote", "list"}); got != 0 {
+			t.Fatalf("Run(remote list) = %d, want 0", got)
+		}
+	})
+	for _, want := range []string{"name", "site", "env", "production", "client-app1-linode", "live"} {
+		if !strings.Contains(listOutput, want) {
+			t.Fatalf("remote list output missing %q:\n%s", want, listOutput)
+		}
+	}
+
+	projectData, err := os.ReadFile(projectPath)
+	if err != nil {
+		t.Fatalf("ReadFile(project) error = %v", err)
+	}
+	var metadata map[string]any
+	if err := json.Unmarshal(projectData, &metadata); err != nil {
+		t.Fatalf("Unmarshal(project) error = %v", err)
+	}
+	remote, ok := mapMapAtPath(metadata, "deploy", "remotes", "production")["site_id"].(string)
+	if !ok || remote != "client-app1-linode" {
+		t.Fatalf("deploy.remotes.production.site_id = %#v, want client-app1-linode", mapMapAtPath(metadata, "deploy", "remotes", "production"))
+	}
+
+	removeOutput := captureStdout(t, func() {
+		if got := Run([]string{"remote", "remove", "production"}); got != 0 {
+			t.Fatalf("Run(remote remove) = %d, want 0", got)
+		}
+	})
+	if !strings.Contains(removeOutput, "Removed remote production") {
+		t.Fatalf("remote remove output = %q", removeOutput)
+	}
+	listAfterRemove := captureStdout(t, func() {
+		if got := Run([]string{"remote", "list"}); got != 0 {
+			t.Fatalf("Run(remote list after remove) = %d, want 0", got)
+		}
+	})
+	if !strings.Contains(listAfterRemove, "No remotes found.") {
+		t.Fatalf("remote list after remove output = %q", listAfterRemove)
+	}
+}
+
 func TestRunEnvHelpShowsCommandsWithoutShortcuts(t *testing.T) {
 	output := captureStdout(t, func() { _ = runEnvHelp() })
 	for _, wanted := range []string{"env\n\nCommands:\n", "\n  show                show local env paths, ports, and URLs\n", "\n  up                  start the local env\n", "\n  down                stop the local env\n", "\n  shell               open a shell in the local env\n", "\n  logs                tail WordPress logs\n", "\n  reset               destroy and recreate the local env\n", "\n  wp -- <args>        run wp-cli in the local env\n", "\n  push <remote>       not implemented yet\n", "\n  pull <remote>       not implemented yet\n", "\n  snapshot            manage/list env snapshots\n"} {
@@ -750,6 +878,54 @@ func TestRunSiteShowUsesDirectTargetWithoutAlias(t *testing.T) {
 	for _, wanted := range []string{`"requested_target": "client-app1-production"`, `"resolved_target": "client-app1-production"`, `"server": "app1"`} {
 		if !strings.Contains(output, wanted) {
 			t.Fatalf("Run() output missing %q:\n%s", wanted, output)
+		}
+	}
+}
+
+func TestRunSiteShowResolvesRepoRemoteAlias(t *testing.T) {
+	stateDir := t.TempDir()
+	t.Setenv("NF_STATE_HOME", stateDir)
+	sites := map[string]any{"sites": map[string]any{"client-kinsta": map[string]any{"provider": "kinsta", "url": "https://www.example.com/", "environment": "live", "kinsta": map[string]any{"site_id": "ksite123", "environment_id": "kenv123"}}}}
+	data, err := json.MarshalIndent(sites, "", "  ")
+	if err != nil {
+		t.Fatalf("MarshalIndent() error = %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(stateDir, "sites.json"), append(data, '\n'), 0o644); err != nil {
+		t.Fatalf("WriteFile(sites) error = %v", err)
+	}
+
+	repoRoot := t.TempDir()
+	if err := os.Mkdir(filepath.Join(repoRoot, ".git"), 0o755); err != nil {
+		t.Fatalf("Mkdir(.git) error = %v", err)
+	}
+	if err := os.MkdirAll(filepath.Join(repoRoot, ".nf"), 0o755); err != nil {
+		t.Fatalf("MkdirAll(.nf) error = %v", err)
+	}
+	project := map[string]any{"schema": 1, "project": map[string]any{"slug": "client"}, "deploy": map[string]any{"remotes": map[string]any{"production": map[string]any{"site_id": "client-kinsta", "env": "live"}}}}
+	projectData, err := json.MarshalIndent(project, "", "  ")
+	if err != nil {
+		t.Fatalf("MarshalIndent(project) error = %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(repoRoot, ".nf", "project.json"), append(projectData, '\n'), 0o644); err != nil {
+		t.Fatalf("WriteFile(project) error = %v", err)
+	}
+	oldwd, err := os.Getwd()
+	if err != nil {
+		t.Fatalf("Getwd() error = %v", err)
+	}
+	if err := os.Chdir(repoRoot); err != nil {
+		t.Fatalf("Chdir() error = %v", err)
+	}
+	t.Cleanup(func() { _ = os.Chdir(oldwd) })
+
+	output := captureStdout(t, func() {
+		if got := Run([]string{"site", "show", "production"}); got != 0 {
+			t.Fatalf("Run(site show production) = %d, want 0", got)
+		}
+	})
+	for _, want := range []string{`"requested_target": "production"`, `"resolved_target": "client-kinsta"`, `"kinsta_site_id": "ksite123"`, `"kinsta_environment_id": "kenv123"`} {
+		if !strings.Contains(output, want) {
+			t.Fatalf("site show remote alias output missing %q:\n%s", want, output)
 		}
 	}
 }

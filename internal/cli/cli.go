@@ -1409,6 +1409,39 @@ func loadProjectMetadataOrError(root string) (map[string]any, error) {
 	return theme.LoadProjectMetadata(root)
 }
 
+func saveProjectMetadata(root string, metadata map[string]any) error {
+	projectPath := config.ProjectFile(root)
+	if err := os.MkdirAll(filepath.Dir(projectPath), 0o755); err != nil {
+		return err
+	}
+	return os.WriteFile(projectPath, []byte(projectInitJSON(metadata)), 0o644)
+}
+
+func projectRemotes(metadata map[string]any, create bool) (map[string]any, error) {
+	deploy := mapMapAtPath(metadata, "deploy")
+	if deploy == nil {
+		if !create {
+			return nil, nil
+		}
+		deploy = map[string]any{}
+		metadata["deploy"] = deploy
+	}
+	value, ok := deploy["remotes"]
+	if !ok {
+		if !create {
+			return nil, nil
+		}
+		remotes := map[string]any{}
+		deploy["remotes"] = remotes
+		return remotes, nil
+	}
+	remotes, ok := value.(map[string]any)
+	if !ok || remotes == nil {
+		return nil, ProjectError{Msg: ".nf/project.json deploy.remotes must be an object"}
+	}
+	return remotes, nil
+}
+
 type projectCommand struct {
 	Description string
 	Run         repoCommandRunner
@@ -1940,6 +1973,31 @@ func projectDeployTargetAlias(metadata map[string]any, targetAlias string) (stri
 	return strings.TrimSpace(resolved), true, nil
 }
 
+func projectRemoteAlias(metadata map[string]any, name string) (string, string, bool, error) {
+	deploy := mapMapAtPath(metadata, "deploy")
+	if deploy == nil {
+		return "", "", false, nil
+	}
+	remotes := mapMapAtPath(deploy, "remotes")
+	if remotes == nil {
+		return "", "", false, nil
+	}
+	value, ok := remotes[name]
+	if !ok {
+		return "", "", false, nil
+	}
+	remote, ok := value.(map[string]any)
+	if !ok || remote == nil {
+		return "", "", false, ProjectError{Msg: fmt.Sprintf(".nf/project.json deploy.remotes.%s must be an object", name)}
+	}
+	siteID := strings.TrimSpace(recordValueString(remote["site_id"]))
+	env := strings.TrimSpace(recordValueString(remote["env"]))
+	if siteID == "" || env == "" {
+		return "", "", false, ProjectError{Msg: fmt.Sprintf(".nf/project.json deploy.remotes.%s must include site_id and env", name)}
+	}
+	return siteID, env, true, nil
+}
+
 func resolveSiteTarget(requested string) (string, map[string]any, bool, bool, error) {
 	resolved := strings.TrimSpace(requested)
 	if resolved == "" {
@@ -1962,6 +2020,11 @@ func resolveSiteTarget(requested string) (string, map[string]any, bool, bool, er
 		return "", nil, false, false, err
 	} else if targetAliasFound {
 		return targetAlias, metadata, projectFileExists, true, nil
+	}
+	if remoteSiteID, _, remoteFound, err := projectRemoteAlias(metadata, resolved); err != nil {
+		return "", nil, false, false, err
+	} else if remoteFound {
+		return remoteSiteID, metadata, projectFileExists, true, nil
 	}
 	return resolved, metadata, projectFileExists, false, nil
 }
@@ -1987,6 +2050,14 @@ func validateSiteRecord(site map[string]any) error {
 func cmdListServers(records []map[string]any) int {
 	if len(records) == 0 {
 		fmt.Println("No servers found.")
+		return 0
+	}
+	return cmdListTargets(records)
+}
+
+func cmdListTargets(records []map[string]any) int {
+	if len(records) == 0 {
+		fmt.Println("No targets found.")
 		return 0
 	}
 	rows := [][]string{{"target", "provider", "hostname", "ssh host", "status"}}
@@ -2040,6 +2111,37 @@ func cmdShowServer(needle string) int {
 	}
 	data, _ := json.MarshalIndent(record, "", "  ")
 	fmt.Println(string(data))
+	return 0
+}
+
+func cmdShowTarget(needle string) int {
+	bundle, err := state.LoadStateBundle()
+	if err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		return 1
+	}
+	record := state.MatchingRecord(bundle.Servers, needle)
+	if record == nil {
+		fmt.Fprintf(os.Stderr, "No target matched %q.\n", needle)
+		return 1
+	}
+	if err := validateServerRecord(record); err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		return 1
+	}
+	data, _ := json.MarshalIndent(record, "", "  ")
+	fmt.Println(string(data))
+	return 0
+}
+
+func cmdSiteRefresh() int {
+	if err := os.MkdirAll(config.StateDir(), 0o755); err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		return 1
+	}
+	fmt.Println("Provider refresh is not implemented yet; using local state cache.")
+	fmt.Printf("Sites cache: %s\n", state.StatePath("sites"))
+	fmt.Printf("Targets cache: %s\n", state.StatePath("servers"))
 	return 0
 }
 
@@ -3176,6 +3278,114 @@ func cmdConfigShow() int {
 	return 0
 }
 
+func cmdRemoteAdd(name, siteID, env string) int {
+	name = strings.TrimSpace(name)
+	siteID = strings.TrimSpace(siteID)
+	env = strings.TrimSpace(env)
+	if name == "" || siteID == "" || env == "" {
+		fmt.Fprintln(os.Stderr, "remote add requires non-empty name, site-id, and env")
+		return 1
+	}
+	root, ok := currentGitRoot()
+	if !ok {
+		fmt.Fprintln(os.Stderr, "remote add requires a .git repository above the current directory")
+		return 1
+	}
+	metadata, err := loadProjectMetadataOrError(root)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		return 1
+	}
+	remotes, err := projectRemotes(metadata, true)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		return 1
+	}
+	remotes[name] = map[string]any{"site_id": siteID, "env": env}
+	if err := saveProjectMetadata(root, metadata); err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		return 1
+	}
+	fmt.Printf("Added remote %s -> %s %s\n", name, siteID, env)
+	return 0
+}
+
+func cmdRemoteRemove(name string) int {
+	name = strings.TrimSpace(name)
+	if name == "" {
+		fmt.Fprintln(os.Stderr, "remote remove requires a non-empty name")
+		return 1
+	}
+	root, ok := currentGitRoot()
+	if !ok {
+		fmt.Fprintln(os.Stderr, "remote remove requires a .git repository above the current directory")
+		return 1
+	}
+	metadata, err := loadProjectMetadataOrError(root)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		return 1
+	}
+	remotes, err := projectRemotes(metadata, false)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		return 1
+	}
+	if remotes == nil {
+		fmt.Fprintf(os.Stderr, "No remote named %q.\n", name)
+		return 1
+	}
+	if _, ok := remotes[name]; !ok {
+		fmt.Fprintf(os.Stderr, "No remote named %q.\n", name)
+		return 1
+	}
+	delete(remotes, name)
+	if err := saveProjectMetadata(root, metadata); err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		return 1
+	}
+	fmt.Printf("Removed remote %s\n", name)
+	return 0
+}
+
+func cmdRemoteList() int {
+	root, ok := currentGitRoot()
+	if !ok {
+		fmt.Fprintln(os.Stderr, "remote list requires a .git repository above the current directory")
+		return 1
+	}
+	metadata, err := loadProjectMetadataOrError(root)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		return 1
+	}
+	remotes, err := projectRemotes(metadata, false)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		return 1
+	}
+	if len(remotes) == 0 {
+		fmt.Println("No remotes found.")
+		return 0
+	}
+	names := make([]string, 0, len(remotes))
+	for name := range remotes {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	rows := [][]string{{"name", "site", "env"}}
+	for _, name := range names {
+		remote, ok := remotes[name].(map[string]any)
+		if !ok || remote == nil {
+			fmt.Fprintf(os.Stderr, ".nf/project.json deploy.remotes.%s must be an object\n", name)
+			return 1
+		}
+		rows = append(rows, []string{name, recordValueString(remote["site_id"]), recordValueString(remote["env"])})
+	}
+	fmt.Println(formatTable(rows))
+	return 0
+}
+
 func runProvider(argv []string) int {
 	if len(argv) == 0 || argv[0] == "help" || argv[0] == "--help" || argv[0] == "-h" {
 		return runProviderHelp()
@@ -3209,15 +3419,18 @@ func runTarget(argv []string) int {
 			fmt.Fprintln(os.Stderr, "target list takes no arguments")
 			return 1
 		}
-		fmt.Fprintln(os.Stderr, "target list is not implemented yet")
-		return 1
+		bundle, err := state.LoadStateBundle()
+		if err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			return 1
+		}
+		return cmdListTargets(bundle.Servers)
 	case "show":
 		if len(argv) != 2 {
 			fmt.Fprintln(os.Stderr, "target show takes exactly one target")
 			return 1
 		}
-		fmt.Fprintln(os.Stderr, "target show is not implemented yet")
-		return 1
+		return cmdShowTarget(argv[1])
 	default:
 		fmt.Fprintln(os.Stderr, "unsupported target command")
 		return 1
@@ -3238,22 +3451,19 @@ func runRemote(argv []string) int {
 			fmt.Fprintln(os.Stderr, "remote add takes exactly name, site-id, and env")
 			return 1
 		}
-		fmt.Fprintln(os.Stderr, "remote add is not implemented yet")
-		return 1
+		return cmdRemoteAdd(argv[1], argv[2], argv[3])
 	case "remove":
 		if len(argv) != 2 {
 			fmt.Fprintln(os.Stderr, "remote remove takes exactly one name")
 			return 1
 		}
-		fmt.Fprintln(os.Stderr, "remote remove is not implemented yet")
-		return 1
+		return cmdRemoteRemove(argv[1])
 	case "list":
 		if len(argv) != 1 {
 			fmt.Fprintln(os.Stderr, "remote list takes no arguments")
 			return 1
 		}
-		fmt.Fprintln(os.Stderr, "remote list is not implemented yet")
-		return 1
+		return cmdRemoteList()
 	default:
 		fmt.Fprintln(os.Stderr, "unsupported remote command")
 		return 1
@@ -3331,8 +3541,7 @@ func runSite(argv []string) int {
 			fmt.Fprintln(os.Stderr, "site refresh takes no arguments")
 			return 1
 		}
-		fmt.Fprintln(os.Stderr, "site refresh is not implemented yet")
-		return 1
+		return cmdSiteRefresh()
 	case "list":
 		fs := flag.NewFlagSet("site list", flag.ContinueOnError)
 		refresh := fs.Bool("refresh", false, "")
@@ -3345,8 +3554,9 @@ func runSite(argv []string) int {
 			return 1
 		}
 		if *refresh {
-			fmt.Fprintln(os.Stderr, "site refresh is not implemented yet")
-			return 1
+			if code := cmdSiteRefresh(); code != 0 {
+				return code
+			}
 		}
 		return cmdList("sites")
 	case "show":
