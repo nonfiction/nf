@@ -71,7 +71,7 @@ func (c argvCommandRunner) Execute(root string, extraArgs []string) error {
 
 func (c argvCommandRunner) Render() string { return strings.Join(c, " ") }
 
-type instanceConfig struct {
+type envConfig struct {
 	ProjectSlug      string
 	ProjectName      string
 	RepoRoot         string
@@ -87,25 +87,25 @@ type instanceConfig struct {
 	ThemeSlug        string
 }
 
-type instanceSnapshotContents struct {
+type envSnapshotContents struct {
 	Database       string   `json:"database"`
 	WpContent      string   `json:"wp_content"`
 	WpContentPaths []string `json:"wp_content_paths"`
 }
 
-type instanceSnapshotMetadata struct {
-	Schema         int                      `json:"schema"`
-	Name           string                   `json:"name"`
-	ProjectSlug    string                   `json:"project_slug"`
-	CreatedAt      string                   `json:"created_at"`
-	EnvPath        string                   `json:"env_path"`
-	ComposeProject string                   `json:"compose_project"`
-	WordpressURL   string                   `json:"wordpress_url"`
-	Contents       instanceSnapshotContents `json:"contents"`
+type envSnapshotMetadata struct {
+	Schema         int                 `json:"schema"`
+	Name           string              `json:"name"`
+	ProjectSlug    string              `json:"project_slug"`
+	CreatedAt      string              `json:"created_at"`
+	EnvPath        string              `json:"env_path"`
+	ComposeProject string              `json:"compose_project"`
+	WordpressURL   string              `json:"wordpress_url"`
+	Contents       envSnapshotContents `json:"contents"`
 }
 
-type instanceSnapshotRecord struct {
-	Metadata         instanceSnapshotMetadata
+type envSnapshotRecord struct {
+	Metadata         envSnapshotMetadata
 	Directory        string
 	DatabaseArchive  string
 	WpContentArchive string
@@ -114,86 +114,86 @@ type instanceSnapshotRecord struct {
 	CreatedAt        time.Time
 }
 
-const instanceSnapshotSchema = 1
+const envSnapshotSchema = 1
 
 var (
-	instanceSnapshotPromptString  = ui.PromptString
-	instanceSnapshotConfirm       = ui.Confirm
-	instanceSnapshotSelect        = ui.Select
-	instanceSnapshotIsInteractive = instanceSnapshotInteractive
+	envSnapshotPromptString  = ui.PromptString
+	envSnapshotConfirm       = ui.Confirm
+	envSnapshotSelect        = ui.Select
+	envSnapshotIsInteractive = envSnapshotInteractive
 )
 
-func defaultInstanceSnapshotName(now time.Time) string {
+func defaultEnvSnapshotName(now time.Time) string {
 	return now.Format("2006-01-02-150405")
 }
 
 func defaultPreRestoreSnapshotName(now time.Time) string {
-	return defaultInstanceSnapshotName(now) + "-pre-restore"
+	return defaultEnvSnapshotName(now) + "-pre-restore"
 }
 
-func instanceSnapshotProjectDir(cfg instanceConfig) string {
+func envSnapshotProjectDir(cfg envConfig) string {
 	return config.SnapshotProjectDir(cfg.ProjectSlug)
 }
 
-func instanceSnapshotDir(cfg instanceConfig, name string) string {
+func envSnapshotDir(cfg envConfig, name string) string {
 	return config.SnapshotDir(cfg.ProjectSlug, name)
 }
 
-func instanceSnapshotContainerDir(name string) string {
+func envSnapshotContainerDir(name string) string {
 	return path.Join("/env-snapshots", name)
 }
 
-func instanceSnapshotContainerDatabaseArchive(name string) string {
-	return path.Join(instanceSnapshotContainerDir(name), "database.sql.gz")
+func envSnapshotContainerDatabaseArchive(name string) string {
+	return path.Join(envSnapshotContainerDir(name), "database.sql.gz")
 }
 
-func instanceSnapshotContainerWpContentArchive(name string) string {
-	return path.Join(instanceSnapshotContainerDir(name), "wp-content.tar.gz")
+func envSnapshotContainerWpContentArchive(name string) string {
+	return path.Join(envSnapshotContainerDir(name), "wp-content.tar.gz")
 }
 
-func instanceSnapshotHostDatabaseArchive(cfg instanceConfig, name string) string {
-	return filepath.Join(instanceSnapshotDir(cfg, name), "database.sql.gz")
+func envSnapshotHostDatabaseArchive(cfg envConfig, name string) string {
+	return filepath.Join(envSnapshotDir(cfg, name), "database.sql.gz")
 }
 
-func instanceSnapshotHostWpContentArchive(cfg instanceConfig, name string) string {
-	return filepath.Join(instanceSnapshotDir(cfg, name), "wp-content.tar.gz")
+func envSnapshotHostWpContentArchive(cfg envConfig, name string) string {
+	return filepath.Join(envSnapshotDir(cfg, name), "wp-content.tar.gz")
 }
 
-func instanceSnapshotMetadataPath(cfg instanceConfig, name string) string {
-	return filepath.Join(instanceSnapshotDir(cfg, name), "snapshot.json")
+func envSnapshotMetadataPath(cfg envConfig, name string) string {
+	return filepath.Join(envSnapshotDir(cfg, name), "snapshot.json")
 }
 
-func instanceSnapshotComposeMount(cfg instanceConfig) string {
+func envSnapshotComposeMount(cfg envConfig) string {
 	return config.SnapshotProjectDir(cfg.ProjectSlug)
 }
 
-func instanceSnapshotContentPaths() []string {
+func envSnapshotContentPaths() []string {
 	return []string{"wp-content/uploads", "wp-content/plugins", "wp-content/mu-plugins", "wp-content/languages"}
 }
 
-func newInstanceSnapshotMetadata(cfg instanceConfig, name string, createdAt time.Time) instanceSnapshotMetadata {
+func newEnvSnapshotMetadata(cfg envConfig, name string, createdAt time.Time) envSnapshotMetadata {
 	envDir := localEnvDir(cfg)
-	return instanceSnapshotMetadata{
-		Schema:         instanceSnapshotSchema,
+	return envSnapshotMetadata{
+		Schema:         envSnapshotSchema,
 		Name:           name,
 		ProjectSlug:    cfg.ProjectSlug,
 		CreatedAt:      createdAt.Format(time.RFC3339),
 		EnvPath:        envDir,
-		ComposeProject: instanceComposeProjectName(cfg.ProjectSlug),
-		WordpressURL:   instanceSnapshotWordPressURL(cfg),
-		Contents: instanceSnapshotContents{
+		ComposeProject: envComposeProjectName(cfg.ProjectSlug),
+		WordpressURL:   envSnapshotWordPressURL(cfg),
+		Contents: envSnapshotContents{
 			Database:       "database.sql.gz",
 			WpContent:      "wp-content.tar.gz",
-			WpContentPaths: instanceSnapshotContentPaths(),
+			WpContentPaths: envSnapshotContentPaths(),
 		},
 	}
 }
 
-func instanceSnapshotWordPressURL(cfg instanceConfig) string {
+func envSnapshotWordPressURL(cfg envConfig) string {
 	return fmt.Sprintf("http://localhost:%d", cfg.WordpressPort)
 }
 
-func instanceSnapshotNormalizedName(input string) (string, error) {
+func envSnapshotNormalizedName(input string) (string, error) {
 	name := strings.TrimSpace(input)
 	if name == "" {
 		return "", ProjectError{Msg: "env snapshot name cannot be empty"}
@@ -220,12 +220,12 @@ func instanceSnapshotNormalizedName(input string) (string, error) {
 	return name, nil
 }
 
-func instanceSnapshotExists(cfg instanceConfig, name string) bool {
-	_, err := os.Stat(instanceSnapshotDir(cfg, name))
+func envSnapshotExists(cfg envConfig, name string) bool {
+	_, err := os.Stat(envSnapshotDir(cfg, name))
 	return err == nil
 }
 
-func instanceSnapshotInteractive() bool {
+func envSnapshotInteractive() bool {
 	info, err := os.Stdin.Stat()
 	if err != nil {
 		return false
@@ -233,7 +233,7 @@ func instanceSnapshotInteractive() bool {
 	return info.Mode()&os.ModeCharDevice != 0
 }
 
-func instanceSnapshotMetadataJSON(meta instanceSnapshotMetadata) (string, error) {
+func envSnapshotMetadataJSON(meta envSnapshotMetadata) (string, error) {
 	data, err := json.MarshalIndent(meta, "", "  ")
 	if err != nil {
 		return "", err
@@ -241,33 +241,33 @@ func instanceSnapshotMetadataJSON(meta instanceSnapshotMetadata) (string, error)
 	return string(append(data, '\n')), nil
 }
 
-func (c instanceConfig) managedUploadsDir() string {
+func (c envConfig) managedUploadsDir() string {
 	return filepath.Join(localEnvDir(c), firstNonEmpty(c.UploadsPath, "uploads"))
 }
 
-func (c instanceConfig) uploadsContainerPath() string {
+func (c envConfig) uploadsContainerPath() string {
 	return path.Join("/", "env", firstNonEmpty(c.UploadsPath, "uploads"))
 }
 
-func localEnvDir(cfg instanceConfig) string {
+func localEnvDir(cfg envConfig) string {
 	return cfg.EnvDir
 }
 
-func instancePortBlockStart(projectSlug string) int {
+func envPortBlockStart(projectSlug string) int {
 	h := fnv.New32a()
-	_, _ = h.Write([]byte(cleanInstanceSlug(projectSlug)))
+	_, _ = h.Write([]byte(cleanEnvSlug(projectSlug)))
 	return 18000 + int(h.Sum32()%1000)*4
 }
 
-func instanceDerivedPorts(projectSlug string) (int, int) {
-	base := instancePortBlockStart(projectSlug)
+func envDerivedPorts(projectSlug string) (int, int) {
+	base := envPortBlockStart(projectSlug)
 	return base, base + 1
 }
 
-func cleanInstanceSlug(projectSlug string) string {
+func cleanEnvSlug(projectSlug string) string {
 	cleaned := strings.ToLower(strings.TrimSpace(projectSlug))
 	var b strings.Builder
-	b.Grow(len(cleaned) + len("nf__instance"))
+	b.Grow(len(cleaned) + len("nf__env"))
 	for _, r := range cleaned {
 		switch {
 		case r >= 'a' && r <= 'z', r >= '0' && r <= '9', r == '_', r == '-':
@@ -285,64 +285,64 @@ func cleanInstanceSlug(projectSlug string) string {
 	return slug
 }
 
-type instanceCommandRunner struct {
+type envCommandRunner struct {
 	name string
-	cfg  instanceConfig
+	cfg  envConfig
 }
 
-func (c instanceCommandRunner) ensureUpInstalledActive(instanceDir string) error {
-	if err := runCommandSpec(execSpec{Dir: instanceDir, Args: instanceComposeArgs(c.cfg, "up", "-d")}); err != nil {
+func (c envCommandRunner) ensureUpInstalledActive(envDir string) error {
+	if err := runCommandSpec(execSpec{Dir: envDir, Args: envComposeArgs(c.cfg, "up", "-d")}); err != nil {
 		return err
 	}
-	if err := runCommandSpecQuiet(execSpec{Dir: instanceDir, Args: instanceWpProbeArgs(c.cfg, "core", "is-installed")}); err != nil {
-		if err := runCommandSpec(execSpec{Dir: instanceDir, Args: instanceWpCoreInstallArgs(c.cfg)}); err != nil {
+	if err := runCommandSpecQuiet(execSpec{Dir: envDir, Args: envWpProbeArgs(c.cfg, "core", "is-installed")}); err != nil {
+		if err := runCommandSpec(execSpec{Dir: envDir, Args: envWpCoreInstallArgs(c.cfg)}); err != nil {
 			return err
 		}
 		return nil
 	}
-	if err := runCommandSpecQuiet(execSpec{Dir: instanceDir, Args: instanceWpThemeIsActiveArgs(c.cfg, "")}); err != nil {
-		return runCommandSpec(execSpec{Dir: instanceDir, Args: instanceWpThemeActivateArgs(c.cfg, "")})
+	if err := runCommandSpecQuiet(execSpec{Dir: envDir, Args: envWpThemeIsActiveArgs(c.cfg, "")}); err != nil {
+		return runCommandSpec(execSpec{Dir: envDir, Args: envWpThemeActivateArgs(c.cfg, "")})
 	}
 	return nil
 }
 
-func (c instanceCommandRunner) instanceReadyForSnapshot(instanceDir string) bool {
-	if err := runCommandSpecQuiet(execSpec{Dir: instanceDir, Args: instanceWpProbeArgs(c.cfg, "core", "is-installed")}); err != nil {
+func (c envCommandRunner) envReadyForSnapshot(envDir string) bool {
+	if err := runCommandSpecQuiet(execSpec{Dir: envDir, Args: envWpProbeArgs(c.cfg, "core", "is-installed")}); err != nil {
 		return false
 	}
-	if err := runCommandSpecQuiet(execSpec{Dir: instanceDir, Args: instanceWpThemeIsActiveArgs(c.cfg, "")}); err != nil {
+	if err := runCommandSpecQuiet(execSpec{Dir: envDir, Args: envWpThemeIsActiveArgs(c.cfg, "")}); err != nil {
 		return false
 	}
 	return true
 }
 
-func (c instanceCommandRunner) Execute(root string, extraArgs []string) error {
-	if err := ensureManagedInstance(c.cfg); err != nil {
+func (c envCommandRunner) Execute(root string, extraArgs []string) error {
+	if err := ensureManagedEnv(c.cfg); err != nil {
 		return err
 	}
-	instanceDir := localEnvDir(c.cfg)
+	envDir := localEnvDir(c.cfg)
 	switch c.name {
 	case "up":
-		return c.ensureUpInstalledActive(instanceDir)
+		return c.ensureUpInstalledActive(envDir)
 	case "down":
-		return runCommandSpec(execSpec{Dir: instanceDir, Args: instanceComposeArgs(c.cfg, "down")})
+		return runCommandSpec(execSpec{Dir: envDir, Args: envComposeArgs(c.cfg, "down")})
 	case "logs":
-		return runCommandSpec(execSpec{Dir: instanceDir, Args: instanceComposeArgs(c.cfg, "logs", "-f", c.cfg.WordpressService)})
+		return runCommandSpec(execSpec{Dir: envDir, Args: envComposeArgs(c.cfg, "logs", "-f", c.cfg.WordpressService)})
 	case "reset":
-		if err := runCommandSpec(execSpec{Dir: instanceDir, Args: instanceComposeArgs(c.cfg, "down", "-v", "--remove-orphans")}); err != nil {
+		if err := runCommandSpec(execSpec{Dir: envDir, Args: envComposeArgs(c.cfg, "down", "-v", "--remove-orphans")}); err != nil {
 			return err
 		}
-		return c.ensureUpInstalledActive(instanceDir)
+		return c.ensureUpInstalledActive(envDir)
 	case "shell":
-		return runCommandSpec(execSpec{Dir: instanceDir, Args: instanceShellArgs(c.cfg)})
+		return runCommandSpec(execSpec{Dir: envDir, Args: envShellArgs(c.cfg)})
 	case "wp":
-		return runCommandSpec(execSpec{Dir: instanceDir, Args: instanceWpArgs(c.cfg, extraArgs...)})
+		return runCommandSpec(execSpec{Dir: envDir, Args: envWpArgs(c.cfg, extraArgs...)})
 	default:
 		return fmt.Errorf("unsupported repo command type")
 	}
 }
 
-func (c instanceCommandRunner) Render() string {
+func (c envCommandRunner) Render() string {
 	switch c.name {
 	case "up":
 		return "docker compose up -d; install WordPress if missing and ensure the mounted theme is active"
@@ -361,20 +361,20 @@ func (c instanceCommandRunner) Render() string {
 	}
 }
 
-func ensureInstanceReadyForSnapshot(cfg instanceConfig) error {
-	if err := ensureManagedInstance(cfg); err != nil {
+func ensureEnvReadyForSnapshot(cfg envConfig) error {
+	if err := ensureManagedEnv(cfg); err != nil {
 		return err
 	}
-	runner := instanceCommandRunner{name: "up", cfg: cfg}
-	if runner.instanceReadyForSnapshot(localEnvDir(cfg)) {
+	runner := envCommandRunner{name: "up", cfg: cfg}
+	if runner.envReadyForSnapshot(localEnvDir(cfg)) {
 		return nil
 	}
 	return runner.ensureUpInstalledActive(localEnvDir(cfg))
 }
 
-func instanceSnapshotCreateScript(name string) string {
-	containerDir := instanceSnapshotContainerDir(name)
-	wpContentArchive := instanceSnapshotContainerWpContentArchive(name)
+func envSnapshotCreateScript(name string) string {
+	containerDir := envSnapshotContainerDir(name)
+	wpContentArchive := envSnapshotContainerWpContentArchive(name)
 	return fmt.Sprintf(`set -eu
 mkdir -p "%s"
 wp db export "%s/database.sql" --allow-root
@@ -394,9 +394,9 @@ fi
 `, containerDir, containerDir, containerDir, wpContentArchive, wpContentArchive)
 }
 
-func instanceSnapshotRestoreScript(name string) string {
-	databaseArchive := instanceSnapshotContainerDatabaseArchive(name)
-	wpContentArchive := instanceSnapshotContainerWpContentArchive(name)
+func envSnapshotRestoreScript(name string) string {
+	databaseArchive := envSnapshotContainerDatabaseArchive(name)
+	wpContentArchive := envSnapshotContainerWpContentArchive(name)
 	return fmt.Sprintf(`set -eu
 tmpdir="$(mktemp -d)"
 trap 'rm -rf "$tmpdir"' EXIT
@@ -409,8 +409,8 @@ fi
 `, databaseArchive, wpContentArchive, wpContentArchive)
 }
 
-func instanceSnapshotComposeArgs(cfg instanceConfig, args ...string) []string {
-	return append(instanceComposeArgs(cfg, "run", "--rm", firstNonEmpty(cfg.CliService, "cli"), "sh", "-lc"), args...)
+func envSnapshotComposeArgs(cfg envConfig, args ...string) []string {
+	return append(envComposeArgs(cfg, "run", "--rm", firstNonEmpty(cfg.CliService, "cli"), "sh", "-lc"), args...)
 }
 
 func runCommandSpecNoPreview(spec execSpec) error {
@@ -425,39 +425,39 @@ func runCommandSpecNoPreview(spec execSpec) error {
 	return cmd.Run()
 }
 
-func instanceSnapshotCreateArchives(cfg instanceConfig, name string) error {
-	if err := os.MkdirAll(instanceSnapshotDir(cfg, name), 0o755); err != nil {
+func envSnapshotCreateArchives(cfg envConfig, name string) error {
+	if err := os.MkdirAll(envSnapshotDir(cfg, name), 0o755); err != nil {
 		return err
 	}
-	if err := os.Chmod(instanceSnapshotDir(cfg, name), 0o777); err != nil {
+	if err := os.Chmod(envSnapshotDir(cfg, name), 0o777); err != nil {
 		return err
 	}
-	if err := runCommandSpecNoPreview(execSpec{Dir: localEnvDir(cfg), Args: instanceSnapshotComposeArgs(cfg, instanceSnapshotCreateScript(name))}); err != nil {
-		return err
-	}
-	return nil
-}
-
-func instanceSnapshotRestoreArchives(cfg instanceConfig, name string) error {
-	if err := runCommandSpecNoPreview(execSpec{Dir: localEnvDir(cfg), Args: instanceSnapshotComposeArgs(cfg, instanceSnapshotRestoreScript(name))}); err != nil {
+	if err := runCommandSpecNoPreview(execSpec{Dir: localEnvDir(cfg), Args: envSnapshotComposeArgs(cfg, envSnapshotCreateScript(name))}); err != nil {
 		return err
 	}
 	return nil
 }
 
-func instanceSnapshotMetadataFromFile(path string) (instanceSnapshotMetadata, error) {
+func envSnapshotRestoreArchives(cfg envConfig, name string) error {
+	if err := runCommandSpecNoPreview(execSpec{Dir: localEnvDir(cfg), Args: envSnapshotComposeArgs(cfg, envSnapshotRestoreScript(name))}); err != nil {
+		return err
+	}
+	return nil
+}
+
+func envSnapshotMetadataFromFile(path string) (envSnapshotMetadata, error) {
 	data, err := os.ReadFile(path)
 	if err != nil {
-		return instanceSnapshotMetadata{}, err
+		return envSnapshotMetadata{}, err
 	}
-	var meta instanceSnapshotMetadata
+	var meta envSnapshotMetadata
 	if err := json.Unmarshal(data, &meta); err != nil {
-		return instanceSnapshotMetadata{}, err
+		return envSnapshotMetadata{}, err
 	}
 	return meta, nil
 }
 
-func instanceSnapshotArchiveSize(path string) int64 {
+func envSnapshotArchiveSize(path string) int64 {
 	info, err := os.Stat(path)
 	if err != nil {
 		return -1
@@ -465,7 +465,7 @@ func instanceSnapshotArchiveSize(path string) int64 {
 	return info.Size()
 }
 
-func instanceSnapshotCreatedAt(meta instanceSnapshotMetadata) time.Time {
+func envSnapshotCreatedAt(meta envSnapshotMetadata) time.Time {
 	if meta.CreatedAt == "" {
 		return time.Time{}
 	}
@@ -475,8 +475,8 @@ func instanceSnapshotCreatedAt(meta instanceSnapshotMetadata) time.Time {
 	return time.Time{}
 }
 
-func loadInstanceSnapshots(cfg instanceConfig) ([]instanceSnapshotRecord, error) {
-	dir := instanceSnapshotProjectDir(cfg)
+func loadEnvSnapshots(cfg envConfig) ([]envSnapshotRecord, error) {
+	dir := envSnapshotProjectDir(cfg)
 	entries, err := os.ReadDir(dir)
 	if err != nil {
 		if os.IsNotExist(err) {
@@ -484,24 +484,24 @@ func loadInstanceSnapshots(cfg instanceConfig) ([]instanceSnapshotRecord, error)
 		}
 		return nil, err
 	}
-	records := make([]instanceSnapshotRecord, 0, len(entries))
+	records := make([]envSnapshotRecord, 0, len(entries))
 	for _, entry := range entries {
 		if !entry.IsDir() {
 			continue
 		}
 		name := entry.Name()
-		meta, err := instanceSnapshotMetadataFromFile(instanceSnapshotMetadataPath(cfg, name))
+		meta, err := envSnapshotMetadataFromFile(envSnapshotMetadataPath(cfg, name))
 		if err != nil {
 			continue
 		}
-		record := instanceSnapshotRecord{
+		record := envSnapshotRecord{
 			Metadata:         meta,
-			Directory:        instanceSnapshotDir(cfg, name),
-			DatabaseArchive:  instanceSnapshotHostDatabaseArchive(cfg, name),
-			WpContentArchive: instanceSnapshotHostWpContentArchive(cfg, name),
-			DatabaseSize:     instanceSnapshotArchiveSize(instanceSnapshotHostDatabaseArchive(cfg, name)),
-			WpContentSize:    instanceSnapshotArchiveSize(instanceSnapshotHostWpContentArchive(cfg, name)),
-			CreatedAt:        instanceSnapshotCreatedAt(meta),
+			Directory:        envSnapshotDir(cfg, name),
+			DatabaseArchive:  envSnapshotHostDatabaseArchive(cfg, name),
+			WpContentArchive: envSnapshotHostWpContentArchive(cfg, name),
+			DatabaseSize:     envSnapshotArchiveSize(envSnapshotHostDatabaseArchive(cfg, name)),
+			WpContentSize:    envSnapshotArchiveSize(envSnapshotHostWpContentArchive(cfg, name)),
+			CreatedAt:        envSnapshotCreatedAt(meta),
 		}
 		records = append(records, record)
 	}
@@ -519,7 +519,7 @@ func loadInstanceSnapshots(cfg instanceConfig) ([]instanceSnapshotRecord, error)
 	return records, nil
 }
 
-func formatInstanceSnapshotTime(value string) string {
+func formatEnvSnapshotTime(value string) string {
 	if value == "" {
 		return "-"
 	}
@@ -529,7 +529,7 @@ func formatInstanceSnapshotTime(value string) string {
 	return value
 }
 
-func formatInstanceSnapshotSize(size int64) string {
+func formatEnvSnapshotSize(size int64) string {
 	if size < 0 {
 		return "-"
 	}
@@ -549,92 +549,92 @@ func formatInstanceSnapshotSize(size int64) string {
 	return fmt.Sprintf("%.1f %s", value, units[unit])
 }
 
-func instanceSnapshotRows(records []instanceSnapshotRecord) [][]string {
+func envSnapshotRows(records []envSnapshotRecord) [][]string {
 	rows := [][]string{{"name", "created", "database", "wp-content", "path"}}
 	for _, record := range records {
 		rows = append(rows, []string{
 			firstNonEmpty(record.Metadata.Name, filepath.Base(record.Directory)),
-			formatInstanceSnapshotTime(record.Metadata.CreatedAt),
-			formatInstanceSnapshotSize(record.DatabaseSize),
-			formatInstanceSnapshotSize(record.WpContentSize),
+			formatEnvSnapshotTime(record.Metadata.CreatedAt),
+			formatEnvSnapshotSize(record.DatabaseSize),
+			formatEnvSnapshotSize(record.WpContentSize),
 			record.Directory,
 		})
 	}
 	return rows
 }
 
-func chooseInstanceSnapshot(records []instanceSnapshotRecord, action string) (instanceSnapshotRecord, error) {
+func chooseEnvSnapshot(records []envSnapshotRecord, action string) (envSnapshotRecord, error) {
 	options := make([]ui.SelectOption, 0, len(records))
 	for _, record := range records {
 		name := firstNonEmpty(record.Metadata.Name, filepath.Base(record.Directory))
 		if name == "" {
 			continue
 		}
-		label := fmt.Sprintf("%s / %s / %s / %s", name, formatInstanceSnapshotTime(record.Metadata.CreatedAt), formatInstanceSnapshotSize(record.DatabaseSize), formatInstanceSnapshotSize(record.WpContentSize))
+		label := fmt.Sprintf("%s / %s / %s / %s", name, formatEnvSnapshotTime(record.Metadata.CreatedAt), formatEnvSnapshotSize(record.DatabaseSize), formatEnvSnapshotSize(record.WpContentSize))
 		options = append(options, ui.SelectOption{Label: label, Value: name})
 	}
 	if len(options) == 0 {
-		return instanceSnapshotRecord{}, fmt.Errorf("No env snapshots found.")
+		return envSnapshotRecord{}, fmt.Errorf("No env snapshots found.")
 	}
-	selected, err := instanceSnapshotSelect(fmt.Sprintf("Choose an env snapshot to %s", action), options)
+	selected, err := envSnapshotSelect(fmt.Sprintf("Choose an env snapshot to %s", action), options)
 	if err != nil {
-		return instanceSnapshotRecord{}, err
+		return envSnapshotRecord{}, err
 	}
 	for _, record := range records {
 		if firstNonEmpty(record.Metadata.Name, filepath.Base(record.Directory)) == selected {
 			return record, nil
 		}
 	}
-	return instanceSnapshotRecord{}, fmt.Errorf("env snapshot %q was not found", selected)
+	return envSnapshotRecord{}, fmt.Errorf("env snapshot %q was not found", selected)
 }
 
-func cmdInstanceSnapshotCreate(cfg instanceConfig, name string, nonInteractive bool) int {
+func cmdEnvSnapshotCreate(cfg envConfig, name string, nonInteractive bool) int {
 	if strings.TrimSpace(name) == "" {
-		if nonInteractive || !instanceSnapshotIsInteractive() {
+		if nonInteractive || !envSnapshotIsInteractive() {
 			fmt.Fprintln(os.Stderr, "env snapshot add requires a name when stdin is not interactive")
 			return 1
 		}
-		defaultName := defaultInstanceSnapshotName(time.Now())
-		prompted, err := instanceSnapshotPromptString("Snapshot name", defaultName, false)
+		defaultName := defaultEnvSnapshotName(time.Now())
+		prompted, err := envSnapshotPromptString("Snapshot name", defaultName, false)
 		if err != nil {
 			fmt.Fprintln(os.Stderr, err)
 			return 1
 		}
 		name = prompted
 	}
-	normalized, err := instanceSnapshotNormalizedName(name)
+	normalized, err := envSnapshotNormalizedName(name)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		return 1
 	}
-	if instanceSnapshotExists(cfg, normalized) {
+	if envSnapshotExists(cfg, normalized) {
 		fmt.Fprintf(os.Stderr, "env snapshot %q already exists.\n", normalized)
 		return 1
 	}
-	if err := ensureInstanceReadyForSnapshot(cfg); err != nil {
+	if err := ensureEnvReadyForSnapshot(cfg); err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		return 1
 	}
-	if err := instanceSnapshotCreateArchives(cfg, normalized); err != nil {
+	if err := envSnapshotCreateArchives(cfg, normalized); err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		return 1
 	}
-	meta := newInstanceSnapshotMetadata(cfg, normalized, time.Now())
-	jsonText, err := instanceSnapshotMetadataJSON(meta)
+	meta := newEnvSnapshotMetadata(cfg, normalized, time.Now())
+	jsonText, err := envSnapshotMetadataJSON(meta)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		return 1
 	}
-	if err := os.WriteFile(instanceSnapshotMetadataPath(cfg, normalized), []byte(jsonText), 0o644); err != nil {
+	if err := os.WriteFile(envSnapshotMetadataPath(cfg, normalized), []byte(jsonText), 0o644); err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		return 1
 	}
-	fmt.Printf("Snapshot created.\n\nSnapshot:\n  project: %s\n  name: %s\n  path: %s\n  database: database.sql.gz\n  wp-content: wp-content.tar.gz\n", cfg.ProjectSlug, normalized, instanceSnapshotDir(cfg, normalized))
+	fmt.Printf("Snapshot created.\n\nSnapshot:\n  project: %s\n  name: %s\n  path: %s\n  database: database.sql.gz\n  wp-content: wp-content.tar.gz\n", cfg.ProjectSlug, normalized, envSnapshotDir(cfg, normalized))
 	return 0
 }
 
-func cmdInstanceSnapshotList(cfg instanceConfig) int {
-	records, err := loadInstanceSnapshots(cfg)
+func cmdEnvSnapshotList(cfg envConfig) int {
+	records, err := loadEnvSnapshots(cfg)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		return 1
@@ -643,35 +643,35 @@ func cmdInstanceSnapshotList(cfg instanceConfig) int {
 		fmt.Println("No env snapshots found.")
 		return 0
 	}
-	fmt.Println(formatTable(instanceSnapshotRows(records)))
+	fmt.Println(formatTable(envSnapshotRows(records)))
 	return 0
 }
 
-func cmdInstanceSnapshotDelete(cfg instanceConfig, name string, nonInteractive bool) int {
-	records, err := loadInstanceSnapshots(cfg)
+func cmdEnvSnapshotDelete(cfg envConfig, name string, nonInteractive bool) int {
+	records, err := loadEnvSnapshots(cfg)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		return 1
 	}
 	selectedName := strings.TrimSpace(name)
 	if selectedName == "" {
-		if nonInteractive || !instanceSnapshotIsInteractive() {
+		if nonInteractive || !envSnapshotIsInteractive() {
 			fmt.Fprintln(os.Stderr, "env snapshot remove requires a name when stdin is not interactive")
 			return 1
 		}
-		record, err := chooseInstanceSnapshot(records, "delete")
+		record, err := chooseEnvSnapshot(records, "delete")
 		if err != nil {
 			fmt.Fprintln(os.Stderr, err)
 			return 1
 		}
 		selectedName = firstNonEmpty(record.Metadata.Name, filepath.Base(record.Directory))
 	}
-	normalized, err := instanceSnapshotNormalizedName(selectedName)
+	normalized, err := envSnapshotNormalizedName(selectedName)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		return 1
 	}
-	path := instanceSnapshotDir(cfg, normalized)
+	path := envSnapshotDir(cfg, normalized)
 	if _, err := os.Stat(path); err != nil {
 		if os.IsNotExist(err) {
 			fmt.Fprintf(os.Stderr, "No env snapshot matched %q.\n", normalized)
@@ -680,11 +680,11 @@ func cmdInstanceSnapshotDelete(cfg instanceConfig, name string, nonInteractive b
 		fmt.Fprintln(os.Stderr, err)
 		return 1
 	}
-	if nonInteractive || !instanceSnapshotIsInteractive() {
+	if nonInteractive || !envSnapshotIsInteractive() {
 		fmt.Fprintln(os.Stderr, "env snapshot remove requires an interactive terminal for confirmation")
 		return 1
 	}
-	confirmed, err := instanceSnapshotConfirm(fmt.Sprintf("Delete env snapshot %q? This removes %s.", normalized, path), false)
+	confirmed, err := envSnapshotConfirm(fmt.Sprintf("Delete env snapshot %q? This removes %s.", normalized, path), false)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		return 1
@@ -701,31 +701,31 @@ func cmdInstanceSnapshotDelete(cfg instanceConfig, name string, nonInteractive b
 	return 0
 }
 
-func cmdInstanceSnapshotRestore(cfg instanceConfig, name string, nonInteractive bool) int {
-	records, err := loadInstanceSnapshots(cfg)
+func cmdEnvSnapshotRestore(cfg envConfig, name string, nonInteractive bool) int {
+	records, err := loadEnvSnapshots(cfg)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		return 1
 	}
 	selectedName := strings.TrimSpace(name)
 	if selectedName == "" {
-		if nonInteractive || !instanceSnapshotIsInteractive() {
+		if nonInteractive || !envSnapshotIsInteractive() {
 			fmt.Fprintln(os.Stderr, "env snapshot use requires a name when stdin is not interactive")
 			return 1
 		}
-		record, err := chooseInstanceSnapshot(records, "restore")
+		record, err := chooseEnvSnapshot(records, "restore")
 		if err != nil {
 			fmt.Fprintln(os.Stderr, err)
 			return 1
 		}
 		selectedName = firstNonEmpty(record.Metadata.Name, filepath.Base(record.Directory))
 	}
-	normalized, err := instanceSnapshotNormalizedName(selectedName)
+	normalized, err := envSnapshotNormalizedName(selectedName)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		return 1
 	}
-	path := instanceSnapshotDir(cfg, normalized)
+	path := envSnapshotDir(cfg, normalized)
 	if _, err := os.Stat(path); err != nil {
 		if os.IsNotExist(err) {
 			fmt.Fprintf(os.Stderr, "No env snapshot matched %q.\n", normalized)
@@ -734,11 +734,11 @@ func cmdInstanceSnapshotRestore(cfg instanceConfig, name string, nonInteractive 
 		fmt.Fprintln(os.Stderr, err)
 		return 1
 	}
-	if nonInteractive || !instanceSnapshotIsInteractive() {
+	if nonInteractive || !envSnapshotIsInteractive() {
 		fmt.Fprintln(os.Stderr, "env snapshot use requires an interactive terminal for confirmation")
 		return 1
 	}
-	confirmed, err := instanceSnapshotConfirm(fmt.Sprintf("Restore env snapshot %q? This will overwrite the current local env database and mutable wp-content.", normalized), false)
+	confirmed, err := envSnapshotConfirm(fmt.Sprintf("Restore env snapshot %q? This will overwrite the current local env database and mutable wp-content.", normalized), false)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		return 1
@@ -747,34 +747,34 @@ func cmdInstanceSnapshotRestore(cfg instanceConfig, name string, nonInteractive 
 		fmt.Fprintln(os.Stderr, "Aborted.")
 		return 1
 	}
-	if err := ensureInstanceReadyForSnapshot(cfg); err != nil {
+	if err := ensureEnvReadyForSnapshot(cfg); err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		return 1
 	}
 	safetyName := defaultPreRestoreSnapshotName(time.Now())
-	if instanceSnapshotExists(cfg, safetyName) {
+	if envSnapshotExists(cfg, safetyName) {
 		fmt.Fprintf(os.Stderr, "env snapshot %q already exists.\n", safetyName)
 		return 1
 	}
-	if err := instanceSnapshotCreateArchives(cfg, safetyName); err != nil {
+	if err := envSnapshotCreateArchives(cfg, safetyName); err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		return 1
 	}
-	safetyMeta := newInstanceSnapshotMetadata(cfg, safetyName, time.Now())
-	jsonText, err := instanceSnapshotMetadataJSON(safetyMeta)
+	safetyMeta := newEnvSnapshotMetadata(cfg, safetyName, time.Now())
+	jsonText, err := envSnapshotMetadataJSON(safetyMeta)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		return 1
 	}
-	if err := os.WriteFile(instanceSnapshotMetadataPath(cfg, safetyName), []byte(jsonText), 0o644); err != nil {
+	if err := os.WriteFile(envSnapshotMetadataPath(cfg, safetyName), []byte(jsonText), 0o644); err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		return 1
 	}
-	if err := instanceSnapshotRestoreArchives(cfg, normalized); err != nil {
+	if err := envSnapshotRestoreArchives(cfg, normalized); err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		return 1
 	}
-	fmt.Printf("Snapshot restored.\n\nRestored:\n  project: %s\n  name: %s\n\nSafety snapshot:\n  name: %s\n  path: %s\n", cfg.ProjectSlug, normalized, safetyName, instanceSnapshotDir(cfg, safetyName))
+	fmt.Printf("Snapshot restored.\n\nRestored:\n  project: %s\n  name: %s\n\nSafety snapshot:\n  name: %s\n  path: %s\n", cfg.ProjectSlug, normalized, safetyName, envSnapshotDir(cfg, safetyName))
 	return 0
 }
 
@@ -839,11 +839,11 @@ func shellQuoteArg(arg string) string {
 	return "'" + strings.ReplaceAll(arg, "'", "'\\''") + "'"
 }
 
-func instanceCommandDir(cfg instanceConfig) string {
+func envCommandDir(cfg envConfig) string {
 	return localEnvDir(cfg)
 }
 
-func ensureManagedInstance(cfg instanceConfig) error {
+func ensureManagedEnv(cfg envConfig) error {
 	envDir := localEnvDir(cfg)
 	if strings.TrimSpace(envDir) == "" {
 		return fmt.Errorf("missing managed env directory")
@@ -851,18 +851,18 @@ func ensureManagedInstance(cfg instanceConfig) error {
 	if err := os.MkdirAll(envDir, 0o755); err != nil {
 		return err
 	}
-	if err := os.MkdirAll(instanceSnapshotProjectDir(cfg), 0o755); err != nil {
+	if err := os.MkdirAll(envSnapshotProjectDir(cfg), 0o755); err != nil {
 		return err
 	}
-	if err := os.Chmod(instanceSnapshotProjectDir(cfg), 0o777); err != nil {
+	if err := os.Chmod(envSnapshotProjectDir(cfg), 0o777); err != nil {
 		return err
 	}
 	files := map[string]string{
-		filepath.Join(envDir, "docker-compose.yml"):                                  renderInstanceCompose(cfg),
-		filepath.Join(envDir, ".env"):                                                renderInstanceEnv(cfg),
-		filepath.Join(envDir, "php", "uploads.ini"):                                  renderInstanceUploadsINI(),
-		filepath.Join(envDir, "wordpress", "Dockerfile"):                             renderInstanceDockerfile(),
-		filepath.Join(envDir, "wordpress", "wordpress-rewrites.conf"):                renderInstanceRewritesConf(),
+		filepath.Join(envDir, "docker-compose.yml"):                                  renderEnvCompose(cfg),
+		filepath.Join(envDir, ".env"):                                                renderEnvFile(cfg),
+		filepath.Join(envDir, "php", "uploads.ini"):                                  renderEnvUploadsINI(),
+		filepath.Join(envDir, "wordpress", "Dockerfile"):                             renderEnvDockerfile(),
+		filepath.Join(envDir, "wordpress", "wordpress-rewrites.conf"):                renderEnvRewritesConf(),
 		filepath.Join(envDir, firstNonEmpty(cfg.UploadsPath, "uploads"), ".gitkeep"): "",
 	}
 	for path, contents := range files {
@@ -890,7 +890,7 @@ func writeManagedFile(path, contents string, mode os.FileMode) error {
 	return nil
 }
 
-func instancePortInUse(port int) bool {
+func envPortInUse(port int) bool {
 	if port <= 0 || port > 65535 {
 		return true
 	}
@@ -902,17 +902,17 @@ func instancePortInUse(port int) bool {
 	return false
 }
 
-func instancePortsInUse(cfg instanceConfig) []int {
+func envPortsInUse(cfg envConfig) []int {
 	occupied := make([]int, 0, 2)
 	for _, port := range []int{cfg.WordpressPort, cfg.MailpitPort} {
-		if instancePortInUse(port) {
+		if envPortInUse(port) {
 			occupied = append(occupied, port)
 		}
 	}
 	return occupied
 }
 
-func instancePortCollisionMessage(cfg instanceConfig, occupied []int) string {
+func envPortCollisionMessage(cfg envConfig, occupied []int) string {
 	if len(occupied) == 0 {
 		return ""
 	}
@@ -930,55 +930,55 @@ func instancePortCollisionMessage(cfg instanceConfig, occupied []int) string {
 	return fmt.Sprintf("Ports %s are already in use.\n\n%s", strings.Join(parts, " and "), block)
 }
 
-func preflightInstancePorts(cfg instanceConfig) error {
-	if occupied := instancePortsInUse(cfg); len(occupied) > 0 {
-		return fmt.Errorf("%s", instancePortCollisionMessage(cfg, occupied))
+func preflightEnvPorts(cfg envConfig) error {
+	if occupied := envPortsInUse(cfg); len(occupied) > 0 {
+		return fmt.Errorf("%s", envPortCollisionMessage(cfg, occupied))
 	}
 	return nil
 }
 
-func instanceComposeArgs(cfg instanceConfig, args ...string) []string {
+func envComposeArgs(cfg envConfig, args ...string) []string {
 	fields := strings.Fields(firstNonEmpty(cfg.Compose, "docker compose"))
 	return append(fields, args...)
 }
 
-func instanceCliArgs(cfg instanceConfig, args ...string) []string {
-	return append(instanceComposeArgs(cfg, "run", "--rm", firstNonEmpty(cfg.CliService, "cli")), args...)
+func envCliArgs(cfg envConfig, args ...string) []string {
+	return append(envComposeArgs(cfg, "run", "--rm", firstNonEmpty(cfg.CliService, "cli")), args...)
 }
 
-func instanceWpArgs(cfg instanceConfig, args ...string) []string {
-	return append(instanceCliArgs(cfg, "wp"), append(args, "--allow-root")...)
+func envWpArgs(cfg envConfig, args ...string) []string {
+	return append(envCliArgs(cfg, "wp"), append(args, "--allow-root")...)
 }
 
-func instanceShellArgs(cfg instanceConfig) []string {
-	return instanceComposeArgs(cfg, "exec", firstNonEmpty(cfg.WordpressService, "wordpress"), "sh")
+func envShellArgs(cfg envConfig) []string {
+	return envComposeArgs(cfg, "exec", firstNonEmpty(cfg.WordpressService, "wordpress"), "sh")
 }
 
-func instanceWpProbeArgs(cfg instanceConfig, args ...string) []string {
-	return instanceWpArgs(cfg, args...)
+func envWpProbeArgs(cfg envConfig, args ...string) []string {
+	return envWpArgs(cfg, args...)
 }
 
-func instanceWpThemeIsActiveArgs(cfg instanceConfig, slug string) []string {
-	return instanceWpArgs(cfg, "theme", "is-active", firstNonEmpty(slug, cfg.ThemeMountSlug, cfg.ThemeSlug, "theme"))
+func envWpThemeIsActiveArgs(cfg envConfig, slug string) []string {
+	return envWpArgs(cfg, "theme", "is-active", firstNonEmpty(slug, cfg.ThemeMountSlug, cfg.ThemeSlug, "theme"))
 }
 
-func instanceWpCoreInstallArgs(cfg instanceConfig) []string {
+func envWpCoreInstallArgs(cfg envConfig) []string {
 	slug := firstNonEmpty(cfg.ThemeMountSlug, cfg.ThemeSlug, "theme")
-	return append(instanceComposeArgs(cfg, "run", "--rm", firstNonEmpty(cfg.CliService, "cli"), "sh", "-lc"), `wp core install --url="$WP_URL" --title="$WP_TITLE" --admin_user="$ADMIN_USER" --admin_password="$ADMIN_PASSWORD" --admin_email="$ADMIN_EMAIL" --skip-email --allow-root && wp theme activate `+slug+` --allow-root`)
+	return append(envComposeArgs(cfg, "run", "--rm", firstNonEmpty(cfg.CliService, "cli"), "sh", "-lc"), `wp core install --url="$WP_URL" --title="$WP_TITLE" --admin_user="$ADMIN_USER" --admin_password="$ADMIN_PASSWORD" --admin_email="$ADMIN_EMAIL" --skip-email --allow-root && wp theme activate `+slug+` --allow-root`)
 }
 
-func instanceWpThemeActivateArgs(cfg instanceConfig, slug string) []string {
-	return instanceWpArgs(cfg, "theme", "activate", firstNonEmpty(slug, cfg.ThemeMountSlug, cfg.ThemeSlug, "theme"))
+func envWpThemeActivateArgs(cfg envConfig, slug string) []string {
+	return envWpArgs(cfg, "theme", "activate", firstNonEmpty(slug, cfg.ThemeMountSlug, cfg.ThemeSlug, "theme"))
 }
 
-func instanceThemeArchivePaths(cfg instanceConfig, sourcePath string) (string, string) {
+func envThemeArchivePaths(cfg envConfig, sourcePath string) (string, string) {
 	base := filepath.Base(sourcePath)
-	host := filepath.Join(instanceCommandDir(cfg), firstNonEmpty(cfg.UploadsPath, "uploads"), base)
+	host := filepath.Join(envCommandDir(cfg), firstNonEmpty(cfg.UploadsPath, "uploads"), base)
 	container := path.Join("/", "env", firstNonEmpty(cfg.UploadsPath, "uploads"), base)
 	return host, container
 }
 
-func instanceRepoPath(root, sourcePath string) string {
+func envRepoPath(root, sourcePath string) string {
 	if filepath.IsAbs(sourcePath) {
 		return sourcePath
 	}
@@ -1454,10 +1454,10 @@ func formatProjectTaskLines(tasks map[string]projectCommand) []string {
 	return lines
 }
 
-func loadInstanceConfig(root string, metadata map[string]any) (instanceConfig, bool) {
+func loadEnvConfig(root string, metadata map[string]any) (envConfig, bool) {
 	raw, ok := metadata["env"].(map[string]any)
 	if !ok || raw == nil {
-		return instanceConfig{}, false
+		return envConfig{}, false
 	}
 	projectSlug := firstNonEmpty(mapStringAtPath(metadata, "project", "slug"), "project")
 	projectName := firstNonEmpty(mapStringAtPath(metadata, "project", "name"), slugToTitle(projectSlug))
@@ -1466,14 +1466,14 @@ func loadInstanceConfig(root string, metadata map[string]any) (instanceConfig, b
 		themePath = filepath.Join(root, themePath)
 	}
 	wordpress := mapMapAtPath(metadata, "wordpress")
-	return instanceConfig{
+	return envConfig{
 		ProjectSlug:      projectSlug,
 		ProjectName:      projectName,
 		RepoRoot:         root,
 		ThemePath:        themePath,
 		EnvDir:           config.EnvDir(projectSlug),
-		WordpressPort:    firstInstancePort(raw, "wordpress", projectSlug),
-		MailpitPort:      firstInstancePort(raw, "mailpit", projectSlug),
+		WordpressPort:    firstEnvPort(raw, "wordpress", projectSlug),
+		MailpitPort:      firstEnvPort(raw, "mailpit", projectSlug),
 		Compose:          firstNonEmpty(mapStringAtPath(raw, "compose"), "docker compose"),
 		WordpressService: firstNonEmpty(mapStringAtPath(raw, "wordpress_service"), "wordpress"),
 		CliService:       firstNonEmpty(mapStringAtPath(raw, "cli_service"), "cli"),
@@ -1483,8 +1483,8 @@ func loadInstanceConfig(root string, metadata map[string]any) (instanceConfig, b
 	}, true
 }
 
-func firstInstancePort(raw map[string]any, name, projectSlug string) int {
-	derivedWordpress, derivedMailpit := instanceDerivedPorts(projectSlug)
+func firstEnvPort(raw map[string]any, name, projectSlug string) int {
+	derivedWordpress, derivedMailpit := envDerivedPorts(projectSlug)
 	derived := derivedWordpress
 	if name == "mailpit" {
 		derived = derivedMailpit
@@ -1497,14 +1497,14 @@ func firstInstancePort(raw map[string]any, name, projectSlug string) int {
 	if !ok {
 		return derived
 	}
-	port, parsed := parseInstancePort(value)
+	port, parsed := parseEnvPort(value)
 	if !parsed || port == 0 {
 		return derived
 	}
 	return port
 }
 
-func parseInstancePort(value any) (int, bool) {
+func parseEnvPort(value any) (int, bool) {
 	switch typed := value.(type) {
 	case nil:
 		return 0, false
@@ -1551,14 +1551,14 @@ func parseInstancePort(value any) (int, bool) {
 	}
 }
 
-func defaultInstanceCommands(cfg instanceConfig) map[string]projectCommand {
+func defaultEnvCommands(cfg envConfig) map[string]projectCommand {
 	return map[string]projectCommand{
-		"up":    {Description: "Start the managed instance, install WordPress if missing, and ensure the mounted theme is active", Run: instanceCommandRunner{name: "up", cfg: cfg}},
-		"down":  {Description: "Stop the managed instance", Run: instanceCommandRunner{name: "down", cfg: cfg}},
-		"logs":  {Description: "Tail WordPress logs", Run: instanceCommandRunner{name: "logs", cfg: cfg}},
-		"reset": {Description: "Destroy and recreate the local env", Run: instanceCommandRunner{name: "reset", cfg: cfg}},
-		"shell": {Description: "Open a shell in the WordPress container", Run: instanceCommandRunner{name: "shell", cfg: cfg}},
-		"wp":    {Description: "Run wp-cli passthrough", Run: instanceCommandRunner{name: "wp", cfg: cfg}},
+		"up":    {Description: "Start the managed env, install WordPress if missing, and ensure the mounted theme is active", Run: envCommandRunner{name: "up", cfg: cfg}},
+		"down":  {Description: "Stop the managed env", Run: envCommandRunner{name: "down", cfg: cfg}},
+		"logs":  {Description: "Tail WordPress logs", Run: envCommandRunner{name: "logs", cfg: cfg}},
+		"reset": {Description: "Destroy and recreate the local env", Run: envCommandRunner{name: "reset", cfg: cfg}},
+		"shell": {Description: "Open a shell in the WordPress container", Run: envCommandRunner{name: "shell", cfg: cfg}},
+		"wp":    {Description: "Run wp-cli passthrough", Run: envCommandRunner{name: "wp", cfg: cfg}},
 	}
 }
 
@@ -2164,7 +2164,7 @@ func writeProjectInit(root string, args projectInitArgs) error {
 	return nil
 }
 
-func ensureInstanceProjectMetadata() error {
+func ensureEnvProjectMetadata() error {
 	root, ok := currentGitRoot()
 	if !ok {
 		return ProjectError{Msg: "env up requires a .git repository above the current directory"}
@@ -2236,7 +2236,7 @@ func projectInitJSON(metadata map[string]any) string {
 	return string(append(data, '\n'))
 }
 
-func renderInstanceCompose(cfg instanceConfig) string {
+func renderEnvCompose(cfg envConfig) string {
 	themeMountSlug := firstNonEmpty(cfg.ThemeMountSlug, "theme")
 	wordpressService := firstNonEmpty(cfg.WordpressService, "wordpress")
 	cliService := firstNonEmpty(cfg.CliService, "cli")
@@ -2321,10 +2321,10 @@ func renderInstanceCompose(cfg instanceConfig) string {
 volumes:
   db_data:
   wp_data:
-`, wordpressService, themePath, themeMountSlug, cliService, wordpressService, themePath, themeMountSlug, uploadsPath, path.Join("/", "env", uploadsPath), instanceSnapshotComposeMount(cfg))
+`, wordpressService, themePath, themeMountSlug, cliService, wordpressService, themePath, themeMountSlug, uploadsPath, path.Join("/", "env", uploadsPath), envSnapshotComposeMount(cfg))
 }
 
-func renderInstanceEnv(cfg instanceConfig) string {
+func renderEnvFile(cfg envConfig) string {
 	wpTitle := firstNonEmpty(cfg.ProjectName, slugToTitle(cfg.ProjectSlug))
 	return fmt.Sprintf(`COMPOSE_PROJECT_NAME=%s
 WP_PORT=%d
@@ -2338,19 +2338,19 @@ WP_TITLE=%s
 ADMIN_USER=admin
 ADMIN_PASSWORD=admin
 ADMIN_EMAIL=web@nonfiction.ca
-`, instanceComposeProjectName(cfg.ProjectSlug), cfg.WordpressPort, cfg.MailpitPort, cfg.ProjectSlug, cfg.ProjectSlug, cfg.WordpressPort, wpTitle)
+`, envComposeProjectName(cfg.ProjectSlug), cfg.WordpressPort, cfg.MailpitPort, cfg.ProjectSlug, cfg.ProjectSlug, cfg.WordpressPort, wpTitle)
 }
 
-func instanceComposeProjectName(projectSlug string) string {
-	return "nf_" + cleanInstanceSlug(projectSlug) + "_env"
+func envComposeProjectName(projectSlug string) string {
+	return "nf_" + cleanEnvSlug(projectSlug) + "_env"
 }
 
-func renderInstanceInfo(cfg instanceConfig, includeURLs bool) string {
+func renderEnvInfo(cfg envConfig, includeURLs bool) string {
 	lines := []string{
 		"Env:",
 		"  project: " + cfg.ProjectSlug,
 		"  path: " + localEnvDir(cfg),
-		"  compose project: " + instanceComposeProjectName(cfg.ProjectSlug),
+		"  compose project: " + envComposeProjectName(cfg.ProjectSlug),
 	}
 	if includeURLs {
 		lines = append(lines,
@@ -2361,11 +2361,11 @@ func renderInstanceInfo(cfg instanceConfig, includeURLs bool) string {
 	return strings.Join(lines, "\n")
 }
 
-func renderInstanceUploadsINI() string {
+func renderEnvUploadsINI() string {
 	return "file_uploads=On\nmemory_limit=256M\nupload_max_filesize=128M\npost_max_size=128M\nmax_execution_time=120\nmax_input_time=120\n"
 }
 
-func renderInstanceDockerfile() string {
+func renderEnvDockerfile() string {
 	return `FROM wordpress:7.0-php8.4-apache
 
 RUN a2enmod rewrite \
@@ -2375,7 +2375,7 @@ COPY wordpress/wordpress-rewrites.conf /etc/apache2/conf-enabled/wordpress-rewri
 `
 }
 
-func renderInstanceRewritesConf() string {
+func renderEnvRewritesConf() string {
 	return `<Directory /var/www/html>
   Options FollowSymLinks
   AllowOverride All
@@ -2765,7 +2765,7 @@ func runEnv(argv []string) int {
 		return 1
 	}
 	if name == "snapshot" {
-		return runInstanceSnapshot(argv[1:])
+		return runEnvSnapshot(argv[1:])
 	}
 	if name == "show" && len(argv) != 1 {
 		fmt.Fprintln(os.Stderr, "env show takes no arguments")
@@ -2788,7 +2788,7 @@ func runEnv(argv []string) int {
 		return 1
 	}
 	if name == "up" {
-		if err := ensureInstanceProjectMetadata(); err != nil {
+		if err := ensureEnvProjectMetadata(); err != nil {
 			fmt.Fprintln(os.Stderr, err)
 			return 1
 		}
@@ -2803,17 +2803,17 @@ func runEnv(argv []string) int {
 		fmt.Fprintln(os.Stderr, err)
 		return 1
 	}
-	cfg, ok := loadInstanceConfig(root, metadata)
+	cfg, ok := loadEnvConfig(root, metadata)
 	if !ok {
 		fmt.Fprintln(os.Stderr, "Missing env metadata in .nf/project.json. Run nf env up first.")
 		return 1
 	}
 	if name == "show" {
-		fmt.Println(renderInstanceInfo(cfg, true))
+		fmt.Println(renderEnvInfo(cfg, true))
 		return 0
 	}
 	if name == "up" {
-		if err := preflightInstancePorts(cfg); err != nil {
+		if err := preflightEnvPorts(cfg); err != nil {
 			fmt.Fprintln(os.Stderr, err)
 			return 1
 		}
@@ -2822,7 +2822,7 @@ func runEnv(argv []string) int {
 	if name == "wp" {
 		extraArgs = normalizePassthroughArgs(extraArgs)
 	}
-	if err := (instanceCommandRunner{name: name, cfg: cfg}).Execute(root, extraArgs); err != nil {
+	if err := (envCommandRunner{name: name, cfg: cfg}).Execute(root, extraArgs); err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		return 1
 	}
@@ -2830,20 +2830,20 @@ func runEnv(argv []string) int {
 	case "up":
 		fmt.Println("Env started.")
 		fmt.Println()
-		fmt.Println(renderInstanceInfo(cfg, true))
+		fmt.Println(renderEnvInfo(cfg, true))
 	case "reset":
 		fmt.Println("Env reset.")
 		fmt.Println()
-		fmt.Println(renderInstanceInfo(cfg, true))
+		fmt.Println(renderEnvInfo(cfg, true))
 	case "down":
 		fmt.Println("Env stopped.")
 		fmt.Println()
-		fmt.Println(renderInstanceInfo(cfg, false))
+		fmt.Println(renderEnvInfo(cfg, false))
 	}
 	return 0
 }
 
-func runInstanceSnapshot(argv []string) int {
+func runEnvSnapshot(argv []string) int {
 	if len(argv) == 0 || argv[0] == "help" {
 		printGroupHelp("env snapshot", []string{
 			"add [name]          create an env snapshot",
@@ -2884,32 +2884,32 @@ func runInstanceSnapshot(argv []string) int {
 		fmt.Fprintln(os.Stderr, err)
 		return 1
 	}
-	cfg, ok := loadInstanceConfig(root, metadata)
+	cfg, ok := loadEnvConfig(root, metadata)
 	if !ok {
 		fmt.Fprintln(os.Stderr, "Missing env metadata in .nf/project.json. Run nf env up first.")
 		return 1
 	}
 	switch cmd {
 	case "list":
-		return cmdInstanceSnapshotList(cfg)
+		return cmdEnvSnapshotList(cfg)
 	case "add":
 		name := ""
 		if len(args) == 1 {
 			name = args[0]
 		}
-		return cmdInstanceSnapshotCreate(cfg, name, false)
+		return cmdEnvSnapshotCreate(cfg, name, false)
 	case "use":
 		name := ""
 		if len(args) == 1 {
 			name = args[0]
 		}
-		return cmdInstanceSnapshotRestore(cfg, name, false)
+		return cmdEnvSnapshotRestore(cfg, name, false)
 	case "remove":
 		name := ""
 		if len(args) == 1 {
 			name = args[0]
 		}
-		return cmdInstanceSnapshotDelete(cfg, name, false)
+		return cmdEnvSnapshotDelete(cfg, name, false)
 	default:
 		return 1
 	}

@@ -221,14 +221,14 @@ func TestRunEnvHelpShowsCommandsWithoutShortcuts(t *testing.T) {
 }
 
 func TestRunEnvSnapshotHelpShowsDedicatedCommands(t *testing.T) {
-	output := captureStdout(t, func() { _ = runInstanceSnapshot([]string{"help"}) })
+	output := captureStdout(t, func() { _ = runEnvSnapshot([]string{"help"}) })
 	for _, want := range []string{"env snapshot\n\nCommands:\n", "\n  add [name]          create an env snapshot\n", "\n  list                list env snapshots\n", "\n  use [name]          restore an env snapshot\n", "\n  remove [name]       delete an env snapshot\n"} {
 		if !strings.Contains(output, want) {
-			t.Fatalf("runInstanceSnapshot(help) output missing %q:\n%s", want, output)
+			t.Fatalf("runEnvSnapshot(help) output missing %q:\n%s", want, output)
 		}
 	}
 	if strings.Contains(output, "alias") || strings.Contains(output, "instance") || strings.Contains(output, "snapshot create") || strings.Contains(output, "snapshot restore") {
-		t.Fatalf("runInstanceSnapshot(help) output unexpectedly mentioned removed alias:\n%s", output)
+		t.Fatalf("runEnvSnapshot(help) output unexpectedly mentioned removed alias:\n%s", output)
 	}
 }
 
@@ -324,19 +324,19 @@ func TestRunEnvSnapshotListShowsSnapshots(t *testing.T) {
 	if err := os.MkdirAll(snapshotDir, 0o755); err != nil {
 		t.Fatalf("MkdirAll(snapshotDir) error = %v", err)
 	}
-	meta := instanceSnapshotMetadata{
-		Schema:         instanceSnapshotSchema,
+	meta := envSnapshotMetadata{
+		Schema:         envSnapshotSchema,
 		Name:           "2026-05-28-093012",
 		ProjectSlug:    "client",
 		CreatedAt:      "2026-05-28T09:30:12Z",
 		EnvPath:        filepath.Join(config.DataHome(), "envs", "client"),
 		ComposeProject: "nf_client_env",
 		WordpressURL:   "http://localhost:18432",
-		Contents:       instanceSnapshotContents{Database: "database.sql.gz", WpContent: "wp-content.tar.gz", WpContentPaths: instanceSnapshotContentPaths()},
+		Contents:       envSnapshotContents{Database: "database.sql.gz", WpContent: "wp-content.tar.gz", WpContentPaths: envSnapshotContentPaths()},
 	}
-	metaJSON, err := instanceSnapshotMetadataJSON(meta)
+	metaJSON, err := envSnapshotMetadataJSON(meta)
 	if err != nil {
-		t.Fatalf("instanceSnapshotMetadataJSON() error = %v", err)
+		t.Fatalf("envSnapshotMetadataJSON() error = %v", err)
 	}
 	if err := os.WriteFile(filepath.Join(snapshotDir, "snapshot.json"), []byte(metaJSON), 0o644); err != nil {
 		t.Fatalf("WriteFile(snapshot.json) error = %v", err)
@@ -397,19 +397,19 @@ func TestRunEnvSnapshotUseSkipsComposeUpWhenReady(t *testing.T) {
 	if err := os.MkdirAll(sourceSnapshotDir, 0o755); err != nil {
 		t.Fatalf("MkdirAll(sourceSnapshotDir) error = %v", err)
 	}
-	sourceMeta := instanceSnapshotMetadata{
-		Schema:         instanceSnapshotSchema,
+	sourceMeta := envSnapshotMetadata{
+		Schema:         envSnapshotSchema,
 		Name:           "restore-source",
 		ProjectSlug:    "client",
 		CreatedAt:      "2026-05-28T09:30:12Z",
 		EnvPath:        filepath.Join(config.DataHome(), "envs", "client"),
 		ComposeProject: "nf_client_env",
 		WordpressURL:   "http://localhost:18432",
-		Contents:       instanceSnapshotContents{Database: "database.sql.gz", WpContent: "wp-content.tar.gz", WpContentPaths: instanceSnapshotContentPaths()},
+		Contents:       envSnapshotContents{Database: "database.sql.gz", WpContent: "wp-content.tar.gz", WpContentPaths: envSnapshotContentPaths()},
 	}
-	sourceMetaJSON, err := instanceSnapshotMetadataJSON(sourceMeta)
+	sourceMetaJSON, err := envSnapshotMetadataJSON(sourceMeta)
 	if err != nil {
-		t.Fatalf("instanceSnapshotMetadataJSON() error = %v", err)
+		t.Fatalf("envSnapshotMetadataJSON() error = %v", err)
 	}
 	if err := os.WriteFile(filepath.Join(sourceSnapshotDir, "snapshot.json"), []byte(sourceMetaJSON), 0o644); err != nil {
 		t.Fatalf("WriteFile(snapshot.json) error = %v", err)
@@ -428,13 +428,13 @@ func TestRunEnvSnapshotUseSkipsComposeUpWhenReady(t *testing.T) {
 	}
 	t.Setenv("DOCKER_LOG", logPath)
 	t.Setenv("PATH", dockerDir+string(os.PathListSeparator)+os.Getenv("PATH"))
-	oldIsInteractive := instanceSnapshotIsInteractive
-	oldConfirm := instanceSnapshotConfirm
-	instanceSnapshotIsInteractive = func() bool { return true }
-	instanceSnapshotConfirm = func(prompt string, defaultYes bool) (bool, error) { return true, nil }
+	oldIsInteractive := envSnapshotIsInteractive
+	oldConfirm := envSnapshotConfirm
+	envSnapshotIsInteractive = func() bool { return true }
+	envSnapshotConfirm = func(prompt string, defaultYes bool) (bool, error) { return true, nil }
 	t.Cleanup(func() {
-		instanceSnapshotIsInteractive = oldIsInteractive
-		instanceSnapshotConfirm = oldConfirm
+		envSnapshotIsInteractive = oldIsInteractive
+		envSnapshotConfirm = oldConfirm
 	})
 	oldwd, err := os.Getwd()
 	if err != nil {
@@ -494,10 +494,10 @@ func TestRunEnvSnapshotRemoveRemovesSnapshotAfterConfirmation(t *testing.T) {
 	if err := os.MkdirAll(snapshotDir, 0o755); err != nil {
 		t.Fatalf("MkdirAll(snapshotDir) error = %v", err)
 	}
-	meta := instanceSnapshotMetadata{Schema: instanceSnapshotSchema, Name: "delete-me", ProjectSlug: "client", CreatedAt: "2026-05-28T09:30:12Z", EnvPath: filepath.Join(config.DataHome(), "envs", "client"), ComposeProject: "nf_client_env", WordpressURL: "http://localhost:18432", Contents: instanceSnapshotContents{Database: "database.sql.gz", WpContent: "wp-content.tar.gz", WpContentPaths: instanceSnapshotContentPaths()}}
-	metaJSON, err := instanceSnapshotMetadataJSON(meta)
+	meta := envSnapshotMetadata{Schema: envSnapshotSchema, Name: "delete-me", ProjectSlug: "client", CreatedAt: "2026-05-28T09:30:12Z", EnvPath: filepath.Join(config.DataHome(), "envs", "client"), ComposeProject: "nf_client_env", WordpressURL: "http://localhost:18432", Contents: envSnapshotContents{Database: "database.sql.gz", WpContent: "wp-content.tar.gz", WpContentPaths: envSnapshotContentPaths()}}
+	metaJSON, err := envSnapshotMetadataJSON(meta)
 	if err != nil {
-		t.Fatalf("instanceSnapshotMetadataJSON() error = %v", err)
+		t.Fatalf("envSnapshotMetadataJSON() error = %v", err)
 	}
 	if err := os.WriteFile(filepath.Join(snapshotDir, "snapshot.json"), []byte(metaJSON), 0o644); err != nil {
 		t.Fatalf("WriteFile(snapshot.json) error = %v", err)
@@ -508,13 +508,13 @@ func TestRunEnvSnapshotRemoveRemovesSnapshotAfterConfirmation(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(snapshotDir, "wp-content.tar.gz"), []byte("content"), 0o644); err != nil {
 		t.Fatalf("WriteFile(wp-content.tar.gz) error = %v", err)
 	}
-	oldIsInteractive := instanceSnapshotIsInteractive
-	oldConfirm := instanceSnapshotConfirm
-	instanceSnapshotIsInteractive = func() bool { return true }
-	instanceSnapshotConfirm = func(prompt string, defaultYes bool) (bool, error) { return true, nil }
+	oldIsInteractive := envSnapshotIsInteractive
+	oldConfirm := envSnapshotConfirm
+	envSnapshotIsInteractive = func() bool { return true }
+	envSnapshotConfirm = func(prompt string, defaultYes bool) (bool, error) { return true, nil }
 	t.Cleanup(func() {
-		instanceSnapshotIsInteractive = oldIsInteractive
-		instanceSnapshotConfirm = oldConfirm
+		envSnapshotIsInteractive = oldIsInteractive
+		envSnapshotConfirm = oldConfirm
 	})
 	oldwd, err := os.Getwd()
 	if err != nil {
@@ -998,70 +998,70 @@ func TestRunInitRejectsUnsupportedProjectType(t *testing.T) {
 	}
 }
 
-func TestRenderInstanceComposeUsesMetadataDefaults(t *testing.T) {
+func TestRenderEnvComposeUsesMetadataDefaults(t *testing.T) {
 	root := t.TempDir()
 	metadata := map[string]any{
 		"project":   map[string]any{"slug": "client"},
 		"wordpress": map[string]any{"theme_path": "theme-src"},
 		"env":       map[string]any{"compose": "docker compose", "wordpress_service": "wp-app", "cli_service": "wp-cli", "theme_mount_slug": "theme-slot", "uploads_path": "uploads"},
 	}
-	cfg, ok := loadInstanceConfig(root, metadata)
+	cfg, ok := loadEnvConfig(root, metadata)
 	if !ok {
-		t.Fatalf("loadInstanceConfig() = false, want true")
+		t.Fatalf("loadEnvConfig() = false, want true")
 	}
-	compose := renderInstanceCompose(cfg)
+	compose := renderEnvCompose(cfg)
 	for _, want := range []string{"wp-app:", "wp-cli:", "condition: service_healthy", "depends_on:\n      wp-app:", "working_dir: /var/www/html", filepath.Join(root, "theme-src") + ":/var/www/html/wp-content/themes/theme-slot", config.SnapshotProjectDir("client") + ":/env-snapshots"} {
 		if !strings.Contains(compose, want) {
-			t.Fatalf("renderInstanceCompose() missing %q:\n%s", want, compose)
+			t.Fatalf("renderEnvCompose() missing %q:\n%s", want, compose)
 		}
 	}
 	if strings.Contains(compose, "\t") {
-		t.Fatalf("renderInstanceCompose() contains a tab character:\n%s", compose)
+		t.Fatalf("renderEnvCompose() contains a tab character:\n%s", compose)
 	}
 }
 
-func TestInstanceSnapshotHelpersValidateNamesAndRenderMetadata(t *testing.T) {
-	if got, want := defaultInstanceSnapshotName(time.Date(2026, 5, 28, 9, 30, 12, 0, time.UTC)), "2026-05-28-093012"; got != want {
-		t.Fatalf("defaultInstanceSnapshotName() = %q, want %q", got, want)
+func TestEnvSnapshotHelpersValidateNamesAndRenderMetadata(t *testing.T) {
+	if got, want := defaultEnvSnapshotName(time.Date(2026, 5, 28, 9, 30, 12, 0, time.UTC)), "2026-05-28-093012"; got != want {
+		t.Fatalf("defaultEnvSnapshotName() = %q, want %q", got, want)
 	}
 	if got, want := defaultPreRestoreSnapshotName(time.Date(2026, 5, 28, 9, 30, 12, 0, time.UTC)), "2026-05-28-093012-pre-restore"; got != want {
 		t.Fatalf("defaultPreRestoreSnapshotName() = %q, want %q", got, want)
 	}
 	for input, want := range map[string]string{"demo snapshot": "demo-snapshot", "  demo   snapshot  ": "demo-snapshot", "snapshot-1": "snapshot-1"} {
-		got, err := instanceSnapshotNormalizedName(input)
+		got, err := envSnapshotNormalizedName(input)
 		if err != nil {
-			t.Fatalf("instanceSnapshotNormalizedName(%q) error = %v", input, err)
+			t.Fatalf("envSnapshotNormalizedName(%q) error = %v", input, err)
 		}
 		if got != want {
-			t.Fatalf("instanceSnapshotNormalizedName(%q) = %q, want %q", input, got, want)
+			t.Fatalf("envSnapshotNormalizedName(%q) = %q, want %q", input, got, want)
 		}
 	}
 	for _, input := range []string{"", "../snapshot", "/tmp/snapshot", "snapshot/name", "snapshot\\name", "snapshot..name", "snapshot.name", "snapshot?name"} {
-		if got, err := instanceSnapshotNormalizedName(input); err == nil {
-			t.Fatalf("instanceSnapshotNormalizedName(%q) = %q, want error", input, got)
+		if got, err := envSnapshotNormalizedName(input); err == nil {
+			t.Fatalf("envSnapshotNormalizedName(%q) = %q, want error", input, got)
 		}
 	}
-	meta := instanceSnapshotMetadata{
-		Schema:         instanceSnapshotSchema,
+	meta := envSnapshotMetadata{
+		Schema:         envSnapshotSchema,
 		Name:           "2026-05-28-093012",
 		ProjectSlug:    "client",
 		CreatedAt:      "2026-05-28T09:30:12Z",
 		EnvPath:        "/data/nf/envs/client",
 		ComposeProject: "nf_client_env",
 		WordpressURL:   "http://localhost:18432",
-		Contents:       instanceSnapshotContents{Database: "database.sql.gz", WpContent: "wp-content.tar.gz", WpContentPaths: instanceSnapshotContentPaths()},
+		Contents:       envSnapshotContents{Database: "database.sql.gz", WpContent: "wp-content.tar.gz", WpContentPaths: envSnapshotContentPaths()},
 	}
-	gotJSON, err := instanceSnapshotMetadataJSON(meta)
+	gotJSON, err := envSnapshotMetadataJSON(meta)
 	if err != nil {
-		t.Fatalf("instanceSnapshotMetadataJSON() error = %v", err)
+		t.Fatalf("envSnapshotMetadataJSON() error = %v", err)
 	}
 	wantJSON := "{\n  \"schema\": 1,\n  \"name\": \"2026-05-28-093012\",\n  \"project_slug\": \"client\",\n  \"created_at\": \"2026-05-28T09:30:12Z\",\n  \"env_path\": \"/data/nf/envs/client\",\n  \"compose_project\": \"nf_client_env\",\n  \"wordpress_url\": \"http://localhost:18432\",\n  \"contents\": {\n    \"database\": \"database.sql.gz\",\n    \"wp_content\": \"wp-content.tar.gz\",\n    \"wp_content_paths\": [\n      \"wp-content/uploads\",\n      \"wp-content/plugins\",\n      \"wp-content/mu-plugins\",\n      \"wp-content/languages\"\n    ]\n  }\n}\n"
 	if gotJSON != wantJSON {
-		t.Fatalf("instanceSnapshotMetadataJSON() =\n%s\nwant=\n%s", gotJSON, wantJSON)
+		t.Fatalf("envSnapshotMetadataJSON() =\n%s\nwant=\n%s", gotJSON, wantJSON)
 	}
 }
 
-func TestRunInstanceUpAutoInitializesProjectMetadata(t *testing.T) {
+func TestRunEnvUpAutoInitializesProjectMetadata(t *testing.T) {
 	repoRoot := filepath.Join(t.TempDir(), "client-site")
 	if err := os.MkdirAll(filepath.Join(repoRoot, ".git"), 0o755); err != nil {
 		t.Fatalf("MkdirAll() error = %v", err)
@@ -1120,16 +1120,16 @@ func TestRunInstanceUpAutoInitializesProjectMetadata(t *testing.T) {
 	}
 }
 
-func TestLoadInstanceConfigUsesEnvBlock(t *testing.T) {
+func TestLoadEnvConfigUsesEnvBlock(t *testing.T) {
 	root := t.TempDir()
 	metadata := map[string]any{
 		"project":   map[string]any{"slug": "client", "name": "Client"},
 		"wordpress": map[string]any{"theme_path": "theme-src", "theme_slug": "theme"},
 		"env":       map[string]any{"compose": "env compose", "wordpress_service": "env-wp", "cli_service": "env-cli", "theme_mount_slug": "env-theme", "uploads_path": "env-uploads"},
 	}
-	cfg, ok := loadInstanceConfig(root, metadata)
+	cfg, ok := loadEnvConfig(root, metadata)
 	if !ok {
-		t.Fatalf("loadInstanceConfig() = false, want true")
+		t.Fatalf("loadEnvConfig() = false, want true")
 	}
 	if got, want := cfg.Compose, "env compose"; got != want {
 		t.Fatalf("Compose = %q, want %q", got, want)
@@ -1236,54 +1236,54 @@ func TestRunThemeTaskPreservesPassthroughSeparator(t *testing.T) {
 	}
 }
 
-func TestInstanceComposeProjectName(t *testing.T) {
+func TestEnvComposeProjectName(t *testing.T) {
 	for input, want := range map[string]string{
 		"client":        "nf_client_env",
 		" Client Site ": "nf_client_site_env",
 		"":              "nf_project_env",
 	} {
-		if got := instanceComposeProjectName(input); got != want {
-			t.Fatalf("instanceComposeProjectName(%q) = %q, want %q", input, got, want)
+		if got := envComposeProjectName(input); got != want {
+			t.Fatalf("envComposeProjectName(%q) = %q, want %q", input, got, want)
 		}
 	}
 }
 
-func TestInstanceDerivedPortsUseCleanedSlug(t *testing.T) {
-	wpA, mailpitA := instanceDerivedPorts(" Client Site ")
-	wpB, mailpitB := instanceDerivedPorts("client_site")
+func TestEnvDerivedPortsUseCleanedSlug(t *testing.T) {
+	wpA, mailpitA := envDerivedPorts(" Client Site ")
+	wpB, mailpitB := envDerivedPorts("client_site")
 	if wpA != wpB || mailpitA != mailpitB {
-		t.Fatalf("instanceDerivedPorts() = (%d, %d) and (%d, %d), want matching ports", wpA, mailpitA, wpB, mailpitB)
+		t.Fatalf("envDerivedPorts() = (%d, %d) and (%d, %d), want matching ports", wpA, mailpitA, wpB, mailpitB)
 	}
 	if mailpitA != wpA+1 {
-		t.Fatalf("instanceDerivedPorts() mailpit = %d, want wordpress+1 (%d)", mailpitA, wpA+1)
+		t.Fatalf("envDerivedPorts() mailpit = %d, want wordpress+1 (%d)", mailpitA, wpA+1)
 	}
 	if wpA < 18000 || mailpitA > 21999 {
-		t.Fatalf("instanceDerivedPorts() = (%d, %d), want ports in 18000-21999 block", wpA, mailpitA)
+		t.Fatalf("envDerivedPorts() = (%d, %d), want ports in 18000-21999 block", wpA, mailpitA)
 	}
 }
 
-func TestRenderInstanceEnvUsesComposeProjectName(t *testing.T) {
-	wpPort, mailpitPort := instanceDerivedPorts("client")
-	cfg := instanceConfig{ProjectSlug: "client", ProjectName: "Client", WordpressPort: wpPort, MailpitPort: mailpitPort}
+func TestRenderEnvFileUsesComposeProjectName(t *testing.T) {
+	wpPort, mailpitPort := envDerivedPorts("client")
+	cfg := envConfig{ProjectSlug: "client", ProjectName: "Client", WordpressPort: wpPort, MailpitPort: mailpitPort}
 	want := fmt.Sprintf("COMPOSE_PROJECT_NAME=nf_client_env\nWP_PORT=%d\nMAILPIT_PORT=%d\nDB_NAME=client\nDB_USER=client\nDB_PASSWORD=wordpress\nDB_ROOT_PASSWORD=root\nWP_URL=http://localhost:%d\nWP_TITLE=Client\nADMIN_USER=admin\nADMIN_PASSWORD=admin\nADMIN_EMAIL=web@nonfiction.ca\n", wpPort, mailpitPort, wpPort)
-	if got := renderInstanceEnv(cfg); got != want {
-		t.Fatalf("renderInstanceEnv() = %q, want %q", got, want)
+	if got := renderEnvFile(cfg); got != want {
+		t.Fatalf("renderEnvFile() = %q, want %q", got, want)
 	}
 }
 
-func TestRenderInstanceInfoUsesEffectivePorts(t *testing.T) {
-	cfg := instanceConfig{ProjectSlug: "client", ProjectName: "Client", EnvDir: filepath.Join("/data", "envs", "client"), WordpressPort: 18432, MailpitPort: 18433}
+func TestRenderEnvInfoUsesEffectivePorts(t *testing.T) {
+	cfg := envConfig{ProjectSlug: "client", ProjectName: "Client", EnvDir: filepath.Join("/data", "envs", "client"), WordpressPort: 18432, MailpitPort: 18433}
 	want := "Env:\n  project: client\n  path: /data/envs/client\n  compose project: nf_client_env\n  WordPress: http://localhost:18432\n  Mailpit:   http://localhost:18433"
-	if got := renderInstanceInfo(cfg, true); got != want {
-		t.Fatalf("renderInstanceInfo(full) = %q, want %q", got, want)
+	if got := renderEnvInfo(cfg, true); got != want {
+		t.Fatalf("renderEnvInfo(full) = %q, want %q", got, want)
 	}
 	want = "Env:\n  project: client\n  path: /data/envs/client\n  compose project: nf_client_env"
-	if got := renderInstanceInfo(cfg, false); got != want {
-		t.Fatalf("renderInstanceInfo(short) = %q, want %q", got, want)
+	if got := renderEnvInfo(cfg, false); got != want {
+		t.Fatalf("renderEnvInfo(short) = %q, want %q", got, want)
 	}
 }
 
-func TestLoadInstanceConfigAppliesPortOverrides(t *testing.T) {
+func TestLoadEnvConfigAppliesPortOverrides(t *testing.T) {
 	root := t.TempDir()
 	if err := os.MkdirAll(filepath.Join(root, "theme"), 0o755); err != nil {
 		t.Fatalf("MkdirAll() error = %v", err)
@@ -1303,29 +1303,29 @@ func TestLoadInstanceConfigAppliesPortOverrides(t *testing.T) {
 			},
 		},
 	}
-	cfg, ok := loadInstanceConfig(root, metadata)
+	cfg, ok := loadEnvConfig(root, metadata)
 	if !ok {
-		t.Fatalf("loadInstanceConfig() = false, want true")
+		t.Fatalf("loadEnvConfig() = false, want true")
 	}
 	if cfg.WordpressPort != 19111 || cfg.MailpitPort != 19112 {
 		t.Fatalf("effective ports = (%d, %d), want overrides (19111, 19112)", cfg.WordpressPort, cfg.MailpitPort)
 	}
 }
 
-func TestLoadInstanceConfigFallsBackPerPortIndependently(t *testing.T) {
+func TestLoadEnvConfigFallsBackPerPortIndependently(t *testing.T) {
 	root := t.TempDir()
 	if err := os.MkdirAll(filepath.Join(root, "theme"), 0o755); err != nil {
 		t.Fatalf("MkdirAll() error = %v", err)
 	}
-	derivedWordpress, derivedMailpit := instanceDerivedPorts("client")
+	derivedWordpress, derivedMailpit := envDerivedPorts("client")
 	for _, tc := range []struct {
 		name          string
-		instancePorts map[string]any
+		envPorts      map[string]any
 		wantWordpress int
 		wantMailpit   int
 	}{
-		{name: "wordpress override only", instancePorts: map[string]any{"wordpress": 19111, "mailpit": 0}, wantWordpress: 19111, wantMailpit: derivedMailpit},
-		{name: "mailpit override only", instancePorts: map[string]any{"wordpress": 0, "mailpit": 19112}, wantWordpress: derivedWordpress, wantMailpit: 19112},
+		{name: "wordpress override only", envPorts: map[string]any{"wordpress": 19111, "mailpit": 0}, wantWordpress: 19111, wantMailpit: derivedMailpit},
+		{name: "mailpit override only", envPorts: map[string]any{"wordpress": 0, "mailpit": 19112}, wantWordpress: derivedWordpress, wantMailpit: 19112},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			metadata := map[string]any{
@@ -1337,12 +1337,12 @@ func TestLoadInstanceConfigFallsBackPerPortIndependently(t *testing.T) {
 					"cli_service":       "cli",
 					"theme_mount_slug":  "theme",
 					"uploads_path":      "uploads",
-					"ports":             tc.instancePorts,
+					"ports":             tc.envPorts,
 				},
 			}
-			cfg, ok := loadInstanceConfig(root, metadata)
+			cfg, ok := loadEnvConfig(root, metadata)
 			if !ok {
-				t.Fatalf("loadInstanceConfig() = false, want true")
+				t.Fatalf("loadEnvConfig() = false, want true")
 			}
 			if cfg.WordpressPort != tc.wantWordpress || cfg.MailpitPort != tc.wantMailpit {
 				t.Fatalf("effective ports = (%d, %d), want (%d, %d)", cfg.WordpressPort, cfg.MailpitPort, tc.wantWordpress, tc.wantMailpit)
@@ -1369,49 +1369,49 @@ func openAdjacentPortPair(t *testing.T) (int, net.Listener, net.Listener) {
 	return 0, nil, nil
 }
 
-func TestPreflightInstancePortsDetectsSingleCollision(t *testing.T) {
-	wpPort, mailpitPort := instanceDerivedPorts("client")
+func TestPreflightEnvPortsDetectsSingleCollision(t *testing.T) {
+	wpPort, mailpitPort := envDerivedPorts("client")
 	listener, err := net.Listen("tcp", fmt.Sprintf(":%d", wpPort))
 	if err != nil {
 		t.Fatalf("net.Listen() error = %v", err)
 	}
 	t.Cleanup(func() { _ = listener.Close() })
 
-	cfg := instanceConfig{ProjectSlug: "client", EnvDir: filepath.Join("/data", "envs", "client"), WordpressPort: wpPort, MailpitPort: mailpitPort}
-	err = preflightInstancePorts(cfg)
+	cfg := envConfig{ProjectSlug: "client", EnvDir: filepath.Join("/data", "envs", "client"), WordpressPort: wpPort, MailpitPort: mailpitPort}
+	err = preflightEnvPorts(cfg)
 	if err == nil {
-		t.Fatal("preflightInstancePorts() error = nil, want collision")
+		t.Fatal("preflightEnvPorts() error = nil, want collision")
 	}
 	message := err.Error()
 	for _, want := range []string{fmt.Sprintf("Port %d is already in use.", wpPort), fmt.Sprintf("WordPress: http://localhost:%d", wpPort), fmt.Sprintf("Mailpit:   http://localhost:%d", mailpitPort)} {
 		if !strings.Contains(message, want) {
-			t.Fatalf("preflightInstancePorts() error = %q, want %q", message, want)
+			t.Fatalf("preflightEnvPorts() error = %q, want %q", message, want)
 		}
 	}
 }
 
-func TestPreflightInstancePortsDetectsBothCollisions(t *testing.T) {
+func TestPreflightEnvPortsDetectsBothCollisions(t *testing.T) {
 	wpPort, first, second := openAdjacentPortPair(t)
 	t.Cleanup(func() {
 		_ = first.Close()
 		_ = second.Close()
 	})
 
-	cfg := instanceConfig{ProjectSlug: "client", EnvDir: filepath.Join("/data", "envs", "client"), WordpressPort: wpPort, MailpitPort: wpPort + 1}
-	err := preflightInstancePorts(cfg)
+	cfg := envConfig{ProjectSlug: "client", EnvDir: filepath.Join("/data", "envs", "client"), WordpressPort: wpPort, MailpitPort: wpPort + 1}
+	err := preflightEnvPorts(cfg)
 	if err == nil {
-		t.Fatal("preflightInstancePorts() error = nil, want collision")
+		t.Fatal("preflightEnvPorts() error = nil, want collision")
 	}
 	message := err.Error()
 	for _, want := range []string{fmt.Sprintf("Ports %d and %d are already in use.", wpPort, wpPort+1), fmt.Sprintf("WordPress: http://localhost:%d", wpPort), fmt.Sprintf("Mailpit:   http://localhost:%d", wpPort+1)} {
 		if !strings.Contains(message, want) {
-			t.Fatalf("preflightInstancePorts() error = %q, want %q", message, want)
+			t.Fatalf("preflightEnvPorts() error = %q, want %q", message, want)
 		}
 	}
 }
 
-func TestInstanceCommandHelpersBuildExpectedArgs(t *testing.T) {
-	cfg := instanceConfig{
+func TestEnvCommandHelpersBuildExpectedArgs(t *testing.T) {
+	cfg := envConfig{
 		ProjectSlug:      "client",
 		ProjectName:      "Client",
 		RepoRoot:         "/repo",
@@ -1425,59 +1425,59 @@ func TestInstanceCommandHelpersBuildExpectedArgs(t *testing.T) {
 		ThemeSlug:        "client",
 	}
 
-	if got, want := instanceComposeArgs(cfg, "up", "-d"), []string{"docker", "compose", "up", "-d"}; !reflect.DeepEqual(got, want) {
-		t.Fatalf("instanceComposeArgs() = %#v, want %#v", got, want)
+	if got, want := envComposeArgs(cfg, "up", "-d"), []string{"docker", "compose", "up", "-d"}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("envComposeArgs() = %#v, want %#v", got, want)
 	}
-	if got, want := instanceWpArgs(cfg, "plugin", "list"), []string{"docker", "compose", "run", "--rm", "cli", "wp", "plugin", "list", "--allow-root"}; !reflect.DeepEqual(got, want) {
-		t.Fatalf("instanceWpArgs() = %#v, want %#v", got, want)
+	if got, want := envWpArgs(cfg, "plugin", "list"), []string{"docker", "compose", "run", "--rm", "cli", "wp", "plugin", "list", "--allow-root"}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("envWpArgs() = %#v, want %#v", got, want)
 	}
-	if got, want := instanceShellArgs(cfg), []string{"docker", "compose", "exec", "wordpress", "sh"}; !reflect.DeepEqual(got, want) {
-		t.Fatalf("instanceShellArgs() = %#v, want %#v", got, want)
+	if got, want := envShellArgs(cfg), []string{"docker", "compose", "exec", "wordpress", "sh"}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("envShellArgs() = %#v, want %#v", got, want)
 	}
-	if got, want := instanceWpThemeIsActiveArgs(cfg, ""), []string{"docker", "compose", "run", "--rm", "cli", "wp", "theme", "is-active", "theme", "--allow-root"}; !reflect.DeepEqual(got, want) {
-		t.Fatalf("instanceWpThemeIsActiveArgs() = %#v, want %#v", got, want)
+	if got, want := envWpThemeIsActiveArgs(cfg, ""), []string{"docker", "compose", "run", "--rm", "cli", "wp", "theme", "is-active", "theme", "--allow-root"}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("envWpThemeIsActiveArgs() = %#v, want %#v", got, want)
 	}
-	hostPath, containerPath := instanceThemeArchivePaths(cfg, "/tmp/theme.zip")
+	hostPath, containerPath := envThemeArchivePaths(cfg, "/tmp/theme.zip")
 	if hostPath != filepath.Join(cfg.EnvDir, "uploads", "theme.zip") || containerPath != "/env/uploads/theme.zip" {
-		t.Fatalf("instanceThemeArchivePaths() = (%q, %q), want host and container upload paths", hostPath, containerPath)
+		t.Fatalf("envThemeArchivePaths() = (%q, %q), want host and container upload paths", hostPath, containerPath)
 	}
-	if got, want := instanceCommandDir(cfg), cfg.EnvDir; got != want {
-		t.Fatalf("instanceCommandDir() = %q, want %q", got, want)
+	if got, want := envCommandDir(cfg), cfg.EnvDir; got != want {
+		t.Fatalf("envCommandDir() = %q, want %q", got, want)
 	}
-	if got, want := instanceWpThemeActivateArgs(cfg, ""), []string{"docker", "compose", "run", "--rm", "cli", "wp", "theme", "activate", "theme", "--allow-root"}; !reflect.DeepEqual(got, want) {
-		t.Fatalf("instanceWpThemeActivateArgs() = %#v, want %#v", got, want)
+	if got, want := envWpThemeActivateArgs(cfg, ""), []string{"docker", "compose", "run", "--rm", "cli", "wp", "theme", "activate", "theme", "--allow-root"}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("envWpThemeActivateArgs() = %#v, want %#v", got, want)
 	}
-	if got, want := instanceWpThemeActivateArgs(cfg, "custom-slug"), []string{"docker", "compose", "run", "--rm", "cli", "wp", "theme", "activate", "custom-slug", "--allow-root"}; !reflect.DeepEqual(got, want) {
-		t.Fatalf("instanceWpThemeActivateArgs(explicit) = %#v, want %#v", got, want)
+	if got, want := envWpThemeActivateArgs(cfg, "custom-slug"), []string{"docker", "compose", "run", "--rm", "cli", "wp", "theme", "activate", "custom-slug", "--allow-root"}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("envWpThemeActivateArgs(explicit) = %#v, want %#v", got, want)
 	}
-	installArgs := instanceWpCoreInstallArgs(cfg)
+	installArgs := envWpCoreInstallArgs(cfg)
 	joined := strings.Join(installArgs, " ")
 	for _, wanted := range []string{"docker compose run --rm cli sh -lc", "WP_URL", "WP_TITLE", "ADMIN_USER", "ADMIN_PASSWORD", "ADMIN_EMAIL", "wp theme activate theme --allow-root"} {
 		if !strings.Contains(joined, wanted) {
-			t.Fatalf("instanceWpCoreInstallArgs() missing %q in %#v", wanted, installArgs)
+			t.Fatalf("envWpCoreInstallArgs() missing %q in %#v", wanted, installArgs)
 		}
 	}
 	if strings.Contains(joined, "wp core is-installed") {
-		t.Fatalf("instanceWpCoreInstallArgs() unexpectedly probes install state: %#v", installArgs)
+		t.Fatalf("envWpCoreInstallArgs() unexpectedly probes install state: %#v", installArgs)
 	}
-	if got, want := instanceRepoPath("/repo", "dist/theme.zip"), filepath.Join("/repo", "dist", "theme.zip"); got != want {
-		t.Fatalf("instanceRepoPath() = %q, want %q", got, want)
+	if got, want := envRepoPath("/repo", "dist/theme.zip"), filepath.Join("/repo", "dist", "theme.zip"); got != want {
+		t.Fatalf("envRepoPath() = %q, want %q", got, want)
 	}
-	if got, want := instanceRepoPath("/repo", "/tmp/theme.zip"), "/tmp/theme.zip"; got != want {
-		t.Fatalf("instanceRepoPath() = %q, want %q", got, want)
+	if got, want := envRepoPath("/repo", "/tmp/theme.zip"), "/tmp/theme.zip"; got != want {
+		t.Fatalf("envRepoPath() = %q, want %q", got, want)
 	}
-	if got, want := (instanceCommandRunner{name: "up", cfg: cfg}).Render(), "docker compose up -d; install WordPress if missing and ensure the mounted theme is active"; got != want {
+	if got, want := (envCommandRunner{name: "up", cfg: cfg}).Render(), "docker compose up -d; install WordPress if missing and ensure the mounted theme is active"; got != want {
 		t.Fatalf("up Render() = %q, want %q", got, want)
 	}
-	if got, want := (instanceCommandRunner{name: "reset", cfg: cfg}).Render(), "docker compose down -v --remove-orphans; nuke env data and recreate it with docker compose up -d, install WordPress if missing, and ensure the mounted theme is active"; got != want {
+	if got, want := (envCommandRunner{name: "reset", cfg: cfg}).Render(), "docker compose down -v --remove-orphans; nuke env data and recreate it with docker compose up -d, install WordPress if missing, and ensure the mounted theme is active"; got != want {
 		t.Fatalf("reset Render() = %q, want %q", got, want)
 	}
-	if got, want := (instanceCommandRunner{name: "shell", cfg: cfg}).Render(), "docker compose exec wordpress sh"; got != want {
+	if got, want := (envCommandRunner{name: "shell", cfg: cfg}).Render(), "docker compose exec wordpress sh"; got != want {
 		t.Fatalf("shell Render() = %q, want %q", got, want)
 	}
 }
 
-func TestEnsureManagedInstanceWritesManagedFiles(t *testing.T) {
+func TestEnsureManagedEnvWritesManagedFiles(t *testing.T) {
 	configHome := t.TempDir()
 	t.Setenv("NF_CONFIG_HOME", configHome)
 	t.Setenv("NF_DATA_HOME", configHome)
@@ -1493,15 +1493,15 @@ func TestEnsureManagedInstanceWritesManagedFiles(t *testing.T) {
 		"wordpress": map[string]any{"theme_slug": "theme", "theme_path": "theme"},
 		"env":       map[string]any{"compose": "docker compose", "wordpress_service": "wordpress", "cli_service": "cli", "theme_mount_slug": "theme", "uploads_path": "uploads"},
 	}
-	cfg, ok := loadInstanceConfig(root, metadata)
+	cfg, ok := loadEnvConfig(root, metadata)
 	if !ok {
-		t.Fatalf("loadInstanceConfig() = false, want true")
+		t.Fatalf("loadEnvConfig() = false, want true")
 	}
 	if got, want := cfg.EnvDir, config.EnvDir("client"); got != want {
 		t.Fatalf("EnvDir = %q, want %q", got, want)
 	}
-	wpPort, mailpitPort := instanceDerivedPorts("client")
-	if err := ensureManagedInstance(cfg); err != nil {
+	wpPort, mailpitPort := envDerivedPorts("client")
+	if err := ensureManagedEnv(cfg); err != nil {
 		t.Fatalf("ensureManagedInstance() error = %v", err)
 	}
 	checks := map[string][]string{
@@ -1530,7 +1530,7 @@ func TestEnsureManagedInstanceWritesManagedFiles(t *testing.T) {
 	}
 }
 
-func TestRunInstanceUpPrintsUnderlyingCommands(t *testing.T) {
+func TestRunEnvUpPrintsUnderlyingCommands(t *testing.T) {
 	repoRoot := filepath.Join(t.TempDir(), "client-site")
 	if err := os.MkdirAll(filepath.Join(repoRoot, ".git"), 0o755); err != nil {
 		t.Fatalf("MkdirAll() error = %v", err)
@@ -1598,7 +1598,7 @@ func TestRunInstanceUpPrintsUnderlyingCommands(t *testing.T) {
 	}
 }
 
-func TestRunInstanceUpActivatesThemeWhenAlreadyInstalled(t *testing.T) {
+func TestRunEnvUpActivatesThemeWhenAlreadyInstalled(t *testing.T) {
 	repoRoot := filepath.Join(t.TempDir(), "client-site")
 	if err := os.MkdirAll(filepath.Join(repoRoot, ".git"), 0o755); err != nil {
 		t.Fatalf("MkdirAll() error = %v", err)
@@ -1670,7 +1670,7 @@ func TestRunInstanceUpActivatesThemeWhenAlreadyInstalled(t *testing.T) {
 	}
 }
 
-func TestRunInstanceResetPrintsUnderlyingCommands(t *testing.T) {
+func TestRunEnvResetPrintsUnderlyingCommands(t *testing.T) {
 	repoRoot := filepath.Join(t.TempDir(), "client-site")
 	if err := os.MkdirAll(filepath.Join(repoRoot, ".git"), 0o755); err != nil {
 		t.Fatalf("MkdirAll() error = %v", err)
@@ -1996,7 +1996,7 @@ func TestRunEnvShowPrintsEnvInfo(t *testing.T) {
 			t.Fatalf("Run(env show) = %d, want 0", got)
 		}
 	})
-	wpPort, mailpitPort := instanceDerivedPorts("client")
+	wpPort, mailpitPort := envDerivedPorts("client")
 	for _, want := range []string{"Env:\n", "  project: client\n", "  compose project: nf_client_env\n", fmt.Sprintf("  WordPress: http://localhost:%d\n", wpPort), fmt.Sprintf("  Mailpit:   http://localhost:%d", mailpitPort)} {
 		if !strings.Contains(output, want) {
 			t.Fatalf("Run(env show) output missing %q:\n%s", want, output)
