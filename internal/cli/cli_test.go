@@ -186,7 +186,7 @@ func TestRunInitHelpShowsFlags(t *testing.T) {
 
 func TestRunProviderHelpShowsCommands(t *testing.T) {
 	output := captureStdout(t, func() { _ = runProviderHelp() })
-	for _, wanted := range []string{"provider\n\nCommands:\n", "\n  list                list provider integrations\n", "\n  dnsimple            configure DNSimple integration\n", "\n  kinsta              configure Kinsta integration\n", "\n  linode              configure Linode integration and targets\n"} {
+	for _, wanted := range []string{"provider\n\nCommands:\n", "\n  list                 list provider integrations\n", "\n  show <provider>      show provider config status\n", "\n  check <provider>     preflight provider config\n"} {
 		if !strings.Contains(output, wanted) {
 			t.Fatalf("runProviderHelp() output missing %q:\n%s", wanted, output)
 		}
@@ -194,12 +194,76 @@ func TestRunProviderHelpShowsCommands(t *testing.T) {
 }
 
 func TestRunProviderListShowsProviders(t *testing.T) {
+	configDir := t.TempDir()
+	t.Setenv("NF_CONFIG_HOME", configDir)
+	t.Setenv("DNSIMPLE_TOKEN", "")
+	t.Setenv("DNSIMPLE_ACCOUNT_ID", "")
+	t.Setenv("KINSTA_API_KEY", "")
+	t.Setenv("LINODE_TOKEN", "")
+	t.Setenv("LINODE_CLI_TOKEN", "")
+
 	output := captureStdout(t, func() {
 		if got := Run([]string{"provider", "list"}); got != 0 {
 			t.Fatalf("Run() = %d, want 0", got)
 		}
 	})
-	for _, want := range []string{"dnsimple", "kinsta", "linode"} {
+	for _, want := range []string{"provider", "status", "missing", "dnsimple", "DNSIMPLE_TOKEN", "kinsta", "KINSTA_API_KEY", "linode", "LINODE_TOKEN or LINODE_CLI_TOKEN"} {
+		if !strings.Contains(output, want) {
+			t.Fatalf("Run() output missing %q:\n%s", want, output)
+		}
+	}
+}
+
+func TestRunProviderShowMasksConfiguredValues(t *testing.T) {
+	configDir := t.TempDir()
+	t.Setenv("NF_CONFIG_HOME", configDir)
+	t.Setenv("DNSIMPLE_TOKEN", "dnsimple-token-secret")
+	t.Setenv("DNSIMPLE_ACCOUNT_ID", "")
+
+	output := captureStdout(t, func() {
+		if got := Run([]string{"provider", "show", "dnsimple"}); got != 0 {
+			t.Fatalf("Run() = %d, want 0", got)
+		}
+	})
+	for _, want := range []string{"Provider: dnsimple", "Status: configured", "DNSIMPLE_TOKEN: dns***********", "DNSIMPLE_ACCOUNT_ID: 14 (default)"} {
+		if !strings.Contains(output, want) {
+			t.Fatalf("Run() output missing %q:\n%s", want, output)
+		}
+	}
+	if strings.Contains(output, "dnsimple-token-secret") {
+		t.Fatalf("Run() output leaked secret:\n%s", output)
+	}
+}
+
+func TestRunProviderCheckPreflightsWithoutRemoteCall(t *testing.T) {
+	configDir := t.TempDir()
+	t.Setenv("NF_CONFIG_HOME", configDir)
+	t.Setenv("LINODE_TOKEN", "")
+	t.Setenv("LINODE_CLI_TOKEN", "linode-token-secret")
+
+	output := captureStdout(t, func() {
+		if got := Run([]string{"provider", "check", "linode"}); got != 0 {
+			t.Fatalf("Run() = %d, want 0", got)
+		}
+	})
+	for _, want := range []string{"Provider linode preflight passed.", "No remote API call was made."} {
+		if !strings.Contains(output, want) {
+			t.Fatalf("Run() output missing %q:\n%s", want, output)
+		}
+	}
+}
+
+func TestRunProviderCheckFailsWhenRequiredConfigMissing(t *testing.T) {
+	configDir := t.TempDir()
+	t.Setenv("NF_CONFIG_HOME", configDir)
+	t.Setenv("KINSTA_API_KEY", "")
+
+	output := captureStdout(t, func() {
+		if got := Run([]string{"provider", "check", "kinsta"}); got != 1 {
+			t.Fatalf("Run() = %d, want 1", got)
+		}
+	})
+	for _, want := range []string{"Provider kinsta preflight failed.", "Missing: KINSTA_API_KEY", "No remote API call was made."} {
 		if !strings.Contains(output, want) {
 			t.Fatalf("Run() output missing %q:\n%s", want, output)
 		}

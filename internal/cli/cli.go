@@ -1010,6 +1010,7 @@ func configInitRequirements() []envwizard.Requirement {
 		{Keys: []string{"NF_SERVER_DOMAIN"}, Prompt: "NF_SERVER_DOMAIN (server domain): ", Default: "nfweb.dev", WriteKey: "NF_SERVER_DOMAIN"},
 		{Keys: []string{"DNSIMPLE_ACCOUNT_ID"}, Prompt: "DNSIMPLE_ACCOUNT_ID (DNSimple account id): ", Default: "14", WriteKey: "DNSIMPLE_ACCOUNT_ID"},
 		{Keys: []string{"DNSIMPLE_TOKEN"}, Prompt: "DNSimple token: ", Secret: true, WriteKey: "DNSIMPLE_TOKEN", Required: true},
+		{Keys: []string{"KINSTA_API_KEY"}, Prompt: "Kinsta API key: ", Secret: true, WriteKey: "KINSTA_API_KEY", Required: true},
 		{Keys: []string{"LINODE_TOKEN", "LINODE_CLI_TOKEN"}, Prompt: "LINODE_TOKEN (Linode API token): ", Secret: true, WriteKey: "LINODE_TOKEN", Required: true},
 		{Keys: []string{"NF_SECRET_SALT"}, Prompt: "NF_SECRET_SALT (used for derived passwords): ", Secret: true, WriteKey: "NF_SECRET_SALT", Required: true},
 	}
@@ -2903,10 +2904,9 @@ func runServerHelp() int {
 
 func runProviderHelp() int {
 	printGroupHelp("provider", []string{
-		"list                list provider integrations",
-		"dnsimple            configure DNSimple integration",
-		"kinsta              configure Kinsta integration",
-		"linode              configure Linode integration and targets",
+		"list                 list provider integrations",
+		"show <provider>      show provider config status",
+		"check <provider>     preflight provider config",
 	})
 	return 0
 }
@@ -3639,17 +3639,159 @@ func runProvider(argv []string) int {
 			fmt.Fprintln(os.Stderr, "provider list takes no arguments")
 			return 1
 		}
-		fmt.Println("dnsimple")
-		fmt.Println("kinsta")
-		fmt.Println("linode")
-		return 0
-	case "dnsimple", "kinsta", "linode":
-		fmt.Fprintf(os.Stderr, "provider %s commands are not implemented yet\n", argv[0])
-		return 1
+		return cmdProviderList()
+	case "show":
+		if len(argv) != 2 {
+			fmt.Fprintln(os.Stderr, "provider show takes exactly one provider")
+			return 1
+		}
+		return cmdProviderShow(argv[1])
+	case "check":
+		if len(argv) != 2 {
+			fmt.Fprintln(os.Stderr, "provider check takes exactly one provider")
+			return 1
+		}
+		return cmdProviderCheck(argv[1])
 	default:
 		fmt.Fprintln(os.Stderr, "unsupported provider command")
 		return 1
 	}
+}
+
+type providerConfigKey struct {
+	Keys     []string
+	Required bool
+	Default  string
+	Secret   bool
+}
+
+type providerConfigStatus struct {
+	Name    string
+	Keys    []providerConfigKey
+	Missing []string
+	Values  map[string]string
+}
+
+func providerConfigStatuses() []providerConfigStatus {
+	return []providerConfigStatus{
+		providerConfigStatusFor("dnsimple", []providerConfigKey{
+			{Keys: []string{"DNSIMPLE_TOKEN"}, Required: true, Secret: true},
+			{Keys: []string{"DNSIMPLE_ACCOUNT_ID"}, Default: "14"},
+		}),
+		providerConfigStatusFor("kinsta", []providerConfigKey{
+			{Keys: []string{"KINSTA_API_KEY"}, Required: true, Secret: true},
+		}),
+		providerConfigStatusFor("linode", []providerConfigKey{
+			{Keys: []string{"LINODE_TOKEN", "LINODE_CLI_TOKEN"}, Required: true, Secret: true},
+		}),
+	}
+}
+
+func providerConfigStatusFor(name string, keys []providerConfigKey) providerConfigStatus {
+	status := providerConfigStatus{Name: name, Keys: keys, Values: map[string]string{}}
+	for _, group := range keys {
+		value := ""
+		for _, key := range group.Keys {
+			if v := envwizard.Value(key); v != "" {
+				value = v
+				status.Values[key] = v
+				break
+			}
+		}
+		if value == "" && group.Default != "" {
+			value = group.Default
+			status.Values[group.Keys[0]] = group.Default
+		}
+		if value == "" && group.Required {
+			status.Missing = append(status.Missing, strings.Join(group.Keys, " or "))
+		}
+	}
+	return status
+}
+
+func providerConfigStatusByName(name string) (providerConfigStatus, bool) {
+	name = strings.ToLower(strings.TrimSpace(name))
+	for _, status := range providerConfigStatuses() {
+		if status.Name == name {
+			return status, true
+		}
+	}
+	return providerConfigStatus{}, false
+}
+
+func providerStatusLabel(status providerConfigStatus) string {
+	if len(status.Missing) == 0 {
+		return "configured"
+	}
+	return "missing"
+}
+
+func providerMissingLabel(status providerConfigStatus) string {
+	if len(status.Missing) == 0 {
+		return "-"
+	}
+	return strings.Join(status.Missing, ", ")
+}
+
+func providerValueLabel(status providerConfigStatus, group providerConfigKey) string {
+	for _, key := range group.Keys {
+		if value := strings.TrimSpace(status.Values[key]); value != "" {
+			if group.Default != "" && value == group.Default && envwizard.Value(key) == "" {
+				return value + " (default)"
+			}
+			if !group.Secret {
+				return value
+			}
+			return maskSecret(value)
+		}
+	}
+	return "unset"
+}
+
+func cmdProviderList() int {
+	rows := [][]string{{"provider", "status", "missing"}}
+	for _, status := range providerConfigStatuses() {
+		rows = append(rows, []string{status.Name, providerStatusLabel(status), providerMissingLabel(status)})
+	}
+	fmt.Println(formatTable(rows))
+	return 0
+}
+
+func cmdProviderShow(name string) int {
+	status, ok := providerConfigStatusByName(name)
+	if !ok {
+		fmt.Fprintf(os.Stderr, "unsupported provider %q\n", name)
+		return 1
+	}
+	fmt.Printf("Provider: %s\n", status.Name)
+	fmt.Printf("Status: %s\n", providerStatusLabel(status))
+	fmt.Printf("Config file: %s\n", config.EnvFile())
+	fmt.Println("Values:")
+	for _, group := range status.Keys {
+		fmt.Printf("  %s: %s\n", strings.Join(group.Keys, " or "), providerValueLabel(status, group))
+	}
+	if len(status.Missing) > 0 {
+		fmt.Printf("Missing: %s\n", providerMissingLabel(status))
+	}
+	return 0
+}
+
+func cmdProviderCheck(name string) int {
+	status, ok := providerConfigStatusByName(name)
+	if !ok {
+		fmt.Fprintf(os.Stderr, "unsupported provider %q\n", name)
+		return 1
+	}
+	if len(status.Missing) > 0 {
+		fmt.Printf("Provider %s preflight failed.\n", status.Name)
+		fmt.Printf("Missing: %s\n", providerMissingLabel(status))
+		fmt.Printf("Set values in the environment or %s.\n", config.EnvFile())
+		fmt.Println("No remote API call was made.")
+		return 1
+	}
+	fmt.Printf("Provider %s preflight passed.\n", status.Name)
+	fmt.Println("No remote API call was made.")
+	return 0
 }
 
 func runTarget(argv []string) int {
