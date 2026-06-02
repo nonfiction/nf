@@ -2986,6 +2986,7 @@ func runProviderHelp() int {
 
 func runTargetHelp() int {
 	printGroupHelp("target", []string{
+		"add linode <name> [flags]   create or ensure a Linode target",
 		"list                list deployable targets",
 		"show <target>       show a deployable target",
 	})
@@ -3018,6 +3019,8 @@ func runConfigHelp() int {
 		"set-base-domain <domain>      set provider base domain",
 		"set-default-wp-email <email>  set default WordPress email",
 		"set-default-wp-user <user>    set default WordPress user",
+		"set-linode-default-region <region>   set default Linode region",
+		"set-linode-default-type <type>       set default Linode type",
 		"show                         show global config",
 	})
 	return 0
@@ -3531,6 +3534,18 @@ func runConfig(argv []string) int {
 			return 1
 		}
 		return cmdConfigSet("default_wp_user", argv[1])
+	case "set-linode-default-region":
+		if len(argv) != 2 || strings.TrimSpace(argv[1]) == "" {
+			fmt.Fprintln(os.Stderr, "config set-linode-default-region takes exactly one region")
+			return 1
+		}
+		return cmdConfigSet("linode_default_region", argv[1])
+	case "set-linode-default-type":
+		if len(argv) != 2 || strings.TrimSpace(argv[1]) == "" {
+			fmt.Fprintln(os.Stderr, "config set-linode-default-type takes exactly one type")
+			return 1
+		}
+		return cmdConfigSet("linode_default_type", argv[1])
 	case "show":
 		if len(argv) != 1 {
 			fmt.Fprintln(os.Stderr, "config show takes no arguments")
@@ -3600,6 +3615,8 @@ func cmdConfigShow() int {
 	fmt.Printf("Default WP User: %s\n", values["default_wp_user"])
 	fmt.Printf("Base Domain: %s\n", values["base_domain"])
 	fmt.Printf("DNSimple Account ID: %s\n", values["dnsimple_account_id"])
+	fmt.Printf("Linode Default Region: %s\n", values["linode_default_region"])
+	fmt.Printf("Linode Default Type: %s\n", values["linode_default_type"])
 	fmt.Printf("Password Salt: %s\n", saltStatus)
 	return 0
 }
@@ -4303,10 +4320,72 @@ func runTarget(argv []string) int {
 			return 1
 		}
 		return cmdShowTarget(argv[1])
+	case "add":
+		return runTargetAdd(argv[1:])
 	default:
 		fmt.Fprintln(os.Stderr, "unsupported target command")
 		return 1
 	}
+}
+
+func runTargetAdd(argv []string) int {
+	if len(argv) < 2 || argv[0] != "linode" {
+		fmt.Fprintln(os.Stderr, "target add takes provider and name: nf target add linode <name>")
+		return 1
+	}
+	args := provision.Args{Provider: "linode", DnsProvider: "dnsimple", Name: argv[1], TargetMode: true}
+	fs := flag.NewFlagSet("target add linode", flag.ContinueOnError)
+	fs.StringVar(&args.Region, "region", "", "Linode region")
+	fs.StringVar(&args.Type, "type", "", "Linode type")
+	fs.StringVar(&args.UbuntuVersion, "ubuntu-version", "", "Ubuntu LTS version to use")
+	fs.StringVar(&args.Firewall, "firewall", "", "Linode cloud firewall mode (managed or none)")
+	fs.StringVar(&args.FirewallID, "firewall-id", "", "existing Linode cloud firewall id")
+	fs.StringVar(&args.SshUser, "ssh-user", "", "deployment SSH user")
+	fs.StringVar(&args.SshKeySource, "ssh-key-source", "", "SSH key source (linode-profile or file)")
+	fs.StringVar(&args.SshKeyLabel, "ssh-key-label", "", "filter Linode profile SSH keys by label")
+	fs.StringVar(&args.SshKeyID, "ssh-key-id", "", "filter Linode profile SSH keys by id")
+	fs.BoolVar(&args.AllLinodeSshKeys, "all-linode-ssh-keys", false, "use all Linode profile SSH keys")
+	fs.StringVar(&args.SshPublicKeyFile, "ssh-public-key-file", "", "SSH public key file")
+	fs.StringVar(&args.WriteCloudInit, "write-cloud-init", "", "write cloud-init preview to a file")
+	fs.BoolVar(&args.NoWait, "no-wait", false, "skip SSH, TLS, and health checks")
+	fs.BoolVar(&args.NonInteractive, "non-interactive", false, "")
+	fs.BoolVar(&args.ShowCloudInit, "show-cloud-init", false, "show cloud-init preview")
+	fs.BoolVar(&args.Execute, "execute", false, "execute remote provisioning")
+	fs.BoolVar(&args.Yes, "yes", false, "confirm execution in non-interactive mode")
+	fs.BoolVar(&args.DryRun, "dry-run", false, "show the plan without executing")
+	fs.SetOutput(os.Stderr)
+	if err := fs.Parse(argv[2:]); err != nil {
+		return 1
+	}
+	if fs.NArg() != 0 {
+		fmt.Fprintln(os.Stderr, "target add linode takes exactly one name")
+		return 1
+	}
+	if args.Execute && args.DryRun {
+		fmt.Fprintln(os.Stderr, "Choose either --execute or --dry-run, not both.")
+		return 1
+	}
+	if !args.Execute {
+		args.DryRun = true
+	}
+	if args.Execute && !args.NoWait {
+		args.Wait = true
+	}
+	if args.NonInteractive && args.Execute && !args.Yes {
+		fmt.Fprintln(os.Stderr, "Remote execution requires both --execute and --yes in non-interactive mode.")
+		return 1
+	}
+	plan, err := provision.BuildPlan(args)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		return 1
+	}
+	_, err = provision.ProvisionServer(plan)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		return 1
+	}
+	return 0
 }
 
 func runRemote(argv []string) int {
