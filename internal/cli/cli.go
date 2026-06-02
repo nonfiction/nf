@@ -1127,15 +1127,27 @@ func discoverGitRoot(start string) (string, bool) {
 }
 
 func projectContextAvailable() bool {
-	_, ok := currentGitRoot()
+	_, ok := currentNFProjectRoot()
 	return ok
 }
 
 func requireProjectContext(command string) error {
-	if _, ok := currentGitRoot(); !ok {
-		return ProjectError{Msg: fmt.Sprintf("%s requires a .git repository above the current directory", command)}
+	if _, ok := currentNFProjectRoot(); !ok {
+		return ProjectError{Msg: fmt.Sprintf("%s requires an nf project with .nf next to .git", command)}
 	}
 	return nil
+}
+
+func currentNFProjectRoot() (string, bool) {
+	root, ok := currentGitRoot()
+	if !ok {
+		return "", false
+	}
+	info, err := os.Stat(filepath.Join(root, ".nf"))
+	if err != nil || !info.IsDir() {
+		return "", false
+	}
+	return root, true
 }
 
 func formatTable(rows [][]string) string {
@@ -3453,13 +3465,35 @@ func runHelp() int {
 	fmt.Println("  provider      manage provider integrations")
 	fmt.Println("  target        list and show deployable targets")
 	fmt.Println("  site          refresh, list, and show remote sites/envs")
-	fmt.Println("  remote        manage repo deploy remotes")
-	fmt.Println("  theme         package artifacts and run theme tasks")
-	fmt.Println("  env           manage the local development env")
+	if projectContextAvailable() {
+		fmt.Println("  remote        manage repo deploy remotes")
+		fmt.Println("  theme         package artifacts and run theme tasks")
+		fmt.Println("  env           manage the local development env")
+	}
 	fmt.Println("  config        manage global config")
 	fmt.Println("  password      derive passwords")
 	fmt.Println("  help          show help")
 	return 0
+}
+
+func projectOnlyCommand(name string) bool {
+	switch name {
+	case "remote", "theme", "env":
+		return true
+	default:
+		return false
+	}
+}
+
+func rejectOutsideProject(command string) bool {
+	if !projectOnlyCommand(command) {
+		return false
+	}
+	if err := requireProjectContext(command); err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		return true
+	}
+	return false
 }
 
 type deleteServerOptions struct {
@@ -3519,12 +3553,21 @@ func Run(argv []string) int {
 	case "site":
 		return runSite(argv[1:])
 	case "remote":
+		if rejectOutsideProject(argv[0]) {
+			return 1
+		}
 		return runRemote(argv[1:])
 	case "env":
+		if rejectOutsideProject(argv[0]) {
+			return 1
+		}
 		return runEnv(argv[1:])
 	case "init":
 		return runInit(argv[1:])
 	case "theme":
+		if rejectOutsideProject(argv[0]) {
+			return 1
+		}
 		return runTheme(argv[1:])
 	case "config":
 		return runConfig(argv[1:])
@@ -3548,12 +3591,21 @@ func runTopicHelp(argv []string) int {
 	case "site":
 		return runSiteHelp()
 	case "remote":
+		if rejectOutsideProject(argv[0]) {
+			return 1
+		}
 		return runRemoteHelp()
 	case "env":
+		if rejectOutsideProject(argv[0]) {
+			return 1
+		}
 		return runEnvHelp()
 	case "init":
 		return runInitHelp()
 	case "theme":
+		if rejectOutsideProject(argv[0]) {
+			return 1
+		}
 		return runThemeHelp()
 	case "config":
 		return runConfigHelp()

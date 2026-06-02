@@ -136,19 +136,19 @@ func TestRunHelpShowsTopLevelCommandsOutsideGit(t *testing.T) {
 	t.Cleanup(func() { _ = os.Chdir(oldwd) })
 
 	output := captureStdout(t, func() { _ = runHelp() })
-	for _, wanted := range []string{"\n  init          initialize project metadata\n", "\n  provider      manage provider integrations\n", "\n  target        list and show deployable targets\n", "\n  site          refresh, list, and show remote sites/envs\n", "\n  remote        manage repo deploy remotes\n", "\n  theme         package artifacts and run theme tasks\n", "\n  env           manage the local development env\n", "\n  config        manage global config\n", "\n  password      derive passwords\n", "\n  help          show help\n"} {
+	for _, wanted := range []string{"\n  init          initialize project metadata\n", "\n  provider      manage provider integrations\n", "\n  target        list and show deployable targets\n", "\n  site          refresh, list, and show remote sites/envs\n", "\n  config        manage global config\n", "\n  password      derive passwords\n", "\n  help          show help\n"} {
 		if !strings.Contains(output, wanted) {
 			t.Fatalf("runHelp() output missing %q:\n%s", wanted, output)
 		}
 	}
-	for _, unwanted := range []string{"\n  repo          ", "\n  instance      ", "\n  server        ", "Shortcuts:", "nf up", "nf shell", "snapshot create", "\n  commands\n", "\n  run <name>\n", "\n  build\n"} {
+	for _, unwanted := range []string{"\n  remote        ", "\n  theme         ", "\n  env           ", "\n  repo          ", "\n  instance      ", "\n  server        ", "Shortcuts:", "nf up", "nf shell", "snapshot create", "\n  commands\n", "\n  run <name>\n", "\n  build\n"} {
 		if strings.Contains(output, unwanted) {
 			t.Fatalf("runHelp() output unexpectedly contained %q:\n%s", unwanted, output)
 		}
 	}
 }
 
-func TestRunHelpShowsTopLevelCommandsInsideGit(t *testing.T) {
+func TestRunHelpHidesProjectCommandsInsideGitWithoutNFDir(t *testing.T) {
 	workdir := t.TempDir()
 	if err := os.Mkdir(filepath.Join(workdir, ".git"), 0o755); err != nil {
 		t.Fatalf("Mkdir() error = %v", err)
@@ -163,14 +163,38 @@ func TestRunHelpShowsTopLevelCommandsInsideGit(t *testing.T) {
 	t.Cleanup(func() { _ = os.Chdir(oldwd) })
 
 	output := captureStdout(t, func() { _ = runHelp() })
-	for _, wanted := range []string{"\n  init          initialize project metadata\n", "\n  theme         package artifacts and run theme tasks\n", "\n  env           manage the local development env\n"} {
+	for _, wanted := range []string{"\n  init          initialize project metadata\n", "\n  provider      manage provider integrations\n", "\n  config        manage global config\n"} {
 		if !strings.Contains(output, wanted) {
 			t.Fatalf("runHelp() output missing %q:\n%s", wanted, output)
 		}
 	}
-	for _, unwanted := range []string{"\n  instance      ", "\n  server        ", "Shortcuts:", "nf up", "nf shell", "snapshot create", "\n  commands\n", "\n  run <name>\n", "\n  build\n"} {
+	for _, unwanted := range []string{"\n  remote        ", "\n  theme         ", "\n  env           ", "\n  instance      ", "\n  server        ", "Shortcuts:", "nf up", "nf shell", "snapshot create", "\n  commands\n", "\n  run <name>\n", "\n  build\n"} {
 		if strings.Contains(output, unwanted) {
 			t.Fatalf("runHelp() output unexpectedly contained %q:\n%s", unwanted, output)
+		}
+	}
+}
+
+func TestRunHelpShowsProjectCommandsInsideNFProject(t *testing.T) {
+	workdir := t.TempDir()
+	for _, dir := range []string{".git", ".nf"} {
+		if err := os.Mkdir(filepath.Join(workdir, dir), 0o755); err != nil {
+			t.Fatalf("Mkdir(%s) error = %v", dir, err)
+		}
+	}
+	oldwd, err := os.Getwd()
+	if err != nil {
+		t.Fatalf("Getwd() error = %v", err)
+	}
+	if err := os.Chdir(workdir); err != nil {
+		t.Fatalf("Chdir() error = %v", err)
+	}
+	t.Cleanup(func() { _ = os.Chdir(oldwd) })
+
+	output := captureStdout(t, func() { _ = runHelp() })
+	for _, wanted := range []string{"\n  remote        manage repo deploy remotes\n", "\n  theme         package artifacts and run theme tasks\n", "\n  env           manage the local development env\n"} {
+		if !strings.Contains(output, wanted) {
+			t.Fatalf("runHelp() output missing %q:\n%s", wanted, output)
 		}
 	}
 }
@@ -1970,6 +1994,9 @@ func TestRunEnvUpAutoInitializesProjectMetadata(t *testing.T) {
 	if err := os.MkdirAll(filepath.Join(repoRoot, ".git"), 0o755); err != nil {
 		t.Fatalf("MkdirAll() error = %v", err)
 	}
+	if err := os.MkdirAll(filepath.Join(repoRoot, ".nf"), 0o755); err != nil {
+		t.Fatalf("MkdirAll() error = %v", err)
+	}
 	if err := os.MkdirAll(filepath.Join(repoRoot, "work"), 0o755); err != nil {
 		t.Fatalf("MkdirAll() error = %v", err)
 	}
@@ -2822,8 +2849,8 @@ func TestRunRejectsThemeTasksOutsideGit(t *testing.T) {
 			t.Fatalf("Run() = %d, want 1", got)
 		}
 	})
-	if !strings.Contains(output, ".git repository") {
-		t.Fatalf("Run() stderr = %q, want .git repository message", output)
+	if !strings.Contains(output, "nf project") {
+		t.Fatalf("Run() stderr = %q, want nf project message", output)
 	}
 }
 
