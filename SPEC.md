@@ -259,6 +259,7 @@ Do not add old compatibility routes unless explicitly requested.
 * [x] `nf provider check <provider>` read-only API healthcheck and structured cache write
 * [x] `nf target list`
 * [x] `nf target show <target>`
+* [x] `nf target add linode <name>` create/ensure target scaffold
 * [x] `nf site refresh` target-based scaffold
 * [x] `nf site list [--refresh]`
 * [x] `nf site show <site-id-or-alias>`
@@ -286,6 +287,8 @@ Do not add old compatibility routes unless explicitly requested.
 * [x] `nf config set-base-domain <domain>`
 * [x] `nf config set-default-wp-email <email>`
 * [x] `nf config set-default-wp-user <user>`
+* [x] `nf config set-linode-default-region <region>`
+* [x] `nf config set-linode-default-type <type>`
 * [x] `nf config show`
 * [x] `nf password set-salt <salt>`
 * [x] `nf password show-salt`
@@ -519,6 +522,7 @@ Status:
 * [x] Kinsta read-only healthcheck and `kinsta` target
 * [x] Linode read-only healthcheck and tagged target discovery
 * [x] `nf target list/show` from `providers.json`
+* [x] `nf target add linode <name>` create/ensure Linode target with DNS/TLS and empty remote site inventory
 * [x] legacy `servers.json` fallback during cache migration
 
 ### Phase 4: Site/env inventory
