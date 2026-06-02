@@ -2335,7 +2335,7 @@ func cmdEnvRemoteSyncPlan(action, remoteName string, cfg envConfig, metadata map
 		return 1
 	}
 	if record == nil {
-		fmt.Fprintf(os.Stderr, "No cached remote env matched site %q env %q. Run nf site refresh when provider refresh is implemented, or update the local state cache.\n", siteID, remoteEnv)
+		fmt.Fprintf(os.Stderr, "No cached remote env matched site %q env %q. Run nf site refresh after target cache is current, or update the local state cache.\n", siteID, remoteEnv)
 		return 1
 	}
 	if err := validateSiteRecord(record); err != nil {
@@ -2464,9 +2464,23 @@ func cmdSiteRefresh() int {
 		fmt.Fprintln(os.Stderr, err)
 		return 1
 	}
-	fmt.Println("Provider refresh is not implemented yet; using local state cache.")
+	targets, err := cachedTargets()
+	if err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		return 1
+	}
+	fmt.Println("Site refresh discovers sites from cached targets.")
 	fmt.Printf("Sites cache: %s\n", state.StatePath("sites"))
 	fmt.Printf("Targets cache: %s\n", state.StatePath("providers"))
+	if len(targets) == 0 {
+		fmt.Println("No cached targets found. Run nf provider check <provider> to refresh target metadata.")
+		return 0
+	}
+	fmt.Printf("Targets: %d\n", len(targets))
+	for _, target := range targets {
+		fmt.Printf("  %s (%s)\n", firstRecordString(target, "_state_key", "target_name", "target", "name", "slug", "hostname", "label", "id"), recordValueString(target["provider"]))
+	}
+	fmt.Println("Remote target site discovery is not implemented yet; no site cache was changed.")
 	return 0
 }
 
@@ -3619,7 +3633,7 @@ func cmdRemoteAdd(name, siteID, env string) int {
 		return 1
 	}
 	if record == nil {
-		fmt.Fprintf(os.Stderr, "No cached remote env matched site %q env %q. Run nf site refresh when provider refresh is implemented, or update the local state cache.\n", siteID, env)
+		fmt.Fprintf(os.Stderr, "No cached remote env matched site %q env %q. Run nf site refresh after target cache is current, or update the local state cache.\n", siteID, env)
 		return 1
 	}
 	if err := validateSiteRecord(record); err != nil {

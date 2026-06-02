@@ -545,9 +545,36 @@ func TestRunSiteRefreshReportsStateCachePaths(t *testing.T) {
 			t.Fatalf("Run(site list --refresh) = %d, want 0", got)
 		}
 	})
-	for _, want := range []string{"Provider refresh is not implemented yet; using local state cache.", filepath.Join(stateDir, "sites.json"), filepath.Join(stateDir, "providers.json"), "No sites found."} {
+	for _, want := range []string{"Site refresh discovers sites from cached targets.", filepath.Join(stateDir, "sites.json"), filepath.Join(stateDir, "providers.json"), "No cached targets found.", "No sites found."} {
 		if !strings.Contains(output, want) {
 			t.Fatalf("site list --refresh output missing %q:\n%s", want, output)
+		}
+	}
+}
+
+func TestRunSiteRefreshReportsCachedTargets(t *testing.T) {
+	stateDir := t.TempDir()
+	t.Setenv("NF_STATE_HOME", stateDir)
+	providers := []map[string]any{{
+		"provider": "linode",
+		"targets":  []map[string]any{{"name": "app1-linode", "provider": "linode"}},
+	}}
+	data, err := json.MarshalIndent(providers, "", "  ")
+	if err != nil {
+		t.Fatalf("MarshalIndent(providers) error = %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(stateDir, "providers.json"), append(data, '\n'), 0o644); err != nil {
+		t.Fatalf("WriteFile(providers) error = %v", err)
+	}
+
+	output := captureStdout(t, func() {
+		if got := Run([]string{"site", "refresh"}); got != 0 {
+			t.Fatalf("Run(site refresh) = %d, want 0", got)
+		}
+	})
+	for _, want := range []string{"Site refresh discovers sites from cached targets.", "Targets: 1", "app1-linode (linode)", "Remote target site discovery is not implemented yet; no site cache was changed."} {
+		if !strings.Contains(output, want) {
+			t.Fatalf("site refresh output missing %q:\n%s", want, output)
 		}
 	}
 }
