@@ -6,6 +6,8 @@ import (
 	"fmt"
 	"io"
 	"net"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -14,6 +16,7 @@ import (
 	"time"
 
 	"github.com/nonfiction/nf/internal/config"
+	"github.com/nonfiction/nf/internal/state"
 )
 
 func TestSlugToTitle(t *testing.T) {
@@ -186,7 +189,7 @@ func TestRunInitHelpShowsFlags(t *testing.T) {
 
 func TestRunProviderHelpShowsCommands(t *testing.T) {
 	output := captureStdout(t, func() { _ = runProviderHelp() })
-	for _, wanted := range []string{"provider\n\nCommands:\n", "\n  list                 list provider integrations\n", "\n  show <provider>      show provider config status\n", "\n  check <provider>     preflight provider config\n"} {
+	for _, wanted := range []string{"provider\n\nCommands:\n", "\n  list                 list provider integrations\n", "\n  show <provider>      show cached provider metadata\n", "\n  check <provider>     run provider healthcheck\n"} {
 		if !strings.Contains(output, wanted) {
 			t.Fatalf("runProviderHelp() output missing %q:\n%s", wanted, output)
 		}
@@ -207,49 +210,138 @@ func TestRunProviderListShowsProviders(t *testing.T) {
 			t.Fatalf("Run() = %d, want 0", got)
 		}
 	})
-	for _, want := range []string{"provider", "status", "missing", "dnsimple", "DNSIMPLE_TOKEN", "kinsta", "KINSTA_API_KEY", "linode", "LINODE_TOKEN or LINODE_CLI_TOKEN"} {
+	for _, want := range []string{"provider", "status", "missing", "dnsimple", "base_domain", "DNSIMPLE_TOKEN", "kinsta", "KINSTA_API_KEY", "linode", "LINODE_TOKEN or LINODE_CLI_TOKEN"} {
 		if !strings.Contains(output, want) {
 			t.Fatalf("Run() output missing %q:\n%s", want, output)
 		}
 	}
 }
 
-func TestRunProviderShowMasksConfiguredValues(t *testing.T) {
+func TestRunProviderShowReadsCachedMetadata(t *testing.T) {
 	configDir := t.TempDir()
 	t.Setenv("NF_CONFIG_HOME", configDir)
+	stateDir := t.TempDir()
+	t.Setenv("NF_STATE_HOME", stateDir)
 	t.Setenv("DNSIMPLE_TOKEN", "dnsimple-token-secret")
-	t.Setenv("DNSIMPLE_ACCOUNT_ID", "")
+	if err := state.SaveStateRecords("providers", []map[string]any{{
+		"provider":      "dnsimple",
+		"account_id":    "14",
+		"account_email": "hello@example.com",
+		"targets":       []map[string]any{},
+	}}); err != nil {
+		t.Fatalf("SaveStateRecords(providers) error = %v", err)
+	}
 
 	output := captureStdout(t, func() {
 		if got := Run([]string{"provider", "show", "dnsimple"}); got != 0 {
 			t.Fatalf("Run() = %d, want 0", got)
 		}
 	})
-	for _, want := range []string{"Provider: dnsimple", "Status: configured", "DNSIMPLE_TOKEN: dns***********", "DNSIMPLE_ACCOUNT_ID: 14 (default)"} {
+	for _, want := range []string{"Provider: dnsimple", filepath.Join(stateDir, "providers.json"), `"provider": "dnsimple"`, `"account_id": "14"`, `"account_email": "hello@example.com"`} {
 		if !strings.Contains(output, want) {
 			t.Fatalf("Run() output missing %q:\n%s", want, output)
 		}
 	}
-	if strings.Contains(output, "dnsimple-token-secret") {
-		t.Fatalf("Run() output leaked secret:\n%s", output)
+	for _, unwanted := range []string{"dnsimple-token-secret", "DNSIMPLE_TOKEN", "Status: configured"} {
+		if strings.Contains(output, unwanted) {
+			t.Fatalf("Run() output included %q:\n%s", unwanted, output)
+		}
 	}
 }
 
-func TestRunProviderCheckPreflightsWithoutRemoteCall(t *testing.T) {
+func TestRunProviderShowRequiresCachedMetadata(t *testing.T) {
+	stateDir := t.TempDir()
+	t.Setenv("NF_STATE_HOME", stateDir)
+
+	stderr := captureStderr(t, func() {
+		if got := Run([]string{"provider", "show", "linode"}); got != 1 {
+			t.Fatalf("Run() = %d, want 1", got)
+		}
+	})
+	if !strings.Contains(stderr, `No cached provider metadata matched "linode"`) || !strings.Contains(stderr, "Run nf provider check linode") {
+		t.Fatalf("Run() stderr = %q", stderr)
+	}
+}
+
+func TestProviderValueLabelMasksConfiguredValues(t *testing.T) {
 	configDir := t.TempDir()
 	t.Setenv("NF_CONFIG_HOME", configDir)
+	if err := saveGlobalConfig(map[string]string{"base_domain": "nonfiction.dev"}); err != nil {
+		t.Fatalf("saveGlobalConfig() error = %v", err)
+	}
+	t.Setenv("DNSIMPLE_TOKEN", "dnsimple-token-secret")
+	status, ok := providerConfigStatusByName("dnsimple")
+	if !ok {
+		t.Fatal("providerConfigStatusByName(dnsimple) missing")
+	}
+	var secretGroup providerConfigKey
+	for _, group := range status.Keys {
+		if group.Secret {
+			secretGroup = group
+			break
+		}
+	}
+	if len(secretGroup.Keys) == 0 {
+		t.Fatal("dnsimple provider has no secret config group")
+	}
+	got := providerValueLabel(status, secretGroup)
+	if got != "dns***********" {
+		t.Fatalf("providerValueLabel() = %q, want masked secret", got)
+	}
+	if strings.Contains(got, "dnsimple-token-secret") {
+		t.Fatalf("providerValueLabel() leaked secret: %s", got)
+	}
+}
+
+func TestRunProviderCheckRunsHealthcheckAndSavesMetadata(t *testing.T) {
+	configDir := t.TempDir()
+	t.Setenv("NF_CONFIG_HOME", configDir)
+	stateDir := t.TempDir()
+	t.Setenv("NF_STATE_HOME", stateDir)
 	t.Setenv("LINODE_TOKEN", "")
 	t.Setenv("LINODE_CLI_TOKEN", "linode-token-secret")
+	oldCheck := providerCheckLinodeFn
+	providerCheckLinodeFn = func() (providerHealthResult, error) {
+		return providerHealthResult{
+			Provider: "linode",
+			Details:  map[string]string{"username": "nf-user", "restricted": "false"},
+			Record: map[string]any{
+				"provider":   "linode",
+				"username":   "nf-user",
+				"restricted": false,
+				"targets": []map[string]any{{
+					"id":       "98222343",
+					"name":     "app1-linode",
+					"provider": "linode",
+				}},
+			},
+		}, nil
+	}
+	t.Cleanup(func() { providerCheckLinodeFn = oldCheck })
 
 	output := captureStdout(t, func() {
 		if got := Run([]string{"provider", "check", "linode"}); got != 0 {
 			t.Fatalf("Run() = %d, want 0", got)
 		}
 	})
-	for _, want := range []string{"Provider linode preflight passed.", "No remote API call was made."} {
+	for _, want := range []string{"Provider linode healthcheck passed.", "username: nf-user", "restricted: false", "Saved provider metadata"} {
 		if !strings.Contains(output, want) {
 			t.Fatalf("Run() output missing %q:\n%s", want, output)
 		}
+	}
+	records, err := state.LoadStateRecords("providers")
+	if err != nil {
+		t.Fatalf("LoadStateRecords(providers) error = %v", err)
+	}
+	if len(records) != 1 {
+		t.Fatalf("providers records = %d, want 1", len(records))
+	}
+	if got := records[0]["username"]; got != "nf-user" {
+		t.Fatalf("provider username = %q, want nf-user", got)
+	}
+	targets, ok := records[0]["targets"].([]any)
+	if !ok || len(targets) != 1 {
+		t.Fatalf("provider targets = %#v, want one target", records[0]["targets"])
 	}
 }
 
@@ -270,15 +362,100 @@ func TestRunProviderCheckFailsWhenRequiredConfigMissing(t *testing.T) {
 	}
 }
 
+func TestRunProviderCheckReportsHealthcheckFailure(t *testing.T) {
+	configDir := t.TempDir()
+	t.Setenv("NF_CONFIG_HOME", configDir)
+	if err := saveGlobalConfig(map[string]string{"base_domain": "nonfiction.dev"}); err != nil {
+		t.Fatalf("saveGlobalConfig() error = %v", err)
+	}
+	t.Setenv("DNSIMPLE_TOKEN", "dnsimple-token-secret")
+	oldCheck := providerCheckDNSimpleFn
+	providerCheckDNSimpleFn = func() (providerHealthResult, error) {
+		return providerHealthResult{}, fmt.Errorf("dnsimple unavailable")
+	}
+	t.Cleanup(func() { providerCheckDNSimpleFn = oldCheck })
+
+	stderr := captureStderr(t, func() {
+		stdout := captureStdout(t, func() {
+			if got := Run([]string{"provider", "check", "dnsimple"}); got != 1 {
+				t.Fatalf("Run() = %d, want 1", got)
+			}
+		})
+		if !strings.Contains(stdout, "Provider dnsimple healthcheck failed.") {
+			t.Fatalf("Run() stdout missing healthcheck failure:\n%s", stdout)
+		}
+	})
+	if !strings.Contains(stderr, "dnsimple unavailable") {
+		t.Fatalf("Run() stderr = %q", stderr)
+	}
+}
+
+func TestCheckDNSimpleProviderValidatesManagedDomain(t *testing.T) {
+	configDir := t.TempDir()
+	t.Setenv("NF_CONFIG_HOME", configDir)
+	if err := saveGlobalConfig(map[string]string{"base_domain": "nonfiction.dev"}); err != nil {
+		t.Fatalf("saveGlobalConfig() error = %v", err)
+	}
+	requests := make([]string, 0)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requests = append(requests, r.URL.Path)
+		switch r.URL.Path {
+		case "/v2/whoami":
+			_, _ = io.WriteString(w, `{"data":{"account":{"id":14,"email":"hello@example.com","name":"Example"}}}`)
+		case "/v2/14/zones/nonfiction.dev":
+			_, _ = io.WriteString(w, `{"data":{"id":123,"account_id":14,"name":"nonfiction.dev","active":true}}`)
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer server.Close()
+	t.Setenv("DNSIMPLE_BASE_URL", server.URL)
+	t.Setenv("DNSIMPLE_TOKEN", "dnsimple-token-secret")
+	t.Setenv("DNSIMPLE_ACCOUNT_ID", "14")
+
+	result, err := checkDNSimpleProvider()
+	if err != nil {
+		t.Fatalf("checkDNSimpleProvider() error = %v", err)
+	}
+	if result.Record["managed_domain"] != "nonfiction.dev" || result.Record["zone_id"] != "123" {
+		t.Fatalf("checkDNSimpleProvider() record = %#v", result.Record)
+	}
+	if got := strings.Join(requests, ","); got != "/v2/whoami,/v2/14/zones/nonfiction.dev" {
+		t.Fatalf("requests = %q", got)
+	}
+}
+
 func TestRunTargetListAndShowUseStateTargets(t *testing.T) {
 	stateDir := t.TempDir()
 	t.Setenv("NF_STATE_HOME", stateDir)
-	servers := map[string]any{"servers": map[string]any{"app1-linode": map[string]any{"id": 98222343, "name": "app1-linode", "provider": "linode", "hostname": "app1.nfweb.dev", "status": "active", "ssh": map[string]any{"user": "nonfiction", "host": "app1.nfweb.dev"}}}}
-	data, err := json.MarshalIndent(servers, "", "  ")
+	providers := []map[string]any{
+		{
+			"provider":   "kinsta",
+			"company_id": "company-123",
+			"targets": []map[string]any{{
+				"id":         "kinsta",
+				"name":       "kinsta",
+				"provider":   "kinsta",
+				"company_id": "company-123",
+			}},
+		},
+		{
+			"provider": "linode",
+			"username": "nf-test",
+			"targets": []map[string]any{{
+				"id":       98222343,
+				"name":     "app1-linode",
+				"provider": "linode",
+				"ipv4":     "203.0.113.10",
+				"status":   "active",
+			}},
+		},
+	}
+	data, err := json.MarshalIndent(providers, "", "  ")
 	if err != nil {
 		t.Fatalf("MarshalIndent() error = %v", err)
 	}
-	if err := os.WriteFile(filepath.Join(stateDir, "servers.json"), append(data, '\n'), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(stateDir, "providers.json"), append(data, '\n'), 0o644); err != nil {
 		t.Fatalf("WriteFile() error = %v", err)
 	}
 
@@ -287,7 +464,7 @@ func TestRunTargetListAndShowUseStateTargets(t *testing.T) {
 			t.Fatalf("Run(target list) = %d, want 0", got)
 		}
 	})
-	for _, want := range []string{"target", "app1-linode", "linode", "app1.nfweb.dev", "active"} {
+	for _, want := range []string{"target", "kinsta", "app1-linode", "linode", "203.0.113.10", "active"} {
 		if !strings.Contains(listOutput, want) {
 			t.Fatalf("target list output missing %q:\n%s", want, listOutput)
 		}
@@ -298,10 +475,64 @@ func TestRunTargetListAndShowUseStateTargets(t *testing.T) {
 			t.Fatalf("Run(target show) = %d, want 0", got)
 		}
 	})
-	for _, want := range []string{`"name": "app1-linode"`, `"provider": "linode"`, `"hostname": "app1.nfweb.dev"`} {
+	for _, want := range []string{`"name": "app1-linode"`, `"provider": "linode"`, `"ipv4": "203.0.113.10"`} {
 		if !strings.Contains(showOutput, want) {
 			t.Fatalf("target show output missing %q:\n%s", want, showOutput)
 		}
+	}
+}
+
+func TestRunTargetListFallsBackToLegacyServersCache(t *testing.T) {
+	stateDir := t.TempDir()
+	t.Setenv("NF_STATE_HOME", stateDir)
+	servers := map[string]any{"servers": map[string]any{"app1-linode": map[string]any{"id": 98222343, "name": "app1-linode", "provider": "linode", "hostname": "app1.nfweb.dev", "status": "active"}}}
+	data, err := json.MarshalIndent(servers, "", "  ")
+	if err != nil {
+		t.Fatalf("MarshalIndent() error = %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(stateDir, "servers.json"), append(data, '\n'), 0o644); err != nil {
+		t.Fatalf("WriteFile() error = %v", err)
+	}
+
+	output := captureStdout(t, func() {
+		if got := Run([]string{"target", "list"}); got != 0 {
+			t.Fatalf("Run(target list) = %d, want 0", got)
+		}
+	})
+	for _, want := range []string{"target", "app1-linode", "linode", "app1.nfweb.dev", "active"} {
+		if !strings.Contains(output, want) {
+			t.Fatalf("target list output missing %q:\n%s", want, output)
+		}
+	}
+}
+
+func TestRunTargetListTreatsProvidersCacheAsAuthoritative(t *testing.T) {
+	stateDir := t.TempDir()
+	t.Setenv("NF_STATE_HOME", stateDir)
+	providers := []map[string]any{{"provider": "dnsimple", "account_id": "14", "targets": []map[string]any{}}}
+	providerData, err := json.MarshalIndent(providers, "", "  ")
+	if err != nil {
+		t.Fatalf("MarshalIndent(providers) error = %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(stateDir, "providers.json"), append(providerData, '\n'), 0o644); err != nil {
+		t.Fatalf("WriteFile(providers) error = %v", err)
+	}
+	servers := map[string]any{"servers": map[string]any{"app1-linode": map[string]any{"name": "app1-linode", "provider": "linode"}}}
+	serverData, err := json.MarshalIndent(servers, "", "  ")
+	if err != nil {
+		t.Fatalf("MarshalIndent(servers) error = %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(stateDir, "servers.json"), append(serverData, '\n'), 0o644); err != nil {
+		t.Fatalf("WriteFile(servers) error = %v", err)
+	}
+
+	output := captureStdout(t, func() {
+		if got := Run([]string{"target", "list"}); got != 0 {
+			t.Fatalf("Run(target list) = %d, want 0", got)
+		}
+	})
+	if !strings.Contains(output, "No targets found.") || strings.Contains(output, "app1-linode") {
+		t.Fatalf("target list output = %q, want providers cache to win", output)
 	}
 }
 
@@ -314,7 +545,7 @@ func TestRunSiteRefreshReportsStateCachePaths(t *testing.T) {
 			t.Fatalf("Run(site list --refresh) = %d, want 0", got)
 		}
 	})
-	for _, want := range []string{"Provider refresh is not implemented yet; using local state cache.", filepath.Join(stateDir, "sites.json"), filepath.Join(stateDir, "servers.json"), "No sites found."} {
+	for _, want := range []string{"Provider refresh is not implemented yet; using local state cache.", filepath.Join(stateDir, "sites.json"), filepath.Join(stateDir, "providers.json"), "No sites found."} {
 		if !strings.Contains(output, want) {
 			t.Fatalf("site list --refresh output missing %q:\n%s", want, output)
 		}
@@ -465,6 +696,25 @@ func TestRunEnvPushPreflightsRepoRemoteWithoutSyncing(t *testing.T) {
 }
 
 func TestRunRemoteAddListRemoveWritesProjectMetadata(t *testing.T) {
+	stateDir := t.TempDir()
+	t.Setenv("NF_STATE_HOME", stateDir)
+	sites := map[string]any{"sites": map[string]any{"live-client-app1-linode": map[string]any{"provider": "linode", "site_id": "client-app1-linode", "env": "live", "url": "https://client.app1.nfweb.dev/", "server": "app1-linode"}}}
+	stateData, err := json.MarshalIndent(sites, "", "  ")
+	if err != nil {
+		t.Fatalf("MarshalIndent(sites) error = %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(stateDir, "sites.json"), append(stateData, '\n'), 0o644); err != nil {
+		t.Fatalf("WriteFile(sites) error = %v", err)
+	}
+	servers := map[string]any{"servers": map[string]any{"app1-linode": map[string]any{"name": "app1-linode", "provider": "linode", "hostname": "app1.nfweb.dev"}}}
+	serverData, err := json.MarshalIndent(servers, "", "  ")
+	if err != nil {
+		t.Fatalf("MarshalIndent(servers) error = %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(stateDir, "servers.json"), append(serverData, '\n'), 0o644); err != nil {
+		t.Fatalf("WriteFile(servers) error = %v", err)
+	}
+
 	repoRoot := t.TempDir()
 	if err := os.Mkdir(filepath.Join(repoRoot, ".git"), 0o755); err != nil {
 		t.Fatalf("Mkdir(.git) error = %v", err)
@@ -510,6 +760,17 @@ func TestRunRemoteAddListRemoveWritesProjectMetadata(t *testing.T) {
 		}
 	}
 
+	showOutput := captureStdout(t, func() {
+		if got := Run([]string{"remote", "show", "production"}); got != 0 {
+			t.Fatalf("Run(remote show) = %d, want 0", got)
+		}
+	})
+	for _, want := range []string{"Remote: production", "Site: client-app1-linode", "Env: live", "Provider: linode", "Target: app1-linode", "URL: https://client.app1.nfweb.dev/"} {
+		if !strings.Contains(showOutput, want) {
+			t.Fatalf("remote show output missing %q:\n%s", want, showOutput)
+		}
+	}
+
 	projectData, err := os.ReadFile(projectPath)
 	if err != nil {
 		t.Fatalf("ReadFile(project) error = %v", err)
@@ -538,6 +799,55 @@ func TestRunRemoteAddListRemoveWritesProjectMetadata(t *testing.T) {
 	})
 	if !strings.Contains(listAfterRemove, "No remotes found.") {
 		t.Fatalf("remote list after remove output = %q", listAfterRemove)
+	}
+}
+
+func TestRunRemoteAddRequiresCachedSiteEnv(t *testing.T) {
+	stateDir := t.TempDir()
+	t.Setenv("NF_STATE_HOME", stateDir)
+	repoRoot := t.TempDir()
+	if err := os.Mkdir(filepath.Join(repoRoot, ".git"), 0o755); err != nil {
+		t.Fatalf("Mkdir(.git) error = %v", err)
+	}
+	if err := os.MkdirAll(filepath.Join(repoRoot, ".nf"), 0o755); err != nil {
+		t.Fatalf("MkdirAll(.nf) error = %v", err)
+	}
+	project := map[string]any{"schema": 1, "project": map[string]any{"slug": "client"}, "deploy": map[string]any{"remotes": map[string]any{}}}
+	data, err := json.MarshalIndent(project, "", "  ")
+	if err != nil {
+		t.Fatalf("MarshalIndent(project) error = %v", err)
+	}
+	projectPath := filepath.Join(repoRoot, ".nf", "project.json")
+	if err := os.WriteFile(projectPath, append(data, '\n'), 0o644); err != nil {
+		t.Fatalf("WriteFile(project) error = %v", err)
+	}
+	oldwd, err := os.Getwd()
+	if err != nil {
+		t.Fatalf("Getwd() error = %v", err)
+	}
+	if err := os.Chdir(repoRoot); err != nil {
+		t.Fatalf("Chdir() error = %v", err)
+	}
+	t.Cleanup(func() { _ = os.Chdir(oldwd) })
+
+	stderr := captureStderr(t, func() {
+		if got := Run([]string{"remote", "add", "production", "client-kinsta", "live"}); got != 1 {
+			t.Fatalf("Run(remote add) = %d, want 1", got)
+		}
+	})
+	if !strings.Contains(stderr, "No cached remote env matched site \"client-kinsta\" env \"live\"") {
+		t.Fatalf("remote add stderr = %q", stderr)
+	}
+	projectData, err := os.ReadFile(projectPath)
+	if err != nil {
+		t.Fatalf("ReadFile(project) error = %v", err)
+	}
+	var metadata map[string]any
+	if err := json.Unmarshal(projectData, &metadata); err != nil {
+		t.Fatalf("Unmarshal(project) error = %v", err)
+	}
+	if len(mapMapAtPath(metadata, "deploy", "remotes")) != 0 {
+		t.Fatalf("remote add wrote metadata despite missing cache: %#v", mapMapAtPath(metadata, "deploy", "remotes"))
 	}
 }
 

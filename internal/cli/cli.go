@@ -3,11 +3,13 @@ package cli
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"flag"
 	"fmt"
 	"hash/fnv"
 	"io"
 	"net"
+	"net/http"
 	"os"
 	"os/exec"
 	"path"
@@ -17,6 +19,8 @@ import (
 	"strings"
 	"time"
 
+	"github.com/dnsimple/dnsimple-go/v9/dnsimple"
+	"github.com/linode/linodego"
 	"github.com/nonfiction/nf/internal/config"
 	"github.com/nonfiction/nf/internal/envwizard"
 	"github.com/nonfiction/nf/internal/passwords"
@@ -31,8 +35,11 @@ type ProjectError struct{ Msg string }
 func (e ProjectError) Error() string { return e.Msg }
 
 var (
-	runLinodeDeleteFn = runLinodeDelete
-	deleteDNSRecordFn = provision.DeleteDNSimpleARecord
+	runLinodeDeleteFn       = runLinodeDelete
+	deleteDNSRecordFn       = provision.DeleteDNSimpleARecord
+	providerCheckDNSimpleFn = checkDNSimpleProvider
+	providerCheckKinstaFn   = checkKinstaProvider
+	providerCheckLinodeFn   = checkLinodeProvider
 )
 
 type repoCommandRunner interface {
@@ -1007,7 +1014,6 @@ func copyFile(sourcePath, destinationPath string) error {
 
 func configInitRequirements() []envwizard.Requirement {
 	return []envwizard.Requirement{
-		{Keys: []string{"NF_SERVER_DOMAIN"}, Prompt: "NF_SERVER_DOMAIN (server domain): ", Default: "nfweb.dev", WriteKey: "NF_SERVER_DOMAIN"},
 		{Keys: []string{"DNSIMPLE_ACCOUNT_ID"}, Prompt: "DNSIMPLE_ACCOUNT_ID (DNSimple account id): ", Default: "14", WriteKey: "DNSIMPLE_ACCOUNT_ID"},
 		{Keys: []string{"DNSIMPLE_TOKEN"}, Prompt: "DNSimple token: ", Secret: true, WriteKey: "DNSIMPLE_TOKEN", Required: true},
 		{Keys: []string{"KINSTA_API_KEY"}, Prompt: "Kinsta API key: ", Secret: true, WriteKey: "KINSTA_API_KEY", Required: true},
@@ -2109,6 +2115,60 @@ func validateServerRecord(server map[string]any) error {
 	return nil
 }
 
+func validateTargetRecord(target map[string]any) error {
+	if strings.TrimSpace(recordValueString(target["provider"])) == "" {
+		return ProjectError{Msg: fmt.Sprintf("Target %q is missing provider.", serverSummary(target))}
+	}
+	return nil
+}
+
+func cachedTargets() ([]map[string]any, error) {
+	providers, err := state.LoadStateRecords("providers")
+	if err != nil {
+		return nil, err
+	}
+	targets := providerTargetRecords(providers)
+	if len(providers) > 0 {
+		return targets, nil
+	}
+	return state.LoadStateRecords("servers")
+}
+
+func providerTargetRecords(providers []map[string]any) []map[string]any {
+	targets := make([]map[string]any, 0)
+	for _, provider := range providers {
+		providerName := recordValueString(provider["provider"])
+		if providerName == "" {
+			providerName = recordValueString(provider["_state_key"])
+		}
+		for _, target := range targetMaps(provider["targets"]) {
+			record := cloneRecord(target)
+			if recordValueString(record["provider"]) == "" && providerName != "" {
+				record["provider"] = providerName
+			}
+			targets = append(targets, record)
+		}
+	}
+	return targets
+}
+
+func targetMaps(value any) []map[string]any {
+	switch typed := value.(type) {
+	case []map[string]any:
+		return typed
+	case []any:
+		out := make([]map[string]any, 0, len(typed))
+		for _, item := range typed {
+			if record, ok := item.(map[string]any); ok {
+				out = append(out, record)
+			}
+		}
+		return out
+	default:
+		return nil
+	}
+}
+
 func validateSiteRecord(site map[string]any) error {
 	provider := strings.ToLower(strings.TrimSpace(recordValueString(site["provider"])))
 	if provider == "" {
@@ -2138,7 +2198,7 @@ func cmdListTargets(records []map[string]any) int {
 		rows = append(rows, []string{
 			firstRecordString(record, "_state_key", "target_name", "target", "name", "slug", "hostname", "label", "id"),
 			recordValueString(record["provider"]),
-			firstRecordString(record, "hostname", "host", "public_ipv4", "ip"),
+			firstRecordString(record, "hostname", "host", "public_ipv4", "ipv4", "ip"),
 			serverSSHHost(record),
 			recordValueString(record["status"]),
 		})
@@ -2380,17 +2440,17 @@ func cmdShowServer(needle string) int {
 }
 
 func cmdShowTarget(needle string) int {
-	bundle, err := state.LoadStateBundle()
+	targets, err := cachedTargets()
 	if err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		return 1
 	}
-	record := state.MatchingRecord(bundle.Servers, needle)
+	record := state.MatchingRecord(targets, needle)
 	if record == nil {
 		fmt.Fprintf(os.Stderr, "No target matched %q.\n", needle)
 		return 1
 	}
-	if err := validateServerRecord(record); err != nil {
+	if err := validateTargetRecord(record); err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		return 1
 	}
@@ -2406,7 +2466,7 @@ func cmdSiteRefresh() int {
 	}
 	fmt.Println("Provider refresh is not implemented yet; using local state cache.")
 	fmt.Printf("Sites cache: %s\n", state.StatePath("sites"))
-	fmt.Printf("Targets cache: %s\n", state.StatePath("servers"))
+	fmt.Printf("Targets cache: %s\n", state.StatePath("providers"))
 	return 0
 }
 
@@ -2905,8 +2965,8 @@ func runServerHelp() int {
 func runProviderHelp() int {
 	printGroupHelp("provider", []string{
 		"list                 list provider integrations",
-		"show <provider>      show provider config status",
-		"check <provider>     preflight provider config",
+		"show <provider>      show cached provider metadata",
+		"check <provider>     run provider healthcheck",
 	})
 	return 0
 }
@@ -2922,6 +2982,7 @@ func runTargetHelp() int {
 func runRemoteHelp() int {
 	printGroupHelp("remote", []string{
 		"add <name> <site-id> <env>   add a repo remote",
+		"show <name>                  show a repo remote",
 		"remove <name>                remove a repo remote",
 		"list                         list repo remotes",
 	})
@@ -2941,6 +3002,7 @@ func runSiteHelp() int {
 func runConfigHelp() int {
 	printGroupHelp("config", []string{
 		"init                         initialize local secret config",
+		"set-base-domain <domain>      set provider base domain",
 		"set-default-wp-email <email>  set default WordPress email",
 		"set-default-wp-user <user>    set default WordPress user",
 		"show                         show global config",
@@ -3438,6 +3500,12 @@ func runConfig(argv []string) int {
 			return 1
 		}
 		return 0
+	case "set-base-domain":
+		if len(argv) != 2 || strings.TrimSpace(argv[1]) == "" {
+			fmt.Fprintln(os.Stderr, "config set-base-domain takes exactly one domain")
+			return 1
+		}
+		return cmdConfigSet("base_domain", argv[1])
 	case "set-default-wp-email":
 		if len(argv) != 2 || strings.TrimSpace(argv[1]) == "" {
 			fmt.Fprintln(os.Stderr, "config set-default-wp-email takes exactly one email")
@@ -3517,6 +3585,7 @@ func cmdConfigShow() int {
 	}
 	fmt.Printf("Default WP Email: %s\n", values["default_wp_email"])
 	fmt.Printf("Default WP User: %s\n", values["default_wp_user"])
+	fmt.Printf("Base Domain: %s\n", values["base_domain"])
 	fmt.Printf("Password Salt: %s\n", saltStatus)
 	return 0
 }
@@ -3541,6 +3610,19 @@ func cmdRemoteAdd(name, siteID, env string) int {
 	}
 	remotes, err := projectRemotes(metadata, true)
 	if err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		return 1
+	}
+	record, _, err := cachedSiteEnv(siteID, env)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		return 1
+	}
+	if record == nil {
+		fmt.Fprintf(os.Stderr, "No cached remote env matched site %q env %q. Run nf site refresh when provider refresh is implemented, or update the local state cache.\n", siteID, env)
+		return 1
+	}
+	if err := validateSiteRecord(record); err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		return 1
 	}
@@ -3588,6 +3670,69 @@ func cmdRemoteRemove(name string) int {
 		return 1
 	}
 	fmt.Printf("Removed remote %s\n", name)
+	return 0
+}
+
+func cmdRemoteShow(name string) int {
+	name = strings.TrimSpace(name)
+	if name == "" {
+		fmt.Fprintln(os.Stderr, "remote show requires a non-empty name")
+		return 1
+	}
+	root, ok := currentGitRoot()
+	if !ok {
+		fmt.Fprintln(os.Stderr, "remote show requires a .git repository above the current directory")
+		return 1
+	}
+	metadata, err := loadProjectMetadataOrError(root)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		return 1
+	}
+	siteID, remoteEnv, ok, err := projectRemoteAlias(metadata, name)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		return 1
+	}
+	if !ok {
+		fmt.Fprintf(os.Stderr, "No remote named %q in .nf/project.json deploy.remotes.\n", name)
+		return 1
+	}
+	fmt.Printf("Remote: %s\n", name)
+	fmt.Printf("Site: %s\n", siteID)
+	fmt.Printf("Env: %s\n", remoteEnv)
+	record, servers, err := cachedSiteEnv(siteID, remoteEnv)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		return 1
+	}
+	if record == nil {
+		fmt.Println("Cache: no matching cached remote env")
+		return 0
+	}
+	if err := validateSiteRecord(record); err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		return 1
+	}
+	provider := strings.ToLower(strings.TrimSpace(recordValueString(record["provider"])))
+	fmt.Printf("Provider: %s\n", provider)
+	target := siteTargetName(record)
+	if provider == "linode" && siteServerReference(record) != "" {
+		target = siteServerReference(record)
+	}
+	fmt.Printf("Target: %s\n", target)
+	if url := firstRecordString(record, "url", "site_url", "home_url", "hostname"); url != "" {
+		fmt.Printf("URL: %s\n", url)
+	}
+	if provider == "linode" {
+		serverRef := siteServerReference(record)
+		server := state.MatchingRecord(servers, serverRef)
+		if server == nil {
+			fmt.Fprintf(os.Stderr, "Linode site %q references server %q, but no server matched that target.\n", siteSummary(record), serverRef)
+			return 1
+		}
+		fmt.Printf("Server: %s\n", serverSummary(server))
+	}
 	return 0
 }
 
@@ -3672,9 +3817,16 @@ type providerConfigStatus struct {
 	Values  map[string]string
 }
 
+type providerHealthResult struct {
+	Provider string
+	Details  map[string]string
+	Record   map[string]any
+}
+
 func providerConfigStatuses() []providerConfigStatus {
 	return []providerConfigStatus{
 		providerConfigStatusFor("dnsimple", []providerConfigKey{
+			{Keys: []string{"base_domain"}, Required: true},
 			{Keys: []string{"DNSIMPLE_TOKEN"}, Required: true, Secret: true},
 			{Keys: []string{"DNSIMPLE_ACCOUNT_ID"}, Default: "14"},
 		}),
@@ -3692,7 +3844,7 @@ func providerConfigStatusFor(name string, keys []providerConfigKey) providerConf
 	for _, group := range keys {
 		value := ""
 		for _, key := range group.Keys {
-			if v := envwizard.Value(key); v != "" {
+			if v := providerConfigValue(key); v != "" {
 				value = v
 				status.Values[key] = v
 				break
@@ -3707,6 +3859,15 @@ func providerConfigStatusFor(name string, keys []providerConfigKey) providerConf
 		}
 	}
 	return status
+}
+
+func providerConfigValue(key string) string {
+	switch key {
+	case "base_domain":
+		return baseDomainValue()
+	default:
+		return envwizard.Value(key)
+	}
 }
 
 func providerConfigStatusByName(name string) (providerConfigStatus, bool) {
@@ -3763,17 +3924,33 @@ func cmdProviderShow(name string) int {
 		fmt.Fprintf(os.Stderr, "unsupported provider %q\n", name)
 		return 1
 	}
+	records, err := state.LoadStateRecords("providers")
+	if err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		return 1
+	}
+	record := providerRecordByName(records, status.Name)
+	if record == nil {
+		fmt.Fprintf(os.Stderr, "No cached provider metadata matched %q. Run nf provider check %s.\n", name, status.Name)
+		return 1
+	}
 	fmt.Printf("Provider: %s\n", status.Name)
-	fmt.Printf("Status: %s\n", providerStatusLabel(status))
-	fmt.Printf("Config file: %s\n", config.EnvFile())
-	fmt.Println("Values:")
-	for _, group := range status.Keys {
-		fmt.Printf("  %s: %s\n", strings.Join(group.Keys, " or "), providerValueLabel(status, group))
-	}
-	if len(status.Missing) > 0 {
-		fmt.Printf("Missing: %s\n", providerMissingLabel(status))
-	}
+	fmt.Printf("Cache: %s\n", state.StatePath("providers"))
+	data, _ := json.MarshalIndent(record, "", "  ")
+	fmt.Println(string(data))
 	return 0
+}
+
+func providerRecordByName(records []map[string]any, name string) map[string]any {
+	name = strings.ToLower(strings.TrimSpace(name))
+	for _, record := range records {
+		for _, key := range []string{"provider", "_state_key", "name", "id"} {
+			if strings.ToLower(strings.TrimSpace(recordValueString(record[key]))) == name {
+				return record
+			}
+		}
+	}
+	return nil
 }
 
 func cmdProviderCheck(name string) int {
@@ -3789,9 +3966,287 @@ func cmdProviderCheck(name string) int {
 		fmt.Println("No remote API call was made.")
 		return 1
 	}
-	fmt.Printf("Provider %s preflight passed.\n", status.Name)
-	fmt.Println("No remote API call was made.")
+	result, err := runProviderHealthcheck(status.Name)
+	if err != nil {
+		fmt.Printf("Provider %s healthcheck failed.\n", status.Name)
+		fmt.Fprintln(os.Stderr, err)
+		return 1
+	}
+	if err := saveProviderHealthRecord(result); err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		return 1
+	}
+	fmt.Printf("Provider %s healthcheck passed.\n", status.Name)
+	for _, line := range providerHealthDetailLines(result.Details) {
+		fmt.Println(line)
+	}
+	fmt.Printf("Saved provider metadata to %s.\n", state.StatePath("providers"))
 	return 0
+}
+
+func runProviderHealthcheck(provider string) (providerHealthResult, error) {
+	switch provider {
+	case "dnsimple":
+		return providerCheckDNSimpleFn()
+	case "kinsta":
+		return providerCheckKinstaFn()
+	case "linode":
+		return providerCheckLinodeFn()
+	default:
+		return providerHealthResult{}, fmt.Errorf("unsupported provider %q", provider)
+	}
+}
+
+func providerHealthDetailLines(details map[string]string) []string {
+	keys := make([]string, 0, len(details))
+	for key := range details {
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+	lines := make([]string, 0, len(keys))
+	for _, key := range keys {
+		lines = append(lines, fmt.Sprintf("%s: %s", key, details[key]))
+	}
+	return lines
+}
+
+func saveProviderHealthRecord(result providerHealthResult) error {
+	record := result.Record
+	if record == nil {
+		record = map[string]any{}
+	}
+	record["provider"] = result.Provider
+	record["checked_at"] = time.Now().UTC().Format(time.RFC3339)
+	if _, ok := record["targets"]; !ok {
+		record["targets"] = []map[string]any{}
+	}
+	records, err := state.LoadStateRecords("providers")
+	if err != nil {
+		return err
+	}
+	replaced := false
+	for i, existing := range records {
+		if strings.EqualFold(recordValueString(existing["provider"]), result.Provider) || strings.EqualFold(recordValueString(existing["_state_key"]), result.Provider) {
+			records[i] = record
+			replaced = true
+			break
+		}
+	}
+	if !replaced {
+		records = append(records, record)
+	}
+	return state.SaveStateRecords("providers", records)
+}
+
+func providerHealthContext() (context.Context, context.CancelFunc) {
+	return context.WithTimeout(context.Background(), 15*time.Second)
+}
+
+func checkDNSimpleProvider() (providerHealthResult, error) {
+	token := envwizard.Value("DNSIMPLE_TOKEN")
+	if token == "" {
+		return providerHealthResult{}, fmt.Errorf("Expected DNSIMPLE_TOKEN in the environment or %s.", config.EnvFile())
+	}
+	managedDomain := baseDomainValue()
+	if managedDomain == "" {
+		return providerHealthResult{}, fmt.Errorf("Expected base_domain in %s. Set it with nf config set-base-domain <domain>.", config.ConfigFile())
+	}
+	accountID := firstNonEmpty(envwizard.Value("DNSIMPLE_ACCOUNT_ID"), "14")
+	ctx, cancel := providerHealthContext()
+	defer cancel()
+	client := dnsimple.NewClient(dnsimple.StaticTokenHTTPClient(ctx, token))
+	if baseURL := envwizard.Value("DNSIMPLE_BASE_URL"); baseURL != "" {
+		client.BaseURL = baseURL
+	}
+	resp, err := client.Identity.Whoami(ctx)
+	if err != nil {
+		return providerHealthResult{}, err
+	}
+	if resp == nil || resp.Data == nil || resp.Data.Account == nil || resp.Data.Account.ID == 0 {
+		return providerHealthResult{}, fmt.Errorf("DNSimple /v2/whoami did not return an account id")
+	}
+	zoneResp, err := client.Zones.GetZone(ctx, accountID, managedDomain)
+	if err != nil {
+		var apiErr *dnsimple.ErrorResponse
+		if errors.As(err, &apiErr) && apiErr.HTTPResponse != nil && apiErr.HTTPResponse.StatusCode == http.StatusNotFound {
+			return providerHealthResult{}, fmt.Errorf("DNSimple zone %s was not found for account %s. Check base_domain, DNSIMPLE_ACCOUNT_ID, and DNSIMPLE_TOKEN", managedDomain, accountID)
+		}
+		return providerHealthResult{}, fmt.Errorf("Checking DNSimple zone %s for account %s: %v", managedDomain, accountID, err)
+	}
+	if zoneResp == nil || zoneResp.Data == nil || strings.TrimSpace(zoneResp.Data.Name) == "" {
+		return providerHealthResult{}, fmt.Errorf("DNSimple zone %s did not return zone metadata", managedDomain)
+	}
+	details := map[string]string{"account_id": accountID, "managed_domain": managedDomain}
+	if resp.Data.Account.Email != "" {
+		details["account_email"] = resp.Data.Account.Email
+	}
+	if resp.Data.Account.Name != "" {
+		details["account_name"] = resp.Data.Account.Name
+	}
+	details["zone_id"] = strconv.FormatInt(zoneResp.Data.ID, 10)
+	record := map[string]any{
+		"provider":       "dnsimple",
+		"account_id":     accountID,
+		"managed_domain": managedDomain,
+		"zone_id":        strconv.FormatInt(zoneResp.Data.ID, 10),
+		"zone_active":    zoneResp.Data.Active,
+		"targets":        []map[string]any{},
+	}
+	if resp.Data.Account.Email != "" {
+		record["account_email"] = resp.Data.Account.Email
+	}
+	if resp.Data.Account.Name != "" {
+		record["account_name"] = resp.Data.Account.Name
+	}
+	return providerHealthResult{Provider: "dnsimple", Details: details, Record: record}, nil
+}
+
+func baseDomainValue() string {
+	values, err := loadGlobalConfig()
+	if err == nil {
+		if value := strings.TrimSpace(values["base_domain"]); value != "" {
+			return value
+		}
+	}
+	return firstNonEmpty(envwizard.Value("NF_SERVER_DOMAIN"), envwizard.Value("DNSIMPLE_ZONE_NAME"))
+}
+
+type kinstaValidateResponse struct {
+	Name      string  `json:"name"`
+	ExpiresAt *string `json:"expires_at"`
+	Company   string  `json:"company"`
+	Status    string  `json:"status"`
+}
+
+func checkKinstaProvider() (providerHealthResult, error) {
+	token := envwizard.Value("KINSTA_API_KEY")
+	if token == "" {
+		return providerHealthResult{}, fmt.Errorf("Expected KINSTA_API_KEY in the environment or %s.", config.EnvFile())
+	}
+	ctx, cancel := providerHealthContext()
+	defer cancel()
+	baseURL := firstNonEmpty(envwizard.Value("KINSTA_BASE_URL"), "https://api.kinsta.com/v2")
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, strings.TrimRight(baseURL, "/")+"/validate", nil)
+	if err != nil {
+		return providerHealthResult{}, err
+	}
+	req.Header.Set("Authorization", "Bearer "+token)
+	req.Header.Set("Accept", "application/json")
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return providerHealthResult{}, err
+	}
+	defer func() { _ = resp.Body.Close() }()
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return providerHealthResult{}, fmt.Errorf("Kinsta /v2/validate returned %s", resp.Status)
+	}
+	var payload kinstaValidateResponse
+	if err := json.NewDecoder(resp.Body).Decode(&payload); err != nil {
+		return providerHealthResult{}, err
+	}
+	company := strings.TrimSpace(payload.Company)
+	if company == "" {
+		return providerHealthResult{}, fmt.Errorf("Kinsta /v2/validate did not return a company uuid")
+	}
+	details := map[string]string{"company_id": company}
+	if payload.Name != "" {
+		details["api_key_name"] = payload.Name
+	}
+	if payload.Status != "" {
+		details["status"] = payload.Status
+	}
+	if payload.ExpiresAt != nil && strings.TrimSpace(*payload.ExpiresAt) != "" {
+		details["expires_at"] = strings.TrimSpace(*payload.ExpiresAt)
+	}
+	record := map[string]any{
+		"provider":   "kinsta",
+		"company_id": company,
+		"targets": []map[string]any{{
+			"id":         "kinsta",
+			"name":       "kinsta",
+			"provider":   "kinsta",
+			"company_id": company,
+		}},
+	}
+	if payload.Name != "" {
+		record["api_key_name"] = payload.Name
+	}
+	if payload.Status != "" {
+		record["status"] = payload.Status
+	}
+	if payload.ExpiresAt != nil && strings.TrimSpace(*payload.ExpiresAt) != "" {
+		record["expires_at"] = strings.TrimSpace(*payload.ExpiresAt)
+	}
+	return providerHealthResult{Provider: "kinsta", Details: details, Record: record}, nil
+}
+
+func checkLinodeProvider() (providerHealthResult, error) {
+	token, err := linodeTokenEnv()
+	if err != nil {
+		return providerHealthResult{}, err
+	}
+	ctx, cancel := providerHealthContext()
+	defer cancel()
+	client := linodego.NewClient(nil)
+	client.SetToken(token)
+	profile, err := client.GetProfile(ctx)
+	if err != nil {
+		return providerHealthResult{}, err
+	}
+	if profile == nil || strings.TrimSpace(profile.Username) == "" {
+		return providerHealthResult{}, fmt.Errorf("Linode profile endpoint did not return a username")
+	}
+	details := map[string]string{"username": profile.Username}
+	if profile.Email != "" {
+		details["email"] = profile.Email
+	}
+	details["restricted"] = strconv.FormatBool(profile.Restricted)
+	instances, err := client.ListInstances(ctx, nil)
+	if err != nil {
+		return providerHealthResult{}, err
+	}
+	targets := make([]map[string]any, 0)
+	for _, instance := range instances {
+		if !linodeInstanceHasTag(instance, "nf") {
+			continue
+		}
+		targets = append(targets, linodeInstanceTargetRecord(instance))
+	}
+	details["targets"] = strconv.Itoa(len(targets))
+	record := map[string]any{
+		"provider":   "linode",
+		"username":   profile.Username,
+		"restricted": profile.Restricted,
+		"targets":    targets,
+	}
+	if profile.Email != "" {
+		record["email"] = profile.Email
+	}
+	return providerHealthResult{Provider: "linode", Details: details, Record: record}, nil
+}
+
+func linodeInstanceHasTag(instance linodego.Instance, tag string) bool {
+	for _, candidate := range instance.Tags {
+		if strings.EqualFold(strings.TrimSpace(candidate), tag) {
+			return true
+		}
+	}
+	return false
+}
+
+func linodeInstanceTargetRecord(instance linodego.Instance) map[string]any {
+	record := map[string]any{
+		"id":       strconv.Itoa(instance.ID),
+		"name":     instance.Label,
+		"provider": "linode",
+		"region":   instance.Region,
+		"status":   string(instance.Status),
+		"tags":     instance.Tags,
+	}
+	if len(instance.IPv4) > 0 && instance.IPv4[0] != nil {
+		record["ipv4"] = instance.IPv4[0].String()
+	}
+	return record
 }
 
 func runTarget(argv []string) int {
@@ -3804,12 +4259,12 @@ func runTarget(argv []string) int {
 			fmt.Fprintln(os.Stderr, "target list takes no arguments")
 			return 1
 		}
-		bundle, err := state.LoadStateBundle()
+		targets, err := cachedTargets()
 		if err != nil {
 			fmt.Fprintln(os.Stderr, err)
 			return 1
 		}
-		return cmdListTargets(bundle.Servers)
+		return cmdListTargets(targets)
 	case "show":
 		if len(argv) != 2 {
 			fmt.Fprintln(os.Stderr, "target show takes exactly one target")
@@ -3843,6 +4298,12 @@ func runRemote(argv []string) int {
 			return 1
 		}
 		return cmdRemoteRemove(argv[1])
+	case "show":
+		if len(argv) != 2 {
+			fmt.Fprintln(os.Stderr, "remote show takes exactly one name")
+			return 1
+		}
+		return cmdRemoteShow(argv[1])
 	case "list":
 		if len(argv) != 1 {
 			fmt.Fprintln(os.Stderr, "remote list takes no arguments")
