@@ -73,6 +73,10 @@ func isInteractiveTerminal() bool {
 	return info.Mode()&os.ModeCharDevice != 0
 }
 
+func IsInteractiveTerminal() bool {
+	return isInteractiveTerminal()
+}
+
 func missingMessage(path string, reqs []Requirement) string {
 	parts := make([]string, 0, len(reqs))
 	for _, req := range reqs {
