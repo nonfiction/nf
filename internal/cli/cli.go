@@ -41,6 +41,7 @@ var (
 	providerCheckDNSimpleFn = checkDNSimpleProvider
 	providerCheckKinstaFn   = checkKinstaProvider
 	providerCheckLinodeFn   = checkLinodeProvider
+	targetSSHReachableFn    = targetSSHReachable
 )
 
 type repoCommandRunner interface {
@@ -1930,7 +1931,7 @@ func serverSSHHost(server map[string]any) string {
 	if sshHost != "" {
 		return sshHost
 	}
-	return firstRecordString(server, "ssh_host")
+	return firstRecordString(server, "ssh_host", "hostname")
 }
 
 func serverSSHUser(server map[string]any) string {
@@ -2263,6 +2264,11 @@ func providerTargetRecords(providers []map[string]any) []map[string]any {
 			if recordValueString(record["provider"]) == "" && providerName != "" {
 				record["provider"] = providerName
 			}
+			if strings.EqualFold(providerName, "kinsta") && recordValueString(record["status"]) == "" {
+				if status := recordValueString(provider["status"]); status != "" {
+					record["status"] = status
+				}
+			}
 			targets = append(targets, record)
 		}
 	}
@@ -2310,18 +2316,76 @@ func cmdListTargets(records []map[string]any) int {
 		fmt.Println("No targets found.")
 		return 0
 	}
-	rows := [][]string{{"target", "provider", "hostname", "ssh host", "status"}}
+	rows := [][]string{{"target", "provider", "hostname", "status"}}
 	for _, record := range records {
 		rows = append(rows, []string{
 			firstRecordString(record, "_state_key", "target_name", "target", "name", "slug", "hostname", "label", "id"),
 			recordValueString(record["provider"]),
 			firstRecordString(record, "hostname", "host", "public_ipv4", "ipv4", "ip"),
-			serverSSHHost(record),
-			recordValueString(record["status"]),
+			targetLiveStatus(record),
 		})
 	}
 	fmt.Println(formatTable(rows))
 	return 0
+}
+
+func targetLiveStatus(record map[string]any) string {
+	switch strings.ToLower(strings.TrimSpace(recordValueString(record["provider"]))) {
+	case "kinsta":
+		return kinstaTargetLiveStatus(record)
+	case "linode":
+		return linodeTargetLiveStatus(record)
+	default:
+		return recordValueString(record["status"])
+	}
+}
+
+func kinstaTargetLiveStatus(record map[string]any) string {
+	result, err := providerCheckKinstaFn()
+	if err != nil {
+		return "unreachable"
+	}
+	for _, target := range targetMaps(result.Record["targets"]) {
+		if recordValueString(target["id"]) == "kinsta" || strings.EqualFold(recordValueString(target["provider"]), "kinsta") {
+			if status := recordValueString(target["status"]); status != "" {
+				return status
+			}
+		}
+	}
+	if status := recordValueString(result.Record["status"]); status != "" {
+		return status
+	}
+	return firstNonEmpty(recordValueString(record["status"]), "active")
+}
+
+func linodeTargetLiveStatus(record map[string]any) string {
+	status := strings.ToLower(strings.TrimSpace(recordValueString(record["status"])))
+	if status != "running" {
+		return recordValueString(record["status"])
+	}
+	if targetSSHReachableFn(record) {
+		return "reachable"
+	}
+	return "ssh unavailable"
+}
+
+func targetSSHReachable(record map[string]any) bool {
+	host := serverSSHHost(record)
+	if host == "" {
+		return false
+	}
+	user := serverSSHUser(record)
+	destination := host
+	if user != "" {
+		destination = user + "@" + host
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, "ssh", "-o", "BatchMode=yes", "-o", "ConnectTimeout=3", "-o", "StrictHostKeyChecking=no", "-o", "UserKnownHostsFile=/dev/null", destination, "true")
+	cmd.Stdin = nil
+	cmd.Stdout = io.Discard
+	cmd.Stderr = io.Discard
+	return cmd.Run() == nil
 }
 
 func cmdListSites(records, servers []map[string]any) int {
@@ -3763,7 +3827,25 @@ func cmdConfigInit(nonInteractive bool) int {
 		fmt.Fprintln(os.Stderr, err)
 		return 1
 	}
+	if err := checkProvidersAfterConfigInit(); err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		return 1
+	}
 	return 0
+}
+
+func checkProvidersAfterConfigInit() error {
+	fmt.Println("Checking providers...")
+	failed := []string{}
+	for _, status := range providerConfigStatuses() {
+		if cmdProviderCheck(status.Name) != 0 {
+			failed = append(failed, status.Name)
+		}
+	}
+	if len(failed) > 0 {
+		return fmt.Errorf("provider checks failed: %s", strings.Join(failed, ", "))
+	}
+	return nil
 }
 
 func initGlobalConfig(settings []configInitSetting, nonInteractive bool) error {
@@ -4437,6 +4519,7 @@ func checkKinstaProvider() (providerHealthResult, error) {
 	if payload.ExpiresAt != nil && strings.TrimSpace(*payload.ExpiresAt) != "" {
 		details["expires_at"] = strings.TrimSpace(*payload.ExpiresAt)
 	}
+	targetStatus := firstNonEmpty(strings.TrimSpace(payload.Status), "active")
 	record := map[string]any{
 		"provider":   "kinsta",
 		"company_id": company,
@@ -4445,6 +4528,7 @@ func checkKinstaProvider() (providerHealthResult, error) {
 			"name":       "kinsta",
 			"provider":   "kinsta",
 			"company_id": company,
+			"status":     targetStatus,
 		}},
 	}
 	if payload.Name != "" {
@@ -4525,7 +4609,40 @@ func linodeInstanceTargetRecord(instance linodego.Instance) map[string]any {
 	if len(instance.IPv4) > 0 && instance.IPv4[0] != nil {
 		record["ipv4"] = instance.IPv4[0].String()
 	}
+	if hostname := linodeInstanceHostname(instance.Label); hostname != "" {
+		record["hostname"] = hostname
+		ssh := map[string]any{"host": hostname}
+		if user := linodeDefaultSSHUser(); user != "" {
+			ssh["user"] = user
+		}
+		record["ssh"] = ssh
+	}
 	return record
+}
+
+func linodeInstanceHostname(label string) string {
+	label = strings.TrimSpace(label)
+	if label == "" {
+		return ""
+	}
+	if strings.Contains(label, ".") {
+		return strings.TrimSuffix(label, ".")
+	}
+	domain := baseDomainValue()
+	if domain == "" {
+		return ""
+	}
+	return label + "." + domain
+}
+
+func linodeDefaultSSHUser() string {
+	values, err := loadGlobalConfig()
+	if err == nil {
+		if value := strings.TrimSpace(values["linode_default_user"]); value != "" {
+			return value
+		}
+	}
+	return "nonfiction"
 }
 
 func runTarget(argv []string) int {
