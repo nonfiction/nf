@@ -200,7 +200,6 @@ func TestRunProviderListShowsProviders(t *testing.T) {
 	configDir := t.TempDir()
 	t.Setenv("NF_CONFIG_HOME", configDir)
 	t.Setenv("DNSIMPLE_TOKEN", "")
-	t.Setenv("DNSIMPLE_ACCOUNT_ID", "")
 	t.Setenv("KINSTA_API_KEY", "")
 	t.Setenv("LINODE_TOKEN", "")
 	t.Setenv("LINODE_CLI_TOKEN", "")
@@ -411,7 +410,6 @@ func TestCheckDNSimpleProviderValidatesManagedDomain(t *testing.T) {
 	defer server.Close()
 	t.Setenv("DNSIMPLE_BASE_URL", server.URL)
 	t.Setenv("DNSIMPLE_TOKEN", "dnsimple-token-secret")
-	t.Setenv("DNSIMPLE_ACCOUNT_ID", "14")
 
 	result, err := checkDNSimpleProvider()
 	if err != nil {
@@ -422,6 +420,13 @@ func TestCheckDNSimpleProviderValidatesManagedDomain(t *testing.T) {
 	}
 	if got := strings.Join(requests, ","); got != "/v2/whoami,/v2/14/zones/nonfiction.dev" {
 		t.Fatalf("requests = %q", got)
+	}
+	values, err := loadGlobalConfig()
+	if err != nil {
+		t.Fatalf("loadGlobalConfig() error = %v", err)
+	}
+	if got, want := values["dnsimple_account_id"], "14"; got != want {
+		t.Fatalf("dnsimple_account_id = %q, want %q", got, want)
 	}
 }
 

@@ -493,7 +493,7 @@ func TestPreparePlanInteractiveExecutePromptsForKeysBeforeConfirmAndReusesThem(t
 	t.Setenv("NF_CONFIG_HOME", configHome)
 	t.Setenv("NF_STATE_HOME", filepath.Join(configHome, "state"))
 	t.Setenv("NF_SERVER_DOMAIN", "example.test")
-	t.Setenv("NF_SECRET_SALT", "test-salt")
+	t.Setenv("NF_PASSWORD_SALT", "test-salt")
 	t.Setenv("DNSIMPLE_TOKEN", "dns-token")
 	t.Setenv("LINODE_CLI_TOKEN", "linode-token")
 
@@ -581,7 +581,7 @@ func TestPreparePlanInteractiveDefaultPromptsForKeysBeforeConfirmAndReusesThem(t
 	t.Setenv("NF_CONFIG_HOME", configHome)
 	t.Setenv("NF_STATE_HOME", filepath.Join(configHome, "state"))
 	t.Setenv("NF_SERVER_DOMAIN", "example.test")
-	t.Setenv("NF_SECRET_SALT", "test-salt")
+	t.Setenv("NF_PASSWORD_SALT", "test-salt")
 	t.Setenv("DNSIMPLE_TOKEN", "dns-token")
 	t.Setenv("LINODE_CLI_TOKEN", "linode-token")
 
@@ -1174,7 +1174,7 @@ func TestProvisionServerWritesOnlyServersJSON(t *testing.T) {
 	configHome := t.TempDir()
 	t.Setenv("NF_CONFIG_HOME", configHome)
 	t.Setenv("NF_STATE_HOME", filepath.Join(configHome, "state"))
-	t.Setenv("NF_SECRET_SALT", "test-salt")
+	t.Setenv("NF_PASSWORD_SALT", "test-salt")
 	t.Setenv("DNSIMPLE_TOKEN", "dns-token")
 	t.Setenv("LINODE_CLI_TOKEN", "linode-token")
 
@@ -1385,7 +1385,7 @@ func TestProvisionServerManagedFirewallCreatesRulesAndAttachesDevice(t *testing.
 	configHome := t.TempDir()
 	t.Setenv("NF_CONFIG_HOME", configHome)
 	t.Setenv("NF_STATE_HOME", filepath.Join(configHome, "state"))
-	t.Setenv("NF_SECRET_SALT", "test-salt")
+	t.Setenv("NF_PASSWORD_SALT", "test-salt")
 	t.Setenv("DNSIMPLE_TOKEN", "dns-token")
 	t.Setenv("LINODE_CLI_TOKEN", "linode-token")
 
@@ -1515,7 +1515,7 @@ func TestProvisionServerManagedFirewallReusesExistingFirewallByLabel(t *testing.
 	configHome := t.TempDir()
 	t.Setenv("NF_CONFIG_HOME", configHome)
 	t.Setenv("NF_STATE_HOME", filepath.Join(configHome, "state"))
-	t.Setenv("NF_SECRET_SALT", "test-salt")
+	t.Setenv("NF_PASSWORD_SALT", "test-salt")
 	t.Setenv("DNSIMPLE_TOKEN", "dns-token")
 	t.Setenv("LINODE_CLI_TOKEN", "linode-token")
 
@@ -1617,7 +1617,7 @@ func TestProvisionServerFirewallFailureKeepsPartialStateAndExplainsRecovery(t *t
 	configHome := t.TempDir()
 	t.Setenv("NF_CONFIG_HOME", configHome)
 	t.Setenv("NF_STATE_HOME", filepath.Join(configHome, "state"))
-	t.Setenv("NF_SECRET_SALT", "test-salt")
+	t.Setenv("NF_PASSWORD_SALT", "test-salt")
 	t.Setenv("DNSIMPLE_TOKEN", "dns-token")
 	t.Setenv("LINODE_CLI_TOKEN", "linode-token")
 
@@ -1706,7 +1706,7 @@ func TestProvisionServerWritesPartialStateOnDNSFailure(t *testing.T) {
 	configHome := t.TempDir()
 	t.Setenv("NF_CONFIG_HOME", configHome)
 	t.Setenv("NF_STATE_HOME", filepath.Join(configHome, "state"))
-	t.Setenv("NF_SECRET_SALT", "test-salt")
+	t.Setenv("NF_PASSWORD_SALT", "test-salt")
 	t.Setenv("DNSIMPLE_TOKEN", "dns-token")
 	t.Setenv("LINODE_CLI_TOKEN", "linode-token")
 
@@ -1796,7 +1796,7 @@ func TestProvisionServerHealthFailureExplainsRecovery(t *testing.T) {
 	configHome := t.TempDir()
 	t.Setenv("NF_CONFIG_HOME", configHome)
 	t.Setenv("NF_STATE_HOME", filepath.Join(configHome, "state"))
-	t.Setenv("NF_SECRET_SALT", "test-salt")
+	t.Setenv("NF_PASSWORD_SALT", "test-salt")
 	t.Setenv("DNSIMPLE_TOKEN", "dns-token")
 	t.Setenv("LINODE_CLI_TOKEN", "linode-token")
 
@@ -1901,7 +1901,7 @@ func TestProvisionServerResumesProvisioningRecordWithoutCreatingNewLinode(t *tes
 	configHome := t.TempDir()
 	t.Setenv("NF_CONFIG_HOME", configHome)
 	t.Setenv("NF_STATE_HOME", filepath.Join(configHome, "state"))
-	t.Setenv("NF_SECRET_SALT", "test-salt")
+	t.Setenv("NF_PASSWORD_SALT", "test-salt")
 	t.Setenv("DNSIMPLE_TOKEN", "dns-token")
 	t.Setenv("LINODE_CLI_TOKEN", "linode-token")
 
@@ -1999,7 +1999,7 @@ func TestProvisionServerStopsWhenAlreadyProvisioned(t *testing.T) {
 	configHome := t.TempDir()
 	t.Setenv("NF_CONFIG_HOME", configHome)
 	t.Setenv("NF_STATE_HOME", filepath.Join(configHome, "state"))
-	t.Setenv("NF_SECRET_SALT", "test-salt")
+	t.Setenv("NF_PASSWORD_SALT", "test-salt")
 	t.Setenv("DNSIMPLE_TOKEN", "dns-token")
 	t.Setenv("LINODE_CLI_TOKEN", "linode-token")
 	record := map[string]any{"provider": "linode", "provider_id": "12345", "name": "app1", "hostname": "app1.nfweb.dev", "label": "app1", "status": "provisioned", "phase": "complete", "ipv4": "198.51.100.10"}
@@ -2093,7 +2093,7 @@ func TestProvisionServerNoWaitLeavesDnsConfiguredAndPrintsManualSteps(t *testing
 	configHome := t.TempDir()
 	t.Setenv("NF_CONFIG_HOME", configHome)
 	t.Setenv("NF_STATE_HOME", filepath.Join(configHome, "state"))
-	t.Setenv("NF_SECRET_SALT", "test-salt")
+	t.Setenv("NF_PASSWORD_SALT", "test-salt")
 	t.Setenv("DNSIMPLE_TOKEN", "dns-token")
 	t.Setenv("LINODE_CLI_TOKEN", "linode-token")
 
@@ -2183,7 +2183,7 @@ func TestProvisionServerResumesFromDnsConfigured(t *testing.T) {
 	configHome := t.TempDir()
 	t.Setenv("NF_CONFIG_HOME", configHome)
 	t.Setenv("NF_STATE_HOME", filepath.Join(configHome, "state"))
-	t.Setenv("NF_SECRET_SALT", "test-salt")
+	t.Setenv("NF_PASSWORD_SALT", "test-salt")
 	t.Setenv("DNSIMPLE_TOKEN", "dns-token")
 	t.Setenv("LINODE_CLI_TOKEN", "linode-token")
 	record := map[string]any{"provider": "linode", "provider_id": "12345", "name": "app1", "hostname": "app1.nfweb.dev", "label": "app1", "status": "provisioning", "phase": "dns_configured", "ipv4": "198.51.100.10", "dns": map[string]any{"provider": "dnsimple", "zone": "nfweb.dev", "hostname_record": map[string]any{"name": "app1", "type": "A", "content": "198.51.100.10"}, "wildcard_record": map[string]any{"name": "*.app1", "type": "A", "content": "198.51.100.10"}}}
@@ -2293,7 +2293,7 @@ func TestProvisionServerResumesFromTLSConfigured(t *testing.T) {
 	configHome := t.TempDir()
 	t.Setenv("NF_CONFIG_HOME", configHome)
 	t.Setenv("NF_STATE_HOME", filepath.Join(configHome, "state"))
-	t.Setenv("NF_SECRET_SALT", "test-salt")
+	t.Setenv("NF_PASSWORD_SALT", "test-salt")
 	t.Setenv("DNSIMPLE_TOKEN", "dns-token")
 	t.Setenv("LINODE_CLI_TOKEN", "linode-token")
 	record := map[string]any{"provider": "linode", "provider_id": "12345", "name": "app1", "hostname": "app1.nfweb.dev", "label": "app1", "status": "provisioning", "phase": "tls_configured", "ipv4": "198.51.100.10", "dns": map[string]any{"provider": "dnsimple", "zone": "nfweb.dev", "hostname_record": map[string]any{"name": "app1", "type": "A", "content": "198.51.100.10"}, "wildcard_record": map[string]any{"name": "*.app1", "type": "A", "content": "198.51.100.10"}}, "tls": map[string]any{"provider": "certbot-dnsimple", "domains": []any{"app1.nfweb.dev", "*.app1.nfweb.dev"}, "certificate": "/etc/letsencrypt/live/app1.nfweb.dev/fullchain.pem", "key": "/etc/letsencrypt/live/app1.nfweb.dev/privkey.pem"}}
