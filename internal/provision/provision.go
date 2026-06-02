@@ -181,6 +181,16 @@ func releaseForUbuntu(version string) (ubuntuRelease, error) {
 	return ubuntuRelease{}, Error{Msg: fmt.Sprintf("Unsupported Ubuntu LTS version %q. Supported versions: %s.", version, strings.Join(supportedUbuntuVersions(), ", "))}
 }
 
+func releaseForImage(image string) (ubuntuRelease, bool) {
+	trimmed := strings.TrimSpace(image)
+	for _, stack := range ubuntuStackMatrix {
+		if stack.image == trimmed {
+			return ubuntuRelease{version: stack.version, label: stack.label, image: stack.image, php: stack.php}, true
+		}
+	}
+	return ubuntuRelease{}, false
+}
+
 func phpPackages(version string) []string {
 	prefix := "php" + version + "-"
 	return []string{
@@ -305,9 +315,12 @@ func stackOptions() []ui.SelectOption {
 	return options
 }
 
-func selectUbuntuStack(explicit string, nonInteractive bool) (ubuntuRelease, error) {
+func selectUbuntuStack(explicit, image string, nonInteractive bool) (ubuntuRelease, error) {
 	if v := strings.TrimSpace(explicit); v != "" {
 		return releaseForUbuntu(v)
+	}
+	if release, ok := releaseForImage(image); ok {
+		return release, nil
 	}
 	if nonInteractive {
 		return releaseForUbuntu("24.04")
@@ -1065,8 +1078,6 @@ users:
     groups: [sudo, www-data]
     sudo: ALL=(ALL) NOPASSWD:ALL
     lock_passwd: true
-    ssh_authorized_keys:
-__SSH_PUBLIC_KEYS__
 
 write_files:
   - path: /etc/ssh/sshd_config.d/99-nf-hardening.conf
@@ -1144,18 +1155,13 @@ write_files:
           listen 80;
           listen [::]:80;
           server_name __HOSTNAME__;
-
           root /var/www/nf;
           index index.html;
-
           location = /healthz {
               default_type application/json;
-              return 200 '{ "server": "__NAME__", "hostname": "__HOSTNAME__", "status": "ready" }';
+              return 200 '{"server":"__NAME__","hostname":"__HOSTNAME__","status":"ready"}';
           }
-
-          location / {
-              try_files $uri $uri/ /index.html;
-          }
+          location / { try_files $uri $uri/ /index.html; }
       }
   - path: /usr/local/bin/nf-write-server-health-page
     permissions: '0755'
@@ -1172,90 +1178,7 @@ write_files:
         <meta name="viewport" content="width=device-width, initial-scale=1">
         <title>nf target __NAME__</title>
         <style>
-          :root {
-            color-scheme: dark;
-          }
-
-          * {
-            box-sizing: border-box;
-          }
-
-          body {
-            margin: 0;
-            min-height: 100vh;
-            display: grid;
-            place-items: center;
-            overflow: hidden;
-            background:
-              radial-gradient(circle at 20% 20%, rgba(144, 93, 250, 0.22), transparent 32rem),
-              radial-gradient(circle at 80% 10%, rgba(85, 1, 210, 0.24), transparent 28rem),
-              linear-gradient(135deg, #09090f 0%, #11111c 50%, #08070d 100%);
-            color: #f8fafc;
-            font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
-          }
-
-          main {
-            position: relative;
-            width: min(92vw, 34rem);
-            padding: clamp(2rem, 6vw, 3.5rem);
-            border: 1px solid rgba(255, 255, 255, 0.12);
-            border-radius: 1.75rem;
-            background: rgba(15, 15, 26, 0.78);
-            box-shadow: 0 2rem 6rem rgba(0, 0, 0, 0.45);
-            text-align: center;
-            backdrop-filter: blur(18px);
-          }
-
-          main::before {
-            content: "";
-            position: absolute;
-            inset: 1px;
-            pointer-events: none;
-            border-radius: inherit;
-            background: linear-gradient(135deg, rgba(255, 255, 255, 0.16), transparent 38%);
-          }
-
-          .logo {
-            position: relative;
-            display: block;
-            width: 5.5rem;
-            height: 5.5rem;
-            margin: 0 auto 1.5rem;
-            border-radius: 1.25rem;
-            box-shadow: 0 1.25rem 3rem rgba(85, 1, 210, 0.35);
-          }
-
-          .pill {
-            position: relative;
-            display: inline-block;
-            margin-bottom: 1rem;
-            padding: 0.35rem 0.8rem;
-            border-radius: 999px;
-            background: rgba(34, 197, 94, 0.14);
-            color: #86efac;
-            font-size: 0.875rem;
-            font-weight: 700;
-            letter-spacing: 0.04em;
-            text-transform: uppercase;
-          }
-
-          h1 {
-            position: relative;
-            margin: 0 0 1rem;
-            font-size: clamp(2rem, 5vw, 3rem);
-            line-height: 1.1;
-          }
-
-          p {
-            position: relative;
-            margin: 0.5rem 0;
-            font-size: 1rem;
-            color: #cbd5e1;
-          }
-
-          .label {
-            color: #94a3b8;
-          }
+          :root{color-scheme:dark}*{box-sizing:border-box}body{margin:0;min-height:100vh;display:grid;place-items:center;overflow:hidden;background:radial-gradient(circle at 20% 20%,rgba(144,93,250,.22),transparent 32rem),radial-gradient(circle at 80% 10%,rgba(85,1,210,.24),transparent 28rem),linear-gradient(135deg,#09090f,#11111c 50%,#08070d);color:#f8fafc;font-family:system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif}main{width:min(92vw,34rem);padding:clamp(2rem,6vw,3.5rem);border:1px solid rgba(255,255,255,.12);border-radius:1.75rem;background:rgba(15,15,26,.78);box-shadow:0 2rem 6rem rgba(0,0,0,.45);text-align:center;backdrop-filter:blur(18px)}.logo{display:block;width:5.5rem;height:5.5rem;margin:0 auto 1.5rem;border-radius:1.25rem;box-shadow:0 1.25rem 3rem rgba(85,1,210,.35)}.pill{display:inline-block;margin-bottom:1rem;padding:.35rem .8rem;border-radius:999px;background:rgba(34,197,94,.14);color:#86efac;font-size:.875rem;font-weight:700;letter-spacing:.04em;text-transform:uppercase}h1{margin:0 0 1rem;font-size:clamp(2rem,5vw,3rem);line-height:1.1}p{margin:.5rem 0;font-size:1rem;color:#cbd5e1}.label{color:#94a3b8}
         </style>
       </head>
       <body>
@@ -1298,37 +1221,27 @@ write_files:
           listen 80;
           listen [::]:80;
           server_name __HOSTNAME__;
-
           root /var/www/nf;
           index index.html;
-
           location = /healthz {
               default_type application/json;
-              return 200 '{ "server": "__NAME__", "hostname": "__HOSTNAME__", "status": "ready" }';
+              return 200 '{"server":"__NAME__","hostname":"__HOSTNAME__","status":"ready"}';
           }
-
-          location / {
-              try_files $uri $uri/ /index.html;
-          }
+          location / { try_files $uri $uri/ /index.html; }
       }
 
       server {
           listen 443 ssl http2;
           listen [::]:443 ssl http2;
           server_name __HOSTNAME__;
-
           include /etc/nginx/snippets/nf-wildcard-cert.conf;
           root /var/www/nf;
           index index.html;
-
           location = /healthz {
               default_type application/json;
-              return 200 '{ "server": "__NAME__", "hostname": "__HOSTNAME__", "status": "ready" }';
+              return 200 '{"server":"__NAME__","hostname":"__HOSTNAME__","status":"ready"}';
           }
-
-          location / {
-              try_files $uri $uri/ /index.html;
-          }
+          location / { try_files $uri $uri/ /index.html; }
       }
       EOF
 
@@ -1425,6 +1338,7 @@ runcmd:
   - systemctl enable --now fail2ban
   - install -d -o __SSH_USER__ -g www-data -m 2775 /var/www /var/www/nf /var/www/sites /var/www/shared /var/log/nginx/sites /var/lib/nf
   - usermod -aG www-data __SSH_USER__
+  - if [ -f /root/.ssh/authorized_keys ]; then install -d -o __SSH_USER__ -g __SSH_USER__ -m 0700 /home/__SSH_USER__/.ssh && cp /root/.ssh/authorized_keys /home/__SSH_USER__/.ssh/authorized_keys && chown __SSH_USER__:__SSH_USER__ /home/__SSH_USER__/.ssh/authorized_keys && chmod 0600 /home/__SSH_USER__/.ssh/authorized_keys; fi
   - chown -R __SSH_USER__:www-data /var/www /var/log/nginx/sites
   - chmod 2775 /var/www /var/www/sites /var/www/shared /var/log/nginx/sites
   - rm -f /etc/nginx/sites-enabled/default
@@ -1471,23 +1385,11 @@ func cloudInitPackageBlock(plan Plan) string {
 	return strings.Join(packageLines(cloudInitPackages(plan)), "\n")
 }
 
-func cloudInitSSHKeyLines(keys []string) string {
-	if len(keys) == 0 {
-		keys = []string{"<ssh public key>"}
-	}
-	lines := make([]string, 0, len(keys))
-	for _, key := range keys {
-		lines = append(lines, "      - "+strings.TrimSpace(key))
-	}
-	return strings.Join(lines, "\n")
-}
-
 func cloudInitReplacements(plan Plan, sshPublicKeys []string, dnsimpleToken string) map[string]string {
 	return map[string]string{
 		"__PACKAGE_LIST__":        cloudInitPackageBlock(plan),
 		"__SHORT_HOSTNAME__":      shortHostname(plan.Hostname),
 		"__SSH_USER__":            plan.SshUser,
-		"__SSH_PUBLIC_KEYS__":     cloudInitSSHKeyLines(sshPublicKeys),
 		"__NAME__":                plan.Name,
 		"__HOSTNAME__":            plan.Hostname,
 		"__DNSIMPLE_TOKEN__":      dnsimpleToken,
@@ -2506,10 +2408,6 @@ func BuildPlan(args Args) (Plan, error) {
 			args, resumeKeys = applyProvisionResumeDefaults(args, resumeRecord)
 		}
 	}
-	ubuntuRelease, err := selectUbuntuStack(args.UbuntuVersion, nonInteractive)
-	if err != nil {
-		return Plan{}, err
-	}
 	firewallMode := strings.ToLower(firstNonEmpty(args.Firewall, "managed"))
 	switch firewallMode {
 	case "managed", "none":
@@ -2523,6 +2421,10 @@ func BuildPlan(args Args) (Plan, error) {
 	defaultType := firstNonEmpty(globalConfigValue("linode_default_type"), "g6-standard-1")
 	defaultImage := globalConfigValue("linode_default_image")
 	defaultUser := firstNonEmpty(globalConfigValue("linode_default_user"), "nonfiction")
+	ubuntuRelease, err := selectUbuntuStack(args.UbuntuVersion, firstNonEmpty(args.Image, defaultImage), nonInteractive)
+	if err != nil {
+		return Plan{}, err
+	}
 	region, err := resolveValue(args.Region, "Linode region: ", defaultRegion, nonInteractive, false)
 	if err != nil {
 		return Plan{}, err

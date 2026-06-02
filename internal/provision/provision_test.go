@@ -811,6 +811,29 @@ func TestPHPReleaseForUbuntuDerivesServiceSocketAndPackages(t *testing.T) {
 	}
 }
 
+func TestBuildPlanInfersUbuntuStackFromImage(t *testing.T) {
+	oldSelect := selectVersionFn
+	t.Cleanup(func() { selectVersionFn = oldSelect })
+	selectVersionFn = func(title string, options []ui.SelectOption) (string, error) {
+		t.Fatalf("selectVersionFn should not run when --image maps to a known Ubuntu stack")
+		return "", nil
+	}
+
+	plan, err := BuildPlan(Args{Name: "app2", Region: "ca-central", Type: "g6-standard-1", SshUser: "nonfiction", Image: "linode/ubuntu24.04", DnsimpleAccountID: "14"})
+	if err != nil {
+		t.Fatalf("BuildPlan() error = %v", err)
+	}
+	if got, want := plan.UbuntuVersion, "24.04"; got != want {
+		t.Fatalf("UbuntuVersion = %q, want %q", got, want)
+	}
+	if got, want := plan.PHPVersion, "8.3"; got != want {
+		t.Fatalf("PHPVersion = %q, want %q", got, want)
+	}
+	if got, want := plan.Image, "linode/ubuntu24.04"; got != want {
+		t.Fatalf("Image = %q, want %q", got, want)
+	}
+}
+
 func TestBuildPlanRejectsUnsupportedProvider(t *testing.T) {
 	_, err := BuildPlan(Args{Provider: "digitalocean", NonInteractive: true})
 	if err == nil || !strings.Contains(err.Error(), "Unsupported provider") {
@@ -859,7 +882,7 @@ func TestCloudInitTemplateIsServerOnly(t *testing.T) {
 		"server_name app1.nfweb.dev;",
 		"location = /healthz",
 		"default_type application/json;",
-		"{ \"server\": \"app1\", \"hostname\": \"app1.nfweb.dev\", \"status\": \"ready\" }",
+		"{\"server\":\"app1\",\"hostname\":\"app1.nfweb.dev\",\"status\":\"ready\"}",
 		"/usr/local/bin/nf-write-server-health-page",
 		"/var/www/nf/index.html",
 		"cat >/var/www/nf/index.html <<'EOF'",
@@ -867,15 +890,15 @@ func TestCloudInitTemplateIsServerOnly(t *testing.T) {
 		"</html>",
 		"EOF",
 		"<title>nf target app1</title>",
-		"color-scheme: dark;",
+		"color-scheme:dark",
 		"background:",
-		"radial-gradient(circle at 20% 20%, rgba(144, 93, 250, 0.22), transparent 32rem)",
+		"radial-gradient(circle at 20% 20%,rgba(144,93,250,.22),transparent 32rem)",
 		"<svg class=\"logo\"",
 		"aria-label=\"Nonfiction logo\"",
 		"linearGradient id=\"background\"",
 		"stop-color=\"#905DFA\"",
 		"stop-color=\"#5501D2\"",
-		"font-family: system-ui, -apple-system, BlinkMacSystemFont, \"Segoe UI\", sans-serif;",
+		"font-family:system-ui,-apple-system,BlinkMacSystemFont,\"Segoe UI\",sans-serif",
 		"<main>",
 		"<div class=\"pill\">ready</div>",
 		"<h1>nf target app1</h1>",
@@ -941,6 +964,9 @@ func TestCloudInitTemplateIsServerOnly(t *testing.T) {
 	if openerIdx == -1 || closerIdx == -1 || openerIdx+1 >= len(lines) || closerIdx+1 >= len(lines) || lines[closerIdx+1] != "  - path: /etc/letsencrypt/renewal-hooks/deploy/reload-nginx" {
 		t.Fatalf("renderCloudInit() output missing normalized heredoc delimiters:\n%s", rendered)
 	}
+	if got, limit := len([]byte(rendered)), 15_000; got > limit {
+		t.Fatalf("renderCloudInit() size = %d bytes, want <= %d to stay under Linode user_data limit", got, limit)
+	}
 	for _, unwanted := range []string{
 		"wordpress.org/latest.zip",
 		"wp core install",
@@ -966,7 +992,7 @@ func TestCloudInitTemplateIsServerOnly(t *testing.T) {
 	}
 }
 
-func TestRenderCloudInitSupportsMultipleSSHKeys(t *testing.T) {
+func TestRenderCloudInitCopiesLinodeRootSSHKeysToSSHUser(t *testing.T) {
 	osPlan, err := osReleasePlan("24.04", "linode/ubuntu24.04")
 	if err != nil {
 		t.Fatalf("osReleasePlan() error = %v", err)
@@ -980,9 +1006,14 @@ func TestRenderCloudInitSupportsMultipleSSHKeys(t *testing.T) {
 	if err != nil {
 		t.Fatalf("renderCloudInit() error = %v", err)
 	}
-	for _, want := range []string{"ssh_authorized_keys:", "- ssh-rsa AAAA team-a", "- ssh-ed25519 BBBB team-b"} {
+	for _, want := range []string{"/root/.ssh/authorized_keys", "/home/ubuntu/.ssh/authorized_keys", "chown ubuntu:ubuntu /home/ubuntu/.ssh/authorized_keys", "chmod 0600 /home/ubuntu/.ssh/authorized_keys"} {
 		if !strings.Contains(rendered, want) {
 			t.Fatalf("renderCloudInit() output missing %q:\n%s", want, rendered)
+		}
+	}
+	for _, unwanted := range []string{"ssh_authorized_keys:", "ssh-rsa AAAA team-a", "ssh-ed25519 BBBB team-b"} {
+		if strings.Contains(rendered, unwanted) {
+			t.Fatalf("renderCloudInit() output unexpectedly included %q in user_data:\n%s", unwanted, rendered)
 		}
 	}
 }
