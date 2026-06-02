@@ -487,6 +487,56 @@ func TestRunTargetListAndShowUseStateTargets(t *testing.T) {
 	}
 }
 
+func TestRunTargetListReconcilesCompletedLinodeHandoff(t *testing.T) {
+	stateDir := t.TempDir()
+	t.Setenv("NF_STATE_HOME", stateDir)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/healthz" {
+			t.Fatalf("health path = %q, want /healthz", r.URL.Path)
+		}
+		_, _ = io.WriteString(w, `{"server":"app2-linode","hostname":"app2-linode.nonfiction.dev","status":"ready"}`)
+	}))
+	t.Cleanup(server.Close)
+	providers := []map[string]any{{
+		"provider": "linode",
+		"targets": []map[string]any{{
+			"name":       "app2-linode",
+			"provider":   "linode",
+			"hostname":   "app2-linode.nonfiction.dev",
+			"health_url": server.URL,
+			"status":     "provisioning",
+			"phase":      "dns_configured",
+		}},
+	}}
+	data, err := json.MarshalIndent(providers, "", "  ")
+	if err != nil {
+		t.Fatalf("MarshalIndent() error = %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(stateDir, "providers.json"), append(data, '\n'), 0o644); err != nil {
+		t.Fatalf("WriteFile(providers.json) error = %v", err)
+	}
+
+	output := captureStdout(t, func() {
+		if got := Run([]string{"target", "list"}); got != 0 {
+			t.Fatalf("Run(target list) = %d, want 0", got)
+		}
+	})
+	if !strings.Contains(output, "app2-linode") || !strings.Contains(output, "provisioned") || strings.Contains(output, "provisioning") {
+		t.Fatalf("target list output = %q, want reconciled provisioned status", output)
+	}
+	records, err := state.LoadStateRecords("providers")
+	if err != nil {
+		t.Fatalf("LoadStateRecords(providers) error = %v", err)
+	}
+	targets := targetMaps(records[0]["targets"])
+	if got, want := recordValueString(targets[0]["status"]), "provisioned"; got != want {
+		t.Fatalf("saved status = %q, want %q", got, want)
+	}
+	if got, want := recordValueString(targets[0]["phase"]), "complete"; got != want {
+		t.Fatalf("saved phase = %q, want %q", got, want)
+	}
+}
+
 func TestRunTargetAddLinodeDryRunUsesTargetNameAndConfigDefaults(t *testing.T) {
 	configDir := t.TempDir()
 	stateDir := t.TempDir()

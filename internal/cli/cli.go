@@ -2127,11 +2127,96 @@ func cachedTargets() ([]map[string]any, error) {
 	if err != nil {
 		return nil, err
 	}
+	if reconcileProviderTargetHandoffs(providers) {
+		if err := state.SaveStateRecords("providers", providers); err != nil {
+			return nil, err
+		}
+	}
 	targets := providerTargetRecords(providers)
 	if len(providers) > 0 {
 		return targets, nil
 	}
 	return state.LoadStateRecords("servers")
+}
+
+func reconcileProviderTargetHandoffs(providers []map[string]any) bool {
+	updated := false
+	for _, provider := range providers {
+		providerName := strings.ToLower(strings.TrimSpace(recordValueString(provider["provider"])))
+		if providerName == "" {
+			providerName = strings.ToLower(strings.TrimSpace(recordValueString(provider["_state_key"])))
+		}
+		if providerName != "linode" {
+			continue
+		}
+		for _, target := range targetMaps(provider["targets"]) {
+			if reconcileLinodeTargetHandoff(target) {
+				updated = true
+			}
+		}
+	}
+	return updated
+}
+
+func reconcileLinodeTargetHandoff(target map[string]any) bool {
+	status := strings.ToLower(strings.TrimSpace(recordValueString(target["status"])))
+	phase := strings.ToLower(strings.TrimSpace(recordValueString(target["phase"])))
+	if status != "provisioning" {
+		return false
+	}
+	switch phase {
+	case "dns_configured", "tls_configured":
+	default:
+		return false
+	}
+	healthURL := targetHealthURL(target)
+	if healthURL == "" || !targetHealthReady(healthURL, target) {
+		return false
+	}
+	now := time.Now().UTC().Format(time.RFC3339)
+	target["status"] = "provisioned"
+	target["phase"] = "complete"
+	target["updated_at"] = now
+	return true
+}
+
+func targetHealthURL(target map[string]any) string {
+	healthURL := strings.TrimSpace(recordValueString(target["health_url"]))
+	if healthURL == "" {
+		hostname := firstRecordString(target, "hostname", "host")
+		if hostname == "" {
+			return ""
+		}
+		healthURL = "https://" + hostname
+	}
+	healthURL = strings.TrimRight(healthURL, "/")
+	if strings.HasSuffix(healthURL, "/healthz") {
+		return healthURL
+	}
+	return healthURL + "/healthz"
+}
+
+func targetHealthReady(healthURL string, target map[string]any) bool {
+	client := &http.Client{Timeout: 3 * time.Second}
+	resp, err := client.Get(healthURL)
+	if err != nil {
+		return false
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return false
+	}
+	body, err := io.ReadAll(io.LimitReader(resp.Body, 8192))
+	if err != nil {
+		return false
+	}
+	text := strings.ToLower(string(body))
+	if !strings.Contains(text, "ready") {
+		return false
+	}
+	name := strings.ToLower(firstRecordString(target, "target_name", "name", "label"))
+	hostname := strings.ToLower(firstRecordString(target, "hostname", "host"))
+	return (name != "" && strings.Contains(text, name)) || (hostname != "" && strings.Contains(text, hostname))
 }
 
 func providerTargetRecords(providers []map[string]any) []map[string]any {
