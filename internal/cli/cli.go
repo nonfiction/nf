@@ -2676,9 +2676,9 @@ func siteDBName(site, env string) string {
 
 func siteEnvPath(site, env string) string {
 	if env == "staging" {
-		return path.Join("/var/www/sites", site+"_staging")
+		return path.Join("/var/www/sites", site+"_staging", "public")
 	}
-	return path.Join("/var/www/sites", site)
+	return path.Join("/var/www/sites", site, "public")
 }
 
 func siteEnvHostname(site, targetName, baseDomain, env string) string {
