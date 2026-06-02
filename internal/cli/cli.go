@@ -129,6 +129,8 @@ var (
 	envSnapshotConfirm       = ui.Confirm
 	envSnapshotSelect        = ui.Select
 	envSnapshotIsInteractive = envSnapshotInteractive
+	configPromptString       = ui.PromptString
+	configIsInteractive      = envwizard.IsInteractiveTerminal
 )
 
 func defaultEnvSnapshotName(now time.Time) string {
@@ -1019,6 +1021,24 @@ func configInitRequirements() []envwizard.Requirement {
 		{Keys: []string{"KINSTA_API_KEY"}, Prompt: "Kinsta API key: ", Secret: true, WriteKey: "KINSTA_API_KEY", Required: true},
 		{Keys: []string{"LINODE_TOKEN", "LINODE_CLI_TOKEN"}, Prompt: "LINODE_TOKEN (Linode API token): ", Secret: true, WriteKey: "LINODE_TOKEN", Required: true},
 		{Keys: []string{"NF_PASSWORD_SALT", "NF_SECRET_SALT"}, Prompt: "NF_PASSWORD_SALT (used for derived passwords): ", Secret: true, WriteKey: "NF_PASSWORD_SALT", Required: true},
+	}
+}
+
+type configInitSetting struct {
+	Key      string
+	Prompt   string
+	Default  string
+	Required bool
+}
+
+func configInitSettings() []configInitSetting {
+	return []configInitSetting{
+		{Key: "base_domain", Prompt: "Base domain: ", Required: true},
+		{Key: "default_wp_email", Prompt: "Default WordPress email: ", Required: true},
+		{Key: "default_wp_user", Prompt: "Default WordPress user: ", Default: "admin", Required: true},
+		{Key: "linode_default_region", Prompt: "Linode default region: ", Default: "ca-central", Required: true},
+		{Key: "linode_default_user", Prompt: "Linode default SSH user: ", Default: "nonfiction", Required: true},
+		{Key: "linode_default_type", Prompt: "Linode default type: ", Default: "g6-standard-1", Required: true},
 	}
 }
 
@@ -3599,11 +3619,7 @@ func runConfig(argv []string) int {
 			}
 			return 1
 		}
-		if err := envwizard.Init(configInitRequirements(), *nonInteractive); err != nil {
-			fmt.Fprintln(os.Stderr, err)
-			return 1
-		}
-		return 0
+		return cmdConfigInit(*nonInteractive)
 	case "set-base-domain":
 		if len(argv) != 2 || strings.TrimSpace(argv[1]) == "" {
 			fmt.Fprintln(os.Stderr, "config set-base-domain takes exactly one domain")
@@ -3684,6 +3700,66 @@ func saveGlobalConfig(values map[string]string) error {
 		return err
 	}
 	return os.WriteFile(path, append(data, '\n'), 0o600)
+}
+
+func cmdConfigInit(nonInteractive bool) int {
+	if err := envwizard.Init(configInitRequirements(), nonInteractive); err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		return 1
+	}
+	if err := initGlobalConfig(configInitSettings(), nonInteractive); err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		return 1
+	}
+	return 0
+}
+
+func initGlobalConfig(settings []configInitSetting, nonInteractive bool) error {
+	values, err := loadGlobalConfig()
+	if err != nil {
+		return err
+	}
+	updates := map[string]string{}
+	for _, setting := range settings {
+		if strings.TrimSpace(values[setting.Key]) != "" {
+			continue
+		}
+		if nonInteractive || !configIsInteractive() {
+			if strings.TrimSpace(setting.Default) != "" {
+				updates[setting.Key] = strings.TrimSpace(setting.Default)
+				continue
+			}
+			if setting.Required {
+				return fmt.Errorf("Missing %s. It is not set in %s. Run `nf config init` interactively to populate it.", setting.Key, config.ConfigFile())
+			}
+			continue
+		}
+		value, err := configPromptString(setting.Prompt, setting.Default, false)
+		if err != nil {
+			return err
+		}
+		value = strings.TrimSpace(value)
+		if value == "" {
+			value = strings.TrimSpace(setting.Default)
+		}
+		if value == "" && setting.Required {
+			return fmt.Errorf("%s is required", setting.Key)
+		}
+		if value != "" {
+			updates[setting.Key] = value
+		}
+	}
+	if len(updates) == 0 {
+		return nil
+	}
+	for key, value := range updates {
+		values[key] = value
+	}
+	if err := saveGlobalConfig(values); err != nil {
+		return err
+	}
+	fmt.Printf("Updated %s\n", config.ConfigFile())
+	return nil
 }
 
 func cmdConfigSet(key, value string) int {

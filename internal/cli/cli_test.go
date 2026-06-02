@@ -216,6 +216,88 @@ func TestRunProviderListShowsProviders(t *testing.T) {
 	}
 }
 
+func TestInitGlobalConfigPromptsForMissingSettings(t *testing.T) {
+	configDir := t.TempDir()
+	t.Setenv("NF_CONFIG_HOME", configDir)
+
+	oldPromptString := configPromptString
+	oldIsInteractive := configIsInteractive
+	t.Cleanup(func() {
+		configPromptString = oldPromptString
+		configIsInteractive = oldIsInteractive
+	})
+
+	answers := map[string]string{
+		"Base domain: ":             "nonfiction.dev",
+		"Default WordPress email: ": "web@nonfiction.ca",
+		"Default WordPress user: ":  "admin",
+		"Linode default region: ":   "ca-central",
+		"Linode default SSH user: ": "nonfiction",
+		"Linode default type: ":     "g6-standard-1",
+	}
+	configIsInteractive = func() bool { return true }
+	configPromptString = func(prompt, defaultValue string, allowBlank bool) (string, error) {
+		value, ok := answers[prompt]
+		if !ok {
+			t.Fatalf("unexpected prompt %q", prompt)
+		}
+		return value, nil
+	}
+
+	if err := initGlobalConfig(configInitSettings(), false); err != nil {
+		t.Fatalf("initGlobalConfig() error = %v", err)
+	}
+	values, err := loadGlobalConfig()
+	if err != nil {
+		t.Fatalf("loadGlobalConfig() error = %v", err)
+	}
+	for key, want := range map[string]string{
+		"base_domain":           "nonfiction.dev",
+		"default_wp_email":      "web@nonfiction.ca",
+		"default_wp_user":       "admin",
+		"linode_default_region": "ca-central",
+		"linode_default_user":   "nonfiction",
+		"linode_default_type":   "g6-standard-1",
+	} {
+		if got := values[key]; got != want {
+			t.Fatalf("config[%s] = %q, want %q", key, got, want)
+		}
+	}
+}
+
+func TestInitGlobalConfigPreservesExistingSettings(t *testing.T) {
+	configDir := t.TempDir()
+	t.Setenv("NF_CONFIG_HOME", configDir)
+	if err := saveGlobalConfig(map[string]string{"base_domain": "example.com"}); err != nil {
+		t.Fatalf("saveGlobalConfig() error = %v", err)
+	}
+
+	oldPromptString := configPromptString
+	oldIsInteractive := configIsInteractive
+	t.Cleanup(func() {
+		configPromptString = oldPromptString
+		configIsInteractive = oldIsInteractive
+	})
+	configIsInteractive = func() bool { return true }
+	configPromptString = func(prompt, defaultValue string, allowBlank bool) (string, error) {
+		if prompt == "Base domain: " {
+			t.Fatalf("base_domain should not be prompted when already set")
+		}
+		return "value", nil
+	}
+
+	if err := initGlobalConfig(configInitSettings(), false); err != nil {
+		t.Fatalf("initGlobalConfig() error = %v", err)
+	}
+	values, err := loadGlobalConfig()
+	if err != nil {
+		t.Fatalf("loadGlobalConfig() error = %v", err)
+	}
+	if got := values["base_domain"]; got != "example.com" {
+		t.Fatalf("base_domain = %q, want existing value", got)
+	}
+}
+
 func TestRunProviderShowReadsCachedMetadata(t *testing.T) {
 	configDir := t.TempDir()
 	t.Setenv("NF_CONFIG_HOME", configDir)
