@@ -13,6 +13,9 @@ type PasswordError struct{ Msg string }
 func (e PasswordError) Error() string { return e.Msg }
 
 func SecretSalt() (string, error) {
+	if salt := os.Getenv("NF_PASSWORD_SALT"); salt != "" {
+		return salt, nil
+	}
 	if salt := os.Getenv("NF_SECRET_SALT"); salt != "" {
 		return salt, nil
 	}
@@ -20,10 +23,13 @@ func SecretSalt() (string, error) {
 	if err != nil {
 		return "", err
 	}
+	if salt := values["NF_PASSWORD_SALT"]; salt != "" {
+		return salt, nil
+	}
 	if salt := values["NF_SECRET_SALT"]; salt != "" {
 		return salt, nil
 	}
-	return "", PasswordError{Msg: "NF_SECRET_SALT is not set in the environment or ~/.config/nf/.env. Run `nf config init` to populate it."}
+	return "", PasswordError{Msg: "NF_PASSWORD_SALT is not set in the environment or ~/.config/nf/.env. Run `nf password set-salt <salt>` to populate it."}
 }
 
 func DerivePassword(slug, purpose, salt string) string {
