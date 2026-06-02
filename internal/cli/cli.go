@@ -42,6 +42,7 @@ var (
 	providerCheckKinstaFn   = checkKinstaProvider
 	providerCheckLinodeFn   = checkLinodeProvider
 	targetSSHReachableFn    = targetSSHReachable
+	runSSHScriptFn          = runSSHScript
 )
 
 type repoCommandRunner interface {
@@ -2167,6 +2168,13 @@ func siteTargetName(site map[string]any) string {
 	return firstRecordString(site, "_state_key", "target_name", "target", "hostname", "name", "slug", "label")
 }
 
+func siteProviderTarget(site map[string]any) string {
+	if target := firstRecordString(site, "target", "server", "server_name", "server_id", "server_hostname", "server_label"); target != "" {
+		return target
+	}
+	return recordValueString(site["provider"])
+}
+
 func siteServerReference(site map[string]any) string {
 	return firstRecordString(site, "server", "server_id", "server_name", "server_hostname", "server_label")
 }
@@ -2227,6 +2235,34 @@ func siteEnvDisplaySite(site map[string]any) string {
 		return siteID
 	}
 	return siteTargetName(site)
+}
+
+func siteListEnvOrder(env string) int {
+	switch env {
+	case "live":
+		return 0
+	case "staging":
+		return 1
+	default:
+		return 2
+	}
+}
+
+func sortedSiteListEnvs(envs map[string]bool) []string {
+	names := make([]string, 0, len(envs))
+	for env := range envs {
+		if env != "" {
+			names = append(names, env)
+		}
+	}
+	sort.Slice(names, func(i, j int) bool {
+		left, right := siteListEnvOrder(names[i]), siteListEnvOrder(names[j])
+		if left != right {
+			return left < right
+		}
+		return names[i] < names[j]
+	})
+	return names
 }
 
 func enrichSiteOutput(out map[string]any, record map[string]any, servers []map[string]any) error {
@@ -2580,20 +2616,436 @@ func targetSSHReachable(record map[string]any) bool {
 	return cmd.Run() == nil
 }
 
+type siteAddArgs struct {
+	target         string
+	site           string
+	execute        bool
+	dryRun         bool
+	yes            bool
+	nonInteractive bool
+}
+
+type siteEnvPlan struct {
+	Env      string
+	Path     string
+	Database string
+	Hostname string
+	URL      string
+	Title    string
+}
+
+type siteAddPlan struct {
+	Target        map[string]any
+	TargetName    string
+	SSHUser       string
+	SSHHost       string
+	Site          string
+	BaseDomain    string
+	AdminUser     string
+	AdminEmail    string
+	AdminPassword string
+	DBPassword    string
+	Envs          []siteEnvPlan
+}
+
+func cleanSiteSlug(input string) (string, error) {
+	slug := strings.ToLower(strings.TrimSpace(input))
+	if slug == "" {
+		return "", ProjectError{Msg: "site name cannot be empty"}
+	}
+	if strings.HasPrefix(slug, "-") || strings.HasSuffix(slug, "-") {
+		return "", ProjectError{Msg: fmt.Sprintf("site name %q must not start or end with '-'", input)}
+	}
+	for _, r := range slug {
+		if r >= 'a' && r <= 'z' || r >= '0' && r <= '9' || r == '-' {
+			continue
+		}
+		return "", ProjectError{Msg: fmt.Sprintf("site name %q must use only lowercase letters, numbers, and '-'", input)}
+	}
+	return slug, nil
+}
+
+func siteDBName(site, env string) string {
+	name := strings.ReplaceAll(site, "-", "_")
+	if env == "staging" {
+		return name + "_staging"
+	}
+	return name
+}
+
+func siteEnvPath(site, env string) string {
+	if env == "staging" {
+		return path.Join("/var/www/sites", site+"_staging")
+	}
+	return path.Join("/var/www/sites", site)
+}
+
+func siteEnvHostname(site, targetName, baseDomain, env string) string {
+	label := site
+	if env == "staging" {
+		label += "-staging"
+	}
+	return label + "." + targetName + "." + baseDomain
+}
+
+func siteEnvTitle(site, env string) string {
+	title := slugToTitle(site)
+	if env == "staging" {
+		return title + " Staging"
+	}
+	return title
+}
+
+func buildSiteAddPlan(args siteAddArgs) (siteAddPlan, error) {
+	siteSlug, err := cleanSiteSlug(args.site)
+	if err != nil {
+		return siteAddPlan{}, err
+	}
+	values, err := loadGlobalConfig()
+	if err != nil {
+		return siteAddPlan{}, err
+	}
+	baseDomain := strings.TrimSuffix(strings.TrimSpace(values["base_domain"]), ".")
+	if baseDomain == "" {
+		return siteAddPlan{}, ProjectError{Msg: fmt.Sprintf("Expected base_domain in %s. Set it with nf config set-base-domain <domain>.", config.ConfigFile())}
+	}
+	adminEmail := strings.TrimSpace(values["default_wp_email"])
+	if adminEmail == "" {
+		return siteAddPlan{}, ProjectError{Msg: fmt.Sprintf("Expected default_wp_email in %s. Set it with nf config set-default-wp-email <email>.", config.ConfigFile())}
+	}
+	adminUser := firstNonEmpty(values["default_wp_user"], "admin")
+	targets, err := cachedTargets()
+	if err != nil {
+		return siteAddPlan{}, err
+	}
+	target := state.MatchingRecord(targets, args.target)
+	if target == nil {
+		return siteAddPlan{}, ProjectError{Msg: fmt.Sprintf("No target matched %q.", args.target)}
+	}
+	provider := strings.ToLower(strings.TrimSpace(recordValueString(target["provider"])))
+	if provider != "linode" {
+		return siteAddPlan{}, ProjectError{Msg: fmt.Sprintf("Unsupported provider %q. Only linode site add is available.", provider)}
+	}
+	targetName := firstRecordString(target, "target_name", "name", "slug", "label", "_state_key")
+	if targetName == "" {
+		return siteAddPlan{}, ProjectError{Msg: fmt.Sprintf("Target %q is missing a name.", args.target)}
+	}
+	sshHost := serverSSHHost(target)
+	if sshHost == "" {
+		return siteAddPlan{}, ProjectError{Msg: fmt.Sprintf("Target %q is missing an SSH host.", targetName)}
+	}
+	sshUser := firstNonEmpty(serverSSHUser(target), values["linode_default_user"])
+	if sshUser == "" {
+		return siteAddPlan{}, ProjectError{Msg: fmt.Sprintf("Target %q is missing an SSH user. Set linode_default_user with nf config set-linode-default-user <user>.", targetName)}
+	}
+	salt, err := passwords.SecretSalt()
+	if err != nil {
+		return siteAddPlan{}, err
+	}
+	plan := siteAddPlan{
+		Target:        target,
+		TargetName:    targetName,
+		SSHUser:       sshUser,
+		SSHHost:       sshHost,
+		Site:          siteSlug,
+		BaseDomain:    baseDomain,
+		AdminUser:     adminUser,
+		AdminEmail:    adminEmail,
+		AdminPassword: passwords.DerivePassword(siteSlug, "wp-admin", salt),
+		DBPassword:    passwords.DerivePassword(siteSlug, "mysql", salt),
+	}
+	for _, env := range []string{"live", "staging"} {
+		hostname := siteEnvHostname(siteSlug, targetName, baseDomain, env)
+		plan.Envs = append(plan.Envs, siteEnvPlan{
+			Env:      env,
+			Path:     siteEnvPath(siteSlug, env),
+			Database: siteDBName(siteSlug, env),
+			Hostname: hostname,
+			URL:      "https://" + hostname,
+			Title:    siteEnvTitle(siteSlug, env),
+		})
+	}
+	return plan, nil
+}
+
+func siteAddRecord(plan siteAddPlan, env siteEnvPlan) map[string]any {
+	envID := plan.Site + "-" + env.Env
+	return map[string]any{
+		"provider":        "linode",
+		"env_id":          envID,
+		"site_id":         plan.Site,
+		"name":            plan.Site,
+		"env":             env.Env,
+		"environment":     env.Env,
+		"target":          plan.TargetName,
+		"server":          plan.TargetName,
+		"server_name":     plan.TargetName,
+		"server_hostname": firstRecordString(plan.Target, "hostname"),
+		"hostname":        env.Hostname,
+		"url":             env.URL,
+		"path":            env.Path,
+		"database":        env.Database,
+		"status":          "active",
+	}
+}
+
+func siteAddRecords(plan siteAddPlan) []map[string]any {
+	records := make([]map[string]any, 0, len(plan.Envs))
+	for _, env := range plan.Envs {
+		records = append(records, siteAddRecord(plan, env))
+	}
+	return records
+}
+
+func appendSiteAddRecords(plan siteAddPlan) error {
+	existing, err := state.LoadStateRecords("sites")
+	if err != nil {
+		return err
+	}
+	if err := ensureSiteNotCached(existing, plan.Site); err != nil {
+		return err
+	}
+	existing = append(existing, siteAddRecords(plan)...)
+	return state.SaveStateRecords("sites", existing)
+}
+
+func ensureSiteNotCached(records []map[string]any, site string) error {
+	for _, record := range records {
+		if siteEnvMatchesSite(record, site) {
+			return ProjectError{Msg: fmt.Sprintf("Site %q already exists in local site cache.", site)}
+		}
+	}
+	return nil
+}
+
+func runSSHScript(user, host, script string) error {
+	destination := host
+	if strings.TrimSpace(user) != "" {
+		destination = user + "@" + host
+	}
+	cmd := exec.Command("ssh", "-o", "BatchMode=yes", "-o", "StrictHostKeyChecking=no", "-o", "UserKnownHostsFile=/dev/null", destination, "sudo", "bash", "-s")
+	cmd.Stdin = strings.NewReader(script)
+	cmd.Stdout = os.Stdout
+	cmd.Stderr = os.Stderr
+	return cmd.Run()
+}
+
+func renderSiteAddScript(plan siteAddPlan) string {
+	q := shellQuoteArg
+	var b strings.Builder
+	b.WriteString("set -euo pipefail\n")
+	b.WriteString("export DEBIAN_FRONTEND=noninteractive\n")
+	b.WriteString("if ! command -v wp >/dev/null 2>&1; then\n")
+	b.WriteString("  curl -fsSL https://raw.githubusercontent.com/wp-cli/builds/gh-pages/phar/wp-cli.phar -o /usr/local/bin/wp\n")
+	b.WriteString("  chmod 0755 /usr/local/bin/wp\n")
+	b.WriteString("fi\n")
+	b.WriteString("install -d -o www-data -g www-data -m 2775 /var/www/sites /var/log/nginx/sites /var/lib/nf\n")
+	b.WriteString("touch /var/lib/nf/sites.json\n")
+	b.WriteString("if ! jq empty /var/lib/nf/sites.json >/dev/null 2>&1; then printf '[]\\n' >/var/lib/nf/sites.json; fi\n")
+	b.WriteString("create_env() {\n")
+	b.WriteString("  env_name=$1 site_path=$2 db_name=$3 host_name=$4 site_url=$5 site_title=$6 state_target=$7\n")
+	b.WriteString("  install -d -o www-data -g www-data -m 2775 \"$site_path\"\n")
+	b.WriteString("  mariadb -uroot <<SQL\n")
+	b.WriteString("CREATE DATABASE IF NOT EXISTS \\`$db_name\\` CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;\n")
+	b.WriteString("CREATE USER IF NOT EXISTS '$db_name'@'localhost' IDENTIFIED BY '")
+	b.WriteString(plan.DBPassword)
+	b.WriteString("';\n")
+	b.WriteString("ALTER USER '$db_name'@'localhost' IDENTIFIED BY '")
+	b.WriteString(plan.DBPassword)
+	b.WriteString("';\n")
+	b.WriteString("GRANT ALL PRIVILEGES ON \\`$db_name\\`.* TO '$db_name'@'localhost';\n")
+	b.WriteString("FLUSH PRIVILEGES;\n")
+	b.WriteString("SQL\n")
+	b.WriteString("  if [ ! -f \"$site_path/wp-load.php\" ]; then sudo -u www-data wp core download --path=\"$site_path\" --allow-root; fi\n")
+	b.WriteString("  sudo -u www-data wp config create --path=\"$site_path\" --dbname=\"$db_name\" --dbuser=\"$db_name\" --dbpass=")
+	b.WriteString(q(plan.DBPassword))
+	b.WriteString(" --dbhost=localhost --skip-check --force --allow-root\n")
+	b.WriteString("  if ! sudo -u www-data wp core is-installed --path=\"$site_path\" --allow-root >/dev/null 2>&1; then\n")
+	b.WriteString("    sudo -u www-data wp core install --path=\"$site_path\" --url=\"$site_url\" --title=\"$site_title\" --admin_user=")
+	b.WriteString(q(plan.AdminUser))
+	b.WriteString(" --admin_password=")
+	b.WriteString(q(plan.AdminPassword))
+	b.WriteString(" --admin_email=")
+	b.WriteString(q(plan.AdminEmail))
+	b.WriteString(" --skip-email --allow-root\n")
+	b.WriteString("  fi\n")
+	b.WriteString("  cat >/etc/nginx/sites-available/nf-site-$state_target <<EOF\n")
+	b.WriteString("server {\n    listen 80;\n    listen [::]:80;\n    server_name $host_name;\n    return 301 https://$host_name\\$request_uri;\n}\n\n")
+	b.WriteString("server {\n    listen 443 ssl http2;\n    listen [::]:443 ssl http2;\n    server_name $host_name;\n    include /etc/nginx/snippets/nf-wildcard-cert.conf;\n    include /etc/nginx/snippets/nf-security-headers.conf;\n    root $site_path;\n    access_log /var/log/nginx/sites/$state_target.access.log;\n    error_log /var/log/nginx/sites/$state_target.error.log;\n    include /etc/nginx/snippets/nf-wordpress.conf;\n    include /etc/nginx/snippets/nf-static-assets.conf;\n    location ~ \\.php$ { include /etc/nginx/snippets/nf-fastcgi-php.conf; fastcgi_pass unix:/run/php/php8.3-fpm.sock; }\n}\n")
+	b.WriteString("EOF\n")
+	b.WriteString("  ln -sf /etc/nginx/sites-available/nf-site-$state_target /etc/nginx/sites-enabled/nf-site-$state_target\n")
+	b.WriteString("  tmp=$(mktemp)\n")
+	b.WriteString("  jq --arg provider linode --arg site_id ")
+	b.WriteString(q(plan.Site))
+	b.WriteString(" --arg name ")
+	b.WriteString(q(plan.Site))
+	b.WriteString(" --arg env_id \"$state_target\" --arg env \"$env_name\" --arg target ")
+	b.WriteString(q(plan.TargetName))
+	b.WriteString(" --arg server ")
+	b.WriteString(q(plan.TargetName))
+	b.WriteString(" --arg server_hostname ")
+	b.WriteString(q(firstRecordString(plan.Target, "hostname")))
+	b.WriteString(" --arg hostname \"$host_name\" --arg url \"$site_url\" --arg path \"$site_path\" --arg database \"$db_name\" '\n")
+	b.WriteString("    map(select(.site_id != $site_id or .env != $env)) + [{provider:$provider,env_id:$env_id,site_id:$site_id,name:$name,env:$env,environment:$env,target:$target,server:$server,server_name:$server,server_hostname:$server_hostname,hostname:$hostname,url:$url,path:$path,database:$database,status:\"active\"}]\n")
+	b.WriteString("  ' /var/lib/nf/sites.json >\"$tmp\" && install -o ")
+	b.WriteString(q(plan.SSHUser))
+	b.WriteString(" -g www-data -m 0664 \"$tmp\" /var/lib/nf/sites.json && rm -f \"$tmp\"\n")
+	b.WriteString("}\n")
+	for _, env := range plan.Envs {
+		stateTarget := plan.Site + "-" + env.Env
+		b.WriteString("create_env ")
+		b.WriteString(q(env.Env))
+		b.WriteByte(' ')
+		b.WriteString(q(env.Path))
+		b.WriteByte(' ')
+		b.WriteString(q(env.Database))
+		b.WriteByte(' ')
+		b.WriteString(q(env.Hostname))
+		b.WriteByte(' ')
+		b.WriteString(q(env.URL))
+		b.WriteByte(' ')
+		b.WriteString(q(env.Title))
+		b.WriteByte(' ')
+		b.WriteString(q(stateTarget))
+		b.WriteByte('\n')
+	}
+	b.WriteString("nginx -t\n")
+	b.WriteString("systemctl reload nginx\n")
+	b.WriteString("systemctl reload php8.3-fpm || systemctl restart php8.3-fpm\n")
+	return b.String()
+}
+
+func printSiteAddPlan(plan siteAddPlan, mode string) {
+	fmt.Println("Add site plan:")
+	fmt.Printf("  target: %s\n", plan.TargetName)
+	fmt.Printf("  provider: linode\n")
+	fmt.Printf("  ssh: %s@%s\n", plan.SSHUser, plan.SSHHost)
+	fmt.Printf("  site: %s\n", plan.Site)
+	fmt.Printf("  admin user: %s\n", plan.AdminUser)
+	fmt.Printf("  admin email: %s\n", plan.AdminEmail)
+	fmt.Printf("  admin password: derived from %s\n", plan.Site)
+	for _, env := range plan.Envs {
+		fmt.Printf("  env %s:\n", env.Env)
+		fmt.Printf("    path: %s\n", env.Path)
+		fmt.Printf("    database: %s\n", env.Database)
+		fmt.Printf("    vhost: %s\n", env.Hostname)
+		fmt.Printf("    url: %s\n", env.URL)
+	}
+	fmt.Printf("  remote state: /var/lib/nf/sites.json\n")
+	fmt.Printf("  local state: %s\n", state.StatePath("sites"))
+	fmt.Printf("  mode: %s\n", mode)
+}
+
+func cmdSiteAdd(args siteAddArgs) int {
+	if args.execute && args.dryRun {
+		fmt.Fprintln(os.Stderr, "Choose either --execute or --dry-run, not both.")
+		return 1
+	}
+	if !args.execute && (args.dryRun || args.nonInteractive) {
+		args.dryRun = true
+	}
+	if args.nonInteractive && args.execute && !args.yes {
+		fmt.Fprintln(os.Stderr, "Remote execution requires both --execute and --yes in non-interactive mode.")
+		return 1
+	}
+	plan, err := buildSiteAddPlan(args)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		return 1
+	}
+	existing, err := state.LoadStateRecords("sites")
+	if err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		return 1
+	}
+	if err := ensureSiteNotCached(existing, plan.Site); err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		return 1
+	}
+	willExecute := args.execute || (!args.dryRun && !args.nonInteractive)
+	mode := "dry-run"
+	if willExecute {
+		mode = "execute"
+	}
+	printSiteAddPlan(plan, mode)
+	if !willExecute {
+		return 0
+	}
+	if !args.yes {
+		confirmed, err := ui.Confirm(fmt.Sprintf("Add site %q with live and staging envs on target %q?", plan.Site, plan.TargetName), false)
+		if err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			return 1
+		}
+		if !confirmed {
+			fmt.Fprintln(os.Stderr, "Aborted.")
+			return 1
+		}
+	}
+	if err := runSSHScriptFn(plan.SSHUser, plan.SSHHost, renderSiteAddScript(plan)); err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		return 1
+	}
+	if err := appendSiteAddRecords(plan); err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		return 1
+	}
+	fmt.Println("Site added.")
+	return 0
+}
+
 func cmdListSites(records, servers []map[string]any) int {
 	if len(records) == 0 {
 		fmt.Println("No sites found.")
 		return 0
 	}
-	rows := [][]string{{"target", "provider", "environment", "url", "branch", "server"}}
+	type siteListRow struct {
+		Site       string
+		Target     string
+		Envs       map[string]bool
+		EnvURLs    map[string]string
+		FirstIndex int
+	}
+	grouped := map[string]*siteListRow{}
 	for _, record := range records {
+		site := siteEnvDisplaySite(record)
+		if site == "" {
+			site = siteSummary(record)
+		}
+		if site == "" {
+			continue
+		}
+		row := grouped[site]
+		if row == nil {
+			row = &siteListRow{Site: site, Target: siteProviderTarget(record), Envs: map[string]bool{}, EnvURLs: map[string]string{}, FirstIndex: len(grouped)}
+			grouped[site] = row
+		}
+		if row.Target == "" {
+			row.Target = siteProviderTarget(record)
+		}
+		env := siteEnvName(record)
+		row.Envs[env] = true
+		if url := firstRecordString(record, "url", "site_url", "home_url", "hostname"); url != "" {
+			row.EnvURLs[env] = url
+		}
+	}
+	if len(grouped) == 0 {
+		fmt.Println("No sites found.")
+		return 0
+	}
+	rowsBySite := make([]*siteListRow, 0, len(grouped))
+	for _, row := range grouped {
+		rowsBySite = append(rowsBySite, row)
+	}
+	sort.Slice(rowsBySite, func(i, j int) bool { return rowsBySite[i].FirstIndex < rowsBySite[j].FirstIndex })
+	rows := [][]string{{"site", "target", "envs", "live url", "staging url"}}
+	for _, row := range rowsBySite {
 		rows = append(rows, []string{
-			siteTargetName(record),
-			recordValueString(record["provider"]),
-			firstRecordString(record, "environment", "environment_name", "env"),
-			firstRecordString(record, "url", "site_url", "home_url", "hostname"),
-			firstRecordString(record, "branch", "git_branch"),
-			siteServerSummary(record, state.MatchingRecord(servers, siteServerReference(record))),
+			row.Site,
+			row.Target,
+			strings.Join(sortedSiteListEnvs(row.Envs), ","),
+			row.EnvURLs["live"],
+			row.EnvURLs["staging"],
 		})
 	}
 	fmt.Println(formatTable(rows))
@@ -2606,7 +3058,7 @@ func cmdListSiteEnvs(siteID string) int {
 		fmt.Fprintln(os.Stderr, err)
 		return 1
 	}
-	rows := [][]string{{"env", "site", "provider", "url", "branch", "target"}}
+	rows := [][]string{{"env", "site", "target", "url"}}
 	for _, record := range bundle.Sites {
 		if !siteEnvMatchesSite(record, siteID) {
 			continue
@@ -2614,10 +3066,8 @@ func cmdListSiteEnvs(siteID string) int {
 		rows = append(rows, []string{
 			siteEnvName(record),
 			siteEnvDisplaySite(record),
-			recordValueString(record["provider"]),
+			siteProviderTarget(record),
 			firstRecordString(record, "url", "site_url", "home_url", "hostname"),
-			firstRecordString(record, "branch", "git_branch"),
-			siteTargetName(record),
 		})
 	}
 	if len(rows) == 1 {
@@ -2664,7 +3114,7 @@ func cmdShowSiteEnv(siteID, env string) int {
 	out["requested_env"] = env
 	out["resolved_site"] = siteEnvDisplaySite(record)
 	out["resolved_env"] = siteEnvName(record)
-	out["resolved_target"] = siteTargetName(record)
+	out["resolved_target"] = siteProviderTarget(record)
 	if err := enrichSiteOutput(out, record, bundle.Servers); err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		return 1
@@ -2723,7 +3173,7 @@ func cmdEnvRemoteSyncPlan(action, remoteName string, cfg envConfig, metadata map
 	fmt.Printf("  site:          %s\n", siteID)
 	fmt.Printf("  env:           %s\n", remoteEnv)
 	fmt.Printf("  provider:      %s\n", provider)
-	fmt.Printf("  target:        %s\n", siteTargetName(record))
+	fmt.Printf("  target:        %s\n", siteProviderTarget(record))
 	if url := firstRecordString(record, "url", "site_url", "home_url", "hostname"); url != "" {
 		fmt.Printf("  url:           %s\n", url)
 	}
@@ -2772,7 +3222,7 @@ func cmdSiteEnvRemoteCommandPlan(action, siteID, env string, args []string) int 
 	fmt.Printf("  site:     %s\n", siteID)
 	fmt.Printf("  env:      %s\n", env)
 	fmt.Printf("  provider: %s\n", provider)
-	fmt.Printf("  target:   %s\n", siteTargetName(record))
+	fmt.Printf("  target:   %s\n", siteProviderTarget(record))
 	if url := firstRecordString(record, "url", "site_url", "home_url", "hostname"); url != "" {
 		fmt.Printf("  url:      %s\n", url)
 	}
@@ -2790,6 +3240,41 @@ func cmdSiteEnvRemoteCommandPlan(action, siteID, env string, args []string) int 
 	}
 	fmt.Fprintf(os.Stderr, "Remote site env %s is not implemented yet; no command was run.\n", action)
 	return 1
+}
+
+func parseSiteEnvFlag(args []string, allowCommand bool) (siteID, env string, command []string, ok bool) {
+	if len(args) == 0 {
+		return "", "", nil, false
+	}
+	siteID = args[0]
+	env = "live"
+	seenEnv := ""
+	for i := 1; i < len(args); i++ {
+		arg := args[i]
+		switch arg {
+		case "--live", "--staging":
+			selected := strings.TrimPrefix(arg, "--")
+			if seenEnv != "" && seenEnv != selected {
+				fmt.Fprintln(os.Stderr, "Choose either --live or --staging, not both.")
+				return "", "", nil, false
+			}
+			seenEnv = selected
+			env = selected
+		case "--":
+			if allowCommand {
+				return siteID, env, args[i+1:], true
+			}
+			fmt.Fprintln(os.Stderr, "unexpected --")
+			return "", "", nil, false
+		default:
+			if allowCommand {
+				return siteID, env, args[i:], true
+			}
+			fmt.Fprintf(os.Stderr, "unknown site env flag: %s\n", arg)
+			return "", "", nil, false
+		}
+	}
+	return siteID, env, nil, true
 }
 
 func cmdShowServer(needle string) int {
@@ -3380,6 +3865,7 @@ func runRemoteHelp() int {
 
 func runSiteHelp() int {
 	printGroupHelp("site", []string{
+		"add <target> <site> [flags]   create live and staging WordPress envs on a target",
 		"refresh             refresh local inventory cache",
 		"list                list sites",
 		"show <id-or-name>   show a site",
@@ -4996,6 +5482,8 @@ func runSite(argv []string) int {
 		return runSiteHelp()
 	}
 	switch argv[0] {
+	case "add":
+		return runSiteAdd(argv[1:])
 	case "refresh":
 		if len(argv) != 1 {
 			fmt.Fprintln(os.Stderr, "site refresh takes no arguments")
@@ -5044,45 +5532,81 @@ func runSite(argv []string) int {
 	}
 }
 
+func runSiteAdd(argv []string) int {
+	if len(argv) == 0 || argv[0] == "help" || argv[0] == "--help" || argv[0] == "-h" {
+		printGroupHelp("site add", []string{
+			"<target> <site> [--execute] [--yes] [--non-interactive] [--dry-run]",
+		})
+		return 0
+	}
+	args := siteAddArgs{}
+	positionals := []string{}
+	for _, arg := range argv {
+		switch arg {
+		case "--execute":
+			args.execute = true
+		case "--yes":
+			args.yes = true
+		case "--non-interactive":
+			args.nonInteractive = true
+		case "--dry-run":
+			args.dryRun = true
+		default:
+			if strings.HasPrefix(arg, "-") {
+				fmt.Fprintf(os.Stderr, "unknown site add flag: %s\n", arg)
+				return 1
+			}
+			positionals = append(positionals, arg)
+		}
+	}
+	if len(positionals) != 2 {
+		fmt.Fprintln(os.Stderr, "site add takes exactly target and site")
+		return 1
+	}
+	args.target = positionals[0]
+	args.site = positionals[1]
+	return cmdSiteAdd(args)
+}
+
 func runSiteEnv(argv []string) int {
 	if len(argv) == 0 || argv[0] == "help" || argv[0] == "--help" || argv[0] == "-h" {
 		printGroupHelp("site env", []string{
-			"list [site-id]              list remote envs",
-			"show <site-id> <env>        show one remote env",
-			"shell <site-id> <env>       shell into a remote env",
-			"wp <site-id> <env> <cmd>    run wp-cli against a remote env",
+			"list <site>                 list remote envs for a site",
+			"show <site> [--live|--staging]       show one remote env",
+			"shell <site> [--live|--staging]      shell into a remote env",
+			"wp <site> [--live|--staging] <cmd>   run wp-cli against a remote env",
 		})
 		return 0
 	}
 	switch argv[0] {
 	case "list":
-		if len(argv) > 2 {
-			fmt.Fprintln(os.Stderr, "site env list takes at most one site-id")
+		if len(argv) != 2 {
+			fmt.Fprintln(os.Stderr, "site env list takes exactly one site")
 			return 1
 		}
-		siteID := ""
-		if len(argv) == 2 {
-			siteID = argv[1]
-		}
-		return cmdListSiteEnvs(siteID)
+		return cmdListSiteEnvs(argv[1])
 	case "show":
-		if len(argv) != 3 {
-			fmt.Fprintln(os.Stderr, "site env show takes exactly site-id and env")
+		siteID, env, _, ok := parseSiteEnvFlag(argv[1:], false)
+		if !ok {
 			return 1
 		}
-		return cmdShowSiteEnv(argv[1], argv[2])
+		return cmdShowSiteEnv(siteID, env)
 	case "shell":
-		if len(argv) != 3 {
-			fmt.Fprintln(os.Stderr, "site env shell takes exactly site-id and env")
+		siteID, env, _, ok := parseSiteEnvFlag(argv[1:], false)
+		if !ok {
 			return 1
 		}
-		return cmdSiteEnvRemoteCommandPlan("shell", argv[1], argv[2], nil)
+		return cmdSiteEnvRemoteCommandPlan("shell", siteID, env, nil)
 	case "wp":
-		if len(argv) < 4 {
-			fmt.Fprintln(os.Stderr, "site env wp takes site-id, env, and command")
+		siteID, env, command, ok := parseSiteEnvFlag(argv[1:], true)
+		if !ok {
 			return 1
 		}
-		return cmdSiteEnvRemoteCommandPlan("wp", argv[1], argv[2], argv[3:])
+		if len(command) == 0 {
+			fmt.Fprintln(os.Stderr, "site env wp takes site and command")
+			return 1
+		}
+		return cmdSiteEnvRemoteCommandPlan("wp", siteID, env, command)
 	default:
 		fmt.Fprintln(os.Stderr, "unsupported site env command")
 		return 1
