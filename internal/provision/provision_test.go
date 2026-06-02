@@ -19,6 +19,18 @@ import (
 	"github.com/nonfiction/nf/internal/ui"
 )
 
+func TestMain(m *testing.M) {
+	if os.Getenv("NF_CONFIG_HOME") == "" {
+		dir, err := os.MkdirTemp("", "nf-provision-config-*")
+		if err != nil {
+			panic(err)
+		}
+		_ = os.Setenv("NF_CONFIG_HOME", dir)
+		defer os.RemoveAll(dir)
+	}
+	os.Exit(m.Run())
+}
+
 func TestSlugToTitle(t *testing.T) {
 	tests := map[string]string{
 		"demo":             "Demo",

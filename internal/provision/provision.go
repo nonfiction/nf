@@ -909,7 +909,19 @@ func requiredEnv(name string) (string, error) {
 }
 
 func serverDomain() string {
-	return firstNonEmpty(envwizard.Value("NF_SERVER_DOMAIN"), envwizard.Value("DNSIMPLE_ZONE_NAME"), "nfweb.dev")
+	return firstNonEmpty(baseDomainConfigValue(), envwizard.Value("NF_SERVER_DOMAIN"), envwizard.Value("DNSIMPLE_ZONE_NAME"), "nfweb.dev")
+}
+
+func baseDomainConfigValue() string {
+	data, err := os.ReadFile(config.ConfigFile())
+	if err != nil {
+		return ""
+	}
+	values := map[string]string{}
+	if err := json.Unmarshal(data, &values); err != nil {
+		return ""
+	}
+	return strings.TrimSpace(values["base_domain"])
 }
 
 func validateServerName(name string) error {
