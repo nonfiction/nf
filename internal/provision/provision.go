@@ -1145,7 +1145,7 @@ write_files:
           listen [::]:80;
           server_name __HOSTNAME__;
 
-          root /var/www/nf-server;
+          root /var/www/nf;
           index index.html;
 
           location = /healthz {
@@ -1163,17 +1163,21 @@ write_files:
       #!/usr/bin/env bash
       set -euo pipefail
 
-      install -d -o __SSH_USER__ -g www-data -m 2775 /var/www/nf-server
-      cat >/var/www/nf-server/index.html <<'EOF'
+      install -d -o __SSH_USER__ -g www-data -m 2775 /var/www/nf
+      cat >/var/www/nf/index.html <<'EOF'
       <!doctype html>
       <html lang="en">
       <head>
         <meta charset="utf-8">
         <meta name="viewport" content="width=device-width, initial-scale=1">
-        <title>nf server __NAME__</title>
+        <title>nf target __NAME__</title>
         <style>
           :root {
-            color-scheme: light;
+            color-scheme: dark;
+          }
+
+          * {
+            box-sizing: border-box;
           }
 
           body {
@@ -1181,27 +1185,54 @@ write_files:
             min-height: 100vh;
             display: grid;
             place-items: center;
-            background: #f4f7fb;
-            color: #0f172a;
+            overflow: hidden;
+            background:
+              radial-gradient(circle at 20% 20%, rgba(144, 93, 250, 0.22), transparent 32rem),
+              radial-gradient(circle at 80% 10%, rgba(85, 1, 210, 0.24), transparent 28rem),
+              linear-gradient(135deg, #09090f 0%, #11111c 50%, #08070d 100%);
+            color: #f8fafc;
             font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
           }
 
           main {
-            width: min(92vw, 28rem);
-            padding: 2rem;
-            border-radius: 1.25rem;
-            background: #fff;
-            box-shadow: 0 1rem 3rem rgba(15, 23, 42, 0.12);
+            position: relative;
+            width: min(92vw, 34rem);
+            padding: clamp(2rem, 6vw, 3.5rem);
+            border: 1px solid rgba(255, 255, 255, 0.12);
+            border-radius: 1.75rem;
+            background: rgba(15, 15, 26, 0.78);
+            box-shadow: 0 2rem 6rem rgba(0, 0, 0, 0.45);
             text-align: center;
+            backdrop-filter: blur(18px);
+          }
+
+          main::before {
+            content: "";
+            position: absolute;
+            inset: 1px;
+            pointer-events: none;
+            border-radius: inherit;
+            background: linear-gradient(135deg, rgba(255, 255, 255, 0.16), transparent 38%);
+          }
+
+          .logo {
+            position: relative;
+            display: block;
+            width: 5.5rem;
+            height: 5.5rem;
+            margin: 0 auto 1.5rem;
+            border-radius: 1.25rem;
+            box-shadow: 0 1.25rem 3rem rgba(85, 1, 210, 0.35);
           }
 
           .pill {
+            position: relative;
             display: inline-block;
             margin-bottom: 1rem;
             padding: 0.35rem 0.8rem;
             border-radius: 999px;
-            background: #dcfce7;
-            color: #166534;
+            background: rgba(34, 197, 94, 0.14);
+            color: #86efac;
             font-size: 0.875rem;
             font-weight: 700;
             letter-spacing: 0.04em;
@@ -1209,25 +1240,38 @@ write_files:
           }
 
           h1 {
-            margin: 0 0 0.75rem;
+            position: relative;
+            margin: 0 0 1rem;
             font-size: clamp(2rem, 5vw, 3rem);
             line-height: 1.1;
           }
 
           p {
+            position: relative;
             margin: 0.5rem 0;
             font-size: 1rem;
+            color: #cbd5e1;
           }
 
           .label {
-            color: #475569;
+            color: #94a3b8;
           }
         </style>
       </head>
       <body>
         <main>
+          <svg class="logo" xmlns="http://www.w3.org/2000/svg" width="400" height="400" viewBox="0 0 400 400" role="img" aria-label="Nonfiction logo">
+            <defs>
+              <linearGradient id="background" x1="0" y1="0" x2="400" y2="0" gradientUnits="userSpaceOnUse">
+                <stop offset="0%" stop-color="#905DFA"/>
+                <stop offset="100%" stop-color="#5501D2"/>
+              </linearGradient>
+            </defs>
+            <rect width="400" height="400" fill="url(#background)"/>
+            <path d="M0 0 C5.64804263 4.84760347 10.76425856 10.21957697 14 17 C14 17.66 14 18.32 14 19 C14.66 19 15.32 19 16 19 C16 10.42 16 1.84 16 -7 C22.93 -7 29.86 -7 37 -7 C36.505 78.14 36.505 78.14 36 165 C29.07 165 22.14 165 15 165 C14.970271 160.07235718 14.970271 160.07235718 14.93994141 155.04516602 C14.87295699 144.17659327 14.79531851 133.30811528 14.71247292 122.43965244 C14.66258242 115.85179807 14.61625163 109.26395918 14.578125 102.67602539 C14.54118084 96.31524064 14.4947959 89.95458765 14.44193649 83.59391594 C14.42344107 81.17034154 14.40831532 78.74673895 14.39665604 76.32312202 C14.37971063 72.92173978 14.35065521 69.52065612 14.31884766 66.11938477 C14.31668747 65.12316101 14.31452728 64.12693726 14.31230164 63.1005249 C14.24145194 57.14790433 13.53078941 51.75007168 12 46 C11.72800781 44.89914063 11.45601563 43.79828125 11.17578125 42.6640625 C7.57502313 29.98809046 1.26288994 19.75708373 -10.10546875 12.69140625 C-21.82380098 6.50358285 -38.1594566 5.38036188 -50.921875 8.875 C-53.84955042 10.027867 -56.3566324 11.29916218 -59 13 C-59.84691406 13.54269531 -60.69382813 14.08539063 -61.56640625 14.64453125 C-66.56825242 18.20122122 -69.38521907 21.47990693 -72 27 C-72.34675781 27.62777344 -72.69351563 28.25554687 -73.05078125 28.90234375 C-77.81511998 37.65140214 -78.29955614 46.3138163 -78.31884766 56.12915039 C-78.32889328 57.31064667 -78.3389389 58.49214294 -78.34928894 59.70944214 C-78.38001571 63.5888422 -78.39712705 67.46817357 -78.4140625 71.34765625 C-78.43170795 74.04765785 -78.45226179 76.74763523 -78.4727478 79.44761658 C-78.51937759 85.81153307 -78.55619769 92.1754663 -78.58942068 98.53946537 C-78.62775432 105.78989266 -78.67713469 113.04023186 -78.72740483 120.29058468 C-78.83048942 135.19365879 -78.91943368 150.09678591 -79 165 C-85.93 165 -92.86 165 -100 165 C-100.11642661 149.43864646 -100.20531801 133.87745068 -100.25906086 118.3157692 C-100.28469311 111.08796483 -100.31955119 103.86043832 -100.37719727 96.6328125 C-100.42749738 90.32313631 -100.45939939 84.01366159 -100.47044247 77.70379043 C-100.47688406 74.37165164 -100.49444201 71.04053952 -100.52865028 67.70850372 C-100.77489859 42.70278559 -98.43472708 20.34664384 -80.75 1.375 C-59.58507528 -18.86770578 -22.71659706 -16.31398929 0 0 Z " fill="#fff" transform="translate(231,131)"/>
+          </svg>
           <div class="pill">ready</div>
-          <h1>nf server __NAME__</h1>
+          <h1>nf target __NAME__</h1>
           <p><span class="label">hostname:</span> __HOSTNAME__</p>
           <p><span class="label">health:</span> https://__HOSTNAME__</p>
         </main>
@@ -1255,7 +1299,7 @@ write_files:
           listen [::]:80;
           server_name __HOSTNAME__;
 
-          root /var/www/nf-server;
+          root /var/www/nf;
           index index.html;
 
           location = /healthz {
@@ -1274,7 +1318,7 @@ write_files:
           server_name __HOSTNAME__;
 
           include /etc/nginx/snippets/nf-wildcard-cert.conf;
-          root /var/www/nf-server;
+          root /var/www/nf;
           index index.html;
 
           location = /healthz {
@@ -1290,6 +1334,32 @@ write_files:
 
       nginx -t
       systemctl reload nginx
+      systemctl disable --now nf-wildcard-tls.timer || true
+  - path: /etc/systemd/system/nf-wildcard-tls.service
+    permissions: '0644'
+    content: |
+      [Unit]
+      Description=Issue nf wildcard TLS certificate
+      Wants=network-online.target
+      After=network-online.target nginx.service
+
+      [Service]
+      Type=oneshot
+      ExecStart=/usr/local/bin/nf-enable-wildcard-tls
+  - path: /etc/systemd/system/nf-wildcard-tls.timer
+    permissions: '0644'
+    content: |
+      [Unit]
+      Description=Retry nf wildcard TLS certificate setup
+
+      [Timer]
+      OnBootSec=2min
+      OnUnitActiveSec=5min
+      Persistent=true
+      Unit=nf-wildcard-tls.service
+
+      [Install]
+      WantedBy=timers.target
   - path: /usr/local/bin/nf-write-server-marker
     permissions: '0755'
     content: |
@@ -1353,7 +1423,7 @@ runcmd:
   - hostnamectl set-hostname __HOSTNAME__
   - systemctl enable --now mariadb
   - systemctl enable --now fail2ban
-  - install -d -o __SSH_USER__ -g www-data -m 2775 /var/www /var/www/nf-server /var/www/sites /var/www/shared /var/log/nginx/sites /var/lib/nf
+  - install -d -o __SSH_USER__ -g www-data -m 2775 /var/www /var/www/nf /var/www/sites /var/www/shared /var/log/nginx/sites /var/lib/nf
   - usermod -aG www-data __SSH_USER__
   - chown -R __SSH_USER__:www-data /var/www /var/log/nginx/sites
   - chmod 2775 /var/www /var/www/sites /var/www/shared /var/log/nginx/sites
@@ -1372,6 +1442,8 @@ runcmd:
   - ufw allow 443/tcp
   - ufw --force enable
   - /usr/local/bin/nf-write-server-marker
+  - systemctl daemon-reload
+  - systemctl enable --now nf-wildcard-tls.timer
 `)
 
 func renderTemplate(template string, replacements map[string]string) string {
@@ -2449,6 +2521,8 @@ func BuildPlan(args Args) (Plan, error) {
 	}
 	defaultRegion := firstNonEmpty(globalConfigValue("linode_default_region"), "ca-central")
 	defaultType := firstNonEmpty(globalConfigValue("linode_default_type"), "g6-standard-1")
+	defaultImage := globalConfigValue("linode_default_image")
+	defaultUser := firstNonEmpty(globalConfigValue("linode_default_user"), "nonfiction")
 	region, err := resolveValue(args.Region, "Linode region: ", defaultRegion, nonInteractive, false)
 	if err != nil {
 		return Plan{}, err
@@ -2457,7 +2531,7 @@ func BuildPlan(args Args) (Plan, error) {
 	if err != nil {
 		return Plan{}, err
 	}
-	sshUser, err := resolveValue(args.SshUser, "Deployment SSH user: ", "nonfiction", nonInteractive, false)
+	sshUser, err := resolveValue(args.SshUser, "Deployment SSH user: ", defaultUser, nonInteractive, false)
 	if err != nil {
 		return Plan{}, err
 	}
@@ -2486,7 +2560,7 @@ func BuildPlan(args Args) (Plan, error) {
 	if firewallMode == "managed" {
 		firewallPlan = managedFirewallPlan(args.FirewallID)
 	}
-	osPlan, err := osReleasePlan(ubuntuRelease.version, args.Image)
+	osPlan, err := osReleasePlan(ubuntuRelease.version, firstNonEmpty(args.Image, defaultImage))
 	if err != nil {
 		return Plan{}, err
 	}
@@ -2510,7 +2584,7 @@ func BuildPlan(args Args) (Plan, error) {
 		Region:            firstNonEmpty(region, defaultRegion),
 		LinodeType:        firstNonEmpty(linodeType, defaultType),
 		Image:             osPlan.Image,
-		SshUser:           firstNonEmpty(sshUser, "nonfiction"),
+		SshUser:           firstNonEmpty(sshUser, defaultUser),
 		SshKeySource:      sshKeySource,
 		SshKeyLabel:       strings.TrimSpace(args.SshKeyLabel),
 		SshKeyID:          strings.TrimSpace(args.SshKeyID),
@@ -2595,7 +2669,11 @@ func renderProvisionSuccess(plan Plan, created CreatedServer, dns DNSState, tls 
 func renderProvisionPaused(plan Plan, created CreatedServer, dns DNSState, statePath string, phase string, sshKeys []SSHAuthorizedKey) string {
 	plan = normalizePlan(plan)
 	sshTarget := plan.SshUser + "@" + plan.Hostname
-	lines := []string{"Server provisioning paused.", ""}
+	title := "Server provisioning paused."
+	if plan.TargetMode {
+		title = "Target provisioning handed off."
+	}
+	lines := []string{title, ""}
 	lines = append(lines, serverPlanBlock(plan, &created, "provisioning", phase)...)
 	lines = append(lines, sshSuccessBlock(plan, sshKeys)...)
 	lines = append(lines, rootSuccessBlock(plan)...)
@@ -2608,6 +2686,9 @@ func renderProvisionPaused(plan Plan, created CreatedServer, dns DNSState, state
 		"  zone: "+dns.Zone,
 		dnsRecordLine("hostname A", dns.HostnameRecord),
 		dnsRecordLine("wildcard A", dns.WildcardRecord),
+		"TLS",
+		"  status: queued on target by nf-wildcard-tls.timer",
+		"  retry: every 5 minutes until certificate succeeds",
 		"Paths",
 		"  state: "+statePath,
 		"  marker: /etc/nf/server.json",
@@ -2615,14 +2696,29 @@ func renderProvisionPaused(plan Plan, created CreatedServer, dns DNSState, state
 		"  sites root: /var/www/sites",
 		"  shared root: /var/www/shared",
 		"  nginx site logs: /var/log/nginx/sites",
-		"Next",
-		"  wait for SSH:",
-		"  ssh -o BatchMode=yes "+sshTarget+" \"cloud-init status --wait\"",
-		"  enable wildcard TLS:",
-		"  ssh "+sshTarget+" \"sudo /usr/local/bin/nf-enable-wildcard-tls\"",
-		"  check HTTPS health:",
-		"  curl -fsS "+plan.HealthURL+"/healthz",
 	)
+	if plan.TargetMode {
+		lines = append(lines,
+			"Next",
+			"  no rerun required; cloud-init starts TLS retry on the target.",
+			"  inspect cloud-init:",
+			"  ssh -o BatchMode=yes "+sshTarget+" \"cloud-init status --wait\"",
+			"  inspect TLS timer:",
+			"  ssh "+sshTarget+" \"sudo systemctl status nf-wildcard-tls.timer nf-wildcard-tls.service\"",
+			"  check HTTPS health when DNS has settled:",
+			"  curl -fsS "+plan.HealthURL+"/healthz",
+		)
+	} else {
+		lines = append(lines,
+			"Next",
+			"  wait for SSH:",
+			"  ssh -o BatchMode=yes "+sshTarget+" \"cloud-init status --wait\"",
+			"  enable wildcard TLS:",
+			"  ssh "+sshTarget+" \"sudo /usr/local/bin/nf-enable-wildcard-tls\"",
+			"  check HTTPS health:",
+			"  curl -fsS "+plan.HealthURL+"/healthz",
+		)
+	}
 	return strings.Join(lines, "\n") + "\n"
 }
 
@@ -2663,10 +2759,14 @@ func renderProvisionHealthFailure(plan Plan, created CreatedServer, dns DNSState
 	return strings.Join(lines, "\n") + "\n"
 }
 
-func renderProvisionPartialFailure(plan Plan, created CreatedServer, statePath string, dnsErr error) string {
+func renderProvisionPartialFailure(plan Plan, created CreatedServer, statePath string, phase string, dnsErr error) string {
 	plan = normalizePlan(plan)
-	lines := []string{"Server provisioning paused.", ""}
-	lines = append(lines, serverPlanBlock(plan, &created, "provisioning", "linode_created")...)
+	title := "Server provisioning paused."
+	if plan.TargetMode {
+		title = "Target provisioning paused."
+	}
+	lines := []string{title, ""}
+	lines = append(lines, serverPlanBlock(plan, &created, "provisioning", phase)...)
 	lines = append(lines,
 		"Paths",
 		"  state: "+statePath,
@@ -2957,10 +3057,10 @@ func ProvisionServer(plan Plan) (*ServerCreateResult, error) {
 		hostnameRecordName := relativeRecordName(effectivePlan.Hostname, dnsZone)
 		wildcardRecordName := relativeRecordName(effectivePlan.WildcardHostname, dnsZone)
 		if err := dnsimpleUpsertARecordRun(dnsimpleToken, effectivePlan.DnsimpleAccountID, dnsZone, hostnameRecordName, linodeIP); err != nil {
-			return nil, Error{Msg: renderProvisionPartialFailure(effectivePlan, created, serverStatePath, err)}
+			return nil, Error{Msg: renderProvisionPartialFailure(effectivePlan, created, serverStatePath, "linode_created", err)}
 		}
 		if err := dnsimpleUpsertARecordRun(dnsimpleToken, effectivePlan.DnsimpleAccountID, dnsZone, wildcardRecordName, linodeIP); err != nil {
-			return nil, Error{Msg: renderProvisionPartialFailure(effectivePlan, created, serverStatePath, err)}
+			return nil, Error{Msg: renderProvisionPartialFailure(effectivePlan, created, serverStatePath, "linode_created", err)}
 		}
 		records, err := dnsimpleListARecordsFn(dnsimpleToken, effectivePlan.DnsimpleAccountID, dnsZone)
 		if err != nil {
@@ -2973,17 +3073,18 @@ func ProvisionServer(plan Plan) (*ServerCreateResult, error) {
 			tlsState = tlsStateRecord(effectivePlan)
 		}
 		currentPhase = "dns_configured"
+		phaseRank = provisioningPhaseRank(currentPhase)
 		if err := upsertProvisionRecord(serverStatePath, effectivePlan, serverStateRecordWithStatus(effectivePlan, created, dnsState, TLSState{}, createdAt, now, "provisioning", currentPhase)); err != nil {
 			return nil, err
 		}
-		if effectivePlan.Wait {
+		if effectivePlan.Wait && !effectivePlan.TargetMode {
 			// Keep distribution failures in the dns_configured pause/resume path.
 			// This preserves the current resume behavior without re-creating the Linode.
 			if err := dnsimpleWaitForRecordDistributionFn(dnsimpleToken, effectivePlan.DnsimpleAccountID, dnsZone, hostnameRecordName, effectivePlan.TLSTimeout); err != nil {
-				return nil, Error{Msg: renderProvisionPartialFailure(effectivePlan, created, serverStatePath, err)}
+				return nil, Error{Msg: renderProvisionPartialFailure(effectivePlan, created, serverStatePath, currentPhase, err)}
 			}
 			if err := dnsimpleWaitForRecordDistributionFn(dnsimpleToken, effectivePlan.DnsimpleAccountID, dnsZone, wildcardRecordName, effectivePlan.TLSTimeout); err != nil {
-				return nil, Error{Msg: renderProvisionPartialFailure(effectivePlan, created, serverStatePath, err)}
+				return nil, Error{Msg: renderProvisionPartialFailure(effectivePlan, created, serverStatePath, currentPhase, err)}
 			}
 		}
 	}

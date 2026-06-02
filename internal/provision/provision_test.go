@@ -861,20 +861,33 @@ func TestCloudInitTemplateIsServerOnly(t *testing.T) {
 		"default_type application/json;",
 		"{ \"server\": \"app1\", \"hostname\": \"app1.nfweb.dev\", \"status\": \"ready\" }",
 		"/usr/local/bin/nf-write-server-health-page",
-		"/var/www/nf-server/index.html",
-		"cat >/var/www/nf-server/index.html <<'EOF'",
+		"/var/www/nf/index.html",
+		"cat >/var/www/nf/index.html <<'EOF'",
 		"<!doctype html>",
 		"</html>",
 		"EOF",
-		"<title>nf server app1</title>",
+		"<title>nf target app1</title>",
+		"color-scheme: dark;",
+		"background:",
+		"radial-gradient(circle at 20% 20%, rgba(144, 93, 250, 0.22), transparent 32rem)",
+		"<svg class=\"logo\"",
+		"aria-label=\"Nonfiction logo\"",
+		"linearGradient id=\"background\"",
+		"stop-color=\"#905DFA\"",
+		"stop-color=\"#5501D2\"",
 		"font-family: system-ui, -apple-system, BlinkMacSystemFont, \"Segoe UI\", sans-serif;",
 		"<main>",
 		"<div class=\"pill\">ready</div>",
-		"<h1>nf server app1</h1>",
+		"<h1>nf target app1</h1>",
 		"<span class=\"label\">hostname:</span> app1.nfweb.dev",
 		"<span class=\"label\">health:</span> https://app1.nfweb.dev",
 		"/etc/letsencrypt/renewal-hooks/deploy/reload-nginx",
 		"/usr/local/bin/nf-enable-wildcard-tls",
+		"/etc/systemd/system/nf-wildcard-tls.service",
+		"/etc/systemd/system/nf-wildcard-tls.timer",
+		"ExecStart=/usr/local/bin/nf-enable-wildcard-tls",
+		"OnUnitActiveSec=5min",
+		"systemctl enable --now nf-wildcard-tls.timer",
 		"/usr/local/bin/nf-write-server-marker",
 		"/var/lib/nf/target.json",
 		"/var/lib/nf/sites.json",
@@ -898,7 +911,7 @@ func TestCloudInitTemplateIsServerOnly(t *testing.T) {
 		"python3-certbot-dns-dnsimple",
 		"unattended-upgrades",
 		"fail2ban",
-		"install -d -o ubuntu -g www-data -m 2775 /var/www /var/www/nf-server /var/www/sites /var/www/shared /var/log/nginx/sites",
+		"install -d -o ubuntu -g www-data -m 2775 /var/www /var/www/nf /var/www/sites /var/www/shared /var/log/nginx/sites",
 		"hostnamectl set-hostname app1.nfweb.dev",
 		"mkdir -p /etc/nf",
 		"Managed by nf",
@@ -914,7 +927,7 @@ func TestCloudInitTemplateIsServerOnly(t *testing.T) {
 	lines := strings.Split(strings.ReplaceAll(rendered, "\r\n", "\n"), "\n")
 	openerIdx, closerIdx := -1, -1
 	for i, line := range lines {
-		if line == "      cat >/var/www/nf-server/index.html <<'EOF'" {
+		if line == "      cat >/var/www/nf/index.html <<'EOF'" {
 			openerIdx = i
 			for j := i + 1; j < len(lines); j++ {
 				if lines[j] == "      EOF" {
@@ -941,6 +954,8 @@ func TestCloudInitTemplateIsServerOnly(t *testing.T) {
 		"composer install",
 		"npm install",
 		"npx",
+		"/var/www/nf-server",
+		"color-scheme: light",
 	} {
 		if strings.Contains(rendered, unwanted) {
 			t.Fatalf("renderCloudInit() output unexpectedly contained %q:\n%s", unwanted, rendered)
@@ -2180,6 +2195,29 @@ func TestProvisionServerNoWaitLeavesDnsConfiguredAndPrintsManualSteps(t *testing
 	}
 	if got, want := valueString(records[0]["phase"]), "dns_configured"; got != want {
 		t.Fatalf("phase = %q, want %q", got, want)
+	}
+}
+
+func TestRenderTargetProvisionPausedShowsTLSHandoff(t *testing.T) {
+	plan := normalizePlan(Plan{Name: "app1-linode", Hostname: "app1-linode.nfweb.dev", SshUser: "nonfiction", HealthURL: "https://app1-linode.nfweb.dev", TargetMode: true})
+	created := CreatedServer{Name: "app1-linode", Provider: "linode", ProviderID: "12345", IPv4: "198.51.100.10"}
+	dns := DNSState{Provider: "dnsimple", Zone: "nfweb.dev", HostnameRecord: DNSRecord{Name: "app1-linode", Content: "198.51.100.10"}, WildcardRecord: DNSRecord{Name: "*.app1-linode", Content: "198.51.100.10"}}
+
+	output := renderProvisionPaused(plan, created, dns, "/tmp/providers.json", "dns_configured", nil)
+	for _, want := range []string{
+		"Target provisioning handed off.",
+		"phase: dns_configured",
+		"status: queued on target by nf-wildcard-tls.timer",
+		"no rerun required; cloud-init starts TLS retry on the target.",
+		"sudo systemctl status nf-wildcard-tls.timer nf-wildcard-tls.service",
+		"curl -fsS https://app1-linode.nfweb.dev/healthz",
+	} {
+		if !strings.Contains(output, want) {
+			t.Fatalf("output missing %q:\n%s", want, output)
+		}
+	}
+	if strings.Contains(output, "sudo /usr/local/bin/nf-enable-wildcard-tls") {
+		t.Fatalf("target handoff output should not require manual TLS command:\n%s", output)
 	}
 }
 
