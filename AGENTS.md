@@ -63,7 +63,7 @@ NF_STATE_HOME=/tmp/nf-state
 NF_DATA_HOME=/tmp/nf-data
 ```
 
-Do not read or write the user's real config/state in tests. `internal/provision` has a `TestMain` guard for this because provision code can read `config.ConfigFile()`.
+Do not read or write the user's real config/state in tests. `internal/target/provision` has a `TestMain` guard for this because provision code can read `config.ConfigFile()`.
 
 ## Current cache files
 
