@@ -875,6 +875,115 @@ func TestRunTargetAddLinodeRejectsWaitConflict(t *testing.T) {
 	}
 }
 
+func TestRunTargetRemoveLinodeDeletesRemoteDNSAndState(t *testing.T) {
+	stateDir := t.TempDir()
+	t.Setenv("NF_STATE_HOME", stateDir)
+	t.Setenv("DNSIMPLE_TOKEN", "token")
+	providers := []map[string]any{{
+		"provider": "linode",
+		"targets": []map[string]any{{
+			"id":       "98222343",
+			"name":     "app1-linode",
+			"provider": "linode",
+			"hostname": "app1-linode.nfweb.dev",
+			"dns": map[string]any{
+				"provider":   "dnsimple",
+				"account_id": "14",
+				"zone":       "nfweb.dev",
+				"hostname_record": map[string]any{
+					"name": "app1-linode",
+				},
+				"wildcard_record": map[string]any{
+					"name": "*.app1-linode",
+				},
+			},
+		}, {
+			"id":       "98222344",
+			"name":     "app2-linode",
+			"provider": "linode",
+		}},
+	}}
+	if err := state.SaveStateRecords("providers", providers); err != nil {
+		t.Fatalf("SaveStateRecords(providers) error = %v", err)
+	}
+	deletedLinodes := []string{}
+	oldLinodeDelete := runLinodeDeleteFn
+	runLinodeDeleteFn = func(id string) error {
+		deletedLinodes = append(deletedLinodes, id)
+		return nil
+	}
+	deletedDNS := []string{}
+	oldDNSDelete := deleteDNSRecordFn
+	deleteDNSRecordFn = func(token, accountID, zone, name string) error {
+		deletedDNS = append(deletedDNS, token+"|"+accountID+"|"+zone+"|"+name)
+		return nil
+	}
+	t.Cleanup(func() {
+		runLinodeDeleteFn = oldLinodeDelete
+		deleteDNSRecordFn = oldDNSDelete
+	})
+
+	output := captureStdout(t, func() {
+		if got := Run([]string{"target", "remove", "app1-linode", "--execute", "--yes", "--non-interactive"}); got != 0 {
+			t.Fatalf("Run(target remove) = %d, want 0", got)
+		}
+	})
+	for _, want := range []string{"Remove target plan:", "Linode API delete instance 98222343", "delete dnsimple app1-linode.nfweb.dev", "delete dnsimple *.app1-linode.nfweb.dev", "mode: execute"} {
+		if !strings.Contains(output, want) {
+			t.Fatalf("target remove output missing %q:\n%s", want, output)
+		}
+	}
+	if got, want := strings.Join(deletedLinodes, ","), "98222343"; got != want {
+		t.Fatalf("deleted linodes = %q, want %q", got, want)
+	}
+	if got, want := strings.Join(deletedDNS, ","), "token|14|nfweb.dev|app1-linode,token|14|nfweb.dev|*.app1-linode"; got != want {
+		t.Fatalf("deleted DNS = %q, want %q", got, want)
+	}
+	records, err := state.LoadStateRecords("providers")
+	if err != nil {
+		t.Fatalf("LoadStateRecords(providers) error = %v", err)
+	}
+	targets := targetMaps(records[0]["targets"])
+	if len(targets) != 1 || recordValueString(targets[0]["name"]) != "app2-linode" {
+		t.Fatalf("provider targets = %#v, want only app2-linode", targets)
+	}
+}
+
+func TestRunTargetRemoveRejectsKinsta(t *testing.T) {
+	stateDir := t.TempDir()
+	t.Setenv("NF_STATE_HOME", stateDir)
+	if err := state.SaveStateRecords("providers", []map[string]any{{"provider": "kinsta", "targets": []map[string]any{{"id": "kinsta", "name": "kinsta"}}}}); err != nil {
+		t.Fatalf("SaveStateRecords(providers) error = %v", err)
+	}
+	stderr := captureStderr(t, func() {
+		if got := Run([]string{"target", "remove", "kinsta", "--dry-run", "--non-interactive"}); got != 1 {
+			t.Fatalf("Run(target remove kinsta) = %d, want 1", got)
+		}
+	})
+	if !strings.Contains(stderr, "Kinsta target cannot be removed.") {
+		t.Fatalf("Run() stderr = %q, want kinsta rejection", stderr)
+	}
+}
+
+func TestRunTargetRemoveRejectsLinodeWithSites(t *testing.T) {
+	stateDir := t.TempDir()
+	t.Setenv("NF_STATE_HOME", stateDir)
+	if err := state.SaveStateRecords("providers", []map[string]any{{"provider": "linode", "targets": []map[string]any{{"id": "98222343", "name": "app1-linode", "provider": "linode"}}}}); err != nil {
+		t.Fatalf("SaveStateRecords(providers) error = %v", err)
+	}
+	if err := state.SaveStateRecords("sites", []map[string]any{{"id": "client-app1-linode", "name": "client-app1-linode", "provider": "linode", "target": "app1-linode"}}); err != nil {
+		t.Fatalf("SaveStateRecords(sites) error = %v", err)
+	}
+	stderr := captureStderr(t, func() {
+		if got := Run([]string{"target", "remove", "app1-linode", "--execute", "--yes", "--non-interactive"}); got != 1 {
+			t.Fatalf("Run(target remove app1-linode) = %d, want 1", got)
+		}
+	})
+	if !strings.Contains(stderr, "contains 1 site(s): client-app1-linode") {
+		t.Fatalf("Run() stderr = %q, want site guard", stderr)
+	}
+}
+
 func TestRunTargetListFallsBackToLegacyServersCache(t *testing.T) {
 	stateDir := t.TempDir()
 	t.Setenv("NF_STATE_HOME", stateDir)
