@@ -24,7 +24,7 @@
 * `nf init`
 * `nf provider list`
 * `nf provider show <provider>`
-* `nf provider check <provider>` (config preflight only; no remote API call)
+* `nf provider check <provider>` (provider API healthcheck; saves structured cache data)
 * `nf target list` / `nf target show <target>`
 * `nf site refresh` (local cache path only; provider fetch not implemented yet)
 * `nf site list [--refresh]`
@@ -34,6 +34,7 @@
 * `nf site env shell <site-id> <env>` (preflight only; remote execution not implemented yet)
 * `nf site env wp <site-id> <env> -- <args>` (preflight only; remote execution not implemented yet)
 * `nf remote add <name> <site-id> <env>`
+* `nf remote show <name>`
 * `nf remote remove <name>`
 * `nf remote list`
 * `nf theme tasks`
@@ -53,6 +54,7 @@
 * `nf env snapshot use [name]`
 * `nf env snapshot remove [name]`
 * `nf config init`
+* `nf config set-base-domain <domain>`
 * `nf config set-default-wp-email <email>`
 * `nf config set-default-wp-user <user>`
 * `nf config show`
@@ -160,7 +162,9 @@ Expected local layout:
   snapshots/<project-slug>/<snapshot-name>/
 ```
 
-Local secrets/config are read from:
+Local non-secret config is read from `~/.config/nf/config.json`. `base_domain` is the base domain for provider targets and DNSimple-managed subdomains. Legacy `NF_SERVER_DOMAIN` may remain as a fallback during migration.
+
+Local secrets/account values are read from:
 
 ```text
 ~/.config/nf/.env
@@ -209,11 +213,15 @@ Provider truth is canonical remotely:
 * Linode API is canonical for Linode servers/targets.
 * Linode-hosted site/env truth lives on each target at `/var/lib/nf/sites.json`, read over SSH as the standard user.
 
+`nf provider list` reports local credential status. `nf provider check` writes structured provider cache data to `providers.json`. `nf provider show <provider>` reads that cached provider metadata. DNSimple validates that it can read the configured `base_domain` zone and has zero targets. Kinsta has one target named `kinsta`. Linode targets are discovered from Linode instances tagged `nf`.
+
 Local inventory cache under `NF_STATE_HOME` is disposable. Repo-local config should store remotes only, not global inventory.
 
 ## Project-context behavior
 
 `nf env ...`, `nf init`, `nf theme ...`, and `nf remote ...` are the local project command surface.
+
+`nf remote add` validates that the requested site/env exists in the current local inventory cache before writing `.nf/project.json`.
 
 Theme tasks come from:
 
@@ -330,7 +338,7 @@ Project repos should track:
 
 Shared state/cache should track normalized provider inventory only. It is disposable and must not be treated as canonical provider truth.
 
-`nf target list/show` read target records from the local `servers.json` cache for now. Keep user-facing wording as target.
+`nf target list/show` read target records from `providers.json` provider metadata. Keep user-facing wording as target. A legacy `servers.json` fallback may remain during cache migration.
 
 `nf site refresh` currently reports local cache paths only. It must not claim provider refresh until remote provider fetch is implemented.
 

@@ -13,7 +13,7 @@ Working or stubbed now:
 * `nf init`
 * `nf provider list`
 * `nf provider show <provider>`
-* `nf provider check <provider>` (config preflight only; no remote API call)
+* `nf provider check <provider>` (provider API healthcheck; saves structured cache data)
 * `nf target list` / `nf target show`
 * `nf site refresh` (local cache path only; provider fetch not implemented yet)
 * `nf site list [--refresh]`
@@ -21,7 +21,7 @@ Working or stubbed now:
 * `nf site env list [site-id]`
 * `nf site env show <site-id> <env>`
 * `nf site env shell/wp ...` (preflight only; remote execution not implemented yet)
-* `nf remote add|remove|list`
+* `nf remote add|show|remove|list`
 * `nf theme tasks`
 * `nf theme package`
 * direct theme tasks from `.nf/project.json`
@@ -39,6 +39,7 @@ Working or stubbed now:
 * `nf env snapshot use [name]`
 * `nf env snapshot remove [name]`
 * `nf config init`
+* `nf config set-base-domain <domain>`
 * `nf config set-default-wp-email <email>`
 * `nf config set-default-wp-user <user>`
 * `nf config show`
@@ -287,6 +288,14 @@ NF_STATE_HOME=/tmp/nf-state
 NF_DATA_HOME=/tmp/nf-data
 ```
 
+Local non-secret config lives in:
+
+```json
+{
+  "base_domain": "nonfiction.dev"
+}
+```
+
 Local secrets and account-specific values live in:
 
 ```text
@@ -307,10 +316,11 @@ Use:
 
 ```sh
 nf config init
+nf config set-base-domain nonfiction.dev
 nf password set-salt <salt>
 ```
 
-to create/update local config. Secrets are masked by default in user-facing output.
+to create/update local config and secrets. Secrets are masked by default in user-facing output.
 
 ## Provider, target, site, and remote model
 
@@ -338,11 +348,14 @@ nf site env show <site-id> <env>
 nf site env shell <site-id> <env>
 nf site env wp <site-id> <env> -- <args>
 nf remote add <name> <site-id> <env>
+nf remote show <name>
 nf remote remove <name>
 nf remote list
 ```
 
-`nf target list/show`, `nf site list/show`, and `nf site env list/show` read the local disposable state cache for now. `nf site refresh` currently reports the cache paths and does not fetch providers yet. `nf remote add/remove/list` stores repo-local remotes in `.nf/project.json` under `deploy.remotes`.
+`nf provider list` reports local credential status. `nf provider check` calls safe read-only provider health endpoints: DNSimple `/v2/whoami`, DNSimple zone lookup for `base_domain`, Kinsta `/v2/validate`, and Linode profile plus Linode instance listing. It writes structured provider cache data to `providers.json`: DNSimple account data and managed base domain with zero targets, Kinsta company data with the `kinsta` target, and Linode user data with targets discovered from Linode instances tagged `nf`. `nf provider show <provider>` reads that cached provider metadata.
+
+`nf target list/show` read target records from `providers.json` provider metadata, with a legacy `servers.json` fallback while old caches are phased out. `nf site list/show` and `nf site env list/show` read the local disposable site cache for now. `nf site refresh` currently reports the cache paths and does not fetch providers yet. `nf remote add` validates against the cache, then `nf remote add/show/remove/list` stores and reads repo-local remotes in `.nf/project.json` under `deploy.remotes`.
 
 Remote execution commands under `nf site env shell/wp ...` currently preflight against the local cache, then stop without running remote commands.
 
