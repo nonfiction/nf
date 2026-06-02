@@ -12,6 +12,23 @@ var (
 	}
 )
 
+func recordStringList(value any) []string {
+	switch typed := value.(type) {
+	case []string:
+		return typed
+	case []any:
+		out := make([]string, 0, len(typed))
+		for _, item := range typed {
+			if text := valueString(item); text != "" {
+				out = append(out, text)
+			}
+		}
+		return out
+	default:
+		return nil
+	}
+}
+
 type legacyTestProvider struct{}
 
 func (legacyTestProvider) Name() string { return "linode" }
@@ -39,7 +56,7 @@ func (legacyTestProvider) FindServerByLabel(ctx context.Context, label string) (
 		if id == "" {
 			id = valueString(record["instance_id"])
 		}
-		return &CreatedServer{Provider: "linode", ProviderID: id, Name: label, Hostname: label, IPv4: linodeIPFromRecord(record)}, nil
+		return &CreatedServer{Provider: "linode", ProviderID: id, Name: label, Hostname: label, IPv4: linodeIPFromRecord(record), Tags: recordStringList(record["tags"])}, nil
 	}
 	return nil, nil
 }
@@ -56,7 +73,7 @@ func (legacyTestProvider) CreateServer(ctx context.Context, plan ServerCreatePla
 	if err != nil {
 		return nil, err
 	}
-	return &CreatedServer{Provider: "linode", ProviderID: id, Name: plan.Plan.Name, Hostname: plan.Plan.Hostname, IPv4: linodeIPFromRecord(payload)}, nil
+	return &CreatedServer{Provider: "linode", ProviderID: id, Name: plan.Plan.Name, Hostname: plan.Plan.Hostname, IPv4: linodeIPFromRecord(payload), Tags: []string{"nf"}}, nil
 }
 
 func (legacyTestProvider) EnsureFirewall(ctx context.Context, plan FirewallPlan) (*FirewallResult, error) {

@@ -487,6 +487,40 @@ func TestRunTargetListAndShowUseStateTargets(t *testing.T) {
 	}
 }
 
+func TestRunTargetAddLinodeDryRunUsesTargetNameAndConfigDefaults(t *testing.T) {
+	configDir := t.TempDir()
+	stateDir := t.TempDir()
+	t.Setenv("NF_CONFIG_HOME", configDir)
+	t.Setenv("NF_STATE_HOME", stateDir)
+	configData := map[string]string{
+		"base_domain":           "nonfiction.dev",
+		"dnsimple_account_id":   "14",
+		"linode_default_region": "us-east",
+		"linode_default_type":   "g6-standard-2",
+	}
+	data, err := json.Marshal(configData)
+	if err != nil {
+		t.Fatalf("Marshal() error = %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(configDir, "config.json"), data, 0o600); err != nil {
+		t.Fatalf("WriteFile(config.json) error = %v", err)
+	}
+
+	output := captureStdout(t, func() {
+		if got := Run([]string{"target", "add", "linode", "app1", "--dry-run", "--non-interactive"}); got != 0 {
+			t.Fatalf("Run(target add linode) = %d, want 0", got)
+		}
+	})
+	for _, want := range []string{"app1-linode", "hostname: app1-linode.nonfiction.dev", "wildcard hostname: *.app1-linode.nonfiction.dev", "region: us-east", "type: g6-standard-2", "state: not checked"} {
+		if !strings.Contains(output, want) {
+			t.Fatalf("target add output missing %q:\n%s", want, output)
+		}
+	}
+	if _, err := os.Stat(filepath.Join(stateDir, "providers.json")); !os.IsNotExist(err) {
+		t.Fatalf("providers.json unexpectedly exists after dry-run: %v", err)
+	}
+}
+
 func TestRunTargetListFallsBackToLegacyServersCache(t *testing.T) {
 	stateDir := t.TempDir()
 	t.Setenv("NF_STATE_HOME", stateDir)
