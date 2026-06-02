@@ -45,6 +45,7 @@ var (
 	runSSHScriptFn          = runSSHScript
 	runSSHCommandFn         = runSSHCommand
 	targetSelectFn          = ui.Select
+	providerSelectFn        = ui.Select
 )
 
 type repoCommandRunner interface {
@@ -3998,8 +3999,8 @@ func runServerHelp() int {
 func runProviderHelp() int {
 	printGroupHelp("provider", []string{
 		"list                 list provider integrations",
-		"show <provider>      show cached provider metadata",
-		"check <provider>     run provider healthcheck",
+		"show [provider] [--json]   show cached provider metadata",
+		"check [provider] [--json]  run provider healthcheck",
 	})
 	return 0
 }
@@ -4686,7 +4687,7 @@ func checkProvidersAfterConfigInit() error {
 	fmt.Println("Checking providers...")
 	failed := []string{}
 	for _, status := range providerConfigStatuses() {
-		if cmdProviderCheck(status.Name) != 0 {
+		if cmdProviderCheck(status.Name, false) != 0 {
 			failed = append(failed, status.Name)
 		}
 	}
@@ -4977,21 +4978,75 @@ func runProvider(argv []string) int {
 		}
 		return cmdProviderList()
 	case "show":
-		if len(argv) != 2 {
-			fmt.Fprintln(os.Stderr, "provider show takes exactly one provider")
+		name, jsonOutput, err := parseProviderActionArgs(argv[1:])
+		if err != nil {
+			fmt.Fprintln(os.Stderr, err)
 			return 1
 		}
-		return cmdProviderShow(argv[1])
+		if name == "" {
+			selected, err := chooseProvider("show")
+			if err != nil {
+				fmt.Fprintln(os.Stderr, err)
+				return 1
+			}
+			name = selected
+		}
+		return cmdProviderShow(name, jsonOutput)
 	case "check":
-		if len(argv) != 2 {
-			fmt.Fprintln(os.Stderr, "provider check takes exactly one provider")
+		name, jsonOutput, err := parseProviderActionArgs(argv[1:])
+		if err != nil {
+			fmt.Fprintln(os.Stderr, err)
 			return 1
 		}
-		return cmdProviderCheck(argv[1])
+		if name == "" {
+			selected, err := chooseProvider("check")
+			if err != nil {
+				fmt.Fprintln(os.Stderr, err)
+				return 1
+			}
+			name = selected
+		}
+		return cmdProviderCheck(name, jsonOutput)
 	default:
 		fmt.Fprintln(os.Stderr, "unsupported provider command")
 		return 1
 	}
+}
+
+func parseProviderActionArgs(argv []string) (string, bool, error) {
+	var name string
+	jsonOutput := false
+	for _, arg := range argv {
+		switch arg {
+		case "--json":
+			jsonOutput = true
+		default:
+			if strings.HasPrefix(arg, "-") {
+				return "", false, fmt.Errorf("unsupported flag %s", arg)
+			}
+			if name != "" {
+				return "", false, fmt.Errorf("provider command takes at most one provider")
+			}
+			name = arg
+		}
+	}
+	return name, jsonOutput, nil
+}
+
+func chooseProvider(action string) (string, error) {
+	statuses := providerConfigStatuses()
+	options := make([]ui.SelectOption, 0, len(statuses))
+	for _, status := range statuses {
+		label := fmt.Sprintf("%s (%s)", status.Name, providerStatusLabel(status))
+		if len(status.Missing) > 0 {
+			label = fmt.Sprintf("%s - missing %s", label, providerMissingLabel(status))
+		}
+		options = append(options, ui.SelectOption{Value: status.Name, Label: label})
+	}
+	if len(options) == 0 {
+		return "", ProjectError{Msg: "No selectable providers found."}
+	}
+	return providerSelectFn(fmt.Sprintf("Choose a provider to %s", action), options)
 }
 
 type providerConfigKey struct {
@@ -5111,7 +5166,7 @@ func cmdProviderList() int {
 	return 0
 }
 
-func cmdProviderShow(name string) int {
+func cmdProviderShow(name string, jsonOutput bool) int {
 	status, ok := providerConfigStatusByName(name)
 	if !ok {
 		fmt.Fprintf(os.Stderr, "unsupported provider %q\n", name)
@@ -5127,11 +5182,53 @@ func cmdProviderShow(name string) int {
 		fmt.Fprintf(os.Stderr, "No cached provider metadata matched %q. Run nf provider check %s.\n", name, status.Name)
 		return 1
 	}
-	fmt.Printf("Provider: %s\n", status.Name)
-	fmt.Printf("Cache: %s\n", state.StatePath("providers"))
-	data, _ := json.MarshalIndent(record, "", "  ")
-	fmt.Println(string(data))
+	if jsonOutput {
+		data, _ := json.MarshalIndent(record, "", "  ")
+		fmt.Println(string(data))
+		return 0
+	}
+	printProviderDetails(status, record)
 	return 0
+}
+
+func printProviderDetails(status providerConfigStatus, record map[string]any) {
+	fmt.Printf("Provider: %s\n", status.Name)
+	fmt.Printf("Status: %s\n", providerStatusLabel(status))
+	if len(status.Missing) > 0 {
+		fmt.Printf("Missing: %s\n", providerMissingLabel(status))
+	}
+	fmt.Printf("Cache: %s\n", state.StatePath("providers"))
+	if checkedAt := recordValueString(record["checked_at"]); checkedAt != "" {
+		fmt.Printf("Checked at: %s\n", checkedAt)
+	}
+	for _, field := range []struct {
+		Label string
+		Keys  []string
+	}{
+		{Label: "Account ID", Keys: []string{"account_id"}},
+		{Label: "Account email", Keys: []string{"account_email", "email"}},
+		{Label: "Username", Keys: []string{"username", "user"}},
+		{Label: "Company ID", Keys: []string{"company", "company_id"}},
+		{Label: "Provider status", Keys: []string{"status"}},
+	} {
+		if value := firstRecordString(record, field.Keys...); value != "" {
+			fmt.Printf("%s: %s\n", field.Label, value)
+		}
+	}
+	targets := targetMaps(record["targets"])
+	fmt.Printf("Targets: %d\n", len(targets))
+	for _, target := range targets {
+		name := firstRecordString(target, "name", "label", "id")
+		if name == "" {
+			continue
+		}
+		status := firstRecordString(target, "status", "phase")
+		if status != "" {
+			fmt.Printf("  - %s (%s)\n", name, status)
+			continue
+		}
+		fmt.Printf("  - %s\n", name)
+	}
 }
 
 func providerRecordByName(records []map[string]any, name string) map[string]any {
@@ -5146,7 +5243,7 @@ func providerRecordByName(records []map[string]any, name string) map[string]any 
 	return nil
 }
 
-func cmdProviderCheck(name string) int {
+func cmdProviderCheck(name string, jsonOutput bool) int {
 	status, ok := providerConfigStatusByName(name)
 	if !ok {
 		fmt.Fprintf(os.Stderr, "unsupported provider %q\n", name)
@@ -5165,9 +5262,17 @@ func cmdProviderCheck(name string) int {
 		fmt.Fprintln(os.Stderr, err)
 		return 1
 	}
+	if result.Record == nil {
+		result.Record = map[string]any{}
+	}
 	if err := saveProviderHealthRecord(result); err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		return 1
+	}
+	if jsonOutput {
+		data, _ := json.MarshalIndent(result.Record, "", "  ")
+		fmt.Println(string(data))
+		return 0
 	}
 	fmt.Printf("Provider %s healthcheck passed.\n", status.Name)
 	for _, line := range providerHealthDetailLines(result.Details) {

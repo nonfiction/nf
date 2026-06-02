@@ -215,7 +215,7 @@ func TestRunInitHelpShowsFlags(t *testing.T) {
 
 func TestRunProviderHelpShowsCommands(t *testing.T) {
 	output := captureStdout(t, func() { _ = runProviderHelp() })
-	for _, wanted := range []string{"provider\n\nCommands:\n", "\n  list                 list provider integrations\n", "\n  show <provider>      show cached provider metadata\n", "\n  check <provider>     run provider healthcheck\n"} {
+	for _, wanted := range []string{"provider\n\nCommands:\n", "\n  list                 list provider integrations\n", "\n  show [provider] [--json]   show cached provider metadata\n", "\n  check [provider] [--json]  run provider healthcheck\n"} {
 		if !strings.Contains(output, wanted) {
 			t.Fatalf("runProviderHelp() output missing %q:\n%s", wanted, output)
 		}
@@ -330,6 +330,9 @@ func TestRunProviderShowReadsCachedMetadata(t *testing.T) {
 	stateDir := t.TempDir()
 	t.Setenv("NF_STATE_HOME", stateDir)
 	t.Setenv("DNSIMPLE_TOKEN", "dnsimple-token-secret")
+	if err := saveGlobalConfig(map[string]string{"base_domain": "nonfiction.dev"}); err != nil {
+		t.Fatalf("saveGlobalConfig() error = %v", err)
+	}
 	if err := state.SaveStateRecords("providers", []map[string]any{{
 		"provider":      "dnsimple",
 		"account_id":    "14",
@@ -344,14 +347,78 @@ func TestRunProviderShowReadsCachedMetadata(t *testing.T) {
 			t.Fatalf("Run() = %d, want 0", got)
 		}
 	})
-	for _, want := range []string{"Provider: dnsimple", filepath.Join(stateDir, "providers.json"), `"provider": "dnsimple"`, `"account_id": "14"`, `"account_email": "hello@example.com"`} {
+	for _, want := range []string{"Provider: dnsimple", "Status: configured", filepath.Join(stateDir, "providers.json"), "Account ID: 14", "Account email: hello@example.com", "Targets: 0"} {
 		if !strings.Contains(output, want) {
 			t.Fatalf("Run() output missing %q:\n%s", want, output)
 		}
 	}
-	for _, unwanted := range []string{"dnsimple-token-secret", "DNSIMPLE_TOKEN", "Status: configured"} {
+	for _, unwanted := range []string{"dnsimple-token-secret", "DNSIMPLE_TOKEN", `"provider": "dnsimple"`} {
 		if strings.Contains(output, unwanted) {
 			t.Fatalf("Run() output included %q:\n%s", unwanted, output)
+		}
+	}
+}
+
+func TestRunProviderShowJSONReadsCachedMetadata(t *testing.T) {
+	stateDir := t.TempDir()
+	t.Setenv("NF_STATE_HOME", stateDir)
+	if err := state.SaveStateRecords("providers", []map[string]any{{
+		"provider":   "linode",
+		"username":   "nf-user",
+		"restricted": false,
+		"targets":    []map[string]any{},
+	}}); err != nil {
+		t.Fatalf("SaveStateRecords(providers) error = %v", err)
+	}
+
+	output := captureStdout(t, func() {
+		if got := Run([]string{"provider", "show", "linode", "--json"}); got != 0 {
+			t.Fatalf("Run() = %d, want 0", got)
+		}
+	})
+	if !strings.Contains(output, `"provider": "linode"`) || !strings.Contains(output, `"username": "nf-user"`) {
+		t.Fatalf("Run() JSON output missing cached fields:\n%s", output)
+	}
+	if strings.Contains(output, "Provider: linode") || strings.Contains(output, "Cache:") {
+		t.Fatalf("Run() JSON output included human text:\n%s", output)
+	}
+}
+
+func TestRunProviderShowWithoutProviderPromptsPicker(t *testing.T) {
+	stateDir := t.TempDir()
+	t.Setenv("NF_STATE_HOME", stateDir)
+	if err := state.SaveStateRecords("providers", []map[string]any{{
+		"provider": "kinsta",
+		"company":  "company-123",
+		"status":   "active",
+		"targets":  []map[string]any{{"name": "kinsta", "status": "active"}},
+	}}); err != nil {
+		t.Fatalf("SaveStateRecords(providers) error = %v", err)
+	}
+	oldSelect := providerSelectFn
+	var selectTitle string
+	var selectOptions []ui.SelectOption
+	providerSelectFn = func(title string, options []ui.SelectOption) (string, error) {
+		selectTitle = title
+		selectOptions = append([]ui.SelectOption(nil), options...)
+		return "kinsta", nil
+	}
+	t.Cleanup(func() { providerSelectFn = oldSelect })
+
+	output := captureStdout(t, func() {
+		if got := Run([]string{"provider", "show"}); got != 0 {
+			t.Fatalf("Run() = %d, want 0", got)
+		}
+	})
+	if selectTitle != "Choose a provider to show" {
+		t.Fatalf("select title = %q", selectTitle)
+	}
+	if len(selectOptions) != 3 || selectOptions[0].Value != "dnsimple" || !strings.Contains(selectOptions[2].Label, "linode") {
+		t.Fatalf("select options = %#v", selectOptions)
+	}
+	for _, want := range []string{"Provider: kinsta", "Company ID: company-123", "Provider status: active", "Targets: 1", "kinsta (active)"} {
+		if !strings.Contains(output, want) {
+			t.Fatalf("Run() output missing %q:\n%s", want, output)
 		}
 	}
 }
@@ -449,6 +516,52 @@ func TestRunProviderCheckRunsHealthcheckAndSavesMetadata(t *testing.T) {
 	targets, ok := records[0]["targets"].([]any)
 	if !ok || len(targets) != 1 {
 		t.Fatalf("provider targets = %#v, want one target", records[0]["targets"])
+	}
+}
+
+func TestRunProviderCheckWithoutProviderPromptsPickerAndJSON(t *testing.T) {
+	stateDir := t.TempDir()
+	t.Setenv("NF_STATE_HOME", stateDir)
+	t.Setenv("KINSTA_API_KEY", "kinsta-token-secret")
+	oldSelect := providerSelectFn
+	oldCheck := providerCheckKinstaFn
+	var selectTitle string
+	providerSelectFn = func(title string, options []ui.SelectOption) (string, error) {
+		selectTitle = title
+		return "kinsta", nil
+	}
+	providerCheckKinstaFn = func() (providerHealthResult, error) {
+		return providerHealthResult{
+			Provider: "kinsta",
+			Details:  map[string]string{"status": "active"},
+			Record: map[string]any{
+				"provider": "kinsta",
+				"company":  "company-123",
+				"status":   "active",
+				"targets":  []map[string]any{{"name": "kinsta", "status": "active"}},
+			},
+		}, nil
+	}
+	t.Cleanup(func() {
+		providerSelectFn = oldSelect
+		providerCheckKinstaFn = oldCheck
+	})
+
+	output := captureStdout(t, func() {
+		if got := Run([]string{"provider", "check", "--json"}); got != 0 {
+			t.Fatalf("Run() = %d, want 0", got)
+		}
+	})
+	if selectTitle != "Choose a provider to check" {
+		t.Fatalf("select title = %q", selectTitle)
+	}
+	for _, want := range []string{`"provider": "kinsta"`, `"company": "company-123"`, `"checked_at":`, `"targets":`} {
+		if !strings.Contains(output, want) {
+			t.Fatalf("Run() JSON output missing %q:\n%s", want, output)
+		}
+	}
+	if strings.Contains(output, "healthcheck passed") || strings.Contains(output, "Saved provider metadata") {
+		t.Fatalf("Run() JSON output included human text:\n%s", output)
 	}
 }
 
