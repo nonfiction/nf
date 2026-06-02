@@ -497,6 +497,8 @@ func TestRunTargetAddLinodeDryRunUsesTargetNameAndConfigDefaults(t *testing.T) {
 		"dnsimple_account_id":   "14",
 		"linode_default_region": "us-east",
 		"linode_default_type":   "g6-standard-2",
+		"linode_default_image":  "linode/ubuntu24.04",
+		"linode_default_user":   "nonfiction",
 	}
 	data, err := json.Marshal(configData)
 	if err != nil {
@@ -507,17 +509,28 @@ func TestRunTargetAddLinodeDryRunUsesTargetNameAndConfigDefaults(t *testing.T) {
 	}
 
 	output := captureStdout(t, func() {
-		if got := Run([]string{"target", "add", "linode", "app1", "--dry-run", "--non-interactive"}); got != 0 {
+		if got := Run([]string{"target", "add", "linode", "app1", "--dry-run", "--non-interactive", "--region", "ca-central", "--type", "g6-standard-1", "--image", "linode/ubuntu24.04", "--user", "nonfiction", "--keys", "all"}); got != 0 {
 			t.Fatalf("Run(target add linode) = %d, want 0", got)
 		}
 	})
-	for _, want := range []string{"app1-linode", "hostname: app1-linode.nonfiction.dev", "wildcard hostname: *.app1-linode.nonfiction.dev", "region: us-east", "type: g6-standard-2", "state: not checked"} {
+	for _, want := range []string{"app1-linode", "hostname: app1-linode.nonfiction.dev", "wildcard hostname: *.app1-linode.nonfiction.dev", "region: ca-central", "type: g6-standard-1", "image: linode/ubuntu24.04", "ssh user: nonfiction", "authorized keys: all Linode profile keys", "state: not checked"} {
 		if !strings.Contains(output, want) {
 			t.Fatalf("target add output missing %q:\n%s", want, output)
 		}
 	}
 	if _, err := os.Stat(filepath.Join(stateDir, "providers.json")); !os.IsNotExist(err) {
 		t.Fatalf("providers.json unexpectedly exists after dry-run: %v", err)
+	}
+}
+
+func TestRunTargetAddLinodeRejectsWaitConflict(t *testing.T) {
+	stderr := captureStderr(t, func() {
+		if got := Run([]string{"target", "add", "linode", "app1", "--wait", "--no-wait"}); got != 1 {
+			t.Fatalf("Run(target add linode --wait --no-wait) = %d, want 1", got)
+		}
+	})
+	if !strings.Contains(stderr, "Choose either --wait or --no-wait, not both.") {
+		t.Fatalf("Run() stderr = %q, want wait conflict", stderr)
 	}
 }
 
