@@ -44,6 +44,7 @@ var (
 	targetSSHReachableFn    = targetSSHReachable
 	runSSHScriptFn          = runSSHScript
 	runSSHCommandFn         = runSSHCommand
+	targetSelectFn          = ui.Select
 )
 
 type repoCommandRunner interface {
@@ -1856,15 +1857,21 @@ func cmdRemoveTarget(needle string, dryRun, execute, yes, nonInteractive bool) i
 	}
 	if len(matchedSites) > 0 {
 		names := make([]string, 0, len(matchedSites))
+		seenNames := map[string]bool{}
 		for _, site := range matchedSites {
-			if summary := siteSummary(site); summary != "" {
+			summary := siteEnvDisplaySite(site)
+			if summary == "" {
+				summary = siteSummary(site)
+			}
+			if summary != "" && !seenNames[summary] {
+				seenNames[summary] = true
 				names = append(names, summary)
 			}
 		}
 		if len(names) == 0 {
-			fmt.Fprintf(os.Stderr, "Target %q contains %d site(s); remove or move those sites before removing the target.\n", needle, len(matchedSites))
+			fmt.Fprintf(os.Stderr, "Target %q contains site envs; remove or move those sites before removing the target.\n", needle)
 		} else {
-			fmt.Fprintf(os.Stderr, "Target %q contains %d site(s): %s. Remove or move those sites before removing the target.\n", needle, len(matchedSites), strings.Join(names, ", "))
+			fmt.Fprintf(os.Stderr, "Target %q contains %d site(s): %s. Remove or move those sites before removing the target.\n", needle, len(names), strings.Join(names, ", "))
 		}
 		return 1
 	}
@@ -2588,14 +2595,13 @@ func kinstaTargetLiveStatus(record map[string]any) string {
 }
 
 func linodeTargetLiveStatus(record map[string]any) string {
-	status := strings.ToLower(strings.TrimSpace(recordValueString(record["status"])))
-	if status != "running" {
-		return recordValueString(record["status"])
-	}
 	if targetSSHReachableFn(record) {
 		return "reachable"
 	}
-	return "ssh unavailable"
+	if serverSSHHost(record) != "" {
+		return "ssh unavailable"
+	}
+	return recordValueString(record["status"])
 }
 
 func targetSSHReachable(record map[string]any) bool {
@@ -3356,7 +3362,7 @@ func cmdShowServer(needle string) int {
 	return 0
 }
 
-func cmdShowTarget(needle string) int {
+func cmdShowTarget(needle string, jsonOutput bool) int {
 	targets, err := cachedTargets()
 	if err != nil {
 		fmt.Fprintln(os.Stderr, err)
@@ -3371,9 +3377,51 @@ func cmdShowTarget(needle string) int {
 		fmt.Fprintln(os.Stderr, err)
 		return 1
 	}
+	if !jsonOutput {
+		printTargetDetails(record)
+		return 0
+	}
 	data, _ := json.MarshalIndent(record, "", "  ")
 	fmt.Println(string(data))
 	return 0
+}
+
+func printTargetDetails(record map[string]any) {
+	name := firstRecordString(record, "_state_key", "target_name", "target", "name", "slug", "hostname", "label", "id")
+	provider := recordValueString(record["provider"])
+	fmt.Printf("Target: %s\n", name)
+	fmt.Printf("Provider: %s\n", provider)
+	if hostname := firstRecordString(record, "hostname", "host", "public_ipv4", "ipv4", "ip"); hostname != "" {
+		fmt.Printf("Hostname: %s\n", hostname)
+	}
+	if id := firstRecordString(record, "id", "provider_id", "linode_id"); id != "" {
+		fmt.Printf("ID: %s\n", id)
+	}
+	if status := targetLiveStatus(record); status != "" {
+		fmt.Printf("Status: %s\n", status)
+	}
+	if cachedStatus := recordValueString(record["status"]); cachedStatus != "" {
+		fmt.Printf("Cached status: %s\n", cachedStatus)
+	}
+	if region := firstRecordString(record, "region"); region != "" {
+		fmt.Printf("Region: %s\n", region)
+	}
+	if targetType := firstRecordString(record, "type", "linode_type"); targetType != "" {
+		fmt.Printf("Type: %s\n", targetType)
+	}
+	if image := firstRecordString(record, "image"); image != "" {
+		fmt.Printf("Image: %s\n", image)
+	}
+	if sshHost := serverSSHHost(record); sshHost != "" {
+		ssh := sshHost
+		if sshUser := serverSSHUser(record); sshUser != "" {
+			ssh = sshUser + "@" + ssh
+		}
+		if port := firstNonEmpty(mapStringAtPath(record, "ssh", "port"), firstRecordString(record, "ssh_port")); port != "" && port != "22" {
+			ssh += ":" + port
+		}
+		fmt.Printf("SSH: %s\n", ssh)
+	}
 }
 
 func cmdSiteRefresh() int {
@@ -3465,6 +3513,60 @@ func cmdShowSite(needle string) int {
 	data, _ := json.MarshalIndent(out, "", "  ")
 	fmt.Println(string(data))
 	return 0
+}
+
+func chooseTargetForShow() (string, error) {
+	return chooseTarget("show")
+}
+
+func chooseTargetForRemove() (string, error) {
+	return chooseTarget("remove")
+}
+
+func chooseTarget(action string) (string, error) {
+	targets, err := cachedTargets()
+	if err != nil {
+		return "", err
+	}
+	if len(targets) == 0 {
+		return "", ProjectError{Msg: "No targets found."}
+	}
+	options := make([]ui.SelectOption, 0, len(targets))
+	for _, target := range targets {
+		value := firstRecordString(target, "_state_key", "target_name", "target", "name", "slug", "hostname", "label", "id")
+		if value == "" {
+			continue
+		}
+		label := serverSummary(target)
+		if label == "" {
+			label = value
+		}
+		options = append(options, ui.SelectOption{Label: label, Value: value})
+	}
+	if len(options) == 0 {
+		return "", ProjectError{Msg: "No selectable targets found."}
+	}
+	return targetSelectFn(fmt.Sprintf("Choose a target to %s", action), options)
+}
+
+func parseTargetShowArgs(argv []string) (string, bool, error) {
+	needle := ""
+	jsonOutput := false
+	for _, arg := range argv {
+		switch arg {
+		case "--json":
+			jsonOutput = true
+		default:
+			if strings.HasPrefix(arg, "-") {
+				return "", false, fmt.Errorf("unknown target show flag: %s", arg)
+			}
+			if needle != "" {
+				return "", false, fmt.Errorf("target show takes at most one target")
+			}
+			needle = arg
+		}
+	}
+	return needle, jsonOutput, nil
 }
 
 func cmdProjectInit(args projectInitArgs) int {
@@ -5408,11 +5510,20 @@ func runTarget(argv []string) int {
 		}
 		return cmdListTargets(targets)
 	case "show":
-		if len(argv) != 2 {
-			fmt.Fprintln(os.Stderr, "target show takes exactly one target")
+		needle, jsonOutput, err := parseTargetShowArgs(argv[1:])
+		if err != nil {
+			fmt.Fprintln(os.Stderr, err)
 			return 1
 		}
-		return cmdShowTarget(argv[1])
+		if needle == "" {
+			selected, err := chooseTargetForShow()
+			if err != nil {
+				fmt.Fprintln(os.Stderr, err)
+				return 1
+			}
+			needle = selected
+		}
+		return cmdShowTarget(needle, jsonOutput)
 	case "add":
 		return runTargetAdd(argv[1:])
 	case "remove":
@@ -5422,8 +5533,16 @@ func runTarget(argv []string) int {
 			return 1
 		}
 		if needle == "" {
-			fmt.Fprintln(os.Stderr, "target remove takes exactly one target")
-			return 1
+			if opts.nonInteractive {
+				fmt.Fprintln(os.Stderr, "target remove requires a target in non-interactive mode")
+				return 1
+			}
+			selected, err := chooseTargetForRemove()
+			if err != nil {
+				fmt.Fprintln(os.Stderr, err)
+				return 1
+			}
+			needle = selected
 		}
 		return cmdRemoveTarget(needle, opts.dryRun, opts.execute, opts.yes, opts.nonInteractive)
 	default:

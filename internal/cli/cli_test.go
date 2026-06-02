@@ -18,6 +18,7 @@ import (
 	"github.com/linode/linodego"
 	"github.com/nonfiction/nf/internal/config"
 	"github.com/nonfiction/nf/internal/state"
+	"github.com/nonfiction/nf/internal/ui"
 )
 
 func TestSlugToTitle(t *testing.T) {
@@ -720,9 +721,19 @@ func TestRunTargetListAndShowUseStateTargets(t *testing.T) {
 			t.Fatalf("Run(target show) = %d, want 0", got)
 		}
 	})
-	for _, want := range []string{`"name": "app1-linode"`, `"provider": "linode"`, `"ipv4": "203.0.113.10"`} {
+	for _, want := range []string{"Target: app1-linode", "Provider: linode", "Hostname: 203.0.113.10", "Status: active", "Cached status: active"} {
 		if !strings.Contains(showOutput, want) {
 			t.Fatalf("target show output missing %q:\n%s", want, showOutput)
+		}
+	}
+	jsonOutput := captureStdout(t, func() {
+		if got := Run([]string{"target", "show", "app1-linode", "--json"}); got != 0 {
+			t.Fatalf("Run(target show --json) = %d, want 0", got)
+		}
+	})
+	for _, want := range []string{`"name": "app1-linode"`, `"provider": "linode"`, `"ipv4": "203.0.113.10"`} {
+		if !strings.Contains(jsonOutput, want) {
+			t.Fatalf("target show --json output missing %q:\n%s", want, jsonOutput)
 		}
 	}
 }
@@ -760,6 +771,91 @@ func TestRunTargetListShowsLiveLinodeSSHStatus(t *testing.T) {
 	})
 	if !strings.Contains(output, "reachable") || strings.Contains(output, "running") {
 		t.Fatalf("target list output = %q, want live reachable status", output)
+	}
+}
+
+func TestRunTargetShowWithoutTargetPromptsPicker(t *testing.T) {
+	stateDir := t.TempDir()
+	t.Setenv("NF_STATE_HOME", stateDir)
+	providers := []map[string]any{{
+		"provider": "linode",
+		"targets": []map[string]any{{
+			"id":       "98222343",
+			"name":     "app1-linode",
+			"provider": "linode",
+			"hostname": "app1-linode.nonfiction.dev",
+		}},
+	}}
+	data, err := json.MarshalIndent(providers, "", "  ")
+	if err != nil {
+		t.Fatalf("MarshalIndent() error = %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(stateDir, "providers.json"), append(data, '\n'), 0o644); err != nil {
+		t.Fatalf("WriteFile() error = %v", err)
+	}
+	oldSelect := targetSelectFn
+	oldSSH := targetSSHReachableFn
+	var selectTitle string
+	var selectOptions []ui.SelectOption
+	targetSelectFn = func(title string, options []ui.SelectOption) (string, error) {
+		selectTitle = title
+		selectOptions = append([]ui.SelectOption(nil), options...)
+		return "app1-linode", nil
+	}
+	targetSSHReachableFn = func(record map[string]any) bool { return true }
+	t.Cleanup(func() {
+		targetSelectFn = oldSelect
+		targetSSHReachableFn = oldSSH
+	})
+
+	output := captureStdout(t, func() {
+		if got := Run([]string{"target", "show"}); got != 0 {
+			t.Fatalf("Run(target show) = %d, want 0", got)
+		}
+	})
+	if selectTitle != "Choose a target to show" {
+		t.Fatalf("select title = %q", selectTitle)
+	}
+	if len(selectOptions) != 1 || selectOptions[0].Value != "app1-linode" || !strings.Contains(selectOptions[0].Label, "app1-linode") {
+		t.Fatalf("select options = %#v", selectOptions)
+	}
+	for _, want := range []string{"Target: app1-linode", "Provider: linode", "Hostname: app1-linode.nonfiction.dev", "ID: 98222343", "Status: reachable"} {
+		if !strings.Contains(output, want) {
+			t.Fatalf("target show output missing %q:\n%s", want, output)
+		}
+	}
+}
+
+func TestRunTargetListShowsReachableForProvisionedLinode(t *testing.T) {
+	stateDir := t.TempDir()
+	t.Setenv("NF_STATE_HOME", stateDir)
+	providers := []map[string]any{{
+		"provider": "linode",
+		"targets": []map[string]any{{
+			"name":     "app1-linode",
+			"provider": "linode",
+			"hostname": "app1-linode.nonfiction.dev",
+			"status":   "provisioned",
+		}},
+	}}
+	data, err := json.MarshalIndent(providers, "", "  ")
+	if err != nil {
+		t.Fatalf("MarshalIndent() error = %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(stateDir, "providers.json"), append(data, '\n'), 0o644); err != nil {
+		t.Fatalf("WriteFile() error = %v", err)
+	}
+	oldSSH := targetSSHReachableFn
+	targetSSHReachableFn = func(record map[string]any) bool { return true }
+	t.Cleanup(func() { targetSSHReachableFn = oldSSH })
+
+	output := captureStdout(t, func() {
+		if got := Run([]string{"target", "list"}); got != 0 {
+			t.Fatalf("Run(target list) = %d, want 0", got)
+		}
+	})
+	if !strings.Contains(output, "reachable") || strings.Contains(output, "provisioned") {
+		t.Fatalf("target list output = %q, want dynamic reachable status", output)
 	}
 }
 
@@ -806,14 +902,17 @@ func TestRunTargetListReconcilesCompletedLinodeHandoff(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(stateDir, "providers.json"), append(data, '\n'), 0o644); err != nil {
 		t.Fatalf("WriteFile(providers.json) error = %v", err)
 	}
+	oldSSH := targetSSHReachableFn
+	targetSSHReachableFn = func(record map[string]any) bool { return false }
+	t.Cleanup(func() { targetSSHReachableFn = oldSSH })
 
 	output := captureStdout(t, func() {
 		if got := Run([]string{"target", "list"}); got != 0 {
 			t.Fatalf("Run(target list) = %d, want 0", got)
 		}
 	})
-	if !strings.Contains(output, "app2-linode") || !strings.Contains(output, "provisioned") || strings.Contains(output, "provisioning") {
-		t.Fatalf("target list output = %q, want reconciled provisioned status", output)
+	if !strings.Contains(output, "app2-linode") || !strings.Contains(output, "ssh unavailable") || strings.Contains(output, "provisioning") {
+		t.Fatalf("target list output = %q, want dynamic ssh unavailable status", output)
 	}
 	records, err := state.LoadStateRecords("providers")
 	if err != nil {
@@ -949,6 +1048,49 @@ func TestRunTargetRemoveLinodeDeletesRemoteDNSAndState(t *testing.T) {
 	}
 }
 
+func TestRunTargetRemoveWithoutTargetPromptsPicker(t *testing.T) {
+	stateDir := t.TempDir()
+	t.Setenv("NF_STATE_HOME", stateDir)
+	providers := []map[string]any{{
+		"provider": "linode",
+		"targets": []map[string]any{{
+			"id":       "98222343",
+			"name":     "app1-linode",
+			"provider": "linode",
+			"hostname": "app1-linode.nonfiction.dev",
+		}},
+	}}
+	if err := state.SaveStateRecords("providers", providers); err != nil {
+		t.Fatalf("SaveStateRecords(providers) error = %v", err)
+	}
+	oldSelect := targetSelectFn
+	var selectTitle string
+	var selectOptions []ui.SelectOption
+	targetSelectFn = func(title string, options []ui.SelectOption) (string, error) {
+		selectTitle = title
+		selectOptions = append([]ui.SelectOption(nil), options...)
+		return "app1-linode", nil
+	}
+	t.Cleanup(func() { targetSelectFn = oldSelect })
+
+	output := captureStdout(t, func() {
+		if got := Run([]string{"target", "remove", "--dry-run"}); got != 0 {
+			t.Fatalf("Run(target remove --dry-run) = %d, want 0", got)
+		}
+	})
+	if selectTitle != "Choose a target to remove" {
+		t.Fatalf("select title = %q", selectTitle)
+	}
+	if len(selectOptions) != 1 || selectOptions[0].Value != "app1-linode" || !strings.Contains(selectOptions[0].Label, "app1-linode") {
+		t.Fatalf("select options = %#v", selectOptions)
+	}
+	for _, want := range []string{"Remove target plan:", "target: app1-linode", "mode: dry-run"} {
+		if !strings.Contains(output, want) {
+			t.Fatalf("target remove output missing %q:\n%s", want, output)
+		}
+	}
+}
+
 func TestRunTargetRemoveRejectsKinsta(t *testing.T) {
 	stateDir := t.TempDir()
 	t.Setenv("NF_STATE_HOME", stateDir)
@@ -971,7 +1113,10 @@ func TestRunTargetRemoveRejectsLinodeWithSites(t *testing.T) {
 	if err := state.SaveStateRecords("providers", []map[string]any{{"provider": "linode", "targets": []map[string]any{{"id": "98222343", "name": "app1-linode", "provider": "linode"}}}}); err != nil {
 		t.Fatalf("SaveStateRecords(providers) error = %v", err)
 	}
-	if err := state.SaveStateRecords("sites", []map[string]any{{"id": "client-app1-linode", "name": "client-app1-linode", "provider": "linode", "target": "app1-linode"}}); err != nil {
+	if err := state.SaveStateRecords("sites", []map[string]any{
+		{"site_id": "client", "name": "client", "provider": "linode", "env": "live", "target": "app1-linode", "hostname": "client.app1-linode.nfweb.dev"},
+		{"site_id": "client", "name": "client", "provider": "linode", "env": "staging", "target": "app1-linode", "hostname": "client-staging.app1-linode.nfweb.dev"},
+	}); err != nil {
 		t.Fatalf("SaveStateRecords(sites) error = %v", err)
 	}
 	stderr := captureStderr(t, func() {
@@ -979,7 +1124,7 @@ func TestRunTargetRemoveRejectsLinodeWithSites(t *testing.T) {
 			t.Fatalf("Run(target remove app1-linode) = %d, want 1", got)
 		}
 	})
-	if !strings.Contains(stderr, "contains 1 site(s): client-app1-linode") {
+	if !strings.Contains(stderr, "contains 1 site(s): client") {
 		t.Fatalf("Run() stderr = %q, want site guard", stderr)
 	}
 }
@@ -995,13 +1140,16 @@ func TestRunTargetListFallsBackToLegacyServersCache(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(stateDir, "servers.json"), append(data, '\n'), 0o644); err != nil {
 		t.Fatalf("WriteFile() error = %v", err)
 	}
+	oldSSH := targetSSHReachableFn
+	targetSSHReachableFn = func(record map[string]any) bool { return false }
+	t.Cleanup(func() { targetSSHReachableFn = oldSSH })
 
 	output := captureStdout(t, func() {
 		if got := Run([]string{"target", "list"}); got != 0 {
 			t.Fatalf("Run(target list) = %d, want 0", got)
 		}
 	})
-	for _, want := range []string{"target", "app1-linode", "linode", "app1.nfweb.dev", "active"} {
+	for _, want := range []string{"target", "app1-linode", "linode", "app1.nfweb.dev", "ssh unavailable"} {
 		if !strings.Contains(output, want) {
 			t.Fatalf("target list output missing %q:\n%s", want, output)
 		}
