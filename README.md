@@ -219,6 +219,8 @@ nf config set-default-wp-email dev@example.com
 nf config set-default-wp-user admin
 nf config set-linode-default-region us-east
 nf config set-linode-default-type g6-standard-1
+nf config set-linode-default-image linode/ubuntu24.04
+nf config set-linode-default-user nonfiction
 nf config show
 nf password set-salt <salt>
 ```
@@ -239,7 +241,7 @@ Commands:
 nf provider list
 nf provider show <provider>
 nf provider check <provider>
-nf target add linode <name> [--region region] [--type type] [--execute --yes]
+nf target add linode <name> [--region region] [--type type] [--image image] [--user user] [--keys all] [--execute --yes] [--wait]
 nf target list
 nf target show <target>
 nf site refresh
@@ -255,12 +257,23 @@ nf remote remove <name>
 nf remote list
 ```
 
+Standard Linode target example:
+
+```sh
+nf target add linode app1 \
+  --region ca-central \
+  --type g6-standard-1 \
+  --image linode/ubuntu24.04 \
+  --user nonfiction \
+  --keys all
+```
+
 Current behavior:
 
 * `nf provider list` reports local credential status.
 * `nf provider check` calls safe read-only provider health endpoints and writes `providers.json`.
 * `nf provider show <provider>` reads cached provider metadata.
-* `nf target add linode <name>` creates or ensures a Linode target named `<name>-linode`, tags it `nf`, creates host and wildcard DNS records under `base_domain`, enables HTTPS, and records the target under the Linode provider in `providers.json`.
+* `nf target add linode <name>` creates or ensures a Linode target named `<name>-linode`, tags it `nf`, creates host and wildcard DNS records under `base_domain`, queues HTTPS setup on the target with a systemd retry timer, and records the target under the Linode provider in `providers.json`. Add `--wait` to keep the CLI attached through SSH, TLS, and health checks.
 * `nf target list/show` read target records from `providers.json`, with a legacy `servers.json` fallback.
 * `nf site refresh` discovers sites from the cached target list. Remote target site discovery is not implemented yet.
 * `nf site list/show` and `nf site env list/show` read the local disposable site cache for now.

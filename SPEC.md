@@ -289,6 +289,8 @@ Do not add old compatibility routes unless explicitly requested.
 * [x] `nf config set-default-wp-user <user>`
 * [x] `nf config set-linode-default-region <region>`
 * [x] `nf config set-linode-default-type <type>`
+* [x] `nf config set-linode-default-image <image>`
+* [x] `nf config set-linode-default-user <user>`
 * [x] `nf config show`
 * [x] `nf password set-salt <salt>`
 * [x] `nf password show-salt`
@@ -522,7 +524,7 @@ Status:
 * [x] Kinsta read-only healthcheck and `kinsta` target
 * [x] Linode read-only healthcheck and tagged target discovery
 * [x] `nf target list/show` from `providers.json`
-* [x] `nf target add linode <name>` create/ensure Linode target with DNS/TLS and empty remote site inventory
+* [x] `nf target add linode <name>` create/ensure Linode target with DNS, queued TLS retry, and empty remote site inventory
 * [x] legacy `servers.json` fallback during cache migration
 
 ### Phase 4: Site/env inventory
