@@ -1366,7 +1366,7 @@ func TestRunSiteAddLinodeDryRunPlansLiveAndStaging(t *testing.T) {
 			t.Fatalf("Run(site add) = %d, want 0", got)
 		}
 	})
-	for _, want := range []string{"Add site plan:", "target: app1-linode", "site: foobar", "admin email: web@nonfiction.ca", "admin password: derived from foobar", "path: /var/www/sites/foobar/public", "database: foobar", "vhost: foobar.app1-linode.nonfiction.dev", "path: /var/www/sites/foobar_staging/public", "database: foobar_staging", "vhost: foobar-staging.app1-linode.nonfiction.dev", "remote state: /var/lib/nf/sites.json", "mode: dry-run"} {
+	for _, want := range []string{"Add site plan:", "target: app1-linode", "site: foobar", "site id: foobar-app1-linode", "admin email: web@nonfiction.ca", "admin password: derived from foobar", "path: /var/www/sites/foobar/public", "database: foobar", "vhost: foobar.app1-linode.nonfiction.dev", "path: /var/www/sites/foobar_staging/public", "database: foobar_staging", "vhost: foobar-staging.app1-linode.nonfiction.dev", "remote state: /var/lib/nf/sites.json", "mode: dry-run"} {
 		if !strings.Contains(output, want) {
 			t.Fatalf("site add dry-run output missing %q:\n%s", want, output)
 		}
@@ -1445,16 +1445,25 @@ func TestRunSiteAddLinodeExecuteRunsSSHAndCachesEnvs(t *testing.T) {
 		if got := recordValueString(record["target"]); got != "app1-linode" {
 			t.Fatalf("%s target = %q, want app1-linode", want.env, got)
 		}
+		if got := recordValueString(record["site_id"]); got != "foobar-app1-linode" {
+			t.Fatalf("%s site_id = %q, want foobar-app1-linode", want.env, got)
+		}
+		if got := recordValueString(record["name"]); got != "foobar" {
+			t.Fatalf("%s name = %q, want foobar", want.env, got)
+		}
 		if got := recordValueString(record["target_name"]); got != "" {
 			t.Fatalf("%s target_name = %q, want empty", want.env, got)
 		}
+	}
+	if !strings.Contains(sshScript, "--arg site_id foobar-app1-linode") {
+		t.Fatalf("ssh script missing canonical site id:\n%s", sshScript)
 	}
 	listOutput := captureStdout(t, func() {
 		if got := Run([]string{"site", "list"}); got != 0 {
 			t.Fatalf("Run(site list) = %d, want 0", got)
 		}
 	})
-	for _, want := range []string{"site", "target", "envs", "live url", "staging url", "foobar", "app1-linode", "live,staging", "https://foobar.app1-linode.nonfiction.dev", "https://foobar-staging.app1-linode.nonfiction.dev"} {
+	for _, want := range []string{"site id", "name", "target", "envs", "live url", "staging url", "foobar-app1-linode", "foobar", "app1-linode", "live,staging", "https://foobar.app1-linode.nonfiction.dev", "https://foobar-staging.app1-linode.nonfiction.dev"} {
 		if !strings.Contains(listOutput, want) {
 			t.Fatalf("site list output missing %q:\n%s", want, listOutput)
 		}
@@ -1462,6 +1471,16 @@ func TestRunSiteAddLinodeExecuteRunsSSHAndCachesEnvs(t *testing.T) {
 	for _, notWant := range []string{"provider", "foobar-live"} {
 		if strings.Contains(listOutput, notWant) {
 			t.Fatalf("site list output contains %q:\n%s", notWant, listOutput)
+		}
+	}
+	showOutput := captureStdout(t, func() {
+		if got := Run([]string{"site", "show", "foobar-app1-linode"}); got != 0 {
+			t.Fatalf("Run(site show) = %d, want 0", got)
+		}
+	})
+	for _, want := range []string{`"site_id": "foobar-app1-linode"`, `"name": "foobar"`, `"target": "app1-linode"`, `"envs":`, `"env": "live"`, `"env": "staging"`} {
+		if !strings.Contains(showOutput, want) {
+			t.Fatalf("site show output missing %q:\n%s", want, showOutput)
 		}
 	}
 }
@@ -2380,6 +2399,48 @@ func TestRunSiteShowUsesDirectTargetWithoutAlias(t *testing.T) {
 	for _, wanted := range []string{`"requested_target": "client-app1-production"`, `"resolved_target": "client-app1-production"`, `"server": "app1"`} {
 		if !strings.Contains(output, wanted) {
 			t.Fatalf("Run() output missing %q:\n%s", wanted, output)
+		}
+	}
+}
+
+func TestRunSiteShowWithoutSitePromptsPicker(t *testing.T) {
+	stateDir := t.TempDir()
+	t.Setenv("NF_STATE_HOME", stateDir)
+	sites := map[string]any{"sites": map[string]any{
+		"foobar-live":    map[string]any{"provider": "linode", "site_id": "foobar-app1-linode", "name": "foobar", "target": "app1-linode", "env": "live", "url": "https://foobar.app1-linode.nonfiction.dev/"},
+		"foobar-staging": map[string]any{"provider": "linode", "site_id": "foobar-app1-linode", "name": "foobar", "target": "app1-linode", "env": "staging", "url": "https://foobar-staging.app1-linode.nonfiction.dev/"},
+	}}
+	data, err := json.MarshalIndent(sites, "", "  ")
+	if err != nil {
+		t.Fatalf("MarshalIndent() error = %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(stateDir, "sites.json"), append(data, '\n'), 0o644); err != nil {
+		t.Fatalf("WriteFile(sites) error = %v", err)
+	}
+	oldSelect := siteSelectFn
+	var selectTitle string
+	var selectOptions []ui.SelectOption
+	siteSelectFn = func(title string, options []ui.SelectOption) (string, error) {
+		selectTitle = title
+		selectOptions = append([]ui.SelectOption(nil), options...)
+		return "foobar-app1-linode", nil
+	}
+	t.Cleanup(func() { siteSelectFn = oldSelect })
+
+	output := captureStdout(t, func() {
+		if got := Run([]string{"site", "show"}); got != 0 {
+			t.Fatalf("Run(site show) = %d, want 0", got)
+		}
+	})
+	if selectTitle != "Choose a site to show" {
+		t.Fatalf("select title = %q", selectTitle)
+	}
+	if len(selectOptions) != 1 || selectOptions[0].Value != "foobar-app1-linode" || !strings.Contains(selectOptions[0].Label, "foobar") || !strings.Contains(selectOptions[0].Label, "target app1-linode") {
+		t.Fatalf("select options = %#v", selectOptions)
+	}
+	for _, want := range []string{`"site_id": "foobar-app1-linode"`, `"name": "foobar"`, `"env": "live"`, `"env": "staging"`} {
+		if !strings.Contains(output, want) {
+			t.Fatalf("site show output missing %q:\n%s", want, output)
 		}
 	}
 }

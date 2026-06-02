@@ -46,6 +46,7 @@ var (
 	runSSHCommandFn         = runSSHCommand
 	targetSelectFn          = ui.Select
 	providerSelectFn        = ui.Select
+	siteSelectFn            = ui.Select
 )
 
 type repoCommandRunner interface {
@@ -2214,12 +2215,35 @@ func siteEnvSiteID(site map[string]any) string {
 	return firstRecordString(site, "site_id", "site", "site_name", "project", "project_slug", "wordpress_site")
 }
 
+func siteRecordName(site map[string]any) string {
+	return firstRecordString(site, "name", "site_name", "project", "project_slug", "wordpress_site")
+}
+
+func siteCanonicalID(name, target string) string {
+	name = strings.TrimSpace(name)
+	target = strings.TrimSpace(target)
+	if name == "" || target == "" {
+		return name
+	}
+	return name + "-" + target
+}
+
+func siteRecordID(site map[string]any) string {
+	if id := siteEnvSiteID(site); id != "" {
+		return id
+	}
+	if id := siteCanonicalID(siteRecordName(site), siteProviderTarget(site)); id != "" {
+		return id
+	}
+	return firstRecordString(site, "_state_key")
+}
+
 func siteEnvMatchesSite(site map[string]any, siteID string) bool {
 	needle := normalizedRecordString(siteID)
 	if needle == "" {
 		return true
 	}
-	for _, candidate := range []string{siteEnvSiteID(site), siteTargetName(site), siteSummary(site), firstRecordString(site, "hostname", "url", "site_url", "home_url")} {
+	for _, candidate := range []string{siteRecordID(site), siteEnvSiteID(site), siteTargetName(site), siteSummary(site), firstRecordString(site, "hostname", "url", "site_url", "home_url")} {
 		if normalizedRecordString(candidate) == needle {
 			return true
 		}
@@ -2240,7 +2264,7 @@ func siteEnvMatchesEnv(site map[string]any, env string) bool {
 }
 
 func siteEnvDisplaySite(site map[string]any) string {
-	if siteID := siteEnvSiteID(site); siteID != "" {
+	if siteID := siteRecordID(site); siteID != "" {
 		return siteID
 	}
 	return siteTargetName(site)
@@ -2648,6 +2672,7 @@ type siteAddPlan struct {
 	SSHUser       string
 	SSHHost       string
 	Site          string
+	SiteID        string
 	BaseDomain    string
 	AdminUser     string
 	AdminEmail    string
@@ -2756,6 +2781,7 @@ func buildSiteAddPlan(args siteAddArgs) (siteAddPlan, error) {
 		SSHUser:       sshUser,
 		SSHHost:       sshHost,
 		Site:          siteSlug,
+		SiteID:        siteCanonicalID(siteSlug, targetName),
 		BaseDomain:    baseDomain,
 		AdminUser:     adminUser,
 		AdminEmail:    adminEmail,
@@ -2777,11 +2803,11 @@ func buildSiteAddPlan(args siteAddArgs) (siteAddPlan, error) {
 }
 
 func siteAddRecord(plan siteAddPlan, env siteEnvPlan) map[string]any {
-	envID := plan.Site + "-" + env.Env
+	envID := plan.SiteID + "-" + env.Env
 	return map[string]any{
 		"provider":        "linode",
 		"env_id":          envID,
-		"site_id":         plan.Site,
+		"site_id":         plan.SiteID,
 		"name":            plan.Site,
 		"env":             env.Env,
 		"environment":     env.Env,
@@ -2810,7 +2836,7 @@ func appendSiteAddRecords(plan siteAddPlan) error {
 	if err != nil {
 		return err
 	}
-	if err := ensureSiteNotCached(existing, plan.Site); err != nil {
+	if err := ensureSiteNotCached(existing, plan.SiteID); err != nil {
 		return err
 	}
 	existing = append(existing, siteAddRecords(plan)...)
@@ -2892,7 +2918,7 @@ func renderSiteAddScript(plan siteAddPlan) string {
 	b.WriteString("  ln -sf /etc/nginx/sites-available/nf-site-$state_target /etc/nginx/sites-enabled/nf-site-$state_target\n")
 	b.WriteString("  tmp=$(mktemp)\n")
 	b.WriteString("  jq --arg provider linode --arg site_id ")
-	b.WriteString(q(plan.Site))
+	b.WriteString(q(plan.SiteID))
 	b.WriteString(" --arg name ")
 	b.WriteString(q(plan.Site))
 	b.WriteString(" --arg env_id \"$state_target\" --arg env \"$env_name\" --arg target ")
@@ -2908,7 +2934,7 @@ func renderSiteAddScript(plan siteAddPlan) string {
 	b.WriteString(" -g www-data -m 0664 \"$tmp\" /var/lib/nf/sites.json && rm -f \"$tmp\"\n")
 	b.WriteString("}\n")
 	for _, env := range plan.Envs {
-		stateTarget := plan.Site + "-" + env.Env
+		stateTarget := plan.SiteID + "-" + env.Env
 		b.WriteString("create_env ")
 		b.WriteString(q(env.Env))
 		b.WriteByte(' ')
@@ -2937,6 +2963,7 @@ func printSiteAddPlan(plan siteAddPlan, mode string) {
 	fmt.Printf("  provider: linode\n")
 	fmt.Printf("  ssh: %s@%s\n", plan.SSHUser, plan.SSHHost)
 	fmt.Printf("  site: %s\n", plan.Site)
+	fmt.Printf("  site id: %s\n", plan.SiteID)
 	fmt.Printf("  admin user: %s\n", plan.AdminUser)
 	fmt.Printf("  admin email: %s\n", plan.AdminEmail)
 	fmt.Printf("  admin password: derived from %s\n", plan.Site)
@@ -2974,7 +3001,7 @@ func cmdSiteAdd(args siteAddArgs) int {
 		fmt.Fprintln(os.Stderr, err)
 		return 1
 	}
-	if err := ensureSiteNotCached(existing, plan.Site); err != nil {
+	if err := ensureSiteNotCached(existing, plan.SiteID); err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		return 1
 	}
@@ -3016,7 +3043,8 @@ func cmdListSites(records, servers []map[string]any) int {
 		return 0
 	}
 	type siteListRow struct {
-		Site       string
+		SiteID     string
+		Name       string
 		Target     string
 		Envs       map[string]bool
 		EnvURLs    map[string]string
@@ -3024,17 +3052,20 @@ func cmdListSites(records, servers []map[string]any) int {
 	}
 	grouped := map[string]*siteListRow{}
 	for _, record := range records {
-		site := siteEnvDisplaySite(record)
-		if site == "" {
-			site = siteSummary(record)
+		siteID := siteEnvDisplaySite(record)
+		if siteID == "" {
+			siteID = siteSummary(record)
 		}
-		if site == "" {
+		if siteID == "" {
 			continue
 		}
-		row := grouped[site]
+		row := grouped[siteID]
 		if row == nil {
-			row = &siteListRow{Site: site, Target: siteProviderTarget(record), Envs: map[string]bool{}, EnvURLs: map[string]string{}, FirstIndex: len(grouped)}
-			grouped[site] = row
+			row = &siteListRow{SiteID: siteID, Name: siteRecordName(record), Target: siteProviderTarget(record), Envs: map[string]bool{}, EnvURLs: map[string]string{}, FirstIndex: len(grouped)}
+			grouped[siteID] = row
+		}
+		if row.Name == "" {
+			row.Name = siteRecordName(record)
 		}
 		if row.Target == "" {
 			row.Target = siteProviderTarget(record)
@@ -3054,10 +3085,11 @@ func cmdListSites(records, servers []map[string]any) int {
 		rowsBySite = append(rowsBySite, row)
 	}
 	sort.Slice(rowsBySite, func(i, j int) bool { return rowsBySite[i].FirstIndex < rowsBySite[j].FirstIndex })
-	rows := [][]string{{"site", "target", "envs", "live url", "staging url"}}
+	rows := [][]string{{"site id", "name", "target", "envs", "live url", "staging url"}}
 	for _, row := range rowsBySite {
 		rows = append(rows, []string{
-			row.Site,
+			row.SiteID,
+			row.Name,
 			row.Target,
 			strings.Join(sortedSiteListEnvs(row.Envs), ","),
 			row.EnvURLs["live"],
@@ -3487,8 +3519,8 @@ func cmdShowSite(needle string) int {
 		fmt.Fprintln(os.Stderr, err)
 		return 1
 	}
-	record := state.MatchingRecord(bundle.Sites, resolved)
-	if record == nil {
+	records := siteRecordsByID(bundle.Sites, resolved)
+	if len(records) == 0 {
 		if targetAliasUsed {
 			fmt.Fprintf(os.Stderr, "deploy.targets.%s resolves to %q, but no site target matched that name.\n", needle, resolved)
 			return 1
@@ -3500,20 +3532,88 @@ func cmdShowSite(needle string) int {
 		fmt.Fprintf(os.Stderr, "No site matched %q.\n", needle)
 		return 1
 	}
-	if err := validateSiteRecord(record); err != nil {
-		fmt.Fprintln(os.Stderr, err)
-		return 1
-	}
-	out := cloneRecord(record)
-	out["requested_target"] = needle
-	out["resolved_target"] = resolved
-	if err := enrichSiteOutput(out, record, bundle.Servers); err != nil {
-		fmt.Fprintln(os.Stderr, err)
-		return 1
-	}
+	out := siteDetailsOutput(needle, resolved, records, bundle.Servers)
 	data, _ := json.MarshalIndent(out, "", "  ")
 	fmt.Println(string(data))
 	return 0
+}
+
+func siteRecordsByID(records []map[string]any, siteID string) []map[string]any {
+	needle := normalizedRecordString(siteID)
+	if needle == "" {
+		return nil
+	}
+	matches := []map[string]any{}
+	for _, record := range records {
+		if normalizedRecordString(siteRecordID(record)) == needle {
+			matches = append(matches, record)
+		}
+	}
+	return matches
+}
+
+func siteDetailsOutput(requested, resolved string, records []map[string]any, servers []map[string]any) map[string]any {
+	first := records[0]
+	out := map[string]any{
+		"requested_site":   requested,
+		"resolved_site":    resolved,
+		"requested_target": requested,
+		"resolved_target":  resolved,
+		"site_id":          siteRecordID(first),
+		"name":             siteRecordName(first),
+		"target":           siteProviderTarget(first),
+		"provider":         recordValueString(first["provider"]),
+	}
+	envs := make([]map[string]any, 0, len(records))
+	for _, record := range records {
+		env := cloneRecord(record)
+		env["resolved_site"] = siteEnvDisplaySite(record)
+		env["resolved_env"] = siteEnvName(record)
+		env["resolved_target"] = siteProviderTarget(record)
+		if err := validateSiteRecord(record); err == nil {
+			_ = enrichSiteOutput(env, record, servers)
+		}
+		envs = append(envs, env)
+	}
+	sort.SliceStable(envs, func(i, j int) bool {
+		left := siteEnvName(envs[i])
+		right := siteEnvName(envs[j])
+		li, ri := siteListEnvOrder(left), siteListEnvOrder(right)
+		if li != ri {
+			return li < ri
+		}
+		return left < right
+	})
+	out["envs"] = envs
+	return out
+}
+
+func chooseSiteForShow() (string, error) {
+	bundle, err := state.LoadStateBundle()
+	if err != nil {
+		return "", err
+	}
+	seen := map[string]bool{}
+	options := []ui.SelectOption{}
+	for _, record := range bundle.Sites {
+		siteID := siteRecordID(record)
+		if siteID == "" || seen[siteID] {
+			continue
+		}
+		seen[siteID] = true
+		parts := []string{siteID}
+		if name := siteRecordName(record); name != "" && name != siteID {
+			parts = append(parts, name)
+		}
+		if target := siteProviderTarget(record); target != "" {
+			parts = append(parts, "target "+target)
+		}
+		options = append(options, ui.SelectOption{Value: siteID, Label: strings.Join(parts, " / ")})
+	}
+	if len(options) == 0 {
+		return "", ProjectError{Msg: "No selectable sites found."}
+	}
+	return siteSelectFn("Choose a site to show", options)
 }
 
 func chooseTargetForShow() (string, error) {
@@ -5799,7 +5899,7 @@ func runSite(argv []string) int {
 		if len(argv) == 2 {
 			needle = argv[1]
 		} else {
-			selected, err := chooseRecord("site", "show")
+			selected, err := chooseSiteForShow()
 			if err != nil {
 				fmt.Fprintln(os.Stderr, err)
 				return 1
