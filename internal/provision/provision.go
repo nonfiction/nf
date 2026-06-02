@@ -62,6 +62,7 @@ type Args struct {
 	Execute           bool
 	Yes               bool
 	DryRun            bool
+	TargetMode        bool
 }
 
 type OSPlan struct {
@@ -134,6 +135,7 @@ type Plan struct {
 	DryRun            bool
 	NonInteractive    bool
 	ShowCloudInit     bool
+	TargetMode        bool
 }
 
 type ubuntuRelease struct {
@@ -639,11 +641,12 @@ func sshKeyLabels(keys []SSHAuthorizedKey) string {
 }
 
 type CreatedServer struct {
-	Provider   string `json:"provider"`
-	ProviderID string `json:"provider_id"`
-	Name       string `json:"name"`
-	Hostname   string `json:"hostname"`
-	IPv4       string `json:"ipv4"`
+	Provider   string   `json:"provider"`
+	ProviderID string   `json:"provider_id"`
+	Name       string   `json:"name"`
+	Hostname   string   `json:"hostname"`
+	IPv4       string   `json:"ipv4"`
+	Tags       []string `json:"tags,omitempty"`
 }
 
 type ServerCreatePlan struct {
@@ -789,7 +792,16 @@ func createdServerFromLinodeInstance(inst linodego.Instance) *CreatedServer {
 		}
 	}
 	id := strconv.Itoa(inst.ID)
-	return &CreatedServer{Provider: "linode", ProviderID: id, Name: inst.Label, Hostname: inst.Label, IPv4: ip}
+	return &CreatedServer{Provider: "linode", ProviderID: id, Name: inst.Label, Hostname: inst.Label, IPv4: ip, Tags: inst.Tags}
+}
+
+func createdServerHasTag(server CreatedServer, tag string) bool {
+	for _, candidate := range server.Tags {
+		if strings.EqualFold(strings.TrimSpace(candidate), strings.TrimSpace(tag)) {
+			return true
+		}
+	}
+	return false
 }
 
 func (p *linodeProvider) CreateServer(ctx context.Context, create ServerCreatePlan) (*CreatedServer, error) {
@@ -798,6 +810,7 @@ func (p *linodeProvider) CreateServer(ctx context.Context, create ServerCreatePl
 		Type:           create.Plan.LinodeType,
 		Image:          create.Plan.Image,
 		Label:          create.Plan.Label,
+		Tags:           []string{"nf"},
 		RootPass:       create.RootPass,
 		AuthorizedKeys: sshKeyBodies(create.SSHKeys),
 		Metadata:       &linodego.InstanceMetadataOptions{UserData: base64UserData(create.UserData)},
@@ -934,6 +947,18 @@ func dnsimpleAccountIDConfigValue() string {
 		return ""
 	}
 	return strings.TrimSpace(values["dnsimple_account_id"])
+}
+
+func globalConfigValue(key string) string {
+	data, err := os.ReadFile(config.ConfigFile())
+	if err != nil {
+		return ""
+	}
+	values := map[string]string{}
+	if err := json.Unmarshal(data, &values); err != nil {
+		return ""
+	}
+	return strings.TrimSpace(values[key])
 }
 
 func validateServerName(name string) error {
@@ -1271,7 +1296,7 @@ write_files:
       #!/usr/bin/env bash
       set -euo pipefail
 
-      mkdir -p /etc/nf
+      mkdir -p /etc/nf /var/lib/nf
       created_at="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
       cat >/etc/nf/server.json <<EOF
       {
@@ -1290,6 +1315,23 @@ write_files:
         "created_at": "${created_at}"
       }
       EOF
+      cat >/var/lib/nf/target.json <<EOF
+      {
+        "schema": 1,
+        "managed_by": "nf",
+        "provider": "__SERVER_PROVIDER__",
+        "name": "__NAME__",
+        "hostname": "__HOSTNAME__",
+        "sites_path": "/var/lib/nf/sites.json",
+        "created_at": "${created_at}"
+      }
+      EOF
+      if [ ! -f /var/lib/nf/sites.json ]; then
+        printf '[]\n' >/var/lib/nf/sites.json
+      fi
+      chown -R __SSH_USER__:www-data /var/lib/nf
+      chmod 2775 /var/lib/nf
+      chmod 0664 /var/lib/nf/sites.json /var/lib/nf/target.json
   - path: /etc/update-motd.d/99-nf
     permissions: '0755'
     content: |
@@ -1311,7 +1353,7 @@ runcmd:
   - hostnamectl set-hostname __HOSTNAME__
   - systemctl enable --now mariadb
   - systemctl enable --now fail2ban
-  - install -d -o __SSH_USER__ -g www-data -m 2775 /var/www /var/www/nf-server /var/www/sites /var/www/shared /var/log/nginx/sites
+  - install -d -o __SSH_USER__ -g www-data -m 2775 /var/www /var/www/nf-server /var/www/sites /var/www/shared /var/log/nginx/sites /var/lib/nf
   - usermod -aG www-data __SSH_USER__
   - chown -R __SSH_USER__:www-data /var/www /var/log/nginx/sites
   - chmod 2775 /var/www /var/www/sites /var/www/shared /var/log/nginx/sites
@@ -1579,7 +1621,7 @@ func ensureManagedFirewall(ctx context.Context, provider ServerProvider, plan Pl
 			createdPlan := plan
 			createdPlan.Firewall.ID = firewallID
 			createdPlan.Firewall.DeviceID = ""
-			if err := upsertStateRecord(statePath, serverStateRecordWithStatus(createdPlan, created, DNSState{}, TLSState{}, now, now, "provisioning", "linode_created")); err != nil {
+			if err := upsertProvisionRecord(statePath, plan, serverStateRecordWithStatus(createdPlan, created, DNSState{}, TLSState{}, now, now, "provisioning", "linode_created")); err != nil {
 				return "", err
 			}
 		}
@@ -1596,7 +1638,7 @@ func ensureManagedFirewall(ctx context.Context, provider ServerProvider, plan Pl
 	statePlan := plan
 	statePlan.Firewall.ID = firewallID
 	statePlan.Firewall.DeviceID = deviceID
-	if err := upsertStateRecord(statePath, serverStateRecordWithStatus(statePlan, created, DNSState{}, TLSState{}, now, now, "provisioning", "linode_created")); err != nil {
+	if err := upsertProvisionRecord(statePath, plan, serverStateRecordWithStatus(statePlan, created, DNSState{}, TLSState{}, now, now, "provisioning", "linode_created")); err != nil {
 		return "", err
 	}
 	if deviceID != created.ProviderID {
@@ -1609,7 +1651,7 @@ func ensureManagedFirewall(ctx context.Context, provider ServerProvider, plan Pl
 		createdPlan := plan
 		createdPlan.Firewall.ID = firewallID
 		createdPlan.Firewall.DeviceID = deviceID
-		if err := upsertStateRecord(statePath, serverStateRecordWithStatus(createdPlan, created, DNSState{}, TLSState{}, now, now, "provisioning", "linode_created")); err != nil {
+		if err := upsertProvisionRecord(statePath, plan, serverStateRecordWithStatus(createdPlan, created, DNSState{}, TLSState{}, now, now, "provisioning", "linode_created")); err != nil {
 			return "", err
 		}
 	}
@@ -2151,6 +2193,14 @@ func serverStateRecordWithStatus(plan Plan, created CreatedServer, dns DNSState,
 		record["id"] = created.ProviderID
 		record["linode_id"] = created.ProviderID
 	}
+	if plan.TargetMode {
+		record["target_name"] = plan.Name
+		record["sites_path"] = "/var/lib/nf/sites.json"
+		record["target_path"] = "/var/lib/nf/target.json"
+	}
+	if len(created.Tags) > 0 {
+		record["tags"] = created.Tags
+	}
 	return record
 }
 
@@ -2336,6 +2386,17 @@ func normalizePlan(plan Plan) Plan {
 	return plan
 }
 
+func targetName(name string) string {
+	name = strings.TrimSpace(name)
+	if name == "" {
+		return ""
+	}
+	if strings.HasSuffix(name, "-linode") {
+		return name
+	}
+	return name + "-linode"
+}
+
 func BuildPlan(args Args) (Plan, error) {
 	nonInteractive := args.NonInteractive
 	provider := firstNonEmpty(args.Provider, "linode")
@@ -2343,6 +2404,9 @@ func BuildPlan(args Args) (Plan, error) {
 	name, err := resolveServerName(args.Name, nonInteractive)
 	if err != nil {
 		return Plan{}, err
+	}
+	if args.TargetMode {
+		name = targetName(name)
 	}
 	if err := validateServerName(name); err != nil {
 		return Plan{}, err
@@ -2359,7 +2423,7 @@ func BuildPlan(args Args) (Plan, error) {
 		return Plan{}, Error{Msg: "Server name cannot be empty."}
 	}
 	resumeKeys := []SSHAuthorizedKey(nil)
-	resumeRecord, _, err := findProvisionStateRecord(Plan{Provider: provider, Name: name, Hostname: hostname, Label: label})
+	resumeRecord, _, err := findProvisionRecord(Plan{Provider: provider, Name: name, Hostname: hostname, Label: label, TargetMode: args.TargetMode})
 	if err != nil {
 		return Plan{}, err
 	}
@@ -2383,11 +2447,13 @@ func BuildPlan(args Args) (Plan, error) {
 	if firewallMode == "none" && strings.TrimSpace(args.FirewallID) != "" {
 		return Plan{}, Error{Msg: "--firewall-id requires --firewall managed."}
 	}
-	region, err := resolveValue(args.Region, "Linode region: ", "ca-central", nonInteractive, false)
+	defaultRegion := firstNonEmpty(globalConfigValue("linode_default_region"), "ca-central")
+	defaultType := firstNonEmpty(globalConfigValue("linode_default_type"), "g6-standard-1")
+	region, err := resolveValue(args.Region, "Linode region: ", defaultRegion, nonInteractive, false)
 	if err != nil {
 		return Plan{}, err
 	}
-	linodeType, err := resolveValue(args.Type, "Linode type: ", "g6-standard-1", nonInteractive, false)
+	linodeType, err := resolveValue(args.Type, "Linode type: ", defaultType, nonInteractive, false)
 	if err != nil {
 		return Plan{}, err
 	}
@@ -2441,8 +2507,8 @@ func BuildPlan(args Args) (Plan, error) {
 		Label:             label,
 		WildcardHostname:  wildcardHostname,
 		HealthURL:         healthURL,
-		Region:            firstNonEmpty(region, "ca-central"),
-		LinodeType:        firstNonEmpty(linodeType, "g6-standard-1"),
+		Region:            firstNonEmpty(region, defaultRegion),
+		LinodeType:        firstNonEmpty(linodeType, defaultType),
 		Image:             osPlan.Image,
 		SshUser:           firstNonEmpty(sshUser, "nonfiction"),
 		SshKeySource:      sshKeySource,
@@ -2464,6 +2530,7 @@ func BuildPlan(args Args) (Plan, error) {
 		DryRun:            args.DryRun || !args.Execute,
 		NonInteractive:    nonInteractive,
 		ShowCloudInit:     args.ShowCloudInit,
+		TargetMode:        args.TargetMode,
 	})
 	plan.AuthorizedKeys = resumeKeys
 	return plan, nil
@@ -2679,6 +2746,62 @@ func upsertStateRecord(path string, candidate map[string]any) error {
 	return saveStatePayload(path, records)
 }
 
+func upsertLinodeProviderTarget(path string, candidate map[string]any) error {
+	records, err := loadStatePayload(path)
+	if err != nil {
+		return err
+	}
+	var provider map[string]any
+	for _, record := range records {
+		if strings.EqualFold(valueString(record["provider"]), "linode") || strings.EqualFold(valueString(record["_state_key"]), "linode") {
+			provider = record
+			break
+		}
+	}
+	if provider == nil {
+		provider = map[string]any{"provider": "linode"}
+		records = append(records, provider)
+	}
+	targets := targetRecordMaps(provider["targets"])
+	updated := false
+	for i, target := range targets {
+		if recordMatches(target, candidate) {
+			targets[i] = candidate
+			updated = true
+			break
+		}
+	}
+	if !updated {
+		targets = append(targets, candidate)
+	}
+	provider["targets"] = targets
+	return saveStatePayload(path, records)
+}
+
+func targetRecordMaps(value any) []map[string]any {
+	switch typed := value.(type) {
+	case []map[string]any:
+		return typed
+	case []any:
+		out := make([]map[string]any, 0, len(typed))
+		for _, item := range typed {
+			if record, ok := item.(map[string]any); ok {
+				out = append(out, record)
+			}
+		}
+		return out
+	default:
+		return []map[string]any{}
+	}
+}
+
+func upsertProvisionRecord(path string, plan Plan, candidate map[string]any) error {
+	if plan.TargetMode {
+		return upsertLinodeProviderTarget(path, candidate)
+	}
+	return upsertStateRecord(path, candidate)
+}
+
 func ProvisionServer(plan Plan) (*ServerCreateResult, error) {
 	plan = normalizePlan(plan)
 	effectivePlan, previewPath, err := preparePlan(plan)
@@ -2690,14 +2813,17 @@ func ProvisionServer(plan Plan) (*ServerCreateResult, error) {
 		return nil, nil
 	}
 	serverStatePath := filepath.Join(config.StateDir(), "servers.json")
-	existingRecord, _, err := findProvisionStateRecord(effectivePlan)
+	if effectivePlan.TargetMode {
+		serverStatePath = filepath.Join(config.StateDir(), "providers.json")
+	}
+	existingRecord, _, err := findProvisionRecord(effectivePlan)
 	if err != nil {
 		return nil, err
 	}
 	if existingRecord != nil {
 		status := existingProvisionStatus(existingRecord)
 		phase := existingProvisionPhase(existingRecord)
-		if status == "provisioned" || phase == "complete" {
+		if (status == "provisioned" || phase == "complete") && !effectivePlan.TargetMode {
 			return nil, Error{Msg: fmt.Sprintf("Server %q is already provisioned. No changes made.\nState: %s", effectivePlan.Hostname, serverStatePath)}
 		}
 	}
@@ -2760,35 +2886,51 @@ func ProvisionServer(plan Plan) (*ServerCreateResult, error) {
 			return nil, err
 		}
 		if linodeMatch != nil {
-			return nil, Error{Msg: fmt.Sprintf("Server name %q is unavailable. Linode label %q already exists (id %s).", effectivePlan.Name, effectivePlan.Label, linodeMatch.ProviderID)}
-		}
-		dnsZone, err := dnsimpleZoneLookup(effectivePlan, dnsimpleToken)
-		if err != nil {
-			return nil, err
-		}
-		records, err := dnsimpleListARecordsFn(dnsimpleToken, effectivePlan.DnsimpleAccountID, dnsZone)
-		if err != nil {
-			return nil, err
-		}
-		hostnameRecordName := relativeRecordName(effectivePlan.Hostname, dnsZone)
-		if record, ok := dnsRecordByName(records, hostnameRecordName); ok {
-			return nil, Error{Msg: fmt.Sprintf("Server name %q is unavailable.\nReason:\n  DNS record %s already exists and points to %s.\nNext:\n  Choose a different server name or clean up DNS first.", effectivePlan.Name, effectivePlan.Hostname, record.Content)}
-		}
-		wildcardRecordName := relativeRecordName(effectivePlan.WildcardHostname, dnsZone)
-		if record, ok := dnsRecordByName(records, wildcardRecordName); ok {
-			return nil, Error{Msg: fmt.Sprintf("Server name %q is unavailable.\nReason:\n  DNS record %s already exists and points to %s.\nNext:\n  Choose a different server name or clean up DNS first.", effectivePlan.Name, effectivePlan.WildcardHostname, record.Content)}
-		}
-		createdPtr, err := provider.CreateServer(ctx, ServerCreatePlan{Plan: effectivePlan, RootPass: rootPass, UserData: rendered, SSHKeys: sshKeys})
-		if err != nil {
-			return nil, err
-		}
-		created = *createdPtr
-		linodeIP = created.IPv4
-		fmt.Println("Creating Linode")
-		currentPhase = "linode_created"
-		partial := serverStateRecordWithStatus(effectivePlan, created, DNSState{}, TLSState{}, createdAt, now, "provisioning", currentPhase)
-		if err := upsertStateRecord(serverStatePath, partial); err != nil {
-			return nil, err
+			if !effectivePlan.TargetMode || !createdServerHasTag(*linodeMatch, "nf") {
+				return nil, Error{Msg: fmt.Sprintf("Server name %q is unavailable. Linode label %q already exists (id %s).", effectivePlan.Name, effectivePlan.Label, linodeMatch.ProviderID)}
+			}
+			created = *linodeMatch
+			created.Name = effectivePlan.Name
+			created.Hostname = effectivePlan.Hostname
+			linodeIP = created.IPv4
+			fmt.Println("Reusing Linode")
+			currentPhase = "linode_created"
+			partial := serverStateRecordWithStatus(effectivePlan, created, DNSState{}, TLSState{}, createdAt, now, "provisioning", currentPhase)
+			if err := upsertProvisionRecord(serverStatePath, effectivePlan, partial); err != nil {
+				return nil, err
+			}
+		} else {
+			dnsZone, err := dnsimpleZoneLookup(effectivePlan, dnsimpleToken)
+			if err != nil {
+				return nil, err
+			}
+			records, err := dnsimpleListARecordsFn(dnsimpleToken, effectivePlan.DnsimpleAccountID, dnsZone)
+			if err != nil {
+				return nil, err
+			}
+			hostnameRecordName := relativeRecordName(effectivePlan.Hostname, dnsZone)
+			if record, ok := dnsRecordByName(records, hostnameRecordName); ok {
+				return nil, Error{Msg: fmt.Sprintf("Server name %q is unavailable.\nReason:\n  DNS record %s already exists and points to %s.\nNext:\n  Choose a different server name or clean up DNS first.", effectivePlan.Name, effectivePlan.Hostname, record.Content)}
+			}
+			wildcardRecordName := relativeRecordName(effectivePlan.WildcardHostname, dnsZone)
+			if record, ok := dnsRecordByName(records, wildcardRecordName); ok {
+				return nil, Error{Msg: fmt.Sprintf("Server name %q is unavailable.\nReason:\n  DNS record %s already exists and points to %s.\nNext:\n  Choose a different server name or clean up DNS first.", effectivePlan.Name, effectivePlan.WildcardHostname, record.Content)}
+			}
+			createdPtr, err := provider.CreateServer(ctx, ServerCreatePlan{Plan: effectivePlan, RootPass: rootPass, UserData: rendered, SSHKeys: sshKeys})
+			if err != nil {
+				return nil, err
+			}
+			created = *createdPtr
+			if effectivePlan.TargetMode && len(created.Tags) == 0 {
+				created.Tags = []string{"nf"}
+			}
+			linodeIP = created.IPv4
+			fmt.Println("Creating Linode")
+			currentPhase = "linode_created"
+			partial := serverStateRecordWithStatus(effectivePlan, created, DNSState{}, TLSState{}, createdAt, now, "provisioning", currentPhase)
+			if err := upsertProvisionRecord(serverStatePath, effectivePlan, partial); err != nil {
+				return nil, err
+			}
 		}
 	}
 	phaseRank := provisioningPhaseRank(currentPhase)
@@ -2802,7 +2944,7 @@ func ProvisionServer(plan Plan) (*ServerCreateResult, error) {
 		effectivePlan.Firewall.DeviceID = created.ProviderID
 		phaseRank = provisioningPhaseRank("firewall_configured")
 		currentPhase = "firewall_configured"
-		if err := upsertStateRecord(serverStatePath, serverStateRecordWithStatus(effectivePlan, created, DNSState{}, TLSState{}, createdAt, now, "provisioning", currentPhase)); err != nil {
+		if err := upsertProvisionRecord(serverStatePath, effectivePlan, serverStateRecordWithStatus(effectivePlan, created, DNSState{}, TLSState{}, createdAt, now, "provisioning", currentPhase)); err != nil {
 			return nil, err
 		}
 	}
@@ -2831,7 +2973,7 @@ func ProvisionServer(plan Plan) (*ServerCreateResult, error) {
 			tlsState = tlsStateRecord(effectivePlan)
 		}
 		currentPhase = "dns_configured"
-		if err := upsertStateRecord(serverStatePath, serverStateRecordWithStatus(effectivePlan, created, dnsState, TLSState{}, createdAt, now, "provisioning", currentPhase)); err != nil {
+		if err := upsertProvisionRecord(serverStatePath, effectivePlan, serverStateRecordWithStatus(effectivePlan, created, dnsState, TLSState{}, createdAt, now, "provisioning", currentPhase)); err != nil {
 			return nil, err
 		}
 		if effectivePlan.Wait {
@@ -2859,7 +3001,7 @@ func ProvisionServer(plan Plan) (*ServerCreateResult, error) {
 			return nil, Error{Msg: fmt.Sprintf("%s\nRecovery: ssh %s@%s \"sudo /usr/local/bin/nf-enable-wildcard-tls\"", strings.TrimSpace(err.Error()), effectivePlan.SshUser, effectivePlan.Hostname)}
 		}
 		currentPhase = "tls_configured"
-		if err := upsertStateRecord(serverStatePath, serverStateRecordWithStatus(effectivePlan, created, dnsState, tlsStateRecord(effectivePlan), createdAt, now, "provisioning", currentPhase)); err != nil {
+		if err := upsertProvisionRecord(serverStatePath, effectivePlan, serverStateRecordWithStatus(effectivePlan, created, dnsState, tlsStateRecord(effectivePlan), createdAt, now, "provisioning", currentPhase)); err != nil {
 			return nil, err
 		}
 	} else if currentPhase != "tls_configured" {
@@ -2871,7 +3013,7 @@ func ProvisionServer(plan Plan) (*ServerCreateResult, error) {
 	if err := checkHTTPSHealthFn(healthURL, effectivePlan.Name, effectivePlan.Hostname, effectivePlan.HealthTimeout); err != nil {
 		return nil, Error{Msg: renderProvisionHealthFailure(effectivePlan, created, dnsState, tlsState, serverStatePath, sshKeys, err)}
 	}
-	if err := upsertStateRecord(serverStatePath, serverStateRecordWithStatus(effectivePlan, created, dnsState, tlsState, createdAt, now, "provisioned", "complete")); err != nil {
+	if err := upsertProvisionRecord(serverStatePath, effectivePlan, serverStateRecordWithStatus(effectivePlan, created, dnsState, tlsState, createdAt, now, "provisioned", "complete")); err != nil {
 		return nil, err
 	}
 	fmt.Print(renderProvisionSuccess(effectivePlan, created, dnsState, tlsState, serverStatePath, firstNonEmpty(previewPath, "not written"), sshKeys))
@@ -2899,6 +3041,33 @@ func matchesProvisionStateRecord(record map[string]any, provider, providerID, ho
 		return true
 	}
 	return false
+}
+
+func findTargetProvisionStateRecord(plan Plan) (map[string]any, int, error) {
+	providers, err := loadStatePayload(filepath.Join(config.StateDir(), "providers.json"))
+	if err != nil {
+		return nil, -1, err
+	}
+	idx := 0
+	for _, provider := range providers {
+		if !strings.EqualFold(valueString(provider["provider"]), "linode") && !strings.EqualFold(valueString(provider["_state_key"]), "linode") {
+			continue
+		}
+		for _, target := range targetRecordMaps(provider["targets"]) {
+			if matchesProvisionStateRecord(target, plan.Provider, "", plan.Hostname, plan.Name, plan.Label) {
+				return target, idx, nil
+			}
+			idx++
+		}
+	}
+	return nil, -1, nil
+}
+
+func findProvisionRecord(plan Plan) (map[string]any, int, error) {
+	if plan.TargetMode {
+		return findTargetProvisionStateRecord(plan)
+	}
+	return findProvisionStateRecord(plan)
 }
 
 func loadStatePayload(path string) ([]map[string]any, error) {
