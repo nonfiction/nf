@@ -924,6 +924,18 @@ func baseDomainConfigValue() string {
 	return strings.TrimSpace(values["base_domain"])
 }
 
+func dnsimpleAccountIDConfigValue() string {
+	data, err := os.ReadFile(config.ConfigFile())
+	if err != nil {
+		return ""
+	}
+	values := map[string]string{}
+	if err := json.Unmarshal(data, &values); err != nil {
+		return ""
+	}
+	return strings.TrimSpace(values["dnsimple_account_id"])
+}
+
 func validateServerName(name string) error {
 	trimmed := strings.TrimSpace(name)
 	if trimmed == "" {
@@ -974,7 +986,7 @@ func deriveHealthURL(hostname string) string {
 
 func provisionRequirements() []envwizard.Requirement {
 	return []envwizard.Requirement{
-		{Keys: []string{"NF_SECRET_SALT"}, Prompt: "NF_SECRET_SALT (used for derived passwords): ", Secret: true, WriteKey: "NF_SECRET_SALT", Required: true},
+		{Keys: []string{"NF_PASSWORD_SALT", "NF_SECRET_SALT"}, Prompt: "NF_PASSWORD_SALT (used for derived passwords): ", Secret: true, WriteKey: "NF_PASSWORD_SALT", Required: true},
 		{Keys: []string{"DNSIMPLE_TOKEN"}, Prompt: "DNSimple token: ", Secret: true, WriteKey: "DNSIMPLE_TOKEN", Required: true},
 		{Keys: []string{"LINODE_TOKEN", "LINODE_CLI_TOKEN"}, Prompt: "LINODE_TOKEN (Linode API token): ", Secret: true, WriteKey: "LINODE_TOKEN", Required: true},
 	}
@@ -2316,7 +2328,7 @@ func normalizePlan(plan Plan) Plan {
 		plan.HealthURL = deriveHealthURL(plan.Hostname)
 	}
 	if strings.TrimSpace(plan.DnsimpleAccountID) == "" {
-		plan.DnsimpleAccountID = firstNonEmpty(envwizard.Value("DNSIMPLE_ACCOUNT_ID"), "14")
+		plan.DnsimpleAccountID = firstNonEmpty(dnsimpleAccountIDConfigValue(), "14")
 	}
 	if !plan.DryRun && !plan.Execute {
 		plan.DryRun = true
@@ -2396,7 +2408,7 @@ func BuildPlan(args Args) (Plan, error) {
 		}
 		sshPublicKeyFile = cleanPath(sshPublicKeyFile)
 	}
-	dnsimpleAccountID := firstNonEmpty(args.DnsimpleAccountID, envwizard.Value("DNSIMPLE_ACCOUNT_ID"), "14")
+	dnsimpleAccountID := firstNonEmpty(args.DnsimpleAccountID, dnsimpleAccountIDConfigValue(), "14")
 	writeCloudInit := strings.TrimSpace(args.WriteCloudInit)
 	if provider != "linode" {
 		return Plan{}, Error{Msg: fmt.Sprintf("Unsupported provider %q. Only linode is available in this slice.", provider)}
@@ -2438,7 +2450,7 @@ func BuildPlan(args Args) (Plan, error) {
 		SshKeyID:          strings.TrimSpace(args.SshKeyID),
 		AllLinodeSshKeys:  args.AllLinodeSshKeys,
 		SshPublicKeyFile:  sshPublicKeyFile,
-		DnsimpleAccountID: firstNonEmpty(dnsimpleAccountID, "14"),
+		DnsimpleAccountID: dnsimpleAccountID,
 		WriteCloudInit:    cleanPath(writeCloudInit),
 		OS:                osPlan,
 		PHP:               phpPlan,

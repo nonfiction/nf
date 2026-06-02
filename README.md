@@ -194,19 +194,21 @@ Non-secret config goes in `config.json`:
 
 ```json
 {
-  "base_domain": "nonfiction.dev"
+  "base_domain": "nonfiction.dev",
+  "dnsimple_account_id": "14"
 }
 ```
 
-Secrets and account-specific values go in `.env`:
+Secrets go in `.env`:
 
 ```env
-NF_SECRET_SALT=
+NF_PASSWORD_SALT=
 DNSIMPLE_TOKEN=
 LINODE_TOKEN=
 KINSTA_API_KEY=
-DNSIMPLE_ACCOUNT_ID=14
 ```
+
+`dnsimple_account_id` is fetched from DNSimple with `DNSIMPLE_TOKEN` by `nf provider check dnsimple`; do not set `DNSIMPLE_ACCOUNT_ID` in `.env`.
 
 Use:
 
@@ -281,7 +283,7 @@ nf password show-salt
 nf password derive <scope> <value...>
 ```
 
-Password derivation uses `NF_SECRET_SALT` from the environment or `~/.config/nf/.env`.
+Password derivation uses `NF_PASSWORD_SALT` from the environment or `~/.config/nf/.env`. Legacy `NF_SECRET_SALT` is accepted only as a migration fallback.
 
 ## Safety
 

@@ -1014,17 +1014,16 @@ func copyFile(sourcePath, destinationPath string) error {
 
 func configInitRequirements() []envwizard.Requirement {
 	return []envwizard.Requirement{
-		{Keys: []string{"DNSIMPLE_ACCOUNT_ID"}, Prompt: "DNSIMPLE_ACCOUNT_ID (DNSimple account id): ", Default: "14", WriteKey: "DNSIMPLE_ACCOUNT_ID"},
 		{Keys: []string{"DNSIMPLE_TOKEN"}, Prompt: "DNSimple token: ", Secret: true, WriteKey: "DNSIMPLE_TOKEN", Required: true},
 		{Keys: []string{"KINSTA_API_KEY"}, Prompt: "Kinsta API key: ", Secret: true, WriteKey: "KINSTA_API_KEY", Required: true},
 		{Keys: []string{"LINODE_TOKEN", "LINODE_CLI_TOKEN"}, Prompt: "LINODE_TOKEN (Linode API token): ", Secret: true, WriteKey: "LINODE_TOKEN", Required: true},
-		{Keys: []string{"NF_SECRET_SALT"}, Prompt: "NF_SECRET_SALT (used for derived passwords): ", Secret: true, WriteKey: "NF_SECRET_SALT", Required: true},
+		{Keys: []string{"NF_PASSWORD_SALT", "NF_SECRET_SALT"}, Prompt: "NF_PASSWORD_SALT (used for derived passwords): ", Secret: true, WriteKey: "NF_PASSWORD_SALT", Required: true},
 	}
 }
 
 func passwordRequirements() []envwizard.Requirement {
 	return []envwizard.Requirement{
-		{Keys: []string{"NF_SECRET_SALT"}, Prompt: "NF_SECRET_SALT (used for derived passwords): ", Secret: true, WriteKey: "NF_SECRET_SALT", Required: true},
+		{Keys: []string{"NF_PASSWORD_SALT", "NF_SECRET_SALT"}, Prompt: "NF_PASSWORD_SALT (used for derived passwords): ", Secret: true, WriteKey: "NF_PASSWORD_SALT", Required: true},
 	}
 }
 
@@ -1307,7 +1306,7 @@ func serverDNSDeleteTargets(server map[string]any) []serverDNSDeleteTarget {
 	}
 	accountID := firstRecordString(dns, "account_id")
 	if provider == "dnsimple" && accountID == "" {
-		accountID = firstNonEmpty(envwizard.Value("DNSIMPLE_ACCOUNT_ID"), "14")
+		accountID = dnsimpleAccountIDValue()
 	}
 	seen := map[string]struct{}{}
 	targets := make([]serverDNSDeleteTarget, 0, 2)
@@ -3464,7 +3463,7 @@ func runPassword(argv []string) int {
 			fmt.Fprintln(os.Stderr, "password set-salt takes exactly one salt")
 			return 1
 		}
-		if _, err := config.SetEnvFile(config.EnvFile(), map[string]string{"NF_SECRET_SALT": argv[1]}); err != nil {
+		if _, err := config.SetEnvFile(config.EnvFile(), map[string]string{"NF_PASSWORD_SALT": argv[1]}); err != nil {
 			fmt.Fprintln(os.Stderr, err)
 			return 1
 		}
@@ -3600,6 +3599,7 @@ func cmdConfigShow() int {
 	fmt.Printf("Default WP Email: %s\n", values["default_wp_email"])
 	fmt.Printf("Default WP User: %s\n", values["default_wp_user"])
 	fmt.Printf("Base Domain: %s\n", values["base_domain"])
+	fmt.Printf("DNSimple Account ID: %s\n", values["dnsimple_account_id"])
 	fmt.Printf("Password Salt: %s\n", saltStatus)
 	return 0
 }
@@ -3842,7 +3842,7 @@ func providerConfigStatuses() []providerConfigStatus {
 		providerConfigStatusFor("dnsimple", []providerConfigKey{
 			{Keys: []string{"base_domain"}, Required: true},
 			{Keys: []string{"DNSIMPLE_TOKEN"}, Required: true, Secret: true},
-			{Keys: []string{"DNSIMPLE_ACCOUNT_ID"}, Default: "14"},
+			{Keys: []string{"dnsimple_account_id"}},
 		}),
 		providerConfigStatusFor("kinsta", []providerConfigKey{
 			{Keys: []string{"KINSTA_API_KEY"}, Required: true, Secret: true},
@@ -3879,6 +3879,8 @@ func providerConfigValue(key string) string {
 	switch key {
 	case "base_domain":
 		return baseDomainValue()
+	case "dnsimple_account_id":
+		return dnsimpleAccountIDValue()
 	default:
 		return envwizard.Value(key)
 	}
@@ -4065,7 +4067,6 @@ func checkDNSimpleProvider() (providerHealthResult, error) {
 	if managedDomain == "" {
 		return providerHealthResult{}, fmt.Errorf("Expected base_domain in %s. Set it with nf config set-base-domain <domain>.", config.ConfigFile())
 	}
-	accountID := firstNonEmpty(envwizard.Value("DNSIMPLE_ACCOUNT_ID"), "14")
 	ctx, cancel := providerHealthContext()
 	defer cancel()
 	client := dnsimple.NewClient(dnsimple.StaticTokenHTTPClient(ctx, token))
@@ -4079,11 +4080,12 @@ func checkDNSimpleProvider() (providerHealthResult, error) {
 	if resp == nil || resp.Data == nil || resp.Data.Account == nil || resp.Data.Account.ID == 0 {
 		return providerHealthResult{}, fmt.Errorf("DNSimple /v2/whoami did not return an account id")
 	}
+	accountID := strconv.FormatInt(resp.Data.Account.ID, 10)
 	zoneResp, err := client.Zones.GetZone(ctx, accountID, managedDomain)
 	if err != nil {
 		var apiErr *dnsimple.ErrorResponse
 		if errors.As(err, &apiErr) && apiErr.HTTPResponse != nil && apiErr.HTTPResponse.StatusCode == http.StatusNotFound {
-			return providerHealthResult{}, fmt.Errorf("DNSimple zone %s was not found for account %s. Check base_domain, DNSIMPLE_ACCOUNT_ID, and DNSIMPLE_TOKEN", managedDomain, accountID)
+			return providerHealthResult{}, fmt.Errorf("DNSimple zone %s was not found for account %s. Check base_domain and DNSIMPLE_TOKEN", managedDomain, accountID)
 		}
 		return providerHealthResult{}, fmt.Errorf("Checking DNSimple zone %s for account %s: %v", managedDomain, accountID, err)
 	}
@@ -4112,6 +4114,14 @@ func checkDNSimpleProvider() (providerHealthResult, error) {
 	if resp.Data.Account.Name != "" {
 		record["account_name"] = resp.Data.Account.Name
 	}
+	if values, err := loadGlobalConfig(); err == nil {
+		values["dnsimple_account_id"] = accountID
+		if err := saveGlobalConfig(values); err != nil {
+			return providerHealthResult{}, err
+		}
+	} else {
+		return providerHealthResult{}, err
+	}
 	return providerHealthResult{Provider: "dnsimple", Details: details, Record: record}, nil
 }
 
@@ -4123,6 +4133,14 @@ func baseDomainValue() string {
 		}
 	}
 	return firstNonEmpty(envwizard.Value("NF_SERVER_DOMAIN"), envwizard.Value("DNSIMPLE_ZONE_NAME"))
+}
+
+func dnsimpleAccountIDValue() string {
+	values, err := loadGlobalConfig()
+	if err == nil {
+		return strings.TrimSpace(values["dnsimple_account_id"])
+	}
+	return ""
 }
 
 type kinstaValidateResponse struct {

@@ -108,22 +108,25 @@ Config:
 
 ```json
 {
-  "base_domain": "nonfiction.dev"
+  "base_domain": "nonfiction.dev",
+  "dnsimple_account_id": "14"
 }
 ```
 
-Secrets/account values:
+Secrets:
 
 ```env
 DNSIMPLE_TOKEN=
-DNSIMPLE_ACCOUNT_ID=14
 ```
 
 `NF_SERVER_DOMAIN` and `DNSIMPLE_ZONE_NAME` may remain as legacy fallbacks during migration, but new behavior should use `base_domain` in `config.json`.
 
+`DNSIMPLE_ACCOUNT_ID` must not be set in `.env`. The DNSimple provider determines the account ID from `/v2/whoami` using `DNSIMPLE_TOKEN` and saves it as `dnsimple_account_id` in `config.json`.
+
 `nf provider check dnsimple` must:
 
 * call DNSimple `/v2/whoami`
+* save the fetched account ID to `config.json`
 * read the configured `base_domain` zone
 * fail clearly if the zone cannot be read
 * write DNSimple account and zone metadata to `providers.json`

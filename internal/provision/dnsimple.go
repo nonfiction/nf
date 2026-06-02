@@ -38,12 +38,12 @@ func (p *dnsimpleProvider) Name() string { return "dnsimple" }
 func (p *dnsimpleProvider) findZone(ctx context.Context, zone string) (string, error) {
 	zone = strings.TrimSpace(zone)
 	if zone == "" {
-		return "", Error{Msg: fmt.Sprintf("DNSimple zone is required for account %s. Check NF_SERVER_DOMAIN, DNSIMPLE_ACCOUNT_ID, and DNSIMPLE_TOKEN.", p.accountID)}
+		return "", Error{Msg: fmt.Sprintf("DNSimple zone is required for account %s. Check base_domain, dnsimple_account_id, and DNSIMPLE_TOKEN.", p.accountID)}
 	}
 	if _, err := p.client.Zones.GetZone(ctx, p.accountID, zone); err != nil {
 		var apiErr *dnsimple.ErrorResponse
 		if errors.As(err, &apiErr) && apiErr.HTTPResponse != nil && apiErr.HTTPResponse.StatusCode == http.StatusNotFound {
-			return "", Error{Msg: fmt.Sprintf("DNSimple zone %s was not found for account %s. Check NF_SERVER_DOMAIN, DNSIMPLE_ACCOUNT_ID, and DNSIMPLE_TOKEN.", zone, p.accountID)}
+			return "", Error{Msg: fmt.Sprintf("DNSimple zone %s was not found for account %s. Check base_domain, dnsimple_account_id, and DNSIMPLE_TOKEN.", zone, p.accountID)}
 		}
 		return "", Error{Msg: fmt.Sprintf("Checking DNSimple zone %s for account %s: %v", zone, p.accountID, err)}
 	}

@@ -68,8 +68,8 @@ Do not read or write the user's real config/state in tests. `internal/provision`
 ## Current cache files
 
 ```text
-config.json     non-secret global config, including base_domain
-.env            secrets/account values
+config.json     non-secret global config, including base_domain and dnsimple_account_id
+.env            secrets/account tokens
 providers.json  provider check metadata and targets
 sites.json      cached remote site/env records
 projects.json   disposable project cache if needed
@@ -80,6 +80,8 @@ Local state is disposable. Provider truth is canonical remotely.
 ## Learned model facts
 
 * `base_domain` belongs in `config.json`, not `.env`. Legacy `NF_SERVER_DOMAIN` can remain as fallback during migration.
+* `dnsimple_account_id` belongs in `config.json`, fetched by DNSimple provider check from `DNSIMPLE_TOKEN`; do not set `DNSIMPLE_ACCOUNT_ID` in `.env`.
+* Password salt is `NF_PASSWORD_SALT`; legacy `NF_SECRET_SALT` is migration-only fallback.
 * DNSimple provider check validates it can read the configured `base_domain` zone and writes zero targets.
 * Kinsta provider check writes one target named `kinsta`.
 * Linode provider check discovers targets from Linode instances tagged `nf`.
