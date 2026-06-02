@@ -43,6 +43,7 @@ var (
 	providerCheckLinodeFn   = checkLinodeProvider
 	targetSSHReachableFn    = targetSSHReachable
 	runSSHScriptFn          = runSSHScript
+	runSSHCommandFn         = runSSHCommand
 )
 
 type repoCommandRunner interface {
@@ -2830,6 +2831,14 @@ func runSSHScript(user, host, script string) error {
 	return cmd.Run()
 }
 
+func runSSHCommand(args []string) error {
+	cmd := exec.Command(args[0], args[1:]...)
+	cmd.Stdout = os.Stdout
+	cmd.Stderr = os.Stderr
+	cmd.Stdin = os.Stdin
+	return cmd.Run()
+}
+
 func renderSiteAddScript(plan siteAddPlan) string {
 	q := shellQuoteArg
 	var b strings.Builder
@@ -3204,7 +3213,7 @@ func cmdSiteEnvRemoteCommandPlan(action, siteID, env string, args []string) int 
 			return 1
 		}
 	}
-	record, servers, err := cachedSiteEnv(siteID, env)
+	record, _, err := cachedSiteEnv(siteID, env)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		return 1
@@ -3226,20 +3235,70 @@ func cmdSiteEnvRemoteCommandPlan(action, siteID, env string, args []string) int 
 	if url := firstRecordString(record, "url", "site_url", "home_url", "hostname"); url != "" {
 		fmt.Printf("  url:      %s\n", url)
 	}
-	if provider == "linode" {
-		serverRef := siteServerReference(record)
-		server := state.MatchingRecord(servers, serverRef)
-		if server == nil {
-			fmt.Fprintf(os.Stderr, "Linode site %q references server %q, but no server matched that target.\n", siteSummary(record), serverRef)
-			return 1
+	if provider != "linode" {
+		if action == "wp" {
+			fmt.Printf("  wp args:  %s\n", strings.Join(args, " "))
 		}
-		fmt.Printf("  server:   %s\n", serverSummary(server))
+		fmt.Fprintf(os.Stderr, "Remote site env %s is not implemented for provider %q; no command was run.\n", action, provider)
+		return 1
+	}
+	sshArgs, err := linodeSiteEnvSSHArgs(record, action, args)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		return 1
 	}
 	if action == "wp" {
 		fmt.Printf("  wp args:  %s\n", strings.Join(args, " "))
 	}
-	fmt.Fprintf(os.Stderr, "Remote site env %s is not implemented yet; no command was run.\n", action)
-	return 1
+	printCommandArgs(sshArgs)
+	if err := runSSHCommandFn(sshArgs); err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		return 1
+	}
+	return 0
+}
+
+func linodeSiteEnvSSHArgs(record map[string]any, action string, wpArgs []string) ([]string, error) {
+	targetRef := siteProviderTarget(record)
+	targets, err := cachedTargets()
+	if err != nil {
+		return nil, err
+	}
+	target := state.MatchingRecord(targets, targetRef)
+	if target == nil {
+		return nil, ProjectError{Msg: fmt.Sprintf("Linode site %q references target %q, but no cached target matched. Run nf provider check linode.", siteSummary(record), targetRef)}
+	}
+	values, err := loadGlobalConfig()
+	if err != nil {
+		return nil, err
+	}
+	user := firstNonEmpty(serverSSHUser(target), values["linode_default_user"])
+	if user == "" {
+		return nil, ProjectError{Msg: fmt.Sprintf("Target %q is missing an SSH user. Set linode_default_user with nf config set-linode-default-user <user>.", targetRef)}
+	}
+	host := firstRecordString(record, "hostname")
+	if host == "" {
+		host = serverSSHHost(target)
+	}
+	if host == "" {
+		return nil, ProjectError{Msg: fmt.Sprintf("Site env %q is missing hostname.", siteSummary(record))}
+	}
+	port := firstNonEmpty(mapStringAtPath(target, "ssh", "port"), firstRecordString(target, "ssh_port"), "22")
+	destination := user + "@" + host
+	path := firstRecordString(record, "path")
+	if path == "" {
+		return nil, ProjectError{Msg: fmt.Sprintf("Site env %q is missing path.", siteSummary(record))}
+	}
+	if action != "wp" {
+		remoteCommand := "cd " + shellQuoteArg(path) + " && exec ${SHELL:-/bin/bash} -i"
+		return []string{"ssh", "-t", "-p", port, destination, remoteCommand}, nil
+	}
+	sshArgs := []string{"ssh", "-p", port, destination}
+	remoteCommand := "cd " + shellQuoteArg(path) + " && sudo -u www-data wp --path=" + shellQuoteArg(path)
+	if normalized := normalizePassthroughArgs(wpArgs); len(normalized) > 0 {
+		remoteCommand += " " + renderCommandArgs(normalized)
+	}
+	return append(sshArgs, remoteCommand), nil
 }
 
 func parseSiteEnvFlag(args []string, allowCommand bool) (siteID, env string, command []string, ok bool) {

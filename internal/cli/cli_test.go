@@ -1272,7 +1272,7 @@ func TestRunSiteEnvShellAndWpPreflightWithoutRunningRemoteCommands(t *testing.T)
 			}
 		}
 	})
-	if !strings.Contains(shellStderr, "Remote site env shell is not implemented yet; no command was run.") {
+	if !strings.Contains(shellStderr, `Remote site env shell is not implemented for provider "kinsta"; no command was run.`) {
 		t.Fatalf("site env shell stderr = %q", shellStderr)
 	}
 
@@ -1288,8 +1288,74 @@ func TestRunSiteEnvShellAndWpPreflightWithoutRunningRemoteCommands(t *testing.T)
 			}
 		}
 	})
-	if !strings.Contains(wpStderr, "Remote site env wp is not implemented yet; no command was run.") {
+	if !strings.Contains(wpStderr, `Remote site env wp is not implemented for provider "kinsta"; no command was run.`) {
 		t.Fatalf("site env wp stderr = %q", wpStderr)
+	}
+}
+
+func TestRunSiteEnvShellAndWpRunSSHForLinode(t *testing.T) {
+	configDir := t.TempDir()
+	stateDir := t.TempDir()
+	t.Setenv("NF_CONFIG_HOME", configDir)
+	t.Setenv("NF_STATE_HOME", stateDir)
+	if err := saveGlobalConfig(map[string]string{"linode_default_user": "nonfiction"}); err != nil {
+		t.Fatalf("saveGlobalConfig() error = %v", err)
+	}
+	if err := state.SaveStateRecords("providers", []map[string]any{{"provider": "linode", "targets": []map[string]any{{"name": "app1-linode", "provider": "linode", "hostname": "app1-linode.nonfiction.dev", "ssh": map[string]any{"user": "nonfiction", "host": "app1-linode.nonfiction.dev"}}}}}); err != nil {
+		t.Fatalf("SaveStateRecords(providers) error = %v", err)
+	}
+	if err := state.SaveStateRecords("sites", []map[string]any{
+		{"provider": "linode", "site_id": "foobar", "env": "live", "target": "app1-linode", "server": "app1-linode", "hostname": "foobar.app1-linode.nonfiction.dev", "url": "https://foobar.app1-linode.nonfiction.dev", "path": "/var/www/sites/foobar"},
+		{"provider": "linode", "site_id": "foobar", "env": "staging", "target": "app1-linode", "server": "app1-linode", "hostname": "foobar-staging.app1-linode.nonfiction.dev", "url": "https://foobar-staging.app1-linode.nonfiction.dev", "path": "/var/www/sites/foobar_staging"},
+	}); err != nil {
+		t.Fatalf("SaveStateRecords(sites) error = %v", err)
+	}
+	var commands [][]string
+	oldRunSSHCommand := runSSHCommandFn
+	runSSHCommandFn = func(args []string) error {
+		commands = append(commands, append([]string(nil), args...))
+		return nil
+	}
+	t.Cleanup(func() { runSSHCommandFn = oldRunSSHCommand })
+
+	shellOutput := captureStdout(t, func() {
+		if got := Run([]string{"site", "env", "shell", "foobar"}); got != 0 {
+			t.Fatalf("Run(site env shell) = %d, want 0", got)
+		}
+	})
+	for _, want := range []string{"Site env shell preflight:", "env:      live", "target:   app1-linode", "> ssh -t -p 22 nonfiction@foobar.app1-linode.nonfiction.dev", "cd /var/www/sites/foobar"} {
+		if !strings.Contains(shellOutput, want) {
+			t.Fatalf("site env shell output missing %q:\n%s", want, shellOutput)
+		}
+	}
+	if len(commands) != 1 {
+		t.Fatalf("shell command = %#v", commands)
+	}
+	shellCommand := strings.Join(commands[0], " ")
+	for _, want := range []string{"ssh -t -p 22 nonfiction@foobar.app1-linode.nonfiction.dev", "cd /var/www/sites/foobar", "exec ${SHELL:-/bin/bash} -i"} {
+		if !strings.Contains(shellCommand, want) {
+			t.Fatalf("shell command missing %q: %#v", want, commands[0])
+		}
+	}
+
+	wpOutput := captureStdout(t, func() {
+		if got := Run([]string{"site", "env", "wp", "foobar", "--staging", "plugin", "list"}); got != 0 {
+			t.Fatalf("Run(site env wp) = %d, want 0", got)
+		}
+	})
+	for _, want := range []string{"Site env wp preflight:", "env:      staging", "wp args:  plugin list", "> ssh -p 22 nonfiction@foobar-staging.app1-linode.nonfiction.dev"} {
+		if !strings.Contains(wpOutput, want) {
+			t.Fatalf("site env wp output missing %q:\n%s", want, wpOutput)
+		}
+	}
+	if len(commands) != 2 {
+		t.Fatalf("commands len = %d, want 2: %#v", len(commands), commands)
+	}
+	wpCommand := strings.Join(commands[1], " ")
+	for _, want := range []string{"ssh -p 22 nonfiction@foobar-staging.app1-linode.nonfiction.dev", "cd /var/www/sites/foobar_staging", "sudo -u www-data wp --path=/var/www/sites/foobar_staging plugin list"} {
+		if !strings.Contains(wpCommand, want) {
+			t.Fatalf("wp command missing %q: %#v", want, commands[1])
+		}
 	}
 }
 
