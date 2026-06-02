@@ -15,6 +15,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/linode/linodego"
 	"github.com/nonfiction/nf/internal/config"
 	"github.com/nonfiction/nf/internal/state"
 )
@@ -450,6 +451,130 @@ func TestRunProviderCheckRunsHealthcheckAndSavesMetadata(t *testing.T) {
 	}
 }
 
+func TestLinodeInstanceTargetRecordDerivesHostnameAndSSH(t *testing.T) {
+	configDir := t.TempDir()
+	t.Setenv("NF_CONFIG_HOME", configDir)
+	if err := saveGlobalConfig(map[string]string{"base_domain": "nonfiction.dev", "linode_default_user": "nonfiction"}); err != nil {
+		t.Fatalf("saveGlobalConfig() error = %v", err)
+	}
+	instance := linodego.Instance{
+		ID:     98222343,
+		Label:  "app1-linode",
+		Region: "ca-central",
+		Status: linodego.InstanceRunning,
+		IPv4:   []*net.IP{ptrTo(net.ParseIP("198.51.100.10"))},
+		Tags:   []string{"nf"},
+	}
+
+	record := linodeInstanceTargetRecord(instance)
+	if got, want := recordValueString(record["hostname"]), "app1-linode.nonfiction.dev"; got != want {
+		t.Fatalf("hostname = %q, want %q", got, want)
+	}
+	if got, want := serverSSHHost(record), "app1-linode.nonfiction.dev"; got != want {
+		t.Fatalf("serverSSHHost() = %q, want %q", got, want)
+	}
+	if got, want := serverSSHUser(record), "nonfiction"; got != want {
+		t.Fatalf("serverSSHUser() = %q, want %q", got, want)
+	}
+	if got, want := recordValueString(record["ipv4"]), "198.51.100.10"; got != want {
+		t.Fatalf("ipv4 = %q, want %q", got, want)
+	}
+	if got, want := recordValueString(record["status"]), "running"; got != want {
+		t.Fatalf("status = %q, want %q", got, want)
+	}
+}
+
+func ptrTo[T any](value T) *T {
+	return &value
+}
+
+func TestCheckKinstaProviderSetsTargetStatusFromAPIValidation(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/validate" {
+			t.Fatalf("request path = %q, want /validate", r.URL.Path)
+		}
+		if got, want := r.Header.Get("Authorization"), "Bearer kinsta-token-secret"; got != want {
+			t.Fatalf("Authorization = %q, want %q", got, want)
+		}
+		_, _ = io.WriteString(w, `{"name":"nf","company":"company-123","status":"active"}`)
+	}))
+	t.Cleanup(server.Close)
+	t.Setenv("KINSTA_BASE_URL", server.URL)
+	t.Setenv("KINSTA_API_KEY", "kinsta-token-secret")
+
+	result, err := checkKinstaProvider()
+	if err != nil {
+		t.Fatalf("checkKinstaProvider() error = %v", err)
+	}
+	targets := targetMaps(result.Record["targets"])
+	if len(targets) != 1 {
+		t.Fatalf("targets len = %d, want 1", len(targets))
+	}
+	if got, want := recordValueString(targets[0]["status"]), "active"; got != want {
+		t.Fatalf("target status = %q, want %q", got, want)
+	}
+}
+
+func TestCheckProvidersAfterConfigInitPopulatesTargets(t *testing.T) {
+	configDir := t.TempDir()
+	t.Setenv("NF_CONFIG_HOME", configDir)
+	stateDir := t.TempDir()
+	t.Setenv("NF_STATE_HOME", stateDir)
+	if err := saveGlobalConfig(map[string]string{"base_domain": "nonfiction.dev"}); err != nil {
+		t.Fatalf("saveGlobalConfig() error = %v", err)
+	}
+	t.Setenv("DNSIMPLE_TOKEN", "dnsimple-token-secret")
+	t.Setenv("KINSTA_API_KEY", "kinsta-token-secret")
+	t.Setenv("LINODE_TOKEN", "linode-token-secret")
+
+	oldDNSimple := providerCheckDNSimpleFn
+	oldKinsta := providerCheckKinstaFn
+	oldLinode := providerCheckLinodeFn
+	t.Cleanup(func() {
+		providerCheckDNSimpleFn = oldDNSimple
+		providerCheckKinstaFn = oldKinsta
+		providerCheckLinodeFn = oldLinode
+	})
+	providerCheckDNSimpleFn = func() (providerHealthResult, error) {
+		return providerHealthResult{Provider: "dnsimple", Details: map[string]string{"zone_active": "true"}, Record: map[string]any{"provider": "dnsimple", "targets": []map[string]any{}}}, nil
+	}
+	providerCheckKinstaFn = func() (providerHealthResult, error) {
+		return providerHealthResult{Provider: "kinsta", Details: map[string]string{"status": "active"}, Record: map[string]any{"provider": "kinsta", "targets": []map[string]any{{"id": "kinsta", "name": "kinsta", "provider": "kinsta"}}}}, nil
+	}
+	providerCheckLinodeFn = func() (providerHealthResult, error) {
+		return providerHealthResult{Provider: "linode", Details: map[string]string{"targets": "1"}, Record: map[string]any{"provider": "linode", "targets": []map[string]any{{"id": "98222343", "name": "app1-linode", "provider": "linode", "status": "running"}}}}, nil
+	}
+
+	output := captureStdout(t, func() {
+		if err := checkProvidersAfterConfigInit(); err != nil {
+			t.Fatalf("checkProvidersAfterConfigInit() error = %v", err)
+		}
+	})
+	for _, want := range []string{"Checking providers...", "Provider dnsimple healthcheck passed.", "Provider kinsta healthcheck passed.", "Provider linode healthcheck passed."} {
+		if !strings.Contains(output, want) {
+			t.Fatalf("checkProvidersAfterConfigInit() output missing %q:\n%s", want, output)
+		}
+	}
+	targets, err := cachedTargets()
+	if err != nil {
+		t.Fatalf("cachedTargets() error = %v", err)
+	}
+	if len(targets) != 2 {
+		t.Fatalf("cachedTargets() len = %d, want 2: %#v", len(targets), targets)
+	}
+	for _, want := range []string{"kinsta", "app1-linode"} {
+		found := false
+		for _, target := range targets {
+			if recordValueString(target["name"]) == want || recordValueString(target["id"]) == want {
+				found = true
+			}
+		}
+		if !found {
+			t.Fatalf("cachedTargets() missing %q: %#v", want, targets)
+		}
+	}
+}
+
 func TestRunProviderCheckFailsWhenRequiredConfigMissing(t *testing.T) {
 	configDir := t.TempDir()
 	t.Setenv("NF_CONFIG_HOME", configDir)
@@ -539,6 +664,11 @@ func TestCheckDNSimpleProviderValidatesManagedDomain(t *testing.T) {
 func TestRunTargetListAndShowUseStateTargets(t *testing.T) {
 	stateDir := t.TempDir()
 	t.Setenv("NF_STATE_HOME", stateDir)
+	oldKinsta := providerCheckKinstaFn
+	providerCheckKinstaFn = func() (providerHealthResult, error) {
+		return providerHealthResult{Provider: "kinsta", Record: map[string]any{"provider": "kinsta", "targets": []map[string]any{{"id": "kinsta", "provider": "kinsta", "status": "active"}}}}, nil
+	}
+	t.Cleanup(func() { providerCheckKinstaFn = oldKinsta })
 	providers := []map[string]any{
 		{
 			"provider":   "kinsta",
@@ -548,6 +678,7 @@ func TestRunTargetListAndShowUseStateTargets(t *testing.T) {
 				"name":       "kinsta",
 				"provider":   "kinsta",
 				"company_id": "company-123",
+				"status":     "active",
 			}},
 		},
 		{
@@ -580,6 +711,9 @@ func TestRunTargetListAndShowUseStateTargets(t *testing.T) {
 			t.Fatalf("target list output missing %q:\n%s", want, listOutput)
 		}
 	}
+	if strings.Contains(listOutput, "ssh host") {
+		t.Fatalf("target list output included removed ssh host column:\n%s", listOutput)
+	}
 
 	showOutput := captureStdout(t, func() {
 		if got := Run([]string{"target", "show", "app1-linode"}); got != 0 {
@@ -590,6 +724,57 @@ func TestRunTargetListAndShowUseStateTargets(t *testing.T) {
 		if !strings.Contains(showOutput, want) {
 			t.Fatalf("target show output missing %q:\n%s", want, showOutput)
 		}
+	}
+}
+
+func TestRunTargetListShowsLiveLinodeSSHStatus(t *testing.T) {
+	stateDir := t.TempDir()
+	t.Setenv("NF_STATE_HOME", stateDir)
+	providers := []map[string]any{{
+		"provider": "linode",
+		"targets": []map[string]any{{
+			"name":     "app1-linode",
+			"provider": "linode",
+			"hostname": "app1-linode.nonfiction.dev",
+			"status":   "running",
+		}},
+	}}
+	data, err := json.MarshalIndent(providers, "", "  ")
+	if err != nil {
+		t.Fatalf("MarshalIndent() error = %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(stateDir, "providers.json"), append(data, '\n'), 0o644); err != nil {
+		t.Fatalf("WriteFile() error = %v", err)
+	}
+
+	oldSSH := targetSSHReachableFn
+	targetSSHReachableFn = func(record map[string]any) bool {
+		return recordValueString(record["name"]) == "app1-linode"
+	}
+	t.Cleanup(func() { targetSSHReachableFn = oldSSH })
+
+	output := captureStdout(t, func() {
+		if got := Run([]string{"target", "list"}); got != 0 {
+			t.Fatalf("Run(target list) = %d, want 0", got)
+		}
+	})
+	if !strings.Contains(output, "reachable") || strings.Contains(output, "running") {
+		t.Fatalf("target list output = %q, want live reachable status", output)
+	}
+}
+
+func TestProviderTargetRecordsBackfillsKinstaStatus(t *testing.T) {
+	providers := []map[string]any{{
+		"provider": "kinsta",
+		"status":   "active",
+		"targets":  []map[string]any{{"id": "kinsta", "name": "kinsta"}},
+	}}
+	targets := providerTargetRecords(providers)
+	if len(targets) != 1 {
+		t.Fatalf("providerTargetRecords() len = %d, want 1", len(targets))
+	}
+	if got, want := recordValueString(targets[0]["status"]), "active"; got != want {
+		t.Fatalf("target status = %q, want %q", got, want)
 	}
 }
 
