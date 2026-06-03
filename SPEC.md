@@ -231,13 +231,19 @@ nf init
 nf provider ...
 nf target ...
 nf site ...
-nf site env ...
-nf remote ...
-nf theme ...
-nf env ...
 nf config ...
 nf password ...
 ```
+
+Project-only command groups are available when the current repo has `.nf/` next to `.git`:
+
+```text
+nf remote ...
+nf theme ...
+nf env ...
+```
+
+`nf site env ...` hangs under `nf site ...` in all contexts.
 
 Old public routes intentionally removed:
 
@@ -261,11 +267,16 @@ Do not add old compatibility routes unless explicitly requested.
 * [x] `nf target list`
 * [x] `nf target show <target>`
 * [x] `nf target add linode <name>` create/ensure target scaffold
+* [x] `nf target remove <target>` remove an empty Linode target
+* [x] `nf site add <target> <site>` create live and staging env scaffolds on a target
 * [x] `nf site refresh` target-based scaffold
 * [x] `nf site list [--refresh]`
 * [x] `nf site show <site-id-or-alias>`
+* [x] `nf site password [site]`
+* [x] `nf site remove [site]`
 * [x] `nf site env list [site-id]`
-* [x] `nf site env show <site-id> <env>`
+* [x] `nf site env show [site-id] [--live|--staging]`
+* [x] `nf site env shell/wp ...` preflight against cached site/env state
 * [x] `nf remote add <name> <site-id> <env>` with cache validation
 * [x] `nf remote show <name>`
 * [x] `nf remote remove <name>`
@@ -288,6 +299,8 @@ Do not add old compatibility routes unless explicitly requested.
 * [x] `nf config set-base-domain <domain>`
 * [x] `nf config set-default-wp-email <email>`
 * [x] `nf config set-default-wp-user <user>`
+* [x] `nf config set-kinsta-default-php <version>`
+* [x] `nf config set-kinsta-default-region <region>`
 * [x] `nf config set-linode-default-region <region>`
 * [x] `nf config set-linode-default-type <type>`
 * [x] `nf config set-linode-default-image <image>`
@@ -300,8 +313,8 @@ Do not add old compatibility routes unless explicitly requested.
 ### Preflight-only / scaffolded
 
 * [ ] `nf site refresh`: currently lists cached targets; remote target site discovery not implemented yet
-* [ ] `nf site env shell <site-id> <env>`: validates cache, does not execute remote shell yet
-* [ ] `nf site env wp <site-id> <env> -- <args>`: validates cache, does not run remote wp-cli yet
+* [ ] `nf site env shell [site-id] [--live|--staging]`: validates cache, does not execute remote shell yet
+* [ ] `nf site env wp <site-id> [--live|--staging] <cmd>`: validates cache, does not run remote wp-cli yet
 * [ ] `nf env push <remote>`: validates repo remote/cache, does not sync yet
 * [ ] `nf env pull <remote>`: validates repo remote/cache, does not sync yet
 

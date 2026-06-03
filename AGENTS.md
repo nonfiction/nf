@@ -7,7 +7,9 @@ Use this file for repo shortcuts and learned implementation gotchas. Put durable
 * `nf` is a Go CLI.
 * Executable entrypoint: `cmd/nf/main.go`.
 * CLI dispatcher: `internal/cli.Run`.
-* Primary command groups: `init`, `provider`, `target`, `site`, `site env`, `remote`, `theme`, `env`, `config`, `password`.
+* Primary always-visible command groups: `init`, `provider`, `target`, `site`, `config`, `password`.
+* Project-only command groups: `remote`, `theme`, `env`. They appear only when the current repo has `.nf/` next to `.git`.
+* `site env` hangs under `site`, not as a top-level group.
 * Do not re-add public `nf server ...`, `nf instance ...`, or top-level local env aliases (`nf up/down/logs/reset/info/shell/wp`) unless explicitly requested.
 
 ## Fast checks
@@ -23,8 +25,15 @@ CLI smoke checks:
 go run ./cmd/nf --help
 go run ./cmd/nf provider list
 go run ./cmd/nf site list
-go run ./cmd/nf env help
 go run ./cmd/nf site env help
+```
+
+Project-context smoke checks need an `nf` project repo with `.nf/project.json` next to `.git`:
+
+```sh
+go run ./cmd/nf theme help
+go run ./cmd/nf remote help
+go run ./cmd/nf env help
 ```
 
 Provider checks call live APIs when credentials are present:
@@ -85,8 +94,12 @@ Local state is disposable. Provider truth is canonical remotely.
 * DNSimple provider check validates it can read the configured `base_domain` zone and writes zero targets.
 * Kinsta provider check writes one target named `kinsta`.
 * Linode provider check discovers targets from Linode instances tagged `nf`.
+* `nf target remove <target>` removes an empty Linode target.
 * `nf target list/show` read targets from `providers.json`; legacy `servers.json` fallback may remain during cache migration.
+* `nf site add <target> <site>` creates live and staging WordPress envs on a target.
 * `nf site refresh` fans out from cached targets. It must not claim to refresh providers.
+* `nf site password [site]` shows only the derived admin password.
+* `nf site remove [site]` removes a Linode site and deletes its env data.
 * Remote target site discovery is not implemented yet.
 * Linode-hosted site/env truth is intended to live on each target at `/var/lib/nf/sites.json`, read over SSH as the standard user.
 * `nf remote add` validates the requested site/env exists in local cache before writing `.nf/project.json`.

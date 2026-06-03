@@ -27,20 +27,29 @@ Nix flakes build from the git source snapshot. Stage newly added source files be
 
 ## Commands
 
+Top-level help is context-sensitive.
+
+Always available:
+
 ```text
 nf
 
 Commands:
   init          initialize project metadata
   provider      manage provider integrations
-  target        list and show deployable targets
+  target        refresh, list, and show deployable targets
   site          refresh, list, and show remote sites/envs
-  remote        manage repo deploy remotes
-  theme         package artifacts and run theme tasks
-  env           manage the local development env
   config        manage global config
   password      derive passwords
   help          show help
+```
+
+Inside an `nf` project repo with `.nf/` next to `.git`, help also shows:
+
+```text
+  remote        manage repo deploy remotes
+  theme         package artifacts and run theme tasks
+  env           manage the local development env
 ```
 
 Removed old public routes:
@@ -56,6 +65,8 @@ Create repo metadata:
 ```sh
 nf init
 ```
+
+After `nf init`, run project-local commands from that repo so `theme`, `env`, and `remote` are available.
 
 Start local WordPress:
 
@@ -217,6 +228,8 @@ nf config init
 nf config set-base-domain nonfiction.dev
 nf config set-default-wp-email dev@example.com
 nf config set-default-wp-user admin
+nf config set-kinsta-default-php 8.3
+nf config set-kinsta-default-region us-central1
 nf config set-linode-default-region us-east
 nf config set-linode-default-type g6-standard-1
 nf config set-linode-default-image linode/ubuntu24.04
@@ -242,16 +255,20 @@ nf provider list
 nf provider show <provider>
 nf provider check <provider>
 nf target add linode <name> [--region region] [--type type] [--image image] [--user user] [--keys all] [--execute --yes] [--wait]
+nf target remove <target> [--dry-run] [--execute --yes]
 nf target refresh
 nf target list
 nf target show <target>
+nf site add <target> <site> [--region region] [--php version] [--execute --yes]
 nf site refresh
 nf site list [--refresh]
 nf site show <site-id-or-alias>
+nf site password [site-id-or-alias]
+nf site remove [site-id-or-alias] [--dry-run] [--execute --yes]
 nf site env list [site-id]
-nf site env show <site-id> <env>
-nf site env shell <site-id> <env>
-nf site env wp <site-id> <env> -- <args>
+nf site env show [site-id] [--live|--staging] [--json]
+nf site env shell [site-id] [--live|--staging]
+nf site env wp <site-id> [--live|--staging] <cmd>
 nf remote add <name> <site-id> <env>
 nf remote show <name>
 nf remote remove <name>
@@ -275,10 +292,14 @@ Current behavior:
 * `nf provider check` calls safe read-only provider health endpoints and writes `providers.json`.
 * `nf provider show <provider>` reads cached provider metadata.
 * `nf target add linode <name>` creates or ensures a Linode target named `<name>-linode`, tags it `nf`, creates host and wildcard DNS records under `base_domain`, queues HTTPS setup on the target with a systemd retry timer, and records the target under the Linode provider in `providers.json`. Add `--wait` to keep the CLI attached through SSH, TLS, and health checks.
+* `nf target remove <target>` removes an empty Linode target.
 * `nf target refresh` updates target records from configured target providers so added and removed targets are reflected in `providers.json`.
 * `nf target list/show` read target records from `providers.json`, with a legacy `servers.json` fallback.
+* `nf site add <target> <site>` creates live and staging WordPress envs on a target.
 * `nf site refresh` discovers sites from the cached target list. Remote target site discovery is not implemented yet.
 * `nf site list/show` and `nf site env list/show` read the local disposable site cache for now.
+* `nf site password [site]` shows the derived admin password only.
+* `nf site remove [site]` removes a Linode site and deletes its env data.
 * `nf remote add` validates against the cache, then repo remotes are stored in `.nf/project.json` under `deploy.remotes`.
 * `nf site env shell/wp ...` currently preflights against the cache, then stops without running remote commands.
 * `nf env push/pull <remote>` currently preflights against the cache, then stops without syncing data.
