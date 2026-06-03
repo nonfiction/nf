@@ -3511,6 +3511,10 @@ func cmdShowSiteEnv(siteID, env string, jsonOutput bool) int {
 		fmt.Fprintln(os.Stderr, err)
 		return 1
 	}
+	if err := enrichSiteAdminCredentials(out, record); err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		return 1
+	}
 	if !jsonOutput {
 		printSiteEnvDetails(out)
 		return 0
@@ -3554,11 +3558,11 @@ func printSiteEnvDetails(out map[string]any) {
 		keys  []string
 	}{
 		{label: "URL", keys: []string{"url", "site_url", "home_url"}},
-		{label: "Hostname", keys: []string{"hostname"}},
 		{label: "Path", keys: []string{"path", "root", "document_root"}},
 		{label: "Database", keys: []string{"database", "db_name"}},
+		{label: "Admin username", keys: []string{"resolved_admin_user", "admin_user", "admin_username", "wp_admin_user", "wordpress_admin_user"}},
+		{label: "Admin password", keys: []string{"resolved_admin_password", "admin_password", "wp_admin_password", "wordpress_admin_password"}},
 		{label: "Branch", keys: []string{"branch"}},
-		{label: "Target summary", keys: []string{"resolved_target_summary"}},
 		{label: "Kinsta site ID", keys: []string{"kinsta_site_id"}},
 		{label: "Kinsta environment ID", keys: []string{"kinsta_environment_id"}},
 	} {
@@ -3566,6 +3570,59 @@ func printSiteEnvDetails(out map[string]any) {
 			fmt.Printf("%s: %s\n", field.label, value)
 		}
 	}
+}
+
+func enrichSiteAdminCredentials(out, record map[string]any) error {
+	if user := firstRecordString(record, "admin_user", "admin_username", "wp_admin_user", "wordpress_admin_user"); user != "" {
+		out["resolved_admin_user"] = user
+	} else {
+		values, err := loadGlobalConfig()
+		if err != nil {
+			return err
+		}
+		out["resolved_admin_user"] = firstNonEmpty(values["default_wp_user"], "admin")
+	}
+
+	password, err := siteAdminPassword(record)
+	if err != nil {
+		if _, ok := err.(passwords.PasswordError); ok {
+			return nil
+		}
+		return err
+	}
+	if password != "" {
+		out["resolved_admin_password"] = password
+	}
+	return nil
+}
+
+func siteAdminPassword(record map[string]any) (string, error) {
+	if password := firstRecordString(record, "admin_password", "wp_admin_password", "wordpress_admin_password"); password != "" {
+		return password, nil
+	}
+	slug := sitePasswordSlug(record)
+	if slug == "" {
+		return "", nil
+	}
+	salt, err := passwords.SecretSalt()
+	if err != nil {
+		return "", err
+	}
+	return passwords.DerivePassword(slug, "wp-admin", salt), nil
+}
+
+func sitePasswordSlug(record map[string]any) string {
+	if slug := firstRecordString(record, "password_scope", "admin_password_scope", "name", "site_name", "project", "project_slug", "wordpress_site"); slug != "" {
+		return slug
+	}
+	siteID := siteEnvSiteID(record)
+	target := siteProviderTarget(record)
+	for _, suffix := range []string{"." + target, "-" + target} {
+		if target != "" && strings.HasSuffix(siteID, suffix) {
+			return strings.TrimSuffix(siteID, suffix)
+		}
+	}
+	return siteID
 }
 
 func cachedSiteEnv(siteID, env string) (map[string]any, []map[string]any, error) {
@@ -4134,6 +4191,52 @@ func cmdShowSite(needle string, jsonOutput bool) int {
 	return 0
 }
 
+func cmdSitePassword(needle string) int {
+	resolved, _, projectFileExists, targetAliasUsed, err := resolveSiteTarget(needle)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		return 1
+	}
+	bundle, err := state.LoadStateBundle()
+	if err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		return 1
+	}
+	records := siteRecordsByID(bundle.Sites, resolved)
+	if len(records) == 0 {
+		if targetAliasUsed {
+			fmt.Fprintf(os.Stderr, "deploy.targets.%s resolves to %q, but no site target matched that name.\n", needle, resolved)
+			return 1
+		}
+		if projectFileExists {
+			fmt.Fprintf(os.Stderr, "No site matched %q. Add deploy.targets.%s in .nf/project.json or create a site target with that name.\n", needle, needle)
+			return 1
+		}
+		fmt.Fprintf(os.Stderr, "No site matched %q.\n", needle)
+		return 1
+	}
+	password, err := siteAdminPassword(preferredPasswordSiteRecord(records))
+	if err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		return 1
+	}
+	if password == "" {
+		fmt.Fprintf(os.Stderr, "Site %q has no derivable admin password.\n", resolved)
+		return 1
+	}
+	fmt.Println(password)
+	return 0
+}
+
+func preferredPasswordSiteRecord(records []map[string]any) map[string]any {
+	for _, record := range records {
+		if normalizedRecordString(siteEnvName(record)) == "live" {
+			return record
+		}
+	}
+	return records[0]
+}
+
 func printSiteDetails(out map[string]any) {
 	fmt.Printf("Site: %s\n", recordValueString(out["site_id"]))
 	if name := recordValueString(out["name"]); name != "" {
@@ -4258,6 +4361,10 @@ func chooseSiteForShow() (string, error) {
 
 func chooseSiteForRemove() (string, error) {
 	return chooseSite("remove")
+}
+
+func chooseSiteForPassword() (string, error) {
+	return chooseSite("show password for")
 }
 
 func chooseSiteForEnvList() (string, error) {
@@ -4883,6 +4990,7 @@ func runSiteHelp() int {
 		"refresh             refresh local inventory cache",
 		"list                list sites",
 		"show [site] [--json]   show a site",
+		"password [site]     show admin password only",
 		"remove [site] [flags]   remove a Linode site and delete its env data",
 		"env                 list, show, shell into, or run wp-cli against remote envs",
 	})
@@ -6732,6 +6840,24 @@ func runSite(argv []string) int {
 			needle = selected
 		}
 		return cmdShowSite(needle, jsonOutput)
+	case "password":
+		if len(argv) > 2 {
+			fmt.Fprintln(os.Stderr, "site password takes at most one site")
+			return 1
+		}
+		needle := ""
+		if len(argv) == 2 {
+			needle = argv[1]
+		}
+		if needle == "" {
+			selected, err := chooseSiteForPassword()
+			if err != nil {
+				fmt.Fprintln(os.Stderr, err)
+				return 1
+			}
+			needle = selected
+		}
+		return cmdSitePassword(needle)
 	case "remove":
 		needle, opts, err := parseRemoveSiteArgs(argv[1:])
 		if err != nil {

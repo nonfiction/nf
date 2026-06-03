@@ -17,6 +17,7 @@ import (
 
 	"github.com/linode/linodego"
 	"github.com/nonfiction/nf/internal/config"
+	"github.com/nonfiction/nf/internal/passwords"
 	"github.com/nonfiction/nf/internal/state"
 	"github.com/nonfiction/nf/internal/ui"
 )
@@ -2069,6 +2070,7 @@ func TestRunSiteEnvListAndShowUseCachedSites(t *testing.T) {
 func TestRunSiteEnvShowLinodeUsesCachedTargets(t *testing.T) {
 	stateDir := t.TempDir()
 	t.Setenv("NF_STATE_HOME", stateDir)
+	t.Setenv("NF_PASSWORD_SALT", "test-salt")
 	if err := state.SaveStateRecords("providers", []map[string]any{{"provider": "linode", "targets": []map[string]any{{"name": "app2-linode", "provider": "linode", "hostname": "app2-linode.nonfiction.dev", "ssh": map[string]any{"user": "nonfiction", "host": "app2-linode.nonfiction.dev"}}}}}); err != nil {
 		t.Fatalf("SaveStateRecords(providers) error = %v", err)
 	}
@@ -2084,9 +2086,15 @@ func TestRunSiteEnvShowLinodeUsesCachedTargets(t *testing.T) {
 			t.Fatalf("Run(site env show) = %d, want 0", got)
 		}
 	})
-	for _, want := range []string{"Site: happytents.app2-linode", "Env: staging", "Provider: linode", "Target: app2-linode", "URL: https://happytents-staging.app2-linode.nonfiction.dev", "Target summary: app2-linode / linode / ssh nonfiction@app2-linode.nonfiction.dev"} {
+	adminPassword := passwords.DerivePassword("happytents", "wp-admin", "test-salt")
+	for _, want := range []string{"Site: happytents.app2-linode", "Env: staging", "Provider: linode", "Target: app2-linode", "URL: https://happytents-staging.app2-linode.nonfiction.dev", "Admin username: admin", "Admin password: " + adminPassword} {
 		if !strings.Contains(showOutput, want) {
 			t.Fatalf("site env show output missing %q:\n%s", want, showOutput)
+		}
+	}
+	for _, notWant := range []string{"Hostname:", "Target summary:"} {
+		if strings.Contains(showOutput, notWant) {
+			t.Fatalf("site env show output contains %q:\n%s", notWant, showOutput)
 		}
 	}
 	jsonOutput := captureStdout(t, func() {
@@ -2094,10 +2102,66 @@ func TestRunSiteEnvShowLinodeUsesCachedTargets(t *testing.T) {
 			t.Fatalf("Run(site env show --json) = %d, want 0", got)
 		}
 	})
-	for _, want := range []string{`"resolved_site": "happytents.app2-linode"`, `"resolved_env": "staging"`, `"resolved_target": "app2-linode"`, `"resolved_target_summary": "app2-linode / linode / ssh nonfiction@app2-linode.nonfiction.dev"`} {
+	for _, want := range []string{`"resolved_site": "happytents.app2-linode"`, `"resolved_env": "staging"`, `"resolved_target": "app2-linode"`, `"resolved_admin_user": "admin"`, `"resolved_admin_password": "` + adminPassword + `"`, `"resolved_target_summary": "app2-linode / linode / ssh nonfiction@app2-linode.nonfiction.dev"`} {
 		if !strings.Contains(jsonOutput, want) {
 			t.Fatalf("site env show --json output missing %q:\n%s", want, jsonOutput)
 		}
+	}
+}
+
+func TestRunSitePasswordPrintsAdminPasswordOnly(t *testing.T) {
+	stateDir := t.TempDir()
+	t.Setenv("NF_STATE_HOME", stateDir)
+	t.Setenv("NF_PASSWORD_SALT", "test-salt")
+	if err := state.SaveStateRecords("sites", []map[string]any{
+		{"provider": "linode", "site_id": "happytents.app2-linode", "name": "happytents", "env": "live", "target": "app2-linode", "url": "https://happytents.app2-linode.nonfiction.dev"},
+		{"provider": "linode", "site_id": "happytents.app2-linode", "name": "happytents", "env": "staging", "target": "app2-linode", "url": "https://happytents-staging.app2-linode.nonfiction.dev"},
+	}); err != nil {
+		t.Fatalf("SaveStateRecords(sites) error = %v", err)
+	}
+
+	want := passwords.DerivePassword("happytents", "wp-admin", "test-salt") + "\n"
+	output := captureStdout(t, func() {
+		if got := Run([]string{"site", "password", "happytents.app2-linode"}); got != 0 {
+			t.Fatalf("Run(site password) = %d, want 0", got)
+		}
+	})
+	if output != want {
+		t.Fatalf("site password output = %q, want %q", output, want)
+	}
+}
+
+func TestRunSitePasswordWithoutSitePromptsPicker(t *testing.T) {
+	stateDir := t.TempDir()
+	t.Setenv("NF_STATE_HOME", stateDir)
+	t.Setenv("NF_PASSWORD_SALT", "test-salt")
+	if err := state.SaveStateRecords("sites", []map[string]any{{"provider": "linode", "site_id": "client.app1-linode", "name": "client", "env": "live", "target": "app1-linode"}}); err != nil {
+		t.Fatalf("SaveStateRecords(sites) error = %v", err)
+	}
+	oldSelect := siteSelectFn
+	var selectTitle string
+	var selectOptions []ui.SelectOption
+	siteSelectFn = func(title string, options []ui.SelectOption) (string, error) {
+		selectTitle = title
+		selectOptions = append([]ui.SelectOption(nil), options...)
+		return "client.app1-linode", nil
+	}
+	t.Cleanup(func() { siteSelectFn = oldSelect })
+
+	want := passwords.DerivePassword("client", "wp-admin", "test-salt") + "\n"
+	output := captureStdout(t, func() {
+		if got := Run([]string{"site", "password"}); got != 0 {
+			t.Fatalf("Run(site password) = %d, want 0", got)
+		}
+	})
+	if selectTitle != "Choose a site to show password for" {
+		t.Fatalf("select title = %q", selectTitle)
+	}
+	if len(selectOptions) != 1 || selectOptions[0] != (ui.SelectOption{Value: "client.app1-linode", Label: "client.app1-linode"}) {
+		t.Fatalf("select options = %#v", selectOptions)
+	}
+	if output != want {
+		t.Fatalf("site password output = %q, want %q", output, want)
 	}
 }
 
