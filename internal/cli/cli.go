@@ -1408,6 +1408,14 @@ func provisionDNSRecordFQDN(target serverDNSDeleteTarget) string {
 	}
 }
 
+func isDNSimpleRecordAlreadyAbsentError(err error) bool {
+	if err == nil {
+		return false
+	}
+	message := strings.ToLower(err.Error())
+	return strings.Contains(message, "dnsimple") && strings.Contains(message, "404") && strings.Contains(message, "not found")
+}
+
 func deleteServerDNSRecord(target serverDNSDeleteTarget) error {
 	switch target.provider {
 	case "", "none":
@@ -1417,7 +1425,14 @@ func deleteServerDNSRecord(target serverDNSDeleteTarget) error {
 		if strings.TrimSpace(token) == "" {
 			return fmt.Errorf("Expected DNSIMPLE_TOKEN in the environment or %s.", config.EnvFile())
 		}
-		return deleteDNSRecordFn(token, target.accountID, target.zone, target.name)
+		if err := deleteDNSRecordFn(token, target.accountID, target.zone, target.name); err != nil {
+			if isDNSimpleRecordAlreadyAbsentError(err) {
+				fmt.Printf("DNSimple record %s already absent (%v)\n", provisionDNSRecordFQDN(target), err)
+				return nil
+			}
+			return err
+		}
+		return nil
 	default:
 		return fmt.Errorf("unsupported DNS provider %q for server deletion", target.provider)
 	}
@@ -1858,25 +1873,17 @@ func cmdRemoveTarget(needle string, dryRun, execute, yes, nonInteractive bool) i
 			matchedSites = append(matchedSites, site)
 		}
 	}
-	if len(matchedSites) > 0 {
-		names := make([]string, 0, len(matchedSites))
-		seenNames := map[string]bool{}
-		for _, site := range matchedSites {
-			summary := siteEnvDisplaySite(site)
-			if summary == "" {
-				summary = siteSummary(site)
-			}
-			if summary != "" && !seenNames[summary] {
-				seenNames[summary] = true
-				names = append(names, summary)
-			}
+	relatedSiteNames := make([]string, 0, len(matchedSites))
+	seenRelatedSites := map[string]bool{}
+	for _, site := range matchedSites {
+		summary := siteEnvDisplaySite(site)
+		if summary == "" {
+			summary = siteSummary(site)
 		}
-		if len(names) == 0 {
-			fmt.Fprintf(os.Stderr, "Target %q contains site envs; remove or move those sites before removing the target.\n", needle)
-		} else {
-			fmt.Fprintf(os.Stderr, "Target %q contains %d site(s): %s. Remove or move those sites before removing the target.\n", needle, len(names), strings.Join(names, ", "))
+		if summary != "" && !seenRelatedSites[summary] {
+			seenRelatedSites[summary] = true
+			relatedSiteNames = append(relatedSiteNames, summary)
 		}
-		return 1
 	}
 	remoteID := firstRecordString(target, "linode_id", "id", "provider_id", "_state_key")
 	dnsDeletes := serverDNSDeleteTargets(target)
@@ -1917,13 +1924,22 @@ func cmdRemoveTarget(needle string, dryRun, execute, yes, nonInteractive bool) i
 			fmt.Printf("  dns action: delete %s %s\n", target.provider, provisionDNSRecordFQDN(target))
 		}
 	}
-	fmt.Println("  related sites: none")
+	if len(relatedSiteNames) == 0 {
+		fmt.Println("  related sites: none")
+	} else {
+		fmt.Printf("  related sites: %s\n", strings.Join(relatedSiteNames, ", "))
+		fmt.Printf("  site cache action: remove %d site(s) from local cache\n", len(relatedSiteNames))
+	}
 	fmt.Printf("  mode: %s\n", mode)
 	if !willExecute {
 		return 0
 	}
 	if !yes {
-		confirmed, err := ui.Confirm(fmt.Sprintf("Remove target %q, delete its Linode, and delete its DNS records?", needle), false)
+		message := fmt.Sprintf("Remove target %q, delete its Linode, and delete its DNS records?", needle)
+		if len(relatedSiteNames) > 0 {
+			message = fmt.Sprintf("Remove target %q, delete its Linode, delete its DNS records, and remove %d related site(s) from local cache?", needle, len(relatedSiteNames))
+		}
+		confirmed, err := ui.Confirm(message, false)
 		if err != nil {
 			fmt.Fprintln(os.Stderr, err)
 			return 1
@@ -1954,6 +1970,12 @@ func cmdRemoveTarget(needle string, dryRun, execute, yes, nonInteractive bool) i
 	if err := state.SaveStateRecords("providers", providers); err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		return 1
+	}
+	if len(matchedSites) > 0 {
+		if _, err := state.DeleteStateRecords("sites", func(record map[string]any) bool { return siteMatchesTarget(record, target) }); err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			return 1
+		}
 	}
 	return 0
 }
@@ -3183,7 +3205,14 @@ func safeDatabaseName(name string) bool {
 
 func safeSitePath(sitePath string) bool {
 	cleaned := path.Clean(sitePath)
-	return strings.HasPrefix(cleaned, "/var/www/sites/") && strings.HasSuffix(cleaned, "/public") && !strings.Contains(cleaned, "..")
+	if strings.Contains(cleaned, "..") || !strings.HasPrefix(cleaned, "/var/www/sites/") {
+		return false
+	}
+	if strings.HasSuffix(cleaned, "/public") {
+		return true
+	}
+	rel := strings.TrimPrefix(cleaned, "/var/www/sites/")
+	return rel != "" && !strings.Contains(rel, "/")
 }
 
 func printSiteRemovePlan(plan siteRemovePlan, mode string) {
@@ -3220,7 +3249,7 @@ func renderSiteRemoveScript(plan siteRemovePlan) string {
 	b.WriteString("  rm -f /var/log/nginx/sites/$env_id.access.log /var/log/nginx/sites/$env_id.error.log\n")
 	b.WriteString("  rm -rf -- \"$site_path\"\n")
 	b.WriteString("  parent=$(dirname \"$site_path\")\n")
-	b.WriteString("  rmdir --ignore-fail-on-non-empty -- \"$parent\" 2>/dev/null || true\n")
+	b.WriteString("  if [ \"$parent\" != /var/www/sites ]; then rmdir --ignore-fail-on-non-empty -- \"$parent\" 2>/dev/null || true; fi\n")
 	b.WriteString("  mariadb -uroot <<SQL\n")
 	b.WriteString("DROP DATABASE IF EXISTS \\`$db_name\\`;\n")
 	b.WriteString("DROP USER IF EXISTS '$db_name'@'localhost';\n")

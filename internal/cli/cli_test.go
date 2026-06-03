@@ -1161,6 +1161,67 @@ func TestRunTargetRemoveLinodeDeletesRemoteDNSAndState(t *testing.T) {
 	}
 }
 
+func TestRunTargetRemoveContinuesWhenDNSimpleZoneAlreadyGone(t *testing.T) {
+	configDir := t.TempDir()
+	stateDir := t.TempDir()
+	t.Setenv("NF_CONFIG_HOME", configDir)
+	t.Setenv("NF_STATE_HOME", stateDir)
+	t.Setenv("DNSIMPLE_TOKEN", "token")
+	if err := saveGlobalConfig(map[string]string{"base_domain": "nonfiction.dev", "dnsimple_account_id": "14"}); err != nil {
+		t.Fatalf("saveGlobalConfig() error = %v", err)
+	}
+	providers := []map[string]any{{
+		"provider": "linode",
+		"targets": []map[string]any{{
+			"id":       "98222343",
+			"name":     "app1-linode",
+			"provider": "linode",
+			"hostname": "app1-linode.nonfiction.dev",
+		}, {
+			"id":       "98222344",
+			"name":     "app2-linode",
+			"provider": "linode",
+		}},
+	}}
+	if err := state.SaveStateRecords("providers", providers); err != nil {
+		t.Fatalf("SaveStateRecords(providers) error = %v", err)
+	}
+	deletedLinodes := []string{}
+	oldLinodeDelete := runLinodeDeleteFn
+	runLinodeDeleteFn = func(id string) error {
+		deletedLinodes = append(deletedLinodes, id)
+		return nil
+	}
+	oldDNSDelete := deleteDNSRecordFn
+	deleteDNSRecordFn = func(token, accountID, zone, name string) error {
+		return fmt.Errorf("Listing DNSimple A records for zone %s: GET https://api.dnsimple.com/v2/zones/%s/records?type=A: 404 Not Found", zone, zone)
+	}
+	t.Cleanup(func() {
+		runLinodeDeleteFn = oldLinodeDelete
+		deleteDNSRecordFn = oldDNSDelete
+	})
+
+	output := captureStdout(t, func() {
+		if got := Run([]string{"target", "remove", "app1-linode", "--execute", "--yes", "--non-interactive"}); got != 0 {
+			t.Fatalf("Run(target remove) = %d, want 0", got)
+		}
+	})
+	if !strings.Contains(output, "DNSimple record app1-linode.nonfiction.dev already absent") {
+		t.Fatalf("target remove output = %q, want DNS already absent warning", output)
+	}
+	if got, want := strings.Join(deletedLinodes, ","), "98222343"; got != want {
+		t.Fatalf("deleted linodes = %q, want %q", got, want)
+	}
+	records, err := state.LoadStateRecords("providers")
+	if err != nil {
+		t.Fatalf("LoadStateRecords(providers) error = %v", err)
+	}
+	targets := targetMaps(records[0]["targets"])
+	if len(targets) != 1 || recordValueString(targets[0]["name"]) != "app2-linode" {
+		t.Fatalf("provider targets = %#v, want only app2-linode", targets)
+	}
+}
+
 func TestRunTargetRemoveWithoutTargetPromptsPicker(t *testing.T) {
 	stateDir := t.TempDir()
 	t.Setenv("NF_STATE_HOME", stateDir)
@@ -1220,25 +1281,46 @@ func TestRunTargetRemoveRejectsKinsta(t *testing.T) {
 	}
 }
 
-func TestRunTargetRemoveRejectsLinodeWithSites(t *testing.T) {
+func TestRunTargetRemoveLinodeRemovesRelatedSitesFromCache(t *testing.T) {
 	stateDir := t.TempDir()
 	t.Setenv("NF_STATE_HOME", stateDir)
-	if err := state.SaveStateRecords("providers", []map[string]any{{"provider": "linode", "targets": []map[string]any{{"id": "98222343", "name": "app1-linode", "provider": "linode"}}}}); err != nil {
+	if err := state.SaveStateRecords("providers", []map[string]any{{"provider": "linode", "targets": []map[string]any{{"id": "98222343", "name": "app1-linode", "provider": "linode"}, {"id": "98222344", "name": "app2-linode", "provider": "linode"}}}}); err != nil {
 		t.Fatalf("SaveStateRecords(providers) error = %v", err)
 	}
 	if err := state.SaveStateRecords("sites", []map[string]any{
 		{"site_id": "client", "name": "client", "provider": "linode", "env": "live", "target": "app1-linode", "hostname": "client.app1-linode.nfweb.dev"},
 		{"site_id": "client", "name": "client", "provider": "linode", "env": "staging", "target": "app1-linode", "hostname": "client-staging.app1-linode.nfweb.dev"},
+		{"site_id": "other", "name": "other", "provider": "linode", "env": "live", "target": "app2-linode", "hostname": "other.app2-linode.nfweb.dev"},
 	}); err != nil {
 		t.Fatalf("SaveStateRecords(sites) error = %v", err)
 	}
-	stderr := captureStderr(t, func() {
-		if got := Run([]string{"target", "remove", "app1-linode", "--execute", "--yes", "--non-interactive"}); got != 1 {
-			t.Fatalf("Run(target remove app1-linode) = %d, want 1", got)
+	deletedLinodes := []string{}
+	oldLinodeDelete := runLinodeDeleteFn
+	runLinodeDeleteFn = func(id string) error {
+		deletedLinodes = append(deletedLinodes, id)
+		return nil
+	}
+	t.Cleanup(func() { runLinodeDeleteFn = oldLinodeDelete })
+
+	output := captureStdout(t, func() {
+		if got := Run([]string{"target", "remove", "app1-linode", "--execute", "--yes", "--non-interactive"}); got != 0 {
+			t.Fatalf("Run(target remove app1-linode) = %d, want 0", got)
 		}
 	})
-	if !strings.Contains(stderr, "contains 1 site(s): client") {
-		t.Fatalf("Run() stderr = %q, want site guard", stderr)
+	for _, want := range []string{"related sites: client", "site cache action: remove 1 site(s) from local cache", "mode: execute"} {
+		if !strings.Contains(output, want) {
+			t.Fatalf("target remove output missing %q:\n%s", want, output)
+		}
+	}
+	if got, want := strings.Join(deletedLinodes, ","), "98222343"; got != want {
+		t.Fatalf("deleted linodes = %q, want %q", got, want)
+	}
+	records, err := state.LoadStateRecords("sites")
+	if err != nil {
+		t.Fatalf("LoadStateRecords(sites) error = %v", err)
+	}
+	if len(records) != 1 || siteRecordID(records[0]) != "other" {
+		t.Fatalf("site cache after target remove = %#v, want only other", records)
 	}
 }
 
@@ -1580,6 +1662,39 @@ func TestRunSiteRemoveLinodeDryRunPlansEnvDeletion(t *testing.T) {
 	for _, want := range []string{"Remove site plan:", "site id: foobar.app1-linode", "target: app1-linode", "dns actions: none", "env live:", "env id: foobar.app1-linode", "delete path: /var/www/sites/foobar/public", "drop database: foobar", "env staging:", "env id: foobar-staging.app1-linode", "delete path: /var/www/sites/foobar_staging/public", "drop database: foobar_staging", "mode: dry-run"} {
 		if !strings.Contains(output, want) {
 			t.Fatalf("site remove dry-run output missing %q:\n%s", want, output)
+		}
+	}
+}
+
+func TestRunSiteRemoveLinodeAllowsLegacySiteRootPath(t *testing.T) {
+	configDir := t.TempDir()
+	stateDir := t.TempDir()
+	t.Setenv("NF_CONFIG_HOME", configDir)
+	t.Setenv("NF_STATE_HOME", stateDir)
+	if err := saveGlobalConfig(map[string]string{"linode_default_user": "nonfiction"}); err != nil {
+		t.Fatalf("saveGlobalConfig() error = %v", err)
+	}
+	if err := state.SaveStateRecords("providers", []map[string]any{{"provider": "linode", "targets": []map[string]any{{"name": "app1-linode", "provider": "linode", "hostname": "app1-linode.nonfiction.dev", "ssh": map[string]any{"user": "nonfiction", "host": "app1-linode.nonfiction.dev"}}}}}); err != nil {
+		t.Fatalf("SaveStateRecords(providers) error = %v", err)
+	}
+	if err := state.SaveStateRecords("sites", []map[string]any{{"provider": "linode", "site_id": "foobar", "env_id": "foobar", "name": "foobar", "env": "live", "target": "app1-linode", "path": "/var/www/sites/foobar", "database": "foobar", "hostname": "foobar.app1-linode.nonfiction.dev"}}); err != nil {
+		t.Fatalf("SaveStateRecords(sites) error = %v", err)
+	}
+	oldRunSSH := runSSHScriptFn
+	runSSHScriptFn = func(user, host, script string) error {
+		t.Fatalf("runSSHScriptFn called during dry-run")
+		return nil
+	}
+	t.Cleanup(func() { runSSHScriptFn = oldRunSSH })
+
+	output := captureStdout(t, func() {
+		if got := Run([]string{"site", "remove", "foobar", "--dry-run", "--non-interactive"}); got != 0 {
+			t.Fatalf("Run(site remove dry-run) = %d, want 0", got)
+		}
+	})
+	for _, want := range []string{"Remove site plan:", "site id: foobar", "target: app1-linode", "delete path: /var/www/sites/foobar", "drop database: foobar", "mode: dry-run"} {
+		if !strings.Contains(output, want) {
+			t.Fatalf("site remove legacy path output missing %q:\n%s", want, output)
 		}
 	}
 }
