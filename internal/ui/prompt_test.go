@@ -1,6 +1,7 @@
 package ui
 
 import (
+	"strings"
 	"testing"
 
 	tea "github.com/charmbracelet/bubbletea"
@@ -44,6 +45,19 @@ func TestConfirmModelDefaultsAndKeys(t *testing.T) {
 	}
 }
 
+func TestConfirmModelViewIsCompactAndBorderless(t *testing.T) {
+	m := newConfirmModel("Proceed?", false)
+	view := m.View()
+	for _, border := range []string{"╭", "╮", "╰", "╯", "│", "─", "[ Yes ]"} {
+		if strings.Contains(view, border) {
+			t.Fatalf("confirm view contains modal border/button %q:\n%s", border, view)
+		}
+	}
+	if !strings.Contains(view, "> No") {
+		t.Fatalf("confirm default should visibly select No:\n%s", view)
+	}
+}
+
 func TestPromptModelAllowBlankUsesPlaceholder(t *testing.T) {
 	m := newPromptModel("Name", "demo", false)
 	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
@@ -75,6 +89,35 @@ func TestSelectModelNavigationAndSubmit(t *testing.T) {
 	m = updated.(selectModel)
 	if !m.answered || m.result != "1" {
 		t.Fatalf("enter result = %#v, want answered value 1", m)
+	}
+}
+
+func TestSelectModelSupportsFirstAndLastKeys(t *testing.T) {
+	m := newSelectModel("Choose", []SelectOption{{Label: "One", Value: "1"}, {Label: "Two", Value: "2"}, {Label: "Three", Value: "3"}})
+
+	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'G'}})
+	m = updated.(selectModel)
+	if got, want := m.selected, 2; got != want {
+		t.Fatalf("G selected = %d, want %d", got, want)
+	}
+
+	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'g'}})
+	m = updated.(selectModel)
+	if got, want := m.selected, 0; got != want {
+		t.Fatalf("g selected = %d, want %d", got, want)
+	}
+}
+
+func TestSelectModelViewIsCompactAndBorderless(t *testing.T) {
+	m := newSelectModel("Choose", []SelectOption{{Label: "One / target app1", Value: "1"}, {Label: "Two / target app2", Value: "2"}})
+	view := m.View()
+	for _, border := range []string{"╭", "╮", "╰", "╯", "│", "─", "Select\n"} {
+		if strings.Contains(view, border) {
+			t.Fatalf("select view contains modal border/title %q:\n%s", border, view)
+		}
+	}
+	if !strings.Contains(view, "> One  target app1") {
+		t.Fatalf("select view should use compact cursor and label spacing:\n%s", view)
 	}
 }
 

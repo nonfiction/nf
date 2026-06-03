@@ -10,17 +10,30 @@ import (
 )
 
 var (
-	accentColor  = lipgloss.Color("62")
-	mutedColor   = lipgloss.Color("241")
-	frameStyle   = lipgloss.NewStyle().Border(lipgloss.RoundedBorder()).BorderForeground(mutedColor).Padding(1, 2)
-	titleStyle   = lipgloss.NewStyle().Foreground(accentColor).Bold(true)
-	labelStyle   = lipgloss.NewStyle().Bold(true)
-	hintStyle    = lipgloss.NewStyle().Foreground(mutedColor)
-	defaultStyle = lipgloss.NewStyle().Faint(true)
-
-	selectedButtonStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("0")).Background(accentColor).Bold(true).Border(lipgloss.NormalBorder()).BorderForeground(accentColor).Padding(0, 1)
-	buttonStyle         = lipgloss.NewStyle().Foreground(accentColor).Border(lipgloss.NormalBorder()).BorderForeground(mutedColor).Padding(0, 1)
+	accentColor   = lipgloss.Color("62")
+	mutedColor    = lipgloss.Color("241")
+	titleStyle    = lipgloss.NewStyle().Bold(true)
+	labelStyle    = lipgloss.NewStyle().Bold(true)
+	hintStyle     = lipgloss.NewStyle().Foreground(mutedColor).Faint(true)
+	defaultStyle  = lipgloss.NewStyle().Faint(true)
+	selectedStyle = lipgloss.NewStyle().Foreground(accentColor).Bold(true)
 )
+
+func ensurePromptPunctuation(s string) string {
+	s = strings.TrimSpace(s)
+	if s == "" {
+		return s
+	}
+	last := s[len(s)-1]
+	if last == ':' || last == '?' || last == '.' || last == '!' {
+		return s
+	}
+	return s + ":"
+}
+
+func compactOptionLabel(label string) string {
+	return strings.ReplaceAll(label, " / ", "  ")
+}
 
 func clampInt(min, max, value int) int {
 	if value < min {
@@ -44,7 +57,7 @@ type promptModel struct {
 
 func newPromptModel(prompt, defaultValue string, allowBlank bool) promptModel {
 	ti := textinput.New()
-	ti.Prompt = ""
+	ti.Prompt = "> "
 	ti.Placeholder = defaultValue
 	ti.SetValue(defaultValue)
 	ti.Focus()
@@ -55,7 +68,7 @@ func newPromptModel(prompt, defaultValue string, allowBlank bool) promptModel {
 
 func newSecretPromptModel(prompt string) promptModel {
 	ti := textinput.New()
-	ti.Prompt = ""
+	ti.Prompt = "> "
 	ti.Placeholder = ""
 	ti.SetValue("")
 	ti.EchoMode = textinput.EchoPassword
@@ -94,18 +107,16 @@ func (m promptModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 }
 
 func (m promptModel) View() string {
-	promptLine := labelStyle.Render(m.prompt)
+	promptLine := labelStyle.Render(ensurePromptPunctuation(m.prompt))
 	if defaultValue := strings.TrimSpace(m.input.Placeholder); defaultValue != "" {
 		promptLine += " " + defaultStyle.Render("("+defaultValue+")")
 	}
 	body := lipgloss.JoinVertical(lipgloss.Left,
-		titleStyle.Render("Input"),
 		promptLine,
-		"",
 		m.input.View(),
-		hintStyle.Render("Enter to accept • Esc/Ctrl+C to abort"),
+		hintStyle.Render("enter accept · esc cancel"),
 	)
-	return frameStyle.Render(body)
+	return body
 }
 
 type confirmModel struct {
@@ -246,24 +257,22 @@ func (m confirmModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
-func (m confirmModel) button(label string, selected bool) string {
-	if selected {
-		return selectedButtonStyle.Render(label)
-	}
-	return buttonStyle.Render(label)
-}
-
 func (m confirmModel) View() string {
-	yes := m.button("Yes", m.selected == 0)
-	no := m.button("No", m.selected == 1)
+	yes := "  Yes"
+	no := "  No"
+	if m.selected == 0 {
+		yes = selectedStyle.Render("> Yes")
+	}
+	if m.selected == 1 {
+		no = selectedStyle.Render("> No")
+	}
 	body := lipgloss.JoinVertical(lipgloss.Left,
-		titleStyle.Render("Confirm"),
-		labelStyle.Render(m.prompt),
-		"",
-		lipgloss.JoinHorizontal(lipgloss.Center, yes, "  ", no),
-		hintStyle.Render("Use arrows, h/l, tab, y/n, Enter, or Esc/Ctrl+C"),
+		labelStyle.Render(ensurePromptPunctuation(m.prompt)),
+		yes,
+		no,
+		hintStyle.Render("h/l or y/n choose · enter confirm · esc cancel"),
 	)
-	return frameStyle.Render(body)
+	return body
 }
 
 func (m selectModel) Init() tea.Cmd { return nil }
@@ -289,6 +298,12 @@ func (m selectModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.viewport = clampInt(4, 12, msg.Height-10)
 		return m, nil
 	case tea.KeyMsg:
+		if msg.String() == "G" || msg.String() == "shift+g" {
+			if len(m.options) > 0 {
+				m.selected = len(m.options) - 1
+			}
+			return m, nil
+		}
 		switch strings.ToLower(msg.String()) {
 		case "ctrl+c", "esc":
 			m.cancelled = true
@@ -298,6 +313,9 @@ func (m selectModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, nil
 		case "down", "j", "tab":
 			m = m.move(1)
+			return m, nil
+		case "g":
+			m.selected = 0
 			return m, nil
 		}
 		switch msg.Type {
@@ -323,7 +341,7 @@ func (m selectModel) View() string {
 	if m.viewport > 0 && end > start+m.viewport {
 		end = start + m.viewport
 	}
-	lines := []string{titleStyle.Render("Select"), labelStyle.Render(m.title), ""}
+	lines := []string{titleStyle.Render(ensurePromptPunctuation(m.title))}
 	if len(m.options) == 0 {
 		lines = append(lines, hintStyle.Render("No options available"))
 	} else {
@@ -331,14 +349,14 @@ func (m selectModel) View() string {
 			prefix := "  "
 			style := lipgloss.NewStyle()
 			if i == m.selected {
-				prefix = "▸ "
-				style = lipgloss.NewStyle().Foreground(accentColor).Bold(true)
+				prefix = "> "
+				style = selectedStyle
 			}
-			lines = append(lines, style.Render(prefix+m.options[i].Label))
+			lines = append(lines, style.Render(prefix+compactOptionLabel(m.options[i].Label)))
 		}
 	}
-	lines = append(lines, hintStyle.Render("Use ↑/↓, j/k, Enter, or Esc/Ctrl+C"))
-	return frameStyle.Render(lipgloss.JoinVertical(lipgloss.Left, lines...))
+	lines = append(lines, "", hintStyle.Render("↑/↓ or j/k select · g/G first/last · enter confirm · esc cancel"))
+	return lipgloss.JoinVertical(lipgloss.Left, lines...)
 }
 
 func (m multiSelectModel) Init() tea.Cmd { return nil }
@@ -382,6 +400,12 @@ func (m multiSelectModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.viewport = clampInt(4, 12, msg.Height-10)
 		return m, nil
 	case tea.KeyMsg:
+		if msg.String() == "G" || msg.String() == "shift+g" {
+			if len(m.options) > 0 {
+				m.selected = len(m.options) - 1
+			}
+			return m, nil
+		}
 		switch strings.ToLower(msg.String()) {
 		case "ctrl+c", "esc":
 			m.cancelled = true
@@ -391,6 +415,9 @@ func (m multiSelectModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, nil
 		case "down", "j", "tab":
 			m = m.move(1)
+			return m, nil
+		case "g":
+			m.selected = 0
 			return m, nil
 		case "space":
 			m = m.toggleSelected()
@@ -418,24 +445,26 @@ func (m multiSelectModel) View() string {
 	if m.viewport > 0 && end > start+m.viewport {
 		end = start + m.viewport
 	}
-	lines := []string{titleStyle.Render("Multi-select"), labelStyle.Render(m.title), ""}
+	lines := []string{titleStyle.Render(ensurePromptPunctuation(m.title))}
 	if len(m.options) == 0 {
 		lines = append(lines, hintStyle.Render("No options available"))
 	} else {
 		for i := start; i < end; i++ {
-			prefix := "[ ] "
+			cursor := "  "
+			check := "[ ] "
 			style := lipgloss.NewStyle()
 			if i < len(m.checked) && m.checked[i] {
-				prefix = "[x] "
+				check = "[x] "
 			}
 			if i == m.selected {
-				style = lipgloss.NewStyle().Foreground(accentColor).Bold(true)
+				cursor = "> "
+				style = selectedStyle
 			}
-			lines = append(lines, style.Render(prefix+m.options[i].Label))
+			lines = append(lines, style.Render(cursor+check+compactOptionLabel(m.options[i].Label)))
 		}
 	}
-	lines = append(lines, hintStyle.Render("Use ↑/↓, j/k, space, Enter, or Esc/Ctrl+C"))
-	return frameStyle.Render(lipgloss.JoinVertical(lipgloss.Left, lines...))
+	lines = append(lines, "", hintStyle.Render("↑/↓ or j/k select · space toggle · g/G first/last · enter confirm · esc cancel"))
+	return lipgloss.JoinVertical(lipgloss.Left, lines...)
 }
 
 func PromptString(prompt, defaultValue string, allowBlank bool) (string, error) {
