@@ -23,6 +23,7 @@ import (
 	"github.com/linode/linodego"
 	"github.com/nonfiction/nf/internal/config"
 	"github.com/nonfiction/nf/internal/envwizard"
+	"github.com/nonfiction/nf/internal/kinsta"
 	"github.com/nonfiction/nf/internal/passwords"
 	"github.com/nonfiction/nf/internal/state"
 	"github.com/nonfiction/nf/internal/target"
@@ -39,9 +40,11 @@ var (
 	runLinodeDeleteFn       = runLinodeDelete
 	deleteDNSRecordFn       = provision.DeleteDNSimpleARecord
 	deleteDNSTXTRecordFn    = provision.DeleteDNSimpleTXTRecord
+	upsertDNSRecordFn       = provision.UpsertDNSimpleRecord
 	providerCheckDNSimpleFn = checkDNSimpleProvider
 	providerCheckKinstaFn   = checkKinstaProvider
 	providerCheckLinodeFn   = checkLinodeProvider
+	kinstaProvisionSiteFn   = provisionKinstaSite
 	targetSSHReachableFn    = targetSSHReachable
 	runSSHScriptFn          = runSSHScript
 	runSSHCommandFn         = runSSHCommand
@@ -2731,6 +2734,7 @@ func targetSSHReachable(record map[string]any) bool {
 type siteAddArgs struct {
 	target         string
 	site           string
+	region         string
 	execute        bool
 	dryRun         bool
 	yes            bool
@@ -2759,6 +2763,44 @@ type siteAddPlan struct {
 	AdminPassword string
 	DBPassword    string
 	Envs          []siteEnvPlan
+}
+
+type kinstaSiteAddEnvPlan struct {
+	Env      string
+	Domain   string
+	URL      string
+	Title    string
+	Branch   string
+	EnvID    string
+	DomainID string
+	Path     string
+	Database string
+	SSHHost  string
+	SSHPort  string
+	SSHUser  string
+	SSHCmd   string
+}
+
+type kinstaSiteAddPlan struct {
+	Target        map[string]any
+	TargetName    string
+	CompanyID     string
+	Site          string
+	SiteID        string
+	BaseDomain    string
+	Region        string
+	AdminUser     string
+	AdminEmail    string
+	AdminPassword string
+	DNSZone       string
+	DNSAccountID  string
+	Envs          []kinstaSiteAddEnvPlan
+}
+
+type kinstaProvisionResult struct {
+	CompanyID string
+	SiteID    string
+	Envs      []kinstaSiteAddEnvPlan
 }
 
 type siteRemoveEnvPlan struct {
@@ -2913,6 +2955,87 @@ func buildSiteAddPlan(args siteAddArgs) (siteAddPlan, error) {
 	return plan, nil
 }
 
+func kinstaSiteID(site string) string {
+	return site + ".kinsta"
+}
+
+func kinstaSiteDomain(site, baseDomain, env string) string {
+	label := site
+	if env == "staging" {
+		label += "-staging"
+	}
+	return label + ".kinsta." + baseDomain
+}
+
+func buildKinstaSiteAddPlan(args siteAddArgs) (kinstaSiteAddPlan, error) {
+	siteSlug, err := cleanSiteSlug(args.site)
+	if err != nil {
+		return kinstaSiteAddPlan{}, err
+	}
+	values, err := loadGlobalConfig()
+	if err != nil {
+		return kinstaSiteAddPlan{}, err
+	}
+	baseDomain := strings.TrimSuffix(strings.TrimSpace(values["base_domain"]), ".")
+	if baseDomain == "" {
+		return kinstaSiteAddPlan{}, ProjectError{Msg: fmt.Sprintf("Expected base_domain in %s. Set it with nf config set-base-domain <domain>.", config.ConfigFile())}
+	}
+	adminEmail := strings.TrimSpace(values["default_wp_email"])
+	if adminEmail == "" {
+		return kinstaSiteAddPlan{}, ProjectError{Msg: fmt.Sprintf("Expected default_wp_email in %s. Set it with nf config set-default-wp-email <email>.", config.ConfigFile())}
+	}
+	adminUser := firstNonEmpty(values["default_wp_user"], "admin")
+	region := firstNonEmpty(args.region, values["kinsta_default_region"], "ca-toronto-1")
+	targets, err := cachedTargets()
+	if err != nil {
+		return kinstaSiteAddPlan{}, err
+	}
+	target := state.MatchingRecord(targets, args.target)
+	if target == nil {
+		return kinstaSiteAddPlan{}, ProjectError{Msg: fmt.Sprintf("No target matched %q.", args.target)}
+	}
+	provider := strings.ToLower(strings.TrimSpace(recordValueString(target["provider"])))
+	if provider != "kinsta" {
+		return kinstaSiteAddPlan{}, ProjectError{Msg: fmt.Sprintf("Unsupported provider %q. Only kinsta site add is available.", provider)}
+	}
+	targetName := firstRecordString(target, "target_name", "name", "slug", "label", "_state_key")
+	if targetName == "" {
+		targetName = "kinsta"
+	}
+	companyID := firstRecordString(target, "company_id", "company")
+	dnsAccountID := firstNonEmpty(values["dnsimple_account_id"], dnsimpleAccountIDValue())
+	if dnsAccountID == "" {
+		return kinstaSiteAddPlan{}, ProjectError{Msg: fmt.Sprintf("Expected dnsimple_account_id in %s. Run nf provider check dnsimple.", config.ConfigFile())}
+	}
+	salt, err := passwords.SecretSalt()
+	if err != nil {
+		return kinstaSiteAddPlan{}, err
+	}
+	plan := kinstaSiteAddPlan{
+		Target:        target,
+		TargetName:    targetName,
+		CompanyID:     companyID,
+		Site:          siteSlug,
+		SiteID:        kinstaSiteID(siteSlug),
+		BaseDomain:    baseDomain,
+		Region:        region,
+		AdminUser:     adminUser,
+		AdminEmail:    adminEmail,
+		AdminPassword: passwords.DerivePassword(siteSlug, "wp-admin", salt),
+		DNSZone:       baseDomain,
+		DNSAccountID:  dnsAccountID,
+	}
+	for _, env := range []string{"live", "staging"} {
+		domain := kinstaSiteDomain(siteSlug, baseDomain, env)
+		branch := "main"
+		if env == "staging" {
+			branch = "develop"
+		}
+		plan.Envs = append(plan.Envs, kinstaSiteAddEnvPlan{Env: env, Domain: domain, URL: "https://" + domain, Title: siteEnvTitle(siteSlug, env), Branch: branch})
+	}
+	return plan, nil
+}
+
 func siteAddRecord(plan siteAddPlan, env siteEnvPlan) map[string]any {
 	envID := linodeEnvID(plan.Site, plan.TargetName, env.Env)
 	return map[string]any{
@@ -2952,6 +3075,443 @@ func appendSiteAddRecords(plan siteAddPlan) error {
 	}
 	existing = append(existing, siteAddRecords(plan)...)
 	return state.SaveStateRecords("sites", existing)
+}
+
+func kinstaSiteAddRecord(plan kinstaSiteAddPlan, env kinstaSiteAddEnvPlan, result kinstaProvisionResult) map[string]any {
+	companyID := firstNonEmpty(result.CompanyID, plan.CompanyID)
+	return map[string]any{
+		"provider":    "kinsta",
+		"env_id":      env.EnvID,
+		"site_id":     plan.SiteID,
+		"name":        plan.Site,
+		"env":         env.Env,
+		"environment": env.Env,
+		"target":      plan.TargetName,
+		"hostname":    env.Domain,
+		"url":         env.URL,
+		"path":        env.Path,
+		"database":    env.Database,
+		"branch":      env.Branch,
+		"status":      "active",
+		"ssh": map[string]any{
+			"host":    env.SSHHost,
+			"port":    env.SSHPort,
+			"user":    env.SSHUser,
+			"command": env.SSHCmd,
+		},
+		"kinsta": map[string]any{
+			"company_id":     companyID,
+			"site_id":        result.SiteID,
+			"environment_id": env.EnvID,
+			"domain_id":      env.DomainID,
+			"path":           env.Path,
+			"database":       env.Database,
+			"ssh": map[string]any{
+				"host":    env.SSHHost,
+				"port":    env.SSHPort,
+				"user":    env.SSHUser,
+				"command": env.SSHCmd,
+			},
+		},
+	}
+}
+
+func upsertKinstaSiteAddRecords(plan kinstaSiteAddPlan, result kinstaProvisionResult) error {
+	existing, err := state.LoadStateRecords("sites")
+	if err != nil {
+		return err
+	}
+	kept := make([]map[string]any, 0, len(existing)+len(result.Envs))
+	for _, record := range existing {
+		if siteEnvMatchesSite(record, plan.SiteID) {
+			continue
+		}
+		kept = append(kept, record)
+	}
+	for _, env := range result.Envs {
+		kept = append(kept, kinstaSiteAddRecord(plan, env, result))
+	}
+	return state.SaveStateRecords("sites", kept)
+}
+
+func printKinstaSiteAddPlan(plan kinstaSiteAddPlan, mode string) {
+	fmt.Println("Add site plan:")
+	fmt.Printf("  target: %s\n", plan.TargetName)
+	fmt.Printf("  provider: kinsta\n")
+	if plan.CompanyID != "" {
+		fmt.Printf("  company id: %s\n", plan.CompanyID)
+	}
+	fmt.Printf("  site: %s\n", plan.Site)
+	fmt.Printf("  site id: %s\n", plan.SiteID)
+	fmt.Printf("  region: %s\n", plan.Region)
+	fmt.Printf("  admin user: %s\n", plan.AdminUser)
+	fmt.Printf("  admin email: %s\n", plan.AdminEmail)
+	fmt.Printf("  admin password: derived from %s\n", plan.Site)
+	for _, env := range plan.Envs {
+		fmt.Printf("  env %s:\n", env.Env)
+		fmt.Printf("    domain: %s\n", env.Domain)
+		fmt.Printf("    url: %s\n", env.URL)
+	}
+	fmt.Printf("  dns: dnsimple zone %s account %s\n", plan.DNSZone, plan.DNSAccountID)
+	fmt.Printf("  local state: %s\n", state.StatePath("sites"))
+	fmt.Printf("  mode: %s\n", mode)
+}
+
+func cmdKinstaSiteAdd(args siteAddArgs) int {
+	if args.execute && args.dryRun {
+		fmt.Fprintln(os.Stderr, "Choose either --execute or --dry-run, not both.")
+		return 1
+	}
+	if !args.execute && (args.dryRun || args.nonInteractive) {
+		args.dryRun = true
+	}
+	if args.nonInteractive && args.execute && !args.yes {
+		fmt.Fprintln(os.Stderr, "Remote execution requires both --execute and --yes in non-interactive mode.")
+		return 1
+	}
+	plan, err := buildKinstaSiteAddPlan(args)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		return 1
+	}
+	willExecute := args.execute || (!args.dryRun && !args.nonInteractive)
+	mode := "dry-run"
+	if willExecute {
+		mode = "execute"
+	}
+	printKinstaSiteAddPlan(plan, mode)
+	if !willExecute {
+		return 0
+	}
+	if !args.yes {
+		confirmed, err := ui.Confirm(fmt.Sprintf("Add site %q with live and staging envs on target %q?", plan.Site, plan.TargetName), false)
+		if err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			return 1
+		}
+		if !confirmed {
+			fmt.Fprintln(os.Stderr, "Aborted.")
+			return 1
+		}
+	}
+	result, err := kinstaProvisionSiteFn(plan)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		fmt.Fprintln(os.Stderr, "Kinsta site add is resumable; rerun the same command after fixing the error.")
+		return 1
+	}
+	if err := upsertKinstaSiteAddRecords(plan, result); err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		return 1
+	}
+	fmt.Println("Site added.")
+	return 0
+}
+
+func provisionKinstaSite(plan kinstaSiteAddPlan) (kinstaProvisionResult, error) {
+	token := envwizard.Value("KINSTA_API_KEY")
+	if token == "" {
+		return kinstaProvisionResult{}, fmt.Errorf("Expected KINSTA_API_KEY in the environment or %s.", config.EnvFile())
+	}
+	dnsToken := envwizard.Value("DNSIMPLE_TOKEN")
+	if dnsToken == "" {
+		return kinstaProvisionResult{}, fmt.Errorf("Expected DNSIMPLE_TOKEN in the environment or %s.", config.EnvFile())
+	}
+	client := kinsta.NewClient(firstNonEmpty(envwizard.Value("KINSTA_BASE_URL"), "https://api.kinsta.com/v2"), token)
+	ctx := context.Background()
+	companyID := plan.CompanyID
+	if companyID == "" {
+		validate, err := client.Validate(ctx)
+		if err != nil {
+			return kinstaProvisionResult{}, err
+		}
+		companyID = strings.TrimSpace(validate.Company)
+		if companyID == "" {
+			return kinstaProvisionResult{}, fmt.Errorf("Kinsta /v2/validate did not return a company uuid")
+		}
+		plan.CompanyID = companyID
+	}
+	kinstaSite, err := ensureKinstaSite(ctx, client, plan, companyID)
+	if err != nil {
+		return kinstaProvisionResult{}, err
+	}
+	liveEnv, stagingEnv, err := ensureKinstaEnvironments(ctx, client, kinstaSite.ID)
+	if err != nil {
+		return kinstaProvisionResult{}, err
+	}
+	result := kinstaProvisionResult{CompanyID: companyID, SiteID: kinstaSite.ID, Envs: make([]kinstaSiteAddEnvPlan, 0, len(plan.Envs))}
+	for _, env := range plan.Envs {
+		remoteEnv := liveEnv
+		if env.Env == "staging" {
+			remoteEnv = stagingEnv
+		}
+		domain, err := ensureKinstaDomain(ctx, client, remoteEnv.ID, env.Domain)
+		if err != nil {
+			return kinstaProvisionResult{}, err
+		}
+		records, err := client.DomainRecords(ctx, domain.ID)
+		if err != nil {
+			return kinstaProvisionResult{}, err
+		}
+		if err := upsertKinstaDNSRecords(dnsToken, plan.DNSAccountID, plan.DNSZone, env.Domain, records); err != nil {
+			return kinstaProvisionResult{}, err
+		}
+		if !domain.IsPrimary {
+			opID, err := client.ChangePrimaryDomain(ctx, remoteEnv.ID, domain.ID, true)
+			if err != nil {
+				return kinstaProvisionResult{}, err
+			}
+			if err := waitKinstaOperation(ctx, client, opID); err != nil {
+				return kinstaProvisionResult{}, err
+			}
+		}
+		env.EnvID = remoteEnv.ID
+		env.DomainID = domain.ID
+		if cfg, err := client.SFTPConfig(ctx, result.SiteID, remoteEnv.ID); err == nil {
+			env.SSHHost = cfg.Host
+			env.SSHPort = firstNonEmpty(cfg.Port, "22")
+			env.SSHUser = cfg.User
+			env.SSHCmd = cfg.SSHCommand
+			env.Path = kinstaEnvPath(cfg.User, remoteEnv.WebRoot)
+			env.Database = cfg.User
+		} else {
+			env.SSHHost = remoteEnv.SSHConnection.SSHIP.ExternalIP
+			env.SSHPort = firstNonEmpty(remoteEnv.SSHConnection.SSHPort, "22")
+			env.Path = kinstaEnvPath(plan.Site, remoteEnv.WebRoot)
+			env.Database = plan.Site
+		}
+		result.Envs = append(result.Envs, env)
+	}
+	return result, nil
+}
+
+func kinstaEnvPath(user, webRoot string) string {
+	user = strings.TrimSpace(user)
+	if user == "" {
+		return ""
+	}
+	root := path.Join("/www", user, "public")
+	webRoot = strings.TrimSpace(webRoot)
+	if webRoot == "" || webRoot == "/" {
+		return root
+	}
+	if strings.HasPrefix(webRoot, "/www/") {
+		return path.Clean(webRoot)
+	}
+	return path.Join(root, webRoot)
+}
+
+func ensureKinstaSite(ctx context.Context, client *kinsta.Client, plan kinstaSiteAddPlan, companyID string) (kinsta.Site, error) {
+	sites, err := client.ListSites(ctx, companyID)
+	if err != nil {
+		return kinsta.Site{}, err
+	}
+	if site, ok := kinsta.FindSite(sites, plan.Site); ok {
+		return site, nil
+	}
+	fmt.Printf("Creating Kinsta site %s in %s...\n", plan.Site, plan.Region)
+	opID, err := client.CreateSite(ctx, kinsta.CreateSiteRequest{
+		Company:              companyID,
+		DisplayName:          plan.Site,
+		Region:               plan.Region,
+		InstallMode:          "new",
+		AdminEmail:           plan.AdminEmail,
+		AdminPassword:        plan.AdminPassword,
+		AdminUser:            plan.AdminUser,
+		SiteTitle:            plan.Site,
+		WPLanguage:           "en_US",
+		IsSubdomainMultisite: false,
+		IsMultisite:          false,
+		WooCommerce:          false,
+		WordPressSEO:         false,
+	})
+	if err != nil {
+		return kinsta.Site{}, err
+	}
+	if err := waitKinstaOperation(ctx, client, opID); err != nil {
+		return kinsta.Site{}, err
+	}
+	sites, err = client.ListSites(ctx, companyID)
+	if err != nil {
+		return kinsta.Site{}, err
+	}
+	if site, ok := kinsta.FindSite(sites, plan.Site); ok {
+		return site, nil
+	}
+	return kinsta.Site{}, fmt.Errorf("Kinsta site %q was created but was not found in site list", plan.Site)
+}
+
+func ensureKinstaEnvironments(ctx context.Context, client *kinsta.Client, siteID string) (kinsta.Environment, kinsta.Environment, error) {
+	envs, err := waitKinstaEnvironments(ctx, client, siteID, func(envs []kinsta.Environment) (kinsta.Environment, bool) {
+		return findKinstaLiveEnvironment(envs)
+	})
+	if err != nil {
+		return kinsta.Environment{}, kinsta.Environment{}, err
+	}
+	live, ok := findKinstaLiveEnvironment(envs)
+	if !ok {
+		return kinsta.Environment{}, kinsta.Environment{}, fmt.Errorf("Kinsta site %s is missing live environment; found: %s", siteID, kinstaEnvironmentSummary(envs))
+	}
+	staging, ok := findKinstaStagingEnvironment(envs, live)
+	if ok {
+		return live, staging, nil
+	}
+	fmt.Println("Creating Kinsta staging environment...")
+	opID, err := client.CloneEnvironment(ctx, siteID, kinsta.CloneEnvironmentRequest{DisplayName: "staging", IsPremium: false, SourceEnvID: live.ID})
+	if err != nil {
+		return kinsta.Environment{}, kinsta.Environment{}, err
+	}
+	if err := waitKinstaOperation(ctx, client, opID); err != nil {
+		return kinsta.Environment{}, kinsta.Environment{}, err
+	}
+	envs, err = waitKinstaEnvironments(ctx, client, siteID, func(envs []kinsta.Environment) (kinsta.Environment, bool) {
+		return findKinstaStagingEnvironment(envs, live)
+	})
+	if err != nil {
+		return kinsta.Environment{}, kinsta.Environment{}, err
+	}
+	staging, ok = findKinstaStagingEnvironment(envs, live)
+	if !ok {
+		return kinsta.Environment{}, kinsta.Environment{}, fmt.Errorf("Kinsta staging environment was created but was not found in environment list; found: %s", kinstaEnvironmentSummary(envs))
+	}
+	return live, staging, nil
+}
+
+func waitKinstaEnvironments(ctx context.Context, client *kinsta.Client, siteID string, ready func([]kinsta.Environment) (kinsta.Environment, bool)) ([]kinsta.Environment, error) {
+	ctx, cancel := context.WithTimeout(ctx, 30*time.Minute)
+	defer cancel()
+	ticker := time.NewTicker(5 * time.Second)
+	defer ticker.Stop()
+	var last []kinsta.Environment
+	for {
+		envs, err := client.ListEnvironments(ctx, siteID)
+		if err != nil {
+			return nil, err
+		}
+		last = envs
+		if _, ok := ready(envs); ok {
+			return envs, nil
+		}
+		select {
+		case <-ctx.Done():
+			return last, fmt.Errorf("timed out waiting for Kinsta environments for site %s; found: %s", siteID, kinstaEnvironmentSummary(last))
+		case <-ticker.C:
+		}
+	}
+}
+
+func findKinstaLiveEnvironment(envs []kinsta.Environment) (kinsta.Environment, bool) {
+	if live, ok := kinsta.FindEnvironment(envs, "live"); ok {
+		return live, true
+	}
+	if len(envs) == 1 {
+		return envs[0], true
+	}
+	return kinsta.Environment{}, false
+}
+
+func findKinstaStagingEnvironment(envs []kinsta.Environment, live kinsta.Environment) (kinsta.Environment, bool) {
+	if staging, ok := kinsta.FindEnvironment(envs, "staging"); ok {
+		return staging, true
+	}
+	if len(envs) == 2 {
+		for _, env := range envs {
+			if env.ID != live.ID {
+				return env, true
+			}
+		}
+	}
+	return kinsta.Environment{}, false
+}
+
+func kinstaEnvironmentSummary(envs []kinsta.Environment) string {
+	if len(envs) == 0 {
+		return "none"
+	}
+	parts := make([]string, 0, len(envs))
+	for _, env := range envs {
+		parts = append(parts, fmt.Sprintf("id=%s name=%q display_name=%q", env.ID, env.Name, env.DisplayName))
+	}
+	return strings.Join(parts, "; ")
+}
+
+func ensureKinstaDomain(ctx context.Context, client *kinsta.Client, envID, domainName string) (kinsta.Domain, error) {
+	domains, err := client.ListDomains(ctx, envID)
+	if err != nil {
+		return kinsta.Domain{}, err
+	}
+	if domain, ok := kinsta.FindDomain(domains, domainName); ok {
+		return domain, nil
+	}
+	fmt.Printf("Adding Kinsta domain %s...\n", domainName)
+	opID, err := client.AddDomain(ctx, envID, kinsta.AddDomainRequest{DomainName: domainName, IsWildcardless: false, AddWithWWWSubdomain: false, SetupType: "quick"})
+	if err != nil {
+		return kinsta.Domain{}, err
+	}
+	if err := waitKinstaOperation(ctx, client, opID); err != nil {
+		return kinsta.Domain{}, err
+	}
+	domains, err = client.ListDomains(ctx, envID)
+	if err != nil {
+		return kinsta.Domain{}, err
+	}
+	if domain, ok := kinsta.FindDomain(domains, domainName); ok {
+		return domain, nil
+	}
+	return kinsta.Domain{}, fmt.Errorf("Kinsta domain %q was added but was not found in domain list", domainName)
+}
+
+func waitKinstaOperation(parent context.Context, client *kinsta.Client, opID string) error {
+	ctx, cancel := context.WithTimeout(parent, 30*time.Minute)
+	defer cancel()
+	return client.WaitOperation(ctx, opID, 5*time.Second)
+}
+
+func upsertKinstaDNSRecords(token, accountID, zone, domain string, records kinsta.DomainRecords) error {
+	all := append([]kinsta.DNSRecord{}, records.Verification...)
+	all = append(all, records.Pointing...)
+	for _, record := range all {
+		fqdn := record.RecordName()
+		if !kinstaDNSRecordBelongsToDomain(fqdn, domain) {
+			continue
+		}
+		name := dnsimpleRelativeName(fqdn, zone)
+		recordType := strings.ToUpper(record.RecordTypeName())
+		content := record.RecordContent()
+		if fqdn == "" || recordType == "" || content == "" {
+			continue
+		}
+		ttl := record.TTL
+		if ttl <= 0 {
+			ttl = 300
+		}
+		if err := upsertDNSRecordFn(token, accountID, zone, name, recordType, content, ttl); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func kinstaDNSRecordBelongsToDomain(recordName, domain string) bool {
+	recordName = strings.ToLower(strings.TrimSuffix(strings.TrimSpace(recordName), "."))
+	domain = strings.ToLower(strings.TrimSuffix(strings.TrimSpace(domain), "."))
+	if recordName == "" || domain == "" {
+		return false
+	}
+	return recordName == domain || strings.HasSuffix(recordName, "."+domain)
+}
+
+func dnsimpleRelativeName(fqdn, zone string) string {
+	fqdn = strings.TrimSuffix(strings.TrimSpace(fqdn), ".")
+	zone = strings.TrimSuffix(strings.TrimSpace(zone), ".")
+	if zone == "" || fqdn == zone {
+		return ""
+	}
+	suffix := "." + zone
+	if strings.HasSuffix(strings.ToLower(fqdn), strings.ToLower(suffix)) {
+		return strings.TrimSuffix(fqdn, suffix)
+	}
+	return fqdn
 }
 
 func ensureSiteNotCached(records []map[string]any, site string) error {
@@ -3097,6 +3657,14 @@ func printSiteAddPlan(plan siteAddPlan, mode string) {
 }
 
 func cmdSiteAdd(args siteAddArgs) int {
+	provider, err := siteAddTargetProvider(args.target)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		return 1
+	}
+	if provider == "kinsta" {
+		return cmdKinstaSiteAdd(args)
+	}
 	if args.execute && args.dryRun {
 		fmt.Fprintln(os.Stderr, "Choose either --execute or --dry-run, not both.")
 		return 1
@@ -3152,6 +3720,22 @@ func cmdSiteAdd(args siteAddArgs) int {
 	}
 	fmt.Println("Site added.")
 	return 0
+}
+
+func siteAddTargetProvider(targetRef string) (string, error) {
+	targets, err := cachedTargets()
+	if err != nil {
+		return "", err
+	}
+	target := state.MatchingRecord(targets, targetRef)
+	if target == nil {
+		return "", ProjectError{Msg: fmt.Sprintf("No target matched %q.", targetRef)}
+	}
+	provider := strings.ToLower(strings.TrimSpace(recordValueString(target["provider"])))
+	if provider == "" {
+		return "", ProjectError{Msg: fmt.Sprintf("Target %q is missing provider.", targetRef)}
+	}
+	return provider, nil
 }
 
 func buildSiteRemovePlan(siteID string) (siteRemovePlan, error) {
@@ -3531,6 +4115,18 @@ func siteEnvDetailsOutput(siteID, env string, record map[string]any) map[string]
 	out["resolved_site"] = siteEnvDisplaySite(record)
 	out["resolved_env"] = siteEnvName(record)
 	out["resolved_target"] = siteProviderTarget(record)
+	if host := firstNonEmpty(mapStringAtPath(record, "ssh", "host"), mapStringAtPath(record, "kinsta", "ssh", "host")); host != "" {
+		out["ssh_host"] = host
+	}
+	if port := firstNonEmpty(mapStringAtPath(record, "ssh", "port"), mapStringAtPath(record, "kinsta", "ssh", "port")); port != "" {
+		out["ssh_port"] = port
+	}
+	if user := firstNonEmpty(mapStringAtPath(record, "ssh", "user"), mapStringAtPath(record, "kinsta", "ssh", "user")); user != "" {
+		out["ssh_user"] = user
+	}
+	if command := firstNonEmpty(mapStringAtPath(record, "ssh", "command"), mapStringAtPath(record, "kinsta", "ssh", "command")); command != "" {
+		out["ssh_command"] = command
+	}
 	return out
 }
 
@@ -3560,12 +4156,23 @@ func printSiteEnvDetails(out map[string]any) {
 		{label: "URL", keys: []string{"url", "site_url", "home_url"}},
 		{label: "Path", keys: []string{"path", "root", "document_root"}},
 		{label: "Database", keys: []string{"database", "db_name"}},
+		{label: "SSH", keys: []string{"resolved_ssh"}},
+		{label: "SSH host", keys: []string{"ssh_host"}},
+		{label: "SSH port", keys: []string{"ssh_port"}},
+		{label: "SSH user", keys: []string{"ssh_user", "ssh_username"}},
+		{label: "SSH command", keys: []string{"ssh_command"}},
 		{label: "Admin username", keys: []string{"resolved_admin_user", "admin_user", "admin_username", "wp_admin_user", "wordpress_admin_user"}},
 		{label: "Admin password", keys: []string{"resolved_admin_password", "admin_password", "wp_admin_password", "wordpress_admin_password"}},
 		{label: "Branch", keys: []string{"branch"}},
 		{label: "Kinsta site ID", keys: []string{"kinsta_site_id"}},
 		{label: "Kinsta environment ID", keys: []string{"kinsta_environment_id"}},
 	} {
+		if field.label == "SSH" {
+			if value := siteEnvSSHDisplay(out); value != "" {
+				fmt.Printf("%s: %s\n", field.label, value)
+			}
+			continue
+		}
 		if value := firstRecordString(out, field.keys...); value != "" {
 			fmt.Printf("%s: %s\n", field.label, value)
 		}
@@ -3727,14 +4334,19 @@ func cmdSiteEnvRemoteCommandPlan(action, siteID, env string, args []string) int 
 	if url := firstRecordString(record, "url", "site_url", "home_url", "hostname"); url != "" {
 		fmt.Printf("  url:      %s\n", url)
 	}
-	if provider != "linode" {
+	if provider != "linode" && provider != "kinsta" {
 		if action == "wp" {
 			fmt.Printf("  wp args:  %s\n", strings.Join(args, " "))
 		}
 		fmt.Fprintf(os.Stderr, "Remote site env %s is not implemented for provider %q; no command was run.\n", action, provider)
 		return 1
 	}
-	sshArgs, err := linodeSiteEnvSSHArgs(record, action, args)
+	var sshArgs []string
+	if provider == "kinsta" {
+		sshArgs, err = kinstaSiteEnvSSHArgs(record, action, args)
+	} else {
+		sshArgs, err = linodeSiteEnvSSHArgs(record, action, args)
+	}
 	if err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		return 1
@@ -3748,6 +4360,46 @@ func cmdSiteEnvRemoteCommandPlan(action, siteID, env string, args []string) int 
 		return 1
 	}
 	return 0
+}
+
+func kinstaSiteEnvSSHArgs(record map[string]any, action string, wpArgs []string) ([]string, error) {
+	host := firstNonEmpty(mapStringAtPath(record, "ssh", "host"), mapStringAtPath(record, "kinsta", "ssh", "host"), firstRecordString(record, "ssh_host"))
+	if host == "" {
+		return nil, ProjectError{Msg: fmt.Sprintf("Kinsta site env %q is missing SSH host. Run nf site refresh.", siteSummary(record))}
+	}
+	user := firstNonEmpty(mapStringAtPath(record, "ssh", "user"), mapStringAtPath(record, "kinsta", "ssh", "user"), firstRecordString(record, "ssh_user", "ssh_username"))
+	if user == "" {
+		return nil, ProjectError{Msg: fmt.Sprintf("Kinsta site env %q is missing SSH user. Run nf site refresh.", siteSummary(record))}
+	}
+	port := firstNonEmpty(mapStringAtPath(record, "ssh", "port"), mapStringAtPath(record, "kinsta", "ssh", "port"), firstRecordString(record, "ssh_port"), "22")
+	path := firstRecordString(record, "path")
+	if path == "" {
+		return nil, ProjectError{Msg: fmt.Sprintf("Kinsta site env %q is missing path. Run nf site refresh.", siteSummary(record))}
+	}
+	path = normalizeKinstaCachedPath(path)
+	destination := user + "@" + host
+	if action != "wp" {
+		remoteCommand := "cd " + shellQuoteArg(path) + " && exec ${SHELL:-/bin/bash} -i"
+		return []string{"ssh", "-t", "-p", port, destination, remoteCommand}, nil
+	}
+	sshArgs := []string{"ssh", "-p", port, destination}
+	remoteCommand := "cd " + shellQuoteArg(path) + " && wp --path=" + shellQuoteArg(path)
+	if normalized := normalizePassthroughArgs(wpArgs); len(normalized) > 0 {
+		remoteCommand += " " + renderCommandArgs(normalized)
+	}
+	return append(sshArgs, remoteCommand), nil
+}
+
+func normalizeKinstaCachedPath(value string) string {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return ""
+	}
+	const duplicatedPublicRoot = "/public/www/"
+	if index := strings.Index(value, duplicatedPublicRoot); index >= 0 {
+		return path.Clean("/www/" + value[index+len(duplicatedPublicRoot):])
+	}
+	return path.Clean(value)
 }
 
 func linodeSiteEnvSSHArgs(record map[string]any, action string, wpArgs []string) ([]string, error) {
@@ -3981,11 +4633,22 @@ func refreshRemoteTargetSites(targets []map[string]any) (siteRefreshResult, erro
 	discovered := []map[string]any{}
 	for _, target := range targets {
 		provider := strings.ToLower(strings.TrimSpace(recordValueString(target["provider"])))
-		if provider != "linode" {
+		if provider != "linode" && provider != "kinsta" {
 			result.Skipped++
 			continue
 		}
 		targetName := firstRecordString(target, "_state_key", "target_name", "target", "name", "slug", "hostname", "label", "id")
+		if provider == "kinsta" {
+			remote, err := discoverKinstaTargetSites(target)
+			if err != nil {
+				result.Warnings = append(result.Warnings, fmt.Sprintf("target %q: %v", targetName, err))
+				continue
+			}
+			result.Refreshed++
+			refreshedTargets[normalizedRecordString(targetName)] = true
+			discovered = append(discovered, remote...)
+			continue
+		}
 		sshHost := serverSSHHost(target)
 		if sshHost == "" {
 			result.Warnings = append(result.Warnings, fmt.Sprintf("target %q has no SSH host", targetName))
@@ -4045,7 +4708,8 @@ func currentTargetNames(targets []map[string]any) map[string]bool {
 }
 
 func staleSiteTarget(site map[string]any, currentTargets map[string]bool) bool {
-	if strings.ToLower(strings.TrimSpace(recordValueString(site["provider"]))) != "linode" {
+	provider := strings.ToLower(strings.TrimSpace(recordValueString(site["provider"])))
+	if provider != "linode" {
 		return false
 	}
 	target := normalizedRecordString(siteProviderTarget(site))
@@ -4053,6 +4717,143 @@ func staleSiteTarget(site map[string]any, currentTargets map[string]bool) bool {
 		return false
 	}
 	return !currentTargets[target]
+}
+
+func discoverKinstaTargetSites(target map[string]any) ([]map[string]any, error) {
+	token := envwizard.Value("KINSTA_API_KEY")
+	if token == "" {
+		return nil, fmt.Errorf("Expected KINSTA_API_KEY in the environment or %s.", config.EnvFile())
+	}
+	targetName := firstNonEmpty(firstRecordString(target, "_state_key", "target_name", "target", "name", "slug", "hostname", "label", "id"), "kinsta")
+	companyID := firstNonEmpty(firstRecordString(target, "company_id", "company"), mapStringAtPath(target, "kinsta", "company_id"))
+	client := kinsta.NewClient(os.Getenv("KINSTA_BASE_URL"), token)
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Minute)
+	defer cancel()
+	if companyID == "" {
+		validate, err := client.Validate(ctx)
+		if err != nil {
+			return nil, err
+		}
+		companyID = strings.TrimSpace(validate.Company)
+	}
+	sites, err := client.ListSites(ctx, companyID)
+	if err != nil {
+		return nil, err
+	}
+	records := []map[string]any{}
+	for _, site := range sites {
+		siteName := firstNonEmpty(site.Name, site.DisplayName, site.ID)
+		if siteName == "" || site.ID == "" {
+			continue
+		}
+		siteID := kinstaSiteID(siteName)
+		envs, err := client.ListEnvironments(ctx, site.ID)
+		if err != nil {
+			return nil, fmt.Errorf("site %s environments: %w", siteName, err)
+		}
+		for i, env := range envs {
+			envName := kinstaCacheEnvName(env, i)
+			domain := kinstaEnvPrimaryDomain(env)
+			if domain.ID == "" || domainName(domain) == "" {
+				domains, err := client.ListDomains(ctx, env.ID)
+				if err == nil {
+					domain = preferredKinstaDomain(domains)
+				}
+			}
+			cfg, _ := client.SFTPConfig(ctx, site.ID, env.ID)
+			pathValue := kinstaEnvPath(firstNonEmpty(cfg.User, siteName), env.WebRoot)
+			database := firstNonEmpty(cfg.User, siteName)
+			host := firstNonEmpty(cfg.Host, env.SSHConnection.SSHIP.ExternalIP)
+			port := firstNonEmpty(cfg.Port, env.SSHConnection.SSHPort, "22")
+			user := cfg.User
+			domainValue := domainName(domain)
+			records = append(records, map[string]any{
+				"provider":    "kinsta",
+				"env_id":      env.ID,
+				"site_id":     siteID,
+				"name":        siteName,
+				"env":         envName,
+				"environment": envName,
+				"target":      targetName,
+				"hostname":    domainValue,
+				"url":         kinstaURL(domainValue),
+				"path":        pathValue,
+				"database":    database,
+				"branch":      kinstaEnvBranch(envName),
+				"status":      "active",
+				"ssh": map[string]any{
+					"host":    host,
+					"port":    port,
+					"user":    user,
+					"command": cfg.SSHCommand,
+				},
+				"kinsta": map[string]any{
+					"company_id":     companyID,
+					"site_id":        site.ID,
+					"environment_id": env.ID,
+					"domain_id":      domain.ID,
+					"path":           pathValue,
+					"database":       database,
+					"ssh": map[string]any{
+						"host":    host,
+						"port":    port,
+						"user":    user,
+						"command": cfg.SSHCommand,
+					},
+				},
+			})
+		}
+	}
+	return records, nil
+}
+
+func kinstaCacheEnvName(env kinsta.Environment, index int) string {
+	value := strings.ToLower(strings.TrimSpace(firstNonEmpty(env.Name, env.DisplayName)))
+	if strings.Contains(value, "stag") {
+		return "staging"
+	}
+	if value == "live" || index == 0 {
+		return "live"
+	}
+	return value
+}
+
+func kinstaEnvPrimaryDomain(env kinsta.Environment) kinsta.Domain {
+	if env.PrimaryDomain.ID != "" || domainName(env.PrimaryDomain) != "" {
+		return env.PrimaryDomain
+	}
+	return preferredKinstaDomain(env.Domains)
+}
+
+func preferredKinstaDomain(domains []kinsta.Domain) kinsta.Domain {
+	for _, domain := range domains {
+		if domain.IsPrimary || strings.EqualFold(strings.TrimSpace(domain.Type), "live") {
+			return domain
+		}
+	}
+	if len(domains) > 0 {
+		return domains[0]
+	}
+	return kinsta.Domain{}
+}
+
+func domainName(domain kinsta.Domain) string {
+	return firstNonEmpty(domain.Name, domain.Domain, domain.DomainName)
+}
+
+func kinstaURL(domain string) string {
+	domain = strings.TrimSpace(domain)
+	if domain == "" {
+		return ""
+	}
+	return "https://" + domain
+}
+
+func kinstaEnvBranch(env string) string {
+	if env == "staging" {
+		return "develop"
+	}
+	return "main"
 }
 
 func discoverLinodeTargetSites(target map[string]any) ([]map[string]any, error) {
@@ -4259,16 +5060,46 @@ func printSiteDetails(out map[string]any) {
 		return
 	}
 	fmt.Println("Environments:")
-	rows := [][]string{{"env", "url", "path", "database"}}
+	showSSH := false
 	for _, env := range envs {
-		rows = append(rows, []string{
+		if siteEnvSSHDisplay(env) != "" {
+			showSSH = true
+			break
+		}
+	}
+	header := []string{"env", "url", "path", "database"}
+	if showSSH {
+		header = append(header, "ssh")
+	}
+	rows := [][]string{header}
+	for _, env := range envs {
+		row := []string{
 			siteEnvName(env),
 			firstRecordString(env, "url", "site_url", "home_url", "hostname"),
 			firstRecordString(env, "path", "root", "document_root"),
 			firstRecordString(env, "database", "db_name"),
-		})
+		}
+		if showSSH {
+			row = append(row, siteEnvSSHDisplay(env))
+		}
+		rows = append(rows, row)
 	}
 	fmt.Println(formatTable(rows))
+}
+
+func siteEnvSSHDisplay(record map[string]any) string {
+	host := firstNonEmpty(mapStringAtPath(record, "ssh", "host"), mapStringAtPath(record, "kinsta", "ssh", "host"), firstRecordString(record, "ssh_host"))
+	if host == "" {
+		return ""
+	}
+	value := host
+	if user := firstNonEmpty(mapStringAtPath(record, "ssh", "user"), mapStringAtPath(record, "kinsta", "ssh", "user"), firstRecordString(record, "ssh_user", "ssh_username")); user != "" {
+		value = user + "@" + value
+	}
+	if port := firstNonEmpty(mapStringAtPath(record, "ssh", "port"), mapStringAtPath(record, "kinsta", "ssh", "port"), firstRecordString(record, "ssh_port")); port != "" && port != "22" {
+		value += ":" + port
+	}
+	return value
 }
 
 func siteRecordsByID(records []map[string]any, siteID string) []map[string]any {
@@ -5003,6 +5834,7 @@ func runConfigHelp() int {
 		"set-base-domain <domain>      set provider base domain",
 		"set-default-wp-email <email>  set default WordPress email",
 		"set-default-wp-user <user>    set default WordPress user",
+		"set-kinsta-default-region <region>   set default Kinsta region",
 		"set-linode-default-region <region>   set default Linode region",
 		"set-linode-default-type <type>       set default Linode type",
 		"set-linode-default-image <image>     set default Linode image",
@@ -5572,6 +6404,12 @@ func runConfig(argv []string) int {
 			return 1
 		}
 		return cmdConfigSet("default_wp_user", argv[1])
+	case "set-kinsta-default-region":
+		if len(argv) != 2 || strings.TrimSpace(argv[1]) == "" {
+			fmt.Fprintln(os.Stderr, "config set-kinsta-default-region takes exactly one region")
+			return 1
+		}
+		return cmdConfigSet("kinsta_default_region", argv[1])
 	case "set-linode-default-region":
 		if len(argv) != 2 || strings.TrimSpace(argv[1]) == "" {
 			fmt.Fprintln(os.Stderr, "config set-linode-default-region takes exactly one region")
@@ -5807,6 +6645,7 @@ func cmdConfigShow() int {
 	fmt.Printf("Default WP User: %s\n", values["default_wp_user"])
 	fmt.Printf("Base Domain: %s\n", values["base_domain"])
 	fmt.Printf("DNSimple Account ID: %s\n", values["dnsimple_account_id"])
+	fmt.Printf("Kinsta Default Region: %s\n", values["kinsta_default_region"])
 	fmt.Printf("Linode Default Region: %s\n", values["linode_default_region"])
 	fmt.Printf("Linode Default Type: %s\n", values["linode_default_type"])
 	fmt.Printf("Linode Default Image: %s\n", values["linode_default_image"])
@@ -6888,13 +7727,14 @@ func runSite(argv []string) int {
 func runSiteAdd(argv []string) int {
 	if len(argv) == 0 || argv[0] == "help" || argv[0] == "--help" || argv[0] == "-h" {
 		printGroupHelp("site add", []string{
-			"<target> <site> [--execute] [--yes] [--non-interactive] [--dry-run]",
+			"<target> <site> [--region <region>] [--execute] [--yes] [--non-interactive] [--dry-run]",
 		})
 		return 0
 	}
 	args := siteAddArgs{}
 	positionals := []string{}
-	for _, arg := range argv {
+	for i := 0; i < len(argv); i++ {
+		arg := argv[i]
 		switch arg {
 		case "--execute":
 			args.execute = true
@@ -6904,7 +7744,22 @@ func runSiteAdd(argv []string) int {
 			args.nonInteractive = true
 		case "--dry-run":
 			args.dryRun = true
+		case "--region":
+			if i+1 >= len(argv) || strings.TrimSpace(argv[i+1]) == "" {
+				fmt.Fprintln(os.Stderr, "--region requires a value")
+				return 1
+			}
+			i++
+			args.region = argv[i]
 		default:
+			if strings.HasPrefix(arg, "--region=") {
+				args.region = strings.TrimPrefix(arg, "--region=")
+				if strings.TrimSpace(args.region) == "" {
+					fmt.Fprintln(os.Stderr, "--region requires a value")
+					return 1
+				}
+				continue
+			}
 			if strings.HasPrefix(arg, "-") {
 				fmt.Fprintf(os.Stderr, "unknown site add flag: %s\n", arg)
 				return 1

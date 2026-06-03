@@ -71,7 +71,23 @@ func (p *dnsimpleProvider) listARecords(ctx context.Context, zone string) ([]DNS
 }
 
 func (p *dnsimpleProvider) upsertARecord(ctx context.Context, zone, name, ip string) (DNSRecord, string, error) {
+	return p.upsertRecord(ctx, zone, name, "A", ip, 60)
+}
+
+func (p *dnsimpleProvider) upsertRecord(ctx context.Context, zone, name, recordType, content string, ttl int) (DNSRecord, string, error) {
+	recordType = strings.ToUpper(strings.TrimSpace(recordType))
+	if recordType == "" {
+		recordType = "A"
+	}
+	name = strings.TrimSpace(name)
+	content = strings.TrimSpace(content)
+	if ttl <= 0 {
+		ttl = 300
+	}
 	records, err := p.listARecords(ctx, zone)
+	if recordType != "A" {
+		records, err = p.listRecords(ctx, zone, recordType)
+	}
 	if err != nil {
 		return DNSRecord{}, "", err
 	}
@@ -79,19 +95,19 @@ func (p *dnsimpleProvider) upsertARecord(ctx context.Context, zone, name, ip str
 		if record.Name != name {
 			continue
 		}
-		if record.Content == ip && record.TTL == 60 {
+		if record.Content == content && record.TTL == ttl {
 			return record, "already points", nil
 		}
 		recordID, err := strconv.ParseInt(record.ID, 10, 64)
 		if err != nil {
 			return DNSRecord{}, "", Error{Msg: fmt.Sprintf("DNSimple record %s has invalid id %q", name, record.ID)}
 		}
-		resp, err := p.client.Zones.UpdateRecord(ctx, p.accountID, zone, recordID, dnsimple.ZoneRecordAttributes{Content: ip, TTL: 60})
+		resp, err := p.client.Zones.UpdateRecord(ctx, p.accountID, zone, recordID, dnsimple.ZoneRecordAttributes{Content: content, TTL: ttl})
 		if err != nil {
-			return DNSRecord{}, "", Error{Msg: fmt.Sprintf("Updating DNSimple A record %s in zone %s: %v", name, zone, err)}
+			return DNSRecord{}, "", Error{Msg: fmt.Sprintf("Updating DNSimple %s record %s in zone %s: %v", recordType, name, zone, err)}
 		}
 		if resp == nil || resp.Data == nil {
-			return DNSRecord{}, "", Error{Msg: fmt.Sprintf("Updating DNSimple A record %s in zone %s: empty response", name, zone)}
+			return DNSRecord{}, "", Error{Msg: fmt.Sprintf("Updating DNSimple %s record %s in zone %s: empty response", recordType, name, zone)}
 		}
 		updated := dnsRecordFromZoneRecord(*resp.Data)
 		if updated.ID == "" {
@@ -99,12 +115,12 @@ func (p *dnsimpleProvider) upsertARecord(ctx context.Context, zone, name, ip str
 		}
 		return updated, "updated", nil
 	}
-	resp, err := p.client.Zones.CreateRecord(ctx, p.accountID, zone, dnsimple.ZoneRecordAttributes{Type: "A", Name: dnsimple.String(name), Content: ip, TTL: 60})
+	resp, err := p.client.Zones.CreateRecord(ctx, p.accountID, zone, dnsimple.ZoneRecordAttributes{Type: recordType, Name: dnsimple.String(name), Content: content, TTL: ttl})
 	if err != nil {
-		return DNSRecord{}, "", Error{Msg: fmt.Sprintf("Creating DNSimple A record %s in zone %s: %v", name, zone, err)}
+		return DNSRecord{}, "", Error{Msg: fmt.Sprintf("Creating DNSimple %s record %s in zone %s: %v", recordType, name, zone, err)}
 	}
 	if resp == nil || resp.Data == nil {
-		return DNSRecord{}, "", Error{Msg: fmt.Sprintf("Creating DNSimple A record %s in zone %s: empty response", name, zone)}
+		return DNSRecord{}, "", Error{Msg: fmt.Sprintf("Creating DNSimple %s record %s in zone %s: empty response", recordType, name, zone)}
 	}
 	created := dnsRecordFromZoneRecord(*resp.Data)
 	return created, "created", nil
@@ -219,24 +235,40 @@ func defaultDNSimpleListARecords(token, accountID, zone string) ([]DNSRecord, er
 }
 
 func defaultDNSimpleUpsertARecord(token, accountID, zone, name, ip string) error {
+	return defaultDNSimpleUpsertRecord(token, accountID, zone, name, "A", ip, 60)
+}
+
+func defaultDNSimpleUpsertRecord(token, accountID, zone, name, recordType, content string, ttl int) error {
 	provider, err := dnsimpleProviderFactory(context.Background(), token, accountID)
 	if err != nil {
 		return err
 	}
-	record, action, err := provider.upsertARecord(context.Background(), zone, name, ip)
+	record, action, err := provider.upsertRecord(context.Background(), zone, name, recordType, content, ttl)
 	if err != nil {
 		return err
 	}
+	recordType = strings.ToUpper(strings.TrimSpace(recordType))
+	if recordType == "" {
+		recordType = "A"
+	}
+	label := ""
+	if recordType != "A" {
+		label = recordType + " "
+	}
 	switch action {
 	case "created":
-		fmt.Printf("Created DNS %s -> %s\n", fqdnForDNSRecordName(name, zone), ip)
+		fmt.Printf("Created DNS %s%s -> %s\n", label, fqdnForDNSRecordName(name, zone), content)
 	case "updated":
-		fmt.Printf("Updated DNS %s -> %s\n", fqdnForDNSRecordName(name, zone), ip)
+		fmt.Printf("Updated DNS %s%s -> %s\n", label, fqdnForDNSRecordName(name, zone), content)
 	default:
-		fmt.Printf("DNS %s already points to %s\n", fqdnForDNSRecordName(name, zone), ip)
+		fmt.Printf("DNS %s%s already points to %s\n", label, fqdnForDNSRecordName(name, zone), content)
 	}
 	_ = record
 	return nil
+}
+
+func UpsertDNSimpleRecord(token, accountID, zone, name, recordType, content string, ttl int) error {
+	return defaultDNSimpleUpsertRecord(token, accountID, zone, name, recordType, content, ttl)
 }
 
 func defaultDNSimpleDeleteARecord(token, accountID, zone, name string) error {
