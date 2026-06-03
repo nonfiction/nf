@@ -2212,13 +2212,6 @@ func siteServerReference(site map[string]any) string {
 	return firstRecordString(site, "server", "server_id", "server_name", "server_hostname", "server_label")
 }
 
-func siteServerSummary(site, server map[string]any) string {
-	if server != nil {
-		return serverSummary(server)
-	}
-	return siteServerReference(site)
-}
-
 func siteKinstaID(site map[string]any, key string) string {
 	if value := mapStringAtPath(site, "kinsta", key); value != "" {
 		return value
@@ -2324,16 +2317,22 @@ func sortedSiteListEnvs(envs map[string]bool) []string {
 func enrichSiteOutput(out map[string]any, record map[string]any, servers []map[string]any) error {
 	provider := strings.ToLower(strings.TrimSpace(recordValueString(record["provider"])))
 	if provider == "linode" {
-		serverRef := siteServerReference(record)
-		server := state.MatchingRecord(servers, serverRef)
-		if server == nil {
-			return ProjectError{Msg: fmt.Sprintf("Linode site %q references server %q, but no server matched that target.", siteSummary(record), serverRef)}
-		}
-		if err := validateServerRecord(server); err != nil {
+		targetRef := siteProviderTarget(record)
+		targets, err := cachedTargets()
+		if err != nil {
 			return err
 		}
-		out["resolved_server_summary"] = serverSummary(server)
-		out["resolved_server"] = server
+		candidates := append([]map[string]any{}, servers...)
+		candidates = append(candidates, targets...)
+		target := state.MatchingRecord(candidates, targetRef)
+		if target == nil {
+			return ProjectError{Msg: fmt.Sprintf("Linode site %q references target %q, but no cached target matched. Run nf provider check linode.", siteSummary(record), targetRef)}
+		}
+		if err := validateTargetRecord(target); err != nil {
+			return err
+		}
+		out["resolved_target_summary"] = serverSummary(target)
+		out["resolved_target_record"] = target
 	}
 	if provider == "kinsta" {
 		if value := siteKinstaID(record, "company_id"); value != "" {
@@ -2581,8 +2580,8 @@ func validateSiteRecord(site map[string]any) error {
 	if provider == "" {
 		return ProjectError{Msg: fmt.Sprintf("Site %q is missing provider.", siteSummary(site))}
 	}
-	if provider == "linode" && siteServerReference(site) == "" {
-		return ProjectError{Msg: fmt.Sprintf("Linode site %q is missing a server reference.", siteSummary(site))}
+	if provider == "linode" && siteProviderTarget(site) == "" {
+		return ProjectError{Msg: fmt.Sprintf("Linode site %q is missing a target reference.", siteSummary(site))}
 	}
 	return nil
 }
@@ -3422,7 +3421,7 @@ func cmdListSiteEnvs(siteID string) int {
 	return 0
 }
 
-func cmdShowSiteEnv(siteID, env string) int {
+func cmdShowSiteEnv(siteID, env string, jsonOutput bool) int {
 	siteID = strings.TrimSpace(siteID)
 	env = strings.TrimSpace(env)
 	if siteID == "" || env == "" {
@@ -3449,19 +3448,66 @@ func cmdShowSiteEnv(siteID, env string) int {
 		fmt.Fprintln(os.Stderr, err)
 		return 1
 	}
+	out := siteEnvDetailsOutput(siteID, env, record)
+	if err := enrichSiteOutput(out, record, bundle.Servers); err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		return 1
+	}
+	if !jsonOutput {
+		printSiteEnvDetails(out)
+		return 0
+	}
+	data, _ := json.MarshalIndent(out, "", "  ")
+	fmt.Println(string(data))
+	return 0
+}
+
+func siteEnvDetailsOutput(siteID, env string, record map[string]any) map[string]any {
 	out := cloneRecord(record)
 	out["requested_site"] = siteID
 	out["requested_env"] = env
 	out["resolved_site"] = siteEnvDisplaySite(record)
 	out["resolved_env"] = siteEnvName(record)
 	out["resolved_target"] = siteProviderTarget(record)
-	if err := enrichSiteOutput(out, record, bundle.Servers); err != nil {
-		fmt.Fprintln(os.Stderr, err)
-		return 1
+	return out
+}
+
+func printSiteEnvDetails(out map[string]any) {
+	fmt.Printf("Site: %s\n", recordValueString(out["resolved_site"]))
+	fmt.Printf("Env: %s\n", recordValueString(out["resolved_env"]))
+	if provider := recordValueString(out["provider"]); provider != "" {
+		fmt.Printf("Provider: %s\n", provider)
 	}
-	data, _ := json.MarshalIndent(out, "", "  ")
-	fmt.Println(string(data))
-	return 0
+	if target := recordValueString(out["resolved_target"]); target != "" {
+		fmt.Printf("Target: %s\n", target)
+	}
+	requestedSite := recordValueString(out["requested_site"])
+	resolvedSite := recordValueString(out["resolved_site"])
+	if requestedSite != "" && resolvedSite != "" && requestedSite != resolvedSite {
+		fmt.Printf("Requested site: %s\n", requestedSite)
+	}
+	requestedEnv := recordValueString(out["requested_env"])
+	resolvedEnv := recordValueString(out["resolved_env"])
+	if requestedEnv != "" && resolvedEnv != "" && requestedEnv != resolvedEnv {
+		fmt.Printf("Requested env: %s\n", requestedEnv)
+	}
+	for _, field := range []struct {
+		label string
+		keys  []string
+	}{
+		{label: "URL", keys: []string{"url", "site_url", "home_url"}},
+		{label: "Hostname", keys: []string{"hostname"}},
+		{label: "Path", keys: []string{"path", "root", "document_root"}},
+		{label: "Database", keys: []string{"database", "db_name"}},
+		{label: "Branch", keys: []string{"branch"}},
+		{label: "Target summary", keys: []string{"resolved_target_summary"}},
+		{label: "Kinsta site ID", keys: []string{"kinsta_site_id"}},
+		{label: "Kinsta environment ID", keys: []string{"kinsta_environment_id"}},
+	} {
+		if value := firstRecordString(out, field.keys...); value != "" {
+			fmt.Printf("%s: %s\n", field.label, value)
+		}
+	}
 }
 
 func cachedSiteEnv(siteID, env string) (map[string]any, []map[string]any, error) {
@@ -3996,7 +4042,7 @@ func cmdServerRootPassword(needle string) int {
 	return 0
 }
 
-func cmdShowSite(needle string) int {
+func cmdShowSite(needle string, jsonOutput bool) int {
 	resolved, _, projectFileExists, targetAliasUsed, err := resolveSiteTarget(needle)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, err)
@@ -4021,9 +4067,47 @@ func cmdShowSite(needle string) int {
 		return 1
 	}
 	out := siteDetailsOutput(needle, resolved, records, bundle.Servers)
+	if !jsonOutput {
+		printSiteDetails(out)
+		return 0
+	}
 	data, _ := json.MarshalIndent(out, "", "  ")
 	fmt.Println(string(data))
 	return 0
+}
+
+func printSiteDetails(out map[string]any) {
+	fmt.Printf("Site: %s\n", recordValueString(out["site_id"]))
+	if name := recordValueString(out["name"]); name != "" {
+		fmt.Printf("Name: %s\n", name)
+	}
+	if provider := recordValueString(out["provider"]); provider != "" {
+		fmt.Printf("Provider: %s\n", provider)
+	}
+	if target := recordValueString(out["target"]); target != "" {
+		fmt.Printf("Target: %s\n", target)
+	}
+	requested := recordValueString(out["requested_site"])
+	resolved := recordValueString(out["resolved_site"])
+	if requested != "" && resolved != "" && requested != resolved {
+		fmt.Printf("Requested: %s\n", requested)
+		fmt.Printf("Resolved: %s\n", resolved)
+	}
+	envs, _ := out["envs"].([]map[string]any)
+	if len(envs) == 0 {
+		return
+	}
+	fmt.Println("Environments:")
+	rows := [][]string{{"env", "url", "path", "database"}}
+	for _, env := range envs {
+		rows = append(rows, []string{
+			siteEnvName(env),
+			firstRecordString(env, "url", "site_url", "home_url", "hostname"),
+			firstRecordString(env, "path", "root", "document_root"),
+			firstRecordString(env, "database", "db_name"),
+		})
+	}
+	fmt.Println(formatTable(rows))
 }
 
 func siteRecordsByID(records []map[string]any, siteID string) []map[string]any {
@@ -4122,6 +4206,14 @@ func chooseSiteForEnvList() (string, error) {
 	return chooseSite("list envs for")
 }
 
+func chooseSiteForEnvShow() (string, error) {
+	return chooseSite("show an env for")
+}
+
+func chooseSiteForEnvShell() (string, error) {
+	return chooseSite("shell into")
+}
+
 func chooseSite(action string) (string, error) {
 	bundle, err := state.LoadStateBundle()
 	if err != nil {
@@ -4148,6 +4240,84 @@ func chooseSite(action string) (string, error) {
 		return "", ProjectError{Msg: "No selectable sites found."}
 	}
 	return siteSelectFn(fmt.Sprintf("Choose a site to %s", action), options)
+}
+
+func parseSiteShowArgs(argv []string) (string, bool, error) {
+	needle := ""
+	jsonOutput := false
+	for _, arg := range argv {
+		switch arg {
+		case "--json":
+			jsonOutput = true
+		default:
+			if strings.HasPrefix(arg, "-") {
+				return "", false, fmt.Errorf("unknown site show flag: %s", arg)
+			}
+			if needle != "" {
+				return "", false, fmt.Errorf("site show takes at most one site")
+			}
+			needle = arg
+		}
+	}
+	return needle, jsonOutput, nil
+}
+
+func parseSiteEnvShowArgs(args []string) (siteID, env string, jsonOutput bool, ok bool) {
+	env = "live"
+	seenEnv := ""
+	for _, arg := range args {
+		switch arg {
+		case "--json":
+			jsonOutput = true
+		case "--live", "--staging":
+			selected := strings.TrimPrefix(arg, "--")
+			if seenEnv != "" && seenEnv != selected {
+				fmt.Fprintln(os.Stderr, "Choose either --live or --staging, not both.")
+				return "", "", false, false
+			}
+			seenEnv = selected
+			env = selected
+		default:
+			if strings.HasPrefix(arg, "-") {
+				fmt.Fprintf(os.Stderr, "unknown site env show flag: %s\n", arg)
+				return "", "", false, false
+			}
+			if siteID != "" {
+				fmt.Fprintln(os.Stderr, "site env show takes at most one site")
+				return "", "", false, false
+			}
+			siteID = arg
+		}
+	}
+	return siteID, env, jsonOutput, true
+}
+
+func parseSiteEnvShellArgs(args []string) (siteID, env string, ok bool) {
+	env = "live"
+	seenEnv := ""
+	for _, arg := range args {
+		switch arg {
+		case "--live", "--staging":
+			selected := strings.TrimPrefix(arg, "--")
+			if seenEnv != "" && seenEnv != selected {
+				fmt.Fprintln(os.Stderr, "Choose either --live or --staging, not both.")
+				return "", "", false
+			}
+			seenEnv = selected
+			env = selected
+		default:
+			if strings.HasPrefix(arg, "-") {
+				fmt.Fprintf(os.Stderr, "unknown site env shell flag: %s\n", arg)
+				return "", "", false
+			}
+			if siteID != "" {
+				fmt.Fprintln(os.Stderr, "site env shell takes at most one site")
+				return "", "", false
+			}
+			siteID = arg
+		}
+	}
+	return siteID, env, true
 }
 
 func chooseTargetForShow() (string, error) {
@@ -4665,7 +4835,7 @@ func runSiteHelp() int {
 		"add <target> <site> [flags]   create live and staging WordPress envs on a target",
 		"refresh             refresh local inventory cache",
 		"list                list sites",
-		"show <id-or-name>   show a site",
+		"show [site] [--json]   show a site",
 		"remove [site] [flags]   remove a Linode site and delete its env data",
 		"env                 list, show, shell into, or run wp-cli against remote envs",
 	})
@@ -6505,14 +6675,12 @@ func runSite(argv []string) int {
 		}
 		return cmdList("sites")
 	case "show":
-		if len(argv) > 2 {
-			fmt.Fprintln(os.Stderr, "site show takes exactly one identifier")
+		needle, jsonOutput, err := parseSiteShowArgs(argv[1:])
+		if err != nil {
+			fmt.Fprintln(os.Stderr, err)
 			return 1
 		}
-		needle := ""
-		if len(argv) == 2 {
-			needle = argv[1]
-		} else {
+		if needle == "" {
 			selected, err := chooseSiteForShow()
 			if err != nil {
 				fmt.Fprintln(os.Stderr, err)
@@ -6520,7 +6688,7 @@ func runSite(argv []string) int {
 			}
 			needle = selected
 		}
-		return cmdShowSite(needle)
+		return cmdShowSite(needle, jsonOutput)
 	case "remove":
 		needle, opts, err := parseRemoveSiteArgs(argv[1:])
 		if err != nil {
@@ -6588,8 +6756,8 @@ func runSiteEnv(argv []string) int {
 	if len(argv) == 0 || argv[0] == "help" || argv[0] == "--help" || argv[0] == "-h" {
 		printGroupHelp("site env", []string{
 			"list [site]                 list remote envs for a site",
-			"show <site> [--live|--staging]       show one remote env",
-			"shell <site> [--live|--staging]      shell into a remote env",
+			"show [site] [--live|--staging] [--json]   show one remote env",
+			"shell [site] [--live|--staging]      shell into a remote env",
 			"wp <site> [--live|--staging] <cmd>   run wp-cli against a remote env",
 		})
 		return 0
@@ -6613,18 +6781,38 @@ func runSiteEnv(argv []string) int {
 		}
 		return cmdListSiteEnvs(siteID)
 	case "show":
-		siteID, env, _, ok := parseSiteEnvFlag(argv[1:], false)
+		siteID, env, jsonOutput, ok := parseSiteEnvShowArgs(argv[1:])
 		if !ok {
 			return 1
 		}
-		return cmdShowSiteEnv(siteID, env)
+		if siteID == "" {
+			selected, err := chooseSiteForEnvShow()
+			if err != nil {
+				fmt.Fprintln(os.Stderr, err)
+				return 1
+			}
+			siteID = selected
+		}
+		return cmdShowSiteEnv(siteID, env, jsonOutput)
 	case "shell":
-		siteID, env, _, ok := parseSiteEnvFlag(argv[1:], false)
+		siteID, env, ok := parseSiteEnvShellArgs(argv[1:])
 		if !ok {
 			return 1
+		}
+		if siteID == "" {
+			selected, err := chooseSiteForEnvShell()
+			if err != nil {
+				fmt.Fprintln(os.Stderr, err)
+				return 1
+			}
+			siteID = selected
 		}
 		return cmdSiteEnvRemoteCommandPlan("shell", siteID, env, nil)
 	case "wp":
+		if len(argv) == 1 || strings.HasPrefix(argv[1], "-") {
+			fmt.Fprintln(os.Stderr, "site env wp takes site and command")
+			return 1
+		}
 		siteID, env, command, ok := parseSiteEnvFlag(argv[1:], true)
 		if !ok {
 			return 1
