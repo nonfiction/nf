@@ -3782,14 +3782,22 @@ func cmdSiteRefresh() int {
 		fmt.Fprintf(os.Stderr, "Warning: %s\n", warning)
 	}
 	if result.Refreshed == 0 {
-		fmt.Println("No remote targets were refreshed; no site cache was changed.")
+		if result.Pruned == 0 {
+			fmt.Println("No remote targets were refreshed; no site cache was changed.")
+		}
 		if len(result.Warnings) > 0 {
 			return 1
 		}
-		return 0
+		if result.Pruned == 0 {
+			return 0
+		}
+	} else {
+		fmt.Printf("Refreshed targets: %d\n", result.Refreshed)
+		fmt.Printf("Discovered remote site envs: %d\n", result.Discovered)
 	}
-	fmt.Printf("Refreshed targets: %d\n", result.Refreshed)
-	fmt.Printf("Discovered remote site envs: %d\n", result.Discovered)
+	if result.Pruned > 0 {
+		fmt.Printf("Pruned stale site envs: %d\n", result.Pruned)
+	}
 	fmt.Printf("Saved site cache: %s\n", state.StatePath("sites"))
 	if len(result.Warnings) > 0 {
 		return 1
@@ -3801,11 +3809,13 @@ type siteRefreshResult struct {
 	Refreshed  int
 	Skipped    int
 	Discovered int
+	Pruned     int
 	Warnings   []string
 }
 
 func refreshRemoteTargetSites(targets []map[string]any) (siteRefreshResult, error) {
 	result := siteRefreshResult{}
+	currentTargets := currentTargetNames(targets)
 	refreshedTargets := map[string]bool{}
 	discovered := []map[string]any{}
 	for _, target := range targets {
@@ -3832,15 +3842,16 @@ func refreshRemoteTargetSites(targets []map[string]any) (siteRefreshResult, erro
 			discovered = append(discovered, record)
 		}
 	}
-	if result.Refreshed == 0 {
-		return result, nil
-	}
 	existing, err := state.LoadStateRecords("sites")
 	if err != nil {
 		return result, err
 	}
 	merged := make([]map[string]any, 0, len(existing)+len(discovered))
 	for _, record := range existing {
+		if staleSiteTarget(record, currentTargets) {
+			result.Pruned++
+			continue
+		}
 		if refreshedTargets[normalizedRecordString(siteProviderTarget(record))] {
 			continue
 		}
@@ -3849,12 +3860,38 @@ func refreshRemoteTargetSites(targets []map[string]any) (siteRefreshResult, erro
 		}
 		merged = append(merged, record)
 	}
+	if result.Refreshed == 0 && result.Pruned == 0 {
+		return result, nil
+	}
 	merged = append(merged, discovered...)
 	if err := state.SaveStateRecords("sites", merged); err != nil {
 		return result, err
 	}
 	result.Discovered = len(discovered)
 	return result, nil
+}
+
+func currentTargetNames(targets []map[string]any) map[string]bool {
+	names := map[string]bool{}
+	for _, target := range targets {
+		for _, key := range []string{"_state_key", "target_name", "target", "name", "slug", "hostname", "host", "label", "id"} {
+			if value := normalizedRecordString(recordValueString(target[key])); value != "" {
+				names[value] = true
+			}
+		}
+	}
+	return names
+}
+
+func staleSiteTarget(site map[string]any, currentTargets map[string]bool) bool {
+	if strings.ToLower(strings.TrimSpace(recordValueString(site["provider"]))) != "linode" {
+		return false
+	}
+	target := normalizedRecordString(siteProviderTarget(site))
+	if target == "" {
+		return false
+	}
+	return !currentTargets[target]
 }
 
 func discoverLinodeTargetSites(target map[string]any) ([]map[string]any, error) {
@@ -4605,6 +4642,7 @@ func runProviderHelp() int {
 func runTargetHelp() int {
 	printGroupHelp("target", []string{
 		"add linode <name> [flags]   create or ensure a Linode target",
+		"refresh             refresh target metadata from providers",
 		"list                list deployable targets",
 		"show <target>       show a deployable target",
 		"remove <target>     remove an empty Linode target",
@@ -4966,7 +5004,7 @@ func runHelp() int {
 	fmt.Println("\nCommands:")
 	fmt.Println("  init          initialize project metadata")
 	fmt.Println("  provider      manage provider integrations")
-	fmt.Println("  target        list and show deployable targets")
+	fmt.Println("  target        refresh, list, and show deployable targets")
 	fmt.Println("  site          refresh, list, and show remote sites/envs")
 	if projectContextAvailable() {
 		fmt.Println("  remote        manage repo deploy remotes")
@@ -5301,6 +5339,70 @@ func checkProvidersAfterConfigInit() error {
 		return fmt.Errorf("provider checks failed: %s", strings.Join(failed, ", "))
 	}
 	return nil
+}
+
+func cmdTargetRefresh() int {
+	fmt.Println("Target refresh updates target metadata from configured providers.")
+	refreshed := []string{}
+	skipped := []string{}
+	failed := []string{}
+	totalTargets := 0
+	for _, status := range providerConfigStatuses() {
+		if !providerHasTargets(status.Name) {
+			continue
+		}
+		if len(status.Missing) > 0 {
+			skipped = append(skipped, fmt.Sprintf("%s (missing %s)", status.Name, providerMissingLabel(status)))
+			continue
+		}
+		result, err := runProviderHealthcheck(status.Name)
+		if err != nil {
+			failed = append(failed, status.Name)
+			fmt.Fprintf(os.Stderr, "%s: %v\n", status.Name, err)
+			continue
+		}
+		if result.Provider == "" {
+			result.Provider = status.Name
+		}
+		if err := saveProviderHealthRecord(result); err != nil {
+			failed = append(failed, status.Name)
+			fmt.Fprintf(os.Stderr, "%s: %v\n", status.Name, err)
+			continue
+		}
+		count := len(targetMaps(result.Record["targets"]))
+		totalTargets += count
+		refreshed = append(refreshed, status.Name)
+		fmt.Printf("Provider %s refreshed. Targets: %d\n", status.Name, count)
+	}
+	if len(skipped) > 0 {
+		fmt.Printf("Skipped providers: %d\n", len(skipped))
+		for _, line := range skipped {
+			fmt.Printf("  - %s\n", line)
+		}
+	}
+	if len(refreshed) > 0 {
+		fmt.Printf("Refreshed providers: %d\n", len(refreshed))
+		fmt.Printf("Targets: %d\n", totalTargets)
+		fmt.Printf("Saved provider metadata to %s.\n", state.StatePath("providers"))
+	}
+	if len(failed) > 0 {
+		fmt.Fprintf(os.Stderr, "target refresh failed for providers: %s\n", strings.Join(failed, ", "))
+		return 1
+	}
+	if len(refreshed) == 0 {
+		fmt.Println("No target providers were refreshed.")
+		return 1
+	}
+	return 0
+}
+
+func providerHasTargets(name string) bool {
+	switch strings.ToLower(strings.TrimSpace(name)) {
+	case "kinsta", "linode":
+		return true
+	default:
+		return false
+	}
 }
 
 func initGlobalConfig(settings []configInitSetting, nonInteractive bool) error {
@@ -6209,6 +6311,12 @@ func runTarget(argv []string) int {
 		return runTargetHelp()
 	}
 	switch argv[0] {
+	case "refresh":
+		if len(argv) != 1 {
+			fmt.Fprintln(os.Stderr, "target refresh takes no arguments")
+			return 1
+		}
+		return cmdTargetRefresh()
 	case "list":
 		if len(argv) != 1 {
 			fmt.Fprintln(os.Stderr, "target list takes no arguments")

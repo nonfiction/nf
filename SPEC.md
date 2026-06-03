@@ -257,6 +257,7 @@ Do not add old compatibility routes unless explicitly requested.
 * [x] `nf provider list`
 * [x] `nf provider show <provider>` reads `providers.json`
 * [x] `nf provider check <provider>` read-only API healthcheck and structured cache write
+* [x] `nf target refresh` refreshes target provider metadata
 * [x] `nf target list`
 * [x] `nf target show <target>`
 * [x] `nf target add linode <name>` create/ensure target scaffold
@@ -323,9 +324,12 @@ These write structured provider metadata to:
 Target commands read from that cache:
 
 ```sh
+nf target refresh
 nf target list
 nf target show app1-linode
 ```
+
+`nf target refresh` runs configured target-provider health checks and rewrites those provider records so added or removed targets are reflected in the cache.
 
 `nf site refresh` then fans out from the cached target list. It must not refresh providers directly.
 

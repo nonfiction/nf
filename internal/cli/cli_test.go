@@ -138,7 +138,7 @@ func TestRunHelpShowsTopLevelCommandsOutsideGit(t *testing.T) {
 	t.Cleanup(func() { _ = os.Chdir(oldwd) })
 
 	output := captureStdout(t, func() { _ = runHelp() })
-	for _, wanted := range []string{"\n  init          initialize project metadata\n", "\n  provider      manage provider integrations\n", "\n  target        list and show deployable targets\n", "\n  site          refresh, list, and show remote sites/envs\n", "\n  config        manage global config\n", "\n  password      derive passwords\n", "\n  help          show help\n"} {
+	for _, wanted := range []string{"\n  init          initialize project metadata\n", "\n  provider      manage provider integrations\n", "\n  target        refresh, list, and show deployable targets\n", "\n  site          refresh, list, and show remote sites/envs\n", "\n  config        manage global config\n", "\n  password      derive passwords\n", "\n  help          show help\n"} {
 		if !strings.Contains(output, wanted) {
 			t.Fatalf("runHelp() output missing %q:\n%s", wanted, output)
 		}
@@ -218,6 +218,15 @@ func TestRunProviderHelpShowsCommands(t *testing.T) {
 	for _, wanted := range []string{"provider\n\nCommands:\n", "\n  list                 list provider integrations\n", "\n  show [provider] [--json]   show cached provider metadata\n", "\n  check [provider] [--json]  run provider healthcheck\n"} {
 		if !strings.Contains(output, wanted) {
 			t.Fatalf("runProviderHelp() output missing %q:\n%s", wanted, output)
+		}
+	}
+}
+
+func TestRunTargetHelpShowsRefresh(t *testing.T) {
+	output := captureStdout(t, func() { _ = runTargetHelp() })
+	for _, wanted := range []string{"target\n\nCommands:\n", "\n  refresh             refresh target metadata from providers\n", "\n  list                list deployable targets\n"} {
+		if !strings.Contains(output, wanted) {
+			t.Fatalf("runTargetHelp() output missing %q:\n%s", wanted, output)
 		}
 	}
 }
@@ -677,6 +686,78 @@ func TestCheckProvidersAfterConfigInitPopulatesTargets(t *testing.T) {
 		t.Fatalf("cachedTargets() len = %d, want 2: %#v", len(targets), targets)
 	}
 	for _, want := range []string{"kinsta", "app1-linode"} {
+		found := false
+		for _, target := range targets {
+			if recordValueString(target["name"]) == want || recordValueString(target["id"]) == want {
+				found = true
+			}
+		}
+		if !found {
+			t.Fatalf("cachedTargets() missing %q: %#v", want, targets)
+		}
+	}
+}
+
+func TestRunTargetRefreshUpdatesProviderTargets(t *testing.T) {
+	stateDir := t.TempDir()
+	t.Setenv("NF_STATE_HOME", stateDir)
+	t.Setenv("KINSTA_API_KEY", "kinsta-token-secret")
+	t.Setenv("LINODE_TOKEN", "linode-token-secret")
+
+	oldKinsta := providerCheckKinstaFn
+	oldLinode := providerCheckLinodeFn
+	t.Cleanup(func() {
+		providerCheckKinstaFn = oldKinsta
+		providerCheckLinodeFn = oldLinode
+	})
+	providerCheckKinstaFn = func() (providerHealthResult, error) {
+		return providerHealthResult{Provider: "kinsta", Record: map[string]any{"provider": "kinsta", "targets": []map[string]any{{"id": "kinsta", "name": "kinsta", "provider": "kinsta", "status": "active"}}}}, nil
+	}
+	providerCheckLinodeFn = func() (providerHealthResult, error) {
+		return providerHealthResult{Provider: "linode", Record: map[string]any{"provider": "linode", "targets": []map[string]any{{"id": "98222344", "name": "app2-linode", "provider": "linode", "status": "running"}}}}, nil
+	}
+	providers := []map[string]any{{
+		"provider": "linode",
+		"targets": []map[string]any{{
+			"id":       "98222343",
+			"name":     "app1-linode",
+			"provider": "linode",
+			"status":   "running",
+		}},
+	}}
+	data, err := json.MarshalIndent(providers, "", "  ")
+	if err != nil {
+		t.Fatalf("MarshalIndent() error = %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(stateDir, "providers.json"), append(data, '\n'), 0o644); err != nil {
+		t.Fatalf("WriteFile() error = %v", err)
+	}
+
+	output := captureStdout(t, func() {
+		if got := Run([]string{"target", "refresh"}); got != 0 {
+			t.Fatalf("Run(target refresh) = %d, want 0", got)
+		}
+	})
+	for _, want := range []string{"Target refresh updates target metadata from configured providers.", "Provider kinsta refreshed. Targets: 1", "Provider linode refreshed. Targets: 1", "Refreshed providers: 2", "Targets: 2"} {
+		if !strings.Contains(output, want) {
+			t.Fatalf("target refresh output missing %q:\n%s", want, output)
+		}
+	}
+	targets, err := cachedTargets()
+	if err != nil {
+		t.Fatalf("cachedTargets() error = %v", err)
+	}
+	if len(targets) != 2 {
+		t.Fatalf("cachedTargets() len = %d, want 2: %#v", len(targets), targets)
+	}
+	for _, unwanted := range []string{"app1-linode", "98222343"} {
+		for _, target := range targets {
+			if recordValueString(target["name"]) == unwanted || recordValueString(target["id"]) == unwanted {
+				t.Fatalf("cachedTargets() included stale target %q: %#v", unwanted, targets)
+			}
+		}
+	}
+	for _, want := range []string{"kinsta", "app2-linode"} {
 		found := false
 		for _, target := range targets {
 			if recordValueString(target["name"]) == want || recordValueString(target["id"]) == want {
@@ -1472,6 +1553,64 @@ func TestRunSiteRefreshDiscoversLinodeRemoteSites(t *testing.T) {
 	}
 	if got := siteProviderTarget(records[1]); got != "app1-linode" {
 		t.Fatalf("normalized target = %q, want app1-linode in %#v", got, records[1])
+	}
+}
+
+func TestRunSiteRefreshPrunesSitesForRemovedTargets(t *testing.T) {
+	stateDir := t.TempDir()
+	t.Setenv("NF_STATE_HOME", stateDir)
+	if err := state.SaveStateRecords("providers", []map[string]any{{"provider": "linode", "targets": []map[string]any{{"name": "app2-linode", "provider": "linode", "hostname": "app2-linode.nonfiction.dev", "ssh": map[string]any{"user": "nonfiction", "host": "app2-linode.nonfiction.dev"}}}}}); err != nil {
+		t.Fatalf("SaveStateRecords(providers) error = %v", err)
+	}
+	if err := state.SaveStateRecords("sites", []map[string]any{
+		{"provider": "linode", "site_id": "foobar", "name": "foobar", "env": "live", "target": "app1-linode"},
+		{"provider": "linode", "site_id": "foobar", "name": "foobar", "env": "staging", "target": "app1-linode"},
+		{"provider": "linode", "site_id": "happytents.app2-linode", "name": "happytents", "env": "live", "target": "app2-linode"},
+	}); err != nil {
+		t.Fatalf("SaveStateRecords(sites) error = %v", err)
+	}
+	oldRunSSHOutput := runSSHOutputFn
+	runSSHOutputFn = func(args []string) ([]byte, error) {
+		return []byte(`[{
+			"site_id":"happytents.app2-linode",
+			"name":"happytents",
+			"env":"live",
+			"target":"app2-linode",
+			"url":"https://happytents.app2-linode.nonfiction.dev/"
+		},{
+			"site_id":"happytents.app2-linode",
+			"name":"happytents",
+			"env":"staging",
+			"target":"app2-linode",
+			"url":"https://happytents-staging.app2-linode.nonfiction.dev/"
+		}]`), nil
+	}
+	t.Cleanup(func() { runSSHOutputFn = oldRunSSHOutput })
+
+	output := captureStdout(t, func() {
+		if got := Run([]string{"site", "refresh"}); got != 0 {
+			t.Fatalf("Run(site refresh) = %d, want 0", got)
+		}
+	})
+	for _, want := range []string{"Targets: 1", "app2-linode (linode)", "Refreshed targets: 1", "Discovered remote site envs: 2"} {
+		if !strings.Contains(output, want) {
+			t.Fatalf("site refresh output missing %q:\n%s", want, output)
+		}
+	}
+	records, err := state.LoadStateRecords("sites")
+	if err != nil {
+		t.Fatalf("LoadStateRecords(sites) error = %v", err)
+	}
+	if len(records) != 2 {
+		t.Fatalf("site records len = %d, want 2: %#v", len(records), records)
+	}
+	for _, record := range records {
+		if got := siteProviderTarget(record); got != "app2-linode" {
+			t.Fatalf("site refresh kept site for removed target %q: %#v", got, records)
+		}
+		if siteRecordID(record) == "foobar" {
+			t.Fatalf("site refresh kept removed target site: %#v", records)
+		}
 	}
 }
 
