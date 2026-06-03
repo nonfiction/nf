@@ -26,13 +26,22 @@ func TestClientSiteEnvironmentDomainFlow(t *testing.T) {
 			}
 			_ = json.NewEncoder(w).Encode(map[string]any{"company": map[string]any{"sites": []map[string]any{{"id": "ksite123", "name": "sanjel", "display_name": "sanjel"}}}})
 		case "GET /sites/ksite123/environments":
-			_ = json.NewEncoder(w).Encode(map[string]any{"site": map[string]any{"environments": []map[string]any{{"id": "kenv-live", "name": "live"}, {"id": "kenv-staging", "display_name": "staging"}}}})
+			_ = json.NewEncoder(w).Encode(map[string]any{"site": map[string]any{"environments": []map[string]any{{"id": "kenv-live", "name": "live", "container_info": map[string]any{"php_engine_version": "php8.3"}}, {"id": "kenv-staging", "display_name": "staging", "container_info": map[string]any{"php_engine_version": "php8.3"}}}}})
 		case "GET /sites/environments/kenv-live/domains":
 			_ = json.NewEncoder(w).Encode(map[string]any{"environment": map[string]any{"site_domains": []map[string]any{{"id": "kdom-live", "name": "sanjel.kinsta.nonfiction.dev", "is_primary": true}}}})
 		case "GET /sites/environments/domains/kdom-live/verification-records":
 			_ = json.NewEncoder(w).Encode(map[string]any{"site_domain": map[string]any{"verification_records": []map[string]any{{"name": "_acme-challenge.sanjel.kinsta.nonfiction.dev", "type": "TXT", "content": "token"}}, "pointing_records": []map[string]any{{"name": "sanjel.kinsta.nonfiction.dev", "type": "A", "content": "203.0.113.10", "ttl": 300}}}})
 		case "GET /operations/op123":
 			_ = json.NewEncoder(w).Encode(map[string]any{"operation": map[string]any{"id": "op123", "status": "complete"}})
+		case "PUT /sites/tools/modify-php-version":
+			var payload map[string]any
+			if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
+				t.Fatalf("modify php decode error = %v", err)
+			}
+			if payload["environment_id"] != "kenv-live" || payload["php_version"] != "8.3" || payload["is_opt_out_from_automatic_php_update"] != false {
+				t.Fatalf("modify php payload = %#v", payload)
+			}
+			_ = json.NewEncoder(w).Encode(map[string]any{"operation_id": "op-modify-php"})
 		case "DELETE /sites/environments/kenv-staging":
 			w.WriteHeader(http.StatusAccepted)
 			_ = json.NewEncoder(w).Encode(map[string]any{"operation_id": "op-delete-env", "status": 202})
@@ -68,6 +77,9 @@ func TestClientSiteEnvironmentDomainFlow(t *testing.T) {
 	if env, ok := FindEnvironment(envs, "staging"); !ok || env.ID != "kenv-staging" {
 		t.Fatalf("FindEnvironment() = %#v, %v; want kenv-staging", env, ok)
 	}
+	if envs[0].CurrentPHPVersion() != "8.3" {
+		t.Fatalf("CurrentPHPVersion() = %q, want 8.3", envs[0].CurrentPHPVersion())
+	}
 	domains, err := client.ListDomains(ctx, "kenv-live")
 	if err != nil {
 		t.Fatalf("ListDomains() error = %v", err)
@@ -84,6 +96,9 @@ func TestClientSiteEnvironmentDomainFlow(t *testing.T) {
 	}
 	if err := client.WaitOperation(ctx, "op123", 0); err != nil {
 		t.Fatalf("WaitOperation() error = %v", err)
+	}
+	if opID, err := client.ModifyPHPVersion(ctx, ModifyPHPVersionRequest{EnvironmentID: "kenv-live", PHPVersion: "8.3", IsOptOutFromAutomaticPHPUpdate: false}); err != nil || opID != "op-modify-php" {
+		t.Fatalf("ModifyPHPVersion() = %q, %v; want op-modify-php", opID, err)
 	}
 	if opID, err := client.DeleteEnvironment(ctx, "kenv-staging"); err != nil || opID != "op-delete-env" {
 		t.Fatalf("DeleteEnvironment() = %q, %v; want op-delete-env", opID, err)

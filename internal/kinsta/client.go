@@ -93,12 +93,25 @@ type Environment struct {
 	ID            string        `json:"id"`
 	Name          string        `json:"name"`
 	DisplayName   string        `json:"display_name"`
+	PHPVersion    string        `json:"php_version"`
+	PHP           string        `json:"php"`
 	IsPremium     bool          `json:"is_premium"`
 	WebRoot       string        `json:"web_root"`
 	Domains       []Domain      `json:"domains"`
 	PrimaryDomain Domain        `json:"primaryDomain"`
 	SSHConnection SSHConnection `json:"ssh_connection"`
 	ContainerInfo ContainerInfo `json:"container_info"`
+}
+
+func (e Environment) CurrentPHPVersion() string {
+	for _, value := range []string{e.PHPVersion, e.PHP, e.ContainerInfo.PHPEngineVersion} {
+		value = strings.TrimSpace(value)
+		if value == "" {
+			continue
+		}
+		return strings.TrimPrefix(value, "php")
+	}
+	return ""
 }
 
 type SSHConnection struct {
@@ -109,7 +122,8 @@ type SSHConnection struct {
 }
 
 type ContainerInfo struct {
-	ID string `json:"id"`
+	ID               string `json:"id"`
+	PHPEngineVersion string `json:"php_engine_version"`
 }
 
 type SFTPConfig struct {
@@ -196,6 +210,12 @@ type AddDomainRequest struct {
 	IsWildcardless      bool   `json:"is_wildcardless"`
 	AddWithWWWSubdomain bool   `json:"add_with_www_subdomain"`
 	SetupType           string `json:"setup_type"`
+}
+
+type ModifyPHPVersionRequest struct {
+	EnvironmentID                  string `json:"environment_id"`
+	PHPVersion                     string `json:"php_version"`
+	IsOptOutFromAutomaticPHPUpdate bool   `json:"is_opt_out_from_automatic_php_update"`
 }
 
 func (c *Client) Validate(ctx context.Context) (ValidateResponse, error) {
@@ -291,6 +311,14 @@ func (c *Client) ChangePrimaryDomain(ctx context.Context, envID, domainID string
 	var out operationResponse
 	payload := map[string]any{"domain_id": domainID, "run_search_and_replace": runSearchReplace}
 	if err := c.do(ctx, http.MethodPut, "/sites/environments/"+url.PathEscape(envID)+"/change-primary-domain", payload, &out); err != nil {
+		return "", err
+	}
+	return out.OperationID(), nil
+}
+
+func (c *Client) ModifyPHPVersion(ctx context.Context, req ModifyPHPVersionRequest) (string, error) {
+	var out operationResponse
+	if err := c.do(ctx, http.MethodPut, "/sites/tools/modify-php-version", req, &out); err != nil {
 		return "", err
 	}
 	return out.OperationID(), nil
