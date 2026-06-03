@@ -264,12 +264,13 @@ func TestInitGlobalConfigPromptsForMissingSettings(t *testing.T) {
 	})
 
 	answers := map[string]string{
-		"Base domain: ":             "nonfiction.dev",
-		"Default WordPress email: ": "web@nonfiction.ca",
-		"Default WordPress user: ":  "admin",
-		"Linode default region: ":   "ca-central",
-		"Linode default SSH user: ": "nonfiction",
-		"Linode default type: ":     "g6-standard-1",
+		"Base domain: ":                "nonfiction.dev",
+		"Default WordPress email: ":    "web@nonfiction.ca",
+		"Default WordPress user: ":     "admin",
+		"Kinsta default PHP version: ": "8.3",
+		"Linode default region: ":      "ca-central",
+		"Linode default SSH user: ":    "nonfiction",
+		"Linode default type: ":        "g6-standard-1",
 	}
 	configIsInteractive = func() bool { return true }
 	configPromptString = func(prompt, defaultValue string, allowBlank bool) (string, error) {
@@ -291,6 +292,7 @@ func TestInitGlobalConfigPromptsForMissingSettings(t *testing.T) {
 		"base_domain":           "nonfiction.dev",
 		"default_wp_email":      "web@nonfiction.ca",
 		"default_wp_user":       "admin",
+		"kinsta_default_php":    "8.3",
 		"linode_default_region": "ca-central",
 		"linode_default_user":   "nonfiction",
 		"linode_default_type":   "g6-standard-1",
@@ -331,6 +333,27 @@ func TestInitGlobalConfigPreservesExistingSettings(t *testing.T) {
 	}
 	if got := values["base_domain"]; got != "example.com" {
 		t.Fatalf("base_domain = %q, want existing value", got)
+	}
+}
+
+func TestRunConfigSetKinstaDefaultPHP(t *testing.T) {
+	configDir := t.TempDir()
+	t.Setenv("NF_CONFIG_HOME", configDir)
+
+	output := captureStdout(t, func() {
+		if got := Run([]string{"config", "set-kinsta-default-php", "8.3"}); got != 0 {
+			t.Fatalf("Run(config set-kinsta-default-php) = %d, want 0", got)
+		}
+	})
+	if !strings.Contains(output, "Set kinsta_default_php") {
+		t.Fatalf("output = %q, want set message", output)
+	}
+	values, err := loadGlobalConfig()
+	if err != nil {
+		t.Fatalf("loadGlobalConfig() error = %v", err)
+	}
+	if got := values["kinsta_default_php"]; got != "8.3" {
+		t.Fatalf("kinsta_default_php = %q, want 8.3", got)
 	}
 }
 
@@ -1593,6 +1616,9 @@ func TestRunSiteRefreshDiscoversLinodeRemoteSites(t *testing.T) {
 	oldRunSSHOutput := runSSHOutputFn
 	runSSHOutputFn = func(args []string) ([]byte, error) {
 		sshArgs = append([]string(nil), args...)
+		if len(args) > 0 && args[len(args)-1] == "/var/lib/nf/target.json" {
+			return []byte(`{"php_version":"8.3"}`), nil
+		}
 		return []byte(`[{"site_id":"client-app1-linode","name":"client","env":"live","url":"https://client.app1-linode.nonfiction.dev/"},{"site_id":"client-app1-linode","name":"client","env":"staging","target":"app1-linode","url":"https://client-staging.app1-linode.nonfiction.dev/"}]`), nil
 	}
 	t.Cleanup(func() { runSSHOutputFn = oldRunSSHOutput })
@@ -1628,6 +1654,9 @@ func TestRunSiteRefreshDiscoversLinodeRemoteSites(t *testing.T) {
 	}
 	if got := siteProviderTarget(records[1]); got != "app1-linode" {
 		t.Fatalf("normalized target = %q, want app1-linode in %#v", got, records[1])
+	}
+	if got := sitePHPVersion(records[1]); got != "8.3" {
+		t.Fatalf("normalized php version = %q, want 8.3 in %#v", got, records[1])
 	}
 }
 
@@ -1714,8 +1743,8 @@ func TestRunSiteRefreshDiscoversKinstaRemoteSites(t *testing.T) {
 			_ = json.NewEncoder(w).Encode(map[string]any{"company": map[string]any{"sites": []map[string]any{{"id": "ksite123", "name": "client", "display_name": "Client"}}}})
 		case "GET /sites/ksite123/environments":
 			_ = json.NewEncoder(w).Encode(map[string]any{"site": map[string]any{"environments": []map[string]any{
-				{"id": "kenv-live", "name": "client", "display_name": "Client", "web_root": "/www/client_123/public", "primaryDomain": map[string]any{"id": "kdom-live", "name": "client.kinsta.nonfiction.dev"}},
-				{"id": "kenv-staging", "name": "client-staging", "display_name": "Client Staging", "web_root": "/www/clientstaging_456/public", "primaryDomain": map[string]any{"id": "kdom-staging", "name": "client-staging.kinsta.nonfiction.dev"}},
+				{"id": "kenv-live", "name": "client", "display_name": "Client", "web_root": "/www/client_123/public", "container_info": map[string]any{"php_engine_version": "php8.3"}, "primaryDomain": map[string]any{"id": "kdom-live", "name": "client.kinsta.nonfiction.dev"}},
+				{"id": "kenv-staging", "name": "client-staging", "display_name": "Client Staging", "web_root": "/www/clientstaging_456/public", "container_info": map[string]any{"php_engine_version": "php8.3"}, "primaryDomain": map[string]any{"id": "kdom-staging", "name": "client-staging.kinsta.nonfiction.dev"}},
 			}}})
 		case "GET /sites/ksite123/environments/kenv-live/ssh/config":
 			_ = json.NewEncoder(w).Encode(map[string]any{"host": "203.0.113.10", "port": "12345", "user": "client_123", "ssh_command": "ssh client_123@203.0.113.10 -p 12345"})
@@ -1764,6 +1793,9 @@ func TestRunSiteRefreshDiscoversKinstaRemoteSites(t *testing.T) {
 		}
 		if got := recordValueString(record["database"]); got != want.database {
 			t.Fatalf("%s database = %q, want %q", want.env, got, want.database)
+		}
+		if got := sitePHPVersion(record); got != "8.3" {
+			t.Fatalf("%s php version = %q, want 8.3", want.env, got)
 		}
 		if got := mapStringAtPath(record, "ssh", "host"); got != want.sshHost {
 			t.Fatalf("%s ssh host = %q, want %q", want.env, got, want.sshHost)
@@ -1966,7 +1998,7 @@ func TestRunSiteAddKinstaDryRunPlansLiveAndStaging(t *testing.T) {
 			t.Fatalf("Run(site add kinsta) = %d, want 0", got)
 		}
 	})
-	for _, want := range []string{"Add site plan:", "target: kinsta", "provider: kinsta", "company id: company-123", "site: sanjel", "site id: sanjel.kinsta", "region: us-central1", "admin email: web@nonfiction.ca", "admin password: derived from sanjel", "domain: sanjel.kinsta.nonfiction.dev", "domain: sanjel-staging.kinsta.nonfiction.dev", "dns: dnsimple zone nonfiction.dev account 14", "mode: dry-run"} {
+	for _, want := range []string{"Add site plan:", "target: kinsta", "provider: kinsta", "company id: company-123", "site: sanjel", "site id: sanjel.kinsta", "region: us-central1", "php: 8.3", "admin email: web@nonfiction.ca", "admin password: derived from sanjel", "domain: sanjel.kinsta.nonfiction.dev", "domain: sanjel-staging.kinsta.nonfiction.dev", "dns: dnsimple zone nonfiction.dev account 14", "mode: dry-run"} {
 		if !strings.Contains(output, want) {
 			t.Fatalf("site add kinsta dry-run output missing %q:\n%s", want, output)
 		}
@@ -2000,14 +2032,14 @@ func TestRunSiteAddKinstaExecuteCachesEnvs(t *testing.T) {
 	t.Cleanup(func() { kinstaProvisionSiteFn = oldProvision })
 
 	output := captureStdout(t, func() {
-		if got := Run([]string{"site", "add", "kinsta", "sanjel", "--region", "ca-toronto-1", "--execute", "--yes", "--non-interactive"}); got != 0 {
+		if got := Run([]string{"site", "add", "kinsta", "sanjel", "--region", "ca-toronto-1", "--php", "8.2", "--execute", "--yes", "--non-interactive"}); got != 0 {
 			t.Fatalf("Run(site add kinsta execute) = %d, want 0", got)
 		}
 	})
 	if !strings.Contains(output, "Site added.") || !strings.Contains(output, "mode: execute") {
 		t.Fatalf("site add kinsta execute output = %q, want success", output)
 	}
-	if capturedPlan.Region != "ca-toronto-1" || capturedPlan.SiteID != "sanjel.kinsta" {
+	if capturedPlan.Region != "ca-toronto-1" || capturedPlan.SiteID != "sanjel.kinsta" || capturedPlan.PHPVersion != "8.2" {
 		t.Fatalf("captured plan = %#v, want region and site id", capturedPlan)
 	}
 	sites, err := state.LoadStateRecords("sites")
@@ -2043,6 +2075,9 @@ func TestRunSiteAddKinstaExecuteCachesEnvs(t *testing.T) {
 		if got := recordValueString(record["branch"]); got != want.branch {
 			t.Fatalf("%s branch = %q, want %q", want.env, got, want.branch)
 		}
+		if got := recordValueString(record["php_version"]); got != "8.2" {
+			t.Fatalf("%s php_version = %q, want 8.2", want.env, got)
+		}
 		if got := recordValueString(record["path"]); got != want.path {
 			t.Fatalf("%s path = %q, want %q", want.env, got, want.path)
 		}
@@ -2067,6 +2102,9 @@ func TestRunSiteAddKinstaExecuteCachesEnvs(t *testing.T) {
 		if got := mapStringAtPath(record, "kinsta", "domain_id"); got != want.domainID {
 			t.Fatalf("%s kinsta domain_id = %q, want %q", want.env, got, want.domainID)
 		}
+		if got := mapStringAtPath(record, "kinsta", "php_version"); got != "8.2" {
+			t.Fatalf("%s kinsta php_version = %q, want 8.2", want.env, got)
+		}
 	}
 	showOutput := captureStdout(t, func() {
 		if got := Run([]string{"site", "show", "sanjel.kinsta"}); got != 0 {
@@ -2085,6 +2123,7 @@ func TestProvisionKinstaSiteCreatesStagingDomainsDNSAndPrimaryDomains(t *testing
 	t.Setenv("DNSIMPLE_TOKEN", "dnsimple-token")
 	createdSite := false
 	createdStaging := false
+	modifiedPHP := map[string]bool{}
 	domains := map[string]bool{}
 	changedPrimary := map[string]bool{}
 	requests := []string{}
@@ -2104,14 +2143,28 @@ func TestProvisionKinstaSiteCreatesStagingDomainsDNSAndPrimaryDomains(t *testing
 		case "POST /sites":
 			createdSite = true
 			_ = json.NewEncoder(w).Encode(map[string]any{"operation_id": "op-create-site"})
-		case "GET /operations/op-create-site", "GET /operations/op-clone-staging", "GET /operations/op-add-live-domain", "GET /operations/op-add-staging-domain", "GET /operations/op-primary-live", "GET /operations/op-primary-staging":
+		case "GET /operations/op-create-site", "GET /operations/op-clone-staging", "GET /operations/op-modify-live-php", "GET /operations/op-add-live-domain", "GET /operations/op-add-staging-domain", "GET /operations/op-primary-live", "GET /operations/op-primary-staging":
 			_ = json.NewEncoder(w).Encode(map[string]any{"operation": map[string]any{"id": strings.TrimPrefix(r.URL.Path, "/operations/"), "status": "complete"}})
 		case "GET /sites/ksite123/environments":
-			envs := []map[string]any{{"id": "kenv-live", "name": "sanjel", "display_name": "sanjel", "web_root": "/"}}
+			livePHP := "8.2"
+			if modifiedPHP["kenv-live"] {
+				livePHP = "8.3"
+			}
+			envs := []map[string]any{{"id": "kenv-live", "name": "sanjel", "display_name": "sanjel", "php_version": livePHP, "web_root": "/"}}
 			if createdStaging {
-				envs = append(envs, map[string]any{"id": "kenv-staging", "name": "sanjel-staging", "display_name": "sanjel-staging", "web_root": "/"})
+				envs = append(envs, map[string]any{"id": "kenv-staging", "name": "sanjel-staging", "display_name": "sanjel-staging", "php_version": livePHP, "web_root": "/"})
 			}
 			_ = json.NewEncoder(w).Encode(map[string]any{"site": map[string]any{"environments": envs}})
+		case "PUT /sites/tools/modify-php-version":
+			var payload map[string]any
+			if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
+				t.Fatalf("modify php decode error = %v", err)
+			}
+			if payload["environment_id"] != "kenv-live" || payload["php_version"] != "8.3" || payload["is_opt_out_from_automatic_php_update"] != false {
+				t.Fatalf("modify php payload = %#v", payload)
+			}
+			modifiedPHP["kenv-live"] = true
+			_ = json.NewEncoder(w).Encode(map[string]any{"operation_id": "op-modify-live-php"})
 		case "GET /sites/ksite123/environments/kenv-live/ssh/config":
 			_ = json.NewEncoder(w).Encode(map[string]any{"host": "203.0.113.10", "port": "12345", "user": "sanjel", "ssh_command": "ssh sanjel@203.0.113.10 -p 12345"})
 		case "GET /sites/ksite123/environments/kenv-staging/ssh/config":
@@ -2174,6 +2227,7 @@ func TestProvisionKinstaSiteCreatesStagingDomainsDNSAndPrimaryDomains(t *testing
 		AdminUser:     "admin",
 		AdminEmail:    "web@nonfiction.ca",
 		AdminPassword: "derived-password",
+		PHPVersion:    "8.3",
 		DNSZone:       "nonfiction.dev",
 		DNSAccountID:  "14",
 		Envs: []kinstaSiteAddEnvPlan{
@@ -2205,8 +2259,8 @@ func TestProvisionKinstaSiteCreatesStagingDomainsDNSAndPrimaryDomains(t *testing
 			t.Fatalf("missing result env %s in %#v", want.env, result.Envs)
 		}
 	}
-	if !createdSite || !createdStaging || !changedPrimary["live"] || !changedPrimary["staging"] {
-		t.Fatalf("flow flags: createdSite=%v createdStaging=%v changedPrimary=%#v", createdSite, createdStaging, changedPrimary)
+	if !createdSite || !createdStaging || !modifiedPHP["kenv-live"] || !changedPrimary["live"] || !changedPrimary["staging"] {
+		t.Fatalf("flow flags: createdSite=%v createdStaging=%v modifiedPHP=%#v changedPrimary=%#v", createdSite, createdStaging, modifiedPHP, changedPrimary)
 	}
 	for _, want := range []dnsCall{
 		{"_acme-challenge.sanjel.kinsta", "TXT", "live-token"},
@@ -2230,7 +2284,7 @@ func TestProvisionKinstaSiteCreatesStagingDomainsDNSAndPrimaryDomains(t *testing
 			t.Fatalf("unexpected apex www DNS call in %#v", dnsCalls)
 		}
 	}
-	for _, want := range []string{"POST /sites", "POST /sites/ksite123/environments/clone", "POST /sites/environments/kenv-live/domains", "POST /sites/environments/kenv-staging/domains", "GET /sites/ksite123/environments/kenv-live/ssh/config", "GET /sites/ksite123/environments/kenv-staging/ssh/config", "PUT /sites/environments/kenv-live/change-primary-domain", "PUT /sites/environments/kenv-staging/change-primary-domain"} {
+	for _, want := range []string{"POST /sites", "PUT /sites/tools/modify-php-version", "POST /sites/ksite123/environments/clone", "POST /sites/environments/kenv-live/domains", "POST /sites/environments/kenv-staging/domains", "GET /sites/ksite123/environments/kenv-live/ssh/config", "GET /sites/ksite123/environments/kenv-staging/ssh/config", "PUT /sites/environments/kenv-live/change-primary-domain", "PUT /sites/environments/kenv-staging/change-primary-domain"} {
 		found := false
 		for _, got := range requests {
 			if got == want {
@@ -2554,8 +2608,8 @@ func TestRunSiteEnvListAndShowUseCachedSites(t *testing.T) {
 	stateDir := t.TempDir()
 	t.Setenv("NF_STATE_HOME", stateDir)
 	sites := map[string]any{"sites": map[string]any{
-		"live-client-kinsta":    map[string]any{"provider": "kinsta", "site_id": "client-kinsta", "env": "live", "url": "https://www.example.com/", "branch": "main", "kinsta": map[string]any{"site_id": "ksite123", "environment_id": "kenv-live"}},
-		"staging-client-kinsta": map[string]any{"provider": "kinsta", "site_id": "client-kinsta", "env": "staging", "url": "https://staging.example.com/", "branch": "develop", "ssh": map[string]any{"host": "203.0.113.11", "port": "12346", "user": "clientstaging", "command": "ssh clientstaging@203.0.113.11 -p 12346"}, "kinsta": map[string]any{"site_id": "ksite123", "environment_id": "kenv-staging"}},
+		"live-client-kinsta":    map[string]any{"provider": "kinsta", "site_id": "client-kinsta", "env": "live", "url": "https://www.example.com/", "branch": "main", "php_version": "8.3", "kinsta": map[string]any{"site_id": "ksite123", "environment_id": "kenv-live", "php_version": "8.3"}},
+		"staging-client-kinsta": map[string]any{"provider": "kinsta", "site_id": "client-kinsta", "env": "staging", "url": "https://staging.example.com/", "branch": "develop", "php_version": "8.3", "ssh": map[string]any{"host": "203.0.113.11", "port": "12346", "user": "clientstaging", "command": "ssh clientstaging@203.0.113.11 -p 12346"}, "kinsta": map[string]any{"site_id": "ksite123", "environment_id": "kenv-staging", "php_version": "8.3"}},
 	}}
 	data, err := json.MarshalIndent(sites, "", "  ")
 	if err != nil {
@@ -2570,12 +2624,12 @@ func TestRunSiteEnvListAndShowUseCachedSites(t *testing.T) {
 			t.Fatalf("Run(site env list) = %d, want 0", got)
 		}
 	})
-	for _, want := range []string{"env", "site", "target", "url", "live", "staging", "client-kinsta", "kinsta", "https://www.example.com/", "https://staging.example.com/"} {
+	for _, want := range []string{"env", "site", "php", "url", "live", "staging", "client-kinsta", "8.3", "https://www.example.com/", "https://staging.example.com/"} {
 		if !strings.Contains(listOutput, want) {
 			t.Fatalf("site env list output missing %q:\n%s", want, listOutput)
 		}
 	}
-	for _, notWant := range []string{"provider", "branch", "develop"} {
+	for _, notWant := range []string{"target", "provider", "branch", "develop"} {
 		if strings.Contains(listOutput, notWant) {
 			t.Fatalf("site env list output contains %q:\n%s", notWant, listOutput)
 		}
@@ -2586,7 +2640,7 @@ func TestRunSiteEnvListAndShowUseCachedSites(t *testing.T) {
 			t.Fatalf("Run(site env show) = %d, want 0", got)
 		}
 	})
-	for _, want := range []string{"Site: client-kinsta", "Env: staging", "Provider: kinsta", "Target: kinsta", "URL: https://staging.example.com/", "SSH: clientstaging@203.0.113.11:12346", "SSH host: 203.0.113.11", "SSH port: 12346", "SSH user: clientstaging", "SSH command: ssh clientstaging@203.0.113.11 -p 12346", "Branch: develop", "Kinsta environment ID: kenv-staging"} {
+	for _, want := range []string{"Site: client-kinsta", "Env: staging", "Provider: kinsta", "Target: kinsta", "URL: https://staging.example.com/", "PHP: 8.3", "SSH: clientstaging@203.0.113.11:12346", "SSH host: 203.0.113.11", "SSH port: 12346", "SSH user: clientstaging", "SSH command: ssh clientstaging@203.0.113.11 -p 12346", "Branch: develop", "Kinsta environment ID: kenv-staging"} {
 		if !strings.Contains(showOutput, want) {
 			t.Fatalf("site env show output missing %q:\n%s", want, showOutput)
 		}
@@ -2596,7 +2650,7 @@ func TestRunSiteEnvListAndShowUseCachedSites(t *testing.T) {
 			t.Fatalf("Run(site env show --json) = %d, want 0", got)
 		}
 	})
-	for _, want := range []string{`"requested_site": "client-kinsta"`, `"requested_env": "staging"`, `"resolved_site": "client-kinsta"`, `"resolved_env": "staging"`, `"ssh_host": "203.0.113.11"`, `"ssh_port": "12346"`, `"ssh_user": "clientstaging"`, `"kinsta_environment_id": "kenv-staging"`} {
+	for _, want := range []string{`"requested_site": "client-kinsta"`, `"requested_env": "staging"`, `"resolved_site": "client-kinsta"`, `"resolved_env": "staging"`, `"php_version": "8.3"`, `"ssh_host": "203.0.113.11"`, `"ssh_port": "12346"`, `"ssh_user": "clientstaging"`, `"kinsta_environment_id": "kenv-staging"`} {
 		if !strings.Contains(jsonOutput, want) {
 			t.Fatalf("site env show --json output missing %q:\n%s", want, jsonOutput)
 		}
@@ -2607,12 +2661,12 @@ func TestRunSiteEnvShowLinodeUsesCachedTargets(t *testing.T) {
 	stateDir := t.TempDir()
 	t.Setenv("NF_STATE_HOME", stateDir)
 	t.Setenv("NF_PASSWORD_SALT", "test-salt")
-	if err := state.SaveStateRecords("providers", []map[string]any{{"provider": "linode", "targets": []map[string]any{{"name": "app2-linode", "provider": "linode", "hostname": "app2-linode.nonfiction.dev", "ssh": map[string]any{"user": "nonfiction", "host": "app2-linode.nonfiction.dev"}}}}}); err != nil {
+	if err := state.SaveStateRecords("providers", []map[string]any{{"provider": "linode", "targets": []map[string]any{{"name": "app2-linode", "provider": "linode", "hostname": "app2-linode.nonfiction.dev", "php": map[string]any{"version": "8.3"}, "ssh": map[string]any{"user": "nonfiction", "host": "app2-linode.nonfiction.dev"}}}}}); err != nil {
 		t.Fatalf("SaveStateRecords(providers) error = %v", err)
 	}
 	if err := state.SaveStateRecords("sites", []map[string]any{
-		{"provider": "linode", "site_id": "happytents.app2-linode", "name": "happytents", "env": "live", "target": "app2-linode", "url": "https://happytents.app2-linode.nonfiction.dev", "hostname": "happytents.app2-linode.nonfiction.dev"},
-		{"provider": "linode", "site_id": "happytents.app2-linode", "name": "happytents", "env": "staging", "target": "app2-linode", "url": "https://happytents-staging.app2-linode.nonfiction.dev", "hostname": "happytents-staging.app2-linode.nonfiction.dev"},
+		{"provider": "linode", "site_id": "happytents.app2-linode", "name": "happytents", "env": "live", "target": "app2-linode", "url": "https://happytents.app2-linode.nonfiction.dev", "hostname": "happytents.app2-linode.nonfiction.dev", "php_version": "8.3"},
+		{"provider": "linode", "site_id": "happytents.app2-linode", "name": "happytents", "env": "staging", "target": "app2-linode", "url": "https://happytents-staging.app2-linode.nonfiction.dev", "hostname": "happytents-staging.app2-linode.nonfiction.dev", "php_version": "8.3"},
 	}); err != nil {
 		t.Fatalf("SaveStateRecords(sites) error = %v", err)
 	}
@@ -2623,7 +2677,7 @@ func TestRunSiteEnvShowLinodeUsesCachedTargets(t *testing.T) {
 		}
 	})
 	adminPassword := passwords.DerivePassword("happytents", "wp-admin", "test-salt")
-	for _, want := range []string{"Site: happytents.app2-linode", "Env: staging", "Provider: linode", "Target: app2-linode", "URL: https://happytents-staging.app2-linode.nonfiction.dev", "Admin username: admin", "Admin password: " + adminPassword} {
+	for _, want := range []string{"Site: happytents.app2-linode", "Env: staging", "Provider: linode", "Target: app2-linode", "URL: https://happytents-staging.app2-linode.nonfiction.dev", "PHP: 8.3", "Admin username: admin", "Admin password: " + adminPassword} {
 		if !strings.Contains(showOutput, want) {
 			t.Fatalf("site env show output missing %q:\n%s", want, showOutput)
 		}
@@ -2638,7 +2692,7 @@ func TestRunSiteEnvShowLinodeUsesCachedTargets(t *testing.T) {
 			t.Fatalf("Run(site env show --json) = %d, want 0", got)
 		}
 	})
-	for _, want := range []string{`"resolved_site": "happytents.app2-linode"`, `"resolved_env": "staging"`, `"resolved_target": "app2-linode"`, `"resolved_admin_user": "admin"`, `"resolved_admin_password": "` + adminPassword + `"`, `"resolved_target_summary": "app2-linode / linode / ssh nonfiction@app2-linode.nonfiction.dev"`} {
+	for _, want := range []string{`"resolved_site": "happytents.app2-linode"`, `"resolved_env": "staging"`, `"resolved_target": "app2-linode"`, `"php_version": "8.3"`, `"resolved_admin_user": "admin"`, `"resolved_admin_password": "` + adminPassword + `"`, `"resolved_target_summary": "app2-linode / linode / ssh nonfiction@app2-linode.nonfiction.dev"`} {
 		if !strings.Contains(jsonOutput, want) {
 			t.Fatalf("site env show --json output missing %q:\n%s", want, jsonOutput)
 		}
@@ -2736,10 +2790,13 @@ func TestRunSiteEnvListWithoutSitePromptsPicker(t *testing.T) {
 	if len(selectOptions) != 1 || selectOptions[0] != (ui.SelectOption{Value: "client-kinsta", Label: "client-kinsta"}) {
 		t.Fatalf("select options = %#v", selectOptions)
 	}
-	for _, want := range []string{"env", "site", "target", "url", "live", "staging", "client-kinsta", "https://www.example.com/", "https://staging.example.com/"} {
+	for _, want := range []string{"env", "site", "php", "url", "live", "staging", "client-kinsta", "https://www.example.com/", "https://staging.example.com/"} {
 		if !strings.Contains(output, want) {
 			t.Fatalf("site env list output missing %q:\n%s", want, output)
 		}
+	}
+	if strings.Contains(output, "target") {
+		t.Fatalf("site env list output contains target column:\n%s", output)
 	}
 }
 

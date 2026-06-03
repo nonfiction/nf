@@ -1049,6 +1049,7 @@ func configInitSettings() []configInitSetting {
 		{Key: "base_domain", Prompt: "Base domain: ", Required: true},
 		{Key: "default_wp_email", Prompt: "Default WordPress email: ", Required: true},
 		{Key: "default_wp_user", Prompt: "Default WordPress user: ", Default: "admin", Required: true},
+		{Key: "kinsta_default_php", Prompt: "Kinsta default PHP version: ", Default: "8.3", Required: true},
 		{Key: "linode_default_region", Prompt: "Linode default region: ", Default: "ca-central", Required: true},
 		{Key: "linode_default_user", Prompt: "Linode default SSH user: ", Default: "nonfiction", Required: true},
 		{Key: "linode_default_type", Prompt: "Linode default type: ", Default: "g6-standard-1", Required: true},
@@ -2282,6 +2283,14 @@ func siteKinstaID(site map[string]any, key string) string {
 	return firstRecordString(site, "kinsta_"+key, key)
 }
 
+func sitePHPVersion(site map[string]any) string {
+	return firstNonEmpty(firstRecordString(site, "php_version", "php"), mapStringAtPath(site, "kinsta", "php_version"), mapStringAtPath(site, "php", "version"))
+}
+
+func targetPHPVersion(target map[string]any) string {
+	return firstNonEmpty(firstRecordString(target, "php_version", "php"), mapStringAtPath(target, "php", "version"))
+}
+
 func normalizedRecordString(value string) string {
 	return strings.ToLower(strings.TrimSpace(value))
 }
@@ -2737,6 +2746,7 @@ type siteAddArgs struct {
 	target         string
 	site           string
 	region         string
+	phpVersion     string
 	execute        bool
 	dryRun         bool
 	yes            bool
@@ -2760,6 +2770,7 @@ type siteAddPlan struct {
 	Site          string
 	SiteID        string
 	BaseDomain    string
+	PHPVersion    string
 	AdminUser     string
 	AdminEmail    string
 	AdminPassword string
@@ -2791,6 +2802,7 @@ type kinstaSiteAddPlan struct {
 	SiteID        string
 	BaseDomain    string
 	Region        string
+	PHPVersion    string
 	AdminUser     string
 	AdminEmail    string
 	AdminPassword string
@@ -2943,6 +2955,7 @@ func buildSiteAddPlan(args siteAddArgs) (siteAddPlan, error) {
 		Site:          siteSlug,
 		SiteID:        linodeSiteID(siteSlug, targetName),
 		BaseDomain:    baseDomain,
+		PHPVersion:    targetPHPVersion(target),
 		AdminUser:     adminUser,
 		AdminEmail:    adminEmail,
 		AdminPassword: passwords.DerivePassword(siteSlug, "wp-admin", salt),
@@ -2993,6 +3006,7 @@ func buildKinstaSiteAddPlan(args siteAddArgs) (kinstaSiteAddPlan, error) {
 	}
 	adminUser := firstNonEmpty(values["default_wp_user"], "admin")
 	region := firstNonEmpty(args.region, values["kinsta_default_region"], "ca-toronto-1")
+	phpVersion := firstNonEmpty(args.phpVersion, values["kinsta_default_php"], "8.3")
 	targets, err := cachedTargets()
 	if err != nil {
 		return kinstaSiteAddPlan{}, err
@@ -3026,6 +3040,7 @@ func buildKinstaSiteAddPlan(args siteAddArgs) (kinstaSiteAddPlan, error) {
 		SiteID:        kinstaSiteID(siteSlug),
 		BaseDomain:    baseDomain,
 		Region:        region,
+		PHPVersion:    phpVersion,
 		AdminUser:     adminUser,
 		AdminEmail:    adminEmail,
 		AdminPassword: passwords.DerivePassword(siteSlug, "wp-admin", salt),
@@ -3060,6 +3075,7 @@ func siteAddRecord(plan siteAddPlan, env siteEnvPlan) map[string]any {
 		"url":             env.URL,
 		"path":            env.Path,
 		"database":        env.Database,
+		"php_version":     plan.PHPVersion,
 		"status":          "active",
 	}
 }
@@ -3099,6 +3115,7 @@ func kinstaSiteAddRecord(plan kinstaSiteAddPlan, env kinstaSiteAddEnvPlan, resul
 		"path":        env.Path,
 		"database":    env.Database,
 		"branch":      env.Branch,
+		"php_version": plan.PHPVersion,
 		"status":      "active",
 		"ssh": map[string]any{
 			"host":    env.SSHHost,
@@ -3111,6 +3128,7 @@ func kinstaSiteAddRecord(plan kinstaSiteAddPlan, env kinstaSiteAddEnvPlan, resul
 			"site_id":        result.SiteID,
 			"environment_id": env.EnvID,
 			"domain_id":      env.DomainID,
+			"php_version":    plan.PHPVersion,
 			"path":           env.Path,
 			"database":       env.Database,
 			"ssh": map[string]any{
@@ -3151,6 +3169,7 @@ func printKinstaSiteAddPlan(plan kinstaSiteAddPlan, mode string) {
 	fmt.Printf("  site: %s\n", plan.Site)
 	fmt.Printf("  site id: %s\n", plan.SiteID)
 	fmt.Printf("  region: %s\n", plan.Region)
+	fmt.Printf("  php: %s\n", plan.PHPVersion)
 	fmt.Printf("  admin user: %s\n", plan.AdminUser)
 	fmt.Printf("  admin email: %s\n", plan.AdminEmail)
 	fmt.Printf("  admin password: derived from %s\n", plan.Site)
@@ -3242,7 +3261,7 @@ func provisionKinstaSite(plan kinstaSiteAddPlan) (kinstaProvisionResult, error) 
 	if err != nil {
 		return kinstaProvisionResult{}, err
 	}
-	liveEnv, stagingEnv, err := ensureKinstaEnvironments(ctx, client, kinstaSite.ID)
+	liveEnv, stagingEnv, err := ensureKinstaEnvironments(ctx, client, kinstaSite.ID, plan.PHPVersion)
 	if err != nil {
 		return kinstaProvisionResult{}, err
 	}
@@ -3348,7 +3367,7 @@ func ensureKinstaSite(ctx context.Context, client *kinsta.Client, plan kinstaSit
 	return kinsta.Site{}, fmt.Errorf("Kinsta site %q was created but was not found in site list", plan.Site)
 }
 
-func ensureKinstaEnvironments(ctx context.Context, client *kinsta.Client, siteID string) (kinsta.Environment, kinsta.Environment, error) {
+func ensureKinstaEnvironments(ctx context.Context, client *kinsta.Client, siteID, phpVersion string) (kinsta.Environment, kinsta.Environment, error) {
 	envs, err := waitKinstaEnvironments(ctx, client, siteID, func(envs []kinsta.Environment) (kinsta.Environment, bool) {
 		return findKinstaLiveEnvironment(envs)
 	})
@@ -3359,8 +3378,24 @@ func ensureKinstaEnvironments(ctx context.Context, client *kinsta.Client, siteID
 	if !ok {
 		return kinsta.Environment{}, kinsta.Environment{}, fmt.Errorf("Kinsta site %s is missing live environment; found: %s", siteID, kinstaEnvironmentSummary(envs))
 	}
+	if err := ensureKinstaEnvironmentPHP(ctx, client, live, phpVersion); err != nil {
+		return kinsta.Environment{}, kinsta.Environment{}, err
+	}
+	envs, err = waitKinstaEnvironments(ctx, client, siteID, func(envs []kinsta.Environment) (kinsta.Environment, bool) {
+		return findKinstaLiveEnvironment(envs)
+	})
+	if err != nil {
+		return kinsta.Environment{}, kinsta.Environment{}, err
+	}
+	live, ok = findKinstaLiveEnvironment(envs)
+	if !ok {
+		return kinsta.Environment{}, kinsta.Environment{}, fmt.Errorf("Kinsta site %s is missing live environment; found: %s", siteID, kinstaEnvironmentSummary(envs))
+	}
 	staging, ok := findKinstaStagingEnvironment(envs, live)
 	if ok {
+		if err := ensureKinstaEnvironmentPHP(ctx, client, staging, phpVersion); err != nil {
+			return kinsta.Environment{}, kinsta.Environment{}, err
+		}
 		return live, staging, nil
 	}
 	fmt.Println("Creating Kinsta staging environment...")
@@ -3381,7 +3416,23 @@ func ensureKinstaEnvironments(ctx context.Context, client *kinsta.Client, siteID
 	if !ok {
 		return kinsta.Environment{}, kinsta.Environment{}, fmt.Errorf("Kinsta staging environment was created but was not found in environment list; found: %s", kinstaEnvironmentSummary(envs))
 	}
+	if err := ensureKinstaEnvironmentPHP(ctx, client, staging, phpVersion); err != nil {
+		return kinsta.Environment{}, kinsta.Environment{}, err
+	}
 	return live, staging, nil
+}
+
+func ensureKinstaEnvironmentPHP(ctx context.Context, client *kinsta.Client, env kinsta.Environment, phpVersion string) error {
+	phpVersion = strings.TrimSpace(phpVersion)
+	if phpVersion == "" || env.ID == "" || env.CurrentPHPVersion() == phpVersion {
+		return nil
+	}
+	fmt.Printf("Setting Kinsta PHP %s on environment %s...\n", phpVersion, firstNonEmpty(env.Name, env.DisplayName, env.ID))
+	opID, err := client.ModifyPHPVersion(ctx, kinsta.ModifyPHPVersionRequest{EnvironmentID: env.ID, PHPVersion: phpVersion, IsOptOutFromAutomaticPHPUpdate: false})
+	if err != nil {
+		return err
+	}
+	return waitKinstaOperation(ctx, client, opID)
 }
 
 func waitKinstaEnvironments(ctx context.Context, client *kinsta.Client, siteID string, ready func([]kinsta.Environment) (kinsta.Environment, bool)) ([]kinsta.Environment, error) {
@@ -3578,6 +3629,7 @@ func runSSHOutput(args []string) ([]byte, error) {
 
 func renderSiteAddScript(plan siteAddPlan) string {
 	q := shellQuoteArg
+	phpVersion := firstNonEmpty(plan.PHPVersion, "8.3")
 	var b strings.Builder
 	b.WriteString("set -euo pipefail\n")
 	b.WriteString("export DEBIAN_FRONTEND=noninteractive\n")
@@ -3588,6 +3640,10 @@ func renderSiteAddScript(plan siteAddPlan) string {
 	b.WriteString("install -d -o www-data -g www-data -m 2775 /var/www/sites /var/log/nginx/sites /var/lib/nf\n")
 	b.WriteString("touch /var/lib/nf/sites.json\n")
 	b.WriteString("if ! jq empty /var/lib/nf/sites.json >/dev/null 2>&1; then printf '[]\\n' >/var/lib/nf/sites.json; fi\n")
+	b.WriteString("target_php_version=$(jq -r '.php_version // .php.version // \"\"' /var/lib/nf/target.json 2>/dev/null || true)\n")
+	b.WriteString("if [ -z \"$target_php_version\" ]; then target_php_version=")
+	b.WriteString(q(phpVersion))
+	b.WriteString("; fi\n")
 	b.WriteString("create_env() {\n")
 	b.WriteString("  env_name=$1 site_path=$2 db_name=$3 host_name=$4 site_url=$5 site_title=$6 state_target=$7\n")
 	b.WriteString("  install -d -o www-data -g www-data -m 2775 \"$site_path\"\n")
@@ -3617,7 +3673,7 @@ func renderSiteAddScript(plan siteAddPlan) string {
 	b.WriteString("  fi\n")
 	b.WriteString("  cat >/etc/nginx/sites-available/nf-site-$state_target <<EOF\n")
 	b.WriteString("server {\n    listen 80;\n    listen [::]:80;\n    server_name $host_name;\n    return 301 https://$host_name\\$request_uri;\n}\n\n")
-	b.WriteString("server {\n    listen 443 ssl http2;\n    listen [::]:443 ssl http2;\n    server_name $host_name;\n    include /etc/nginx/snippets/nf-wildcard-cert.conf;\n    include /etc/nginx/snippets/nf-security-headers.conf;\n    root $site_path;\n    access_log /var/log/nginx/sites/$state_target.access.log;\n    error_log /var/log/nginx/sites/$state_target.error.log;\n    include /etc/nginx/snippets/nf-wordpress.conf;\n    include /etc/nginx/snippets/nf-static-assets.conf;\n    location ~ \\.php$ { include /etc/nginx/snippets/nf-fastcgi-php.conf; fastcgi_pass unix:/run/php/php8.3-fpm.sock; }\n}\n")
+	b.WriteString("server {\n    listen 443 ssl http2;\n    listen [::]:443 ssl http2;\n    server_name $host_name;\n    include /etc/nginx/snippets/nf-wildcard-cert.conf;\n    include /etc/nginx/snippets/nf-security-headers.conf;\n    root $site_path;\n    access_log /var/log/nginx/sites/$state_target.access.log;\n    error_log /var/log/nginx/sites/$state_target.error.log;\n    include /etc/nginx/snippets/nf-wordpress.conf;\n    include /etc/nginx/snippets/nf-static-assets.conf;\n    location ~ \\.php$ { include /etc/nginx/snippets/nf-fastcgi-php.conf; fastcgi_pass unix:/run/php/php${target_php_version}-fpm.sock; }\n}\n")
 	b.WriteString("EOF\n")
 	b.WriteString("  ln -sf /etc/nginx/sites-available/nf-site-$state_target /etc/nginx/sites-enabled/nf-site-$state_target\n")
 	b.WriteString("  tmp=$(mktemp)\n")
@@ -3631,8 +3687,8 @@ func renderSiteAddScript(plan siteAddPlan) string {
 	b.WriteString(q(plan.TargetName))
 	b.WriteString(" --arg server_hostname ")
 	b.WriteString(q(firstRecordString(plan.Target, "hostname")))
-	b.WriteString(" --arg hostname \"$host_name\" --arg url \"$site_url\" --arg path \"$site_path\" --arg database \"$db_name\" '\n")
-	b.WriteString("    map(select(.site_id != $site_id or .env != $env)) + [{provider:$provider,env_id:$env_id,site_id:$site_id,name:$name,env:$env,environment:$env,target:$target,server:$server,server_name:$server,server_hostname:$server_hostname,hostname:$hostname,url:$url,path:$path,database:$database,status:\"active\"}]\n")
+	b.WriteString(" --arg hostname \"$host_name\" --arg url \"$site_url\" --arg path \"$site_path\" --arg database \"$db_name\" --arg php_version \"$target_php_version\" '\n")
+	b.WriteString("    map(select(.site_id != $site_id or .env != $env)) + [{provider:$provider,env_id:$env_id,site_id:$site_id,name:$name,env:$env,environment:$env,target:$target,server:$server,server_name:$server,server_hostname:$server_hostname,hostname:$hostname,url:$url,path:$path,database:$database,php_version:$php_version,status:\"active\"}]\n")
 	b.WriteString("  ' /var/lib/nf/sites.json >\"$tmp\" && install -o ")
 	b.WriteString(q(plan.SSHUser))
 	b.WriteString(" -g www-data -m 0664 \"$tmp\" /var/lib/nf/sites.json && rm -f \"$tmp\"\n")
@@ -3657,7 +3713,7 @@ func renderSiteAddScript(plan siteAddPlan) string {
 	}
 	b.WriteString("nginx -t\n")
 	b.WriteString("systemctl reload nginx\n")
-	b.WriteString("systemctl reload php8.3-fpm || systemctl restart php8.3-fpm\n")
+	b.WriteString("systemctl reload php${target_php_version}-fpm || systemctl restart php${target_php_version}-fpm\n")
 	return b.String()
 }
 
@@ -3675,6 +3731,9 @@ func printSiteAddPlan(plan siteAddPlan, mode string) {
 		fmt.Printf("  env %s:\n", env.Env)
 		fmt.Printf("    path: %s\n", env.Path)
 		fmt.Printf("    database: %s\n", env.Database)
+		if plan.PHPVersion != "" {
+			fmt.Printf("    php: %s\n", plan.PHPVersion)
+		}
 		fmt.Printf("    vhost: %s\n", env.Hostname)
 		fmt.Printf("    url: %s\n", env.URL)
 	}
@@ -3691,6 +3750,10 @@ func cmdSiteAdd(args siteAddArgs) int {
 	}
 	if provider == "kinsta" {
 		return cmdKinstaSiteAdd(args)
+	}
+	if strings.TrimSpace(args.phpVersion) != "" {
+		fmt.Fprintln(os.Stderr, "--php only applies to kinsta targets")
+		return 1
 	}
 	if args.execute && args.dryRun {
 		fmt.Fprintln(os.Stderr, "Choose either --execute or --dry-run, not both.")
@@ -4283,7 +4346,7 @@ func cmdListSiteEnvs(siteID string) int {
 		fmt.Fprintln(os.Stderr, err)
 		return 1
 	}
-	rows := [][]string{{"env", "site", "target", "url"}}
+	rows := [][]string{{"env", "site", "php", "url"}}
 	for _, record := range bundle.Sites {
 		if !siteEnvMatchesSite(record, siteID) {
 			continue
@@ -4291,7 +4354,7 @@ func cmdListSiteEnvs(siteID string) int {
 		rows = append(rows, []string{
 			siteEnvName(record),
 			siteEnvDisplaySite(record),
-			siteProviderTarget(record),
+			sitePHPVersion(record),
 			firstRecordString(record, "url", "site_url", "home_url", "hostname"),
 		})
 	}
@@ -4359,6 +4422,9 @@ func siteEnvDetailsOutput(siteID, env string, record map[string]any) map[string]
 	out["resolved_site"] = siteEnvDisplaySite(record)
 	out["resolved_env"] = siteEnvName(record)
 	out["resolved_target"] = siteProviderTarget(record)
+	if phpVersion := sitePHPVersion(record); phpVersion != "" {
+		out["php_version"] = phpVersion
+	}
 	if host := firstNonEmpty(mapStringAtPath(record, "ssh", "host"), mapStringAtPath(record, "kinsta", "ssh", "host")); host != "" {
 		out["ssh_host"] = host
 	}
@@ -4400,6 +4466,7 @@ func printSiteEnvDetails(out map[string]any) {
 		{label: "URL", keys: []string{"url", "site_url", "home_url"}},
 		{label: "Path", keys: []string{"path", "root", "document_root"}},
 		{label: "Database", keys: []string{"database", "db_name"}},
+		{label: "PHP", keys: []string{"php_version"}},
 		{label: "SSH", keys: []string{"resolved_ssh"}},
 		{label: "SSH host", keys: []string{"ssh_host"}},
 		{label: "SSH port", keys: []string{"ssh_port"}},
@@ -4997,6 +5064,7 @@ func discoverKinstaTargetSites(target map[string]any) ([]map[string]any, error) 
 		}
 		for i, env := range envs {
 			envName := kinstaCacheEnvName(env, i)
+			phpVersion := env.CurrentPHPVersion()
 			domain := kinstaEnvPrimaryDomain(env)
 			if domain.ID == "" || domainName(domain) == "" {
 				domains, err := client.ListDomains(ctx, env.ID)
@@ -5024,6 +5092,7 @@ func discoverKinstaTargetSites(target map[string]any) ([]map[string]any, error) 
 				"path":        pathValue,
 				"database":    database,
 				"branch":      kinstaEnvBranch(envName),
+				"php_version": phpVersion,
 				"status":      "active",
 				"ssh": map[string]any{
 					"host":    host,
@@ -5036,6 +5105,7 @@ func discoverKinstaTargetSites(target map[string]any) ([]map[string]any, error) 
 					"site_id":        site.ID,
 					"environment_id": env.ID,
 					"domain_id":      domain.ID,
+					"php_version":    phpVersion,
 					"path":           pathValue,
 					"database":       database,
 					"ssh": map[string]any{
@@ -5101,6 +5171,16 @@ func kinstaEnvBranch(env string) string {
 }
 
 func discoverLinodeTargetSites(target map[string]any) ([]map[string]any, error) {
+	remoteTarget := map[string]any{}
+	if data, err := readLinodeTargetFile(target); err == nil {
+		remoteTarget = data
+	}
+	mergedTarget := cloneRecord(target)
+	for key, value := range remoteTarget {
+		if recordValueString(mergedTarget[key]) == "" {
+			mergedTarget[key] = value
+		}
+	}
 	sshHost := serverSSHHost(target)
 	sshUser := serverSSHUser(target)
 	args := []string{"ssh", "-o", "BatchMode=yes", "-o", "StrictHostKeyChecking=no", "-o", "UserKnownHostsFile=/dev/null"}
@@ -5116,7 +5196,39 @@ func discoverLinodeTargetSites(target map[string]any) ([]map[string]any, error) 
 	if err != nil {
 		return nil, err
 	}
-	return parseRemoteSiteRecords(data)
+	records, err := parseRemoteSiteRecords(data)
+	if err != nil {
+		return nil, err
+	}
+	for _, record := range records {
+		normalizeRemoteSiteRecord(record, mergedTarget)
+	}
+	return records, nil
+}
+
+func readLinodeTargetFile(target map[string]any) (map[string]any, error) {
+	sshHost := serverSSHHost(target)
+	sshUser := serverSSHUser(target)
+	args := []string{"ssh", "-o", "BatchMode=yes", "-o", "StrictHostKeyChecking=no", "-o", "UserKnownHostsFile=/dev/null"}
+	if port := firstNonEmpty(mapStringAtPath(target, "ssh", "port"), firstRecordString(target, "ssh_port")); port != "" {
+		args = append(args, "-p", port)
+	}
+	destination := sshHost
+	if sshUser != "" {
+		destination = sshUser + "@" + sshHost
+	}
+	args = append(args, destination, "cat", "/var/lib/nf/target.json")
+	data, err := runSSHOutputFn(args)
+	if err != nil {
+		return nil, err
+	}
+	dec := json.NewDecoder(strings.NewReader(string(data)))
+	dec.UseNumber()
+	record := map[string]any{}
+	if err := dec.Decode(&record); err != nil {
+		return nil, fmt.Errorf("parse /var/lib/nf/target.json: %w", err)
+	}
+	return record, nil
 }
 
 func parseRemoteSiteRecords(data []byte) ([]map[string]any, error) {
@@ -5173,6 +5285,11 @@ func normalizeRemoteSiteRecord(record, target map[string]any) {
 	}
 	if recordValueString(record["provider"]) == "" {
 		record["provider"] = "linode"
+	}
+	if sitePHPVersion(record) == "" {
+		if phpVersion := targetPHPVersion(target); phpVersion != "" {
+			record["php_version"] = phpVersion
+		}
 	}
 }
 
@@ -6078,6 +6195,7 @@ func runConfigHelp() int {
 		"set-base-domain <domain>      set provider base domain",
 		"set-default-wp-email <email>  set default WordPress email",
 		"set-default-wp-user <user>    set default WordPress user",
+		"set-kinsta-default-php <version>      set default Kinsta PHP version",
 		"set-kinsta-default-region <region>   set default Kinsta region",
 		"set-linode-default-region <region>   set default Linode region",
 		"set-linode-default-type <type>       set default Linode type",
@@ -6654,6 +6772,12 @@ func runConfig(argv []string) int {
 			return 1
 		}
 		return cmdConfigSet("kinsta_default_region", argv[1])
+	case "set-kinsta-default-php":
+		if len(argv) != 2 || strings.TrimSpace(argv[1]) == "" {
+			fmt.Fprintln(os.Stderr, "config set-kinsta-default-php takes exactly one version")
+			return 1
+		}
+		return cmdConfigSet("kinsta_default_php", argv[1])
 	case "set-linode-default-region":
 		if len(argv) != 2 || strings.TrimSpace(argv[1]) == "" {
 			fmt.Fprintln(os.Stderr, "config set-linode-default-region takes exactly one region")
@@ -6890,6 +7014,7 @@ func cmdConfigShow() int {
 	fmt.Printf("Base Domain: %s\n", values["base_domain"])
 	fmt.Printf("DNSimple Account ID: %s\n", values["dnsimple_account_id"])
 	fmt.Printf("Kinsta Default Region: %s\n", values["kinsta_default_region"])
+	fmt.Printf("Kinsta Default PHP: %s\n", firstNonEmpty(values["kinsta_default_php"], "8.3"))
 	fmt.Printf("Linode Default Region: %s\n", values["linode_default_region"])
 	fmt.Printf("Linode Default Type: %s\n", values["linode_default_type"])
 	fmt.Printf("Linode Default Image: %s\n", values["linode_default_image"])
@@ -7971,7 +8096,7 @@ func runSite(argv []string) int {
 func runSiteAdd(argv []string) int {
 	if len(argv) == 0 || argv[0] == "help" || argv[0] == "--help" || argv[0] == "-h" {
 		printGroupHelp("site add", []string{
-			"<target> <site> [--region <region>] [--execute] [--yes] [--non-interactive] [--dry-run]",
+			"<target> <site> [--region <region>] [--php <version>] [--execute] [--yes] [--non-interactive] [--dry-run]",
 		})
 		return 0
 	}
@@ -7995,11 +8120,26 @@ func runSiteAdd(argv []string) int {
 			}
 			i++
 			args.region = argv[i]
+		case "--php":
+			if i+1 >= len(argv) || strings.TrimSpace(argv[i+1]) == "" {
+				fmt.Fprintln(os.Stderr, "--php requires a value")
+				return 1
+			}
+			i++
+			args.phpVersion = argv[i]
 		default:
 			if strings.HasPrefix(arg, "--region=") {
 				args.region = strings.TrimPrefix(arg, "--region=")
 				if strings.TrimSpace(args.region) == "" {
 					fmt.Fprintln(os.Stderr, "--region requires a value")
+					return 1
+				}
+				continue
+			}
+			if strings.HasPrefix(arg, "--php=") {
+				args.phpVersion = strings.TrimPrefix(arg, "--php=")
+				if strings.TrimSpace(args.phpVersion) == "" {
+					fmt.Fprintln(os.Stderr, "--php requires a value")
 					return 1
 				}
 				continue
