@@ -154,7 +154,7 @@ type ubuntuStack struct {
 }
 
 const packageSourceUbuntuNative = "ubuntu-native"
-const firewallManagedLabel = "nf"
+const firewallManagedLabel = "nf-web"
 const firewallInboundPolicy = "DROP"
 const firewallOutboundPolicy = "ACCEPT"
 
