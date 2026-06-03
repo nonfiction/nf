@@ -1762,9 +1762,19 @@ func TestRunSiteAddLinodeExecuteRunsSSHAndCachesEnvs(t *testing.T) {
 			t.Fatalf("Run(site show) = %d, want 0", got)
 		}
 	})
-	for _, want := range []string{`"site_id": "foobar.app1-linode"`, `"env_id": "foobar.app1-linode"`, `"env_id": "foobar-staging.app1-linode"`, `"name": "foobar"`, `"target": "app1-linode"`, `"envs":`, `"env": "live"`, `"env": "staging"`} {
+	for _, want := range []string{"Site: foobar.app1-linode", "Name: foobar", "Provider: linode", "Target: app1-linode", "Environments:", "live", "staging", "foobar.app1-linode.nonfiction.dev", "foobar-staging.app1-linode.nonfiction.dev"} {
 		if !strings.Contains(showOutput, want) {
 			t.Fatalf("site show output missing %q:\n%s", want, showOutput)
+		}
+	}
+	jsonOutput := captureStdout(t, func() {
+		if got := Run([]string{"site", "show", "foobar.app1-linode", "--json"}); got != 0 {
+			t.Fatalf("Run(site show --json) = %d, want 0", got)
+		}
+	})
+	for _, want := range []string{`"site_id": "foobar.app1-linode"`, `"env_id": "foobar.app1-linode"`, `"env_id": "foobar-staging.app1-linode"`, `"name": "foobar"`, `"target": "app1-linode"`, `"envs":`, `"env": "live"`, `"env": "staging"`} {
+		if !strings.Contains(jsonOutput, want) {
+			t.Fatalf("site show --json output missing %q:\n%s", want, jsonOutput)
 		}
 	}
 }
@@ -1965,9 +1975,54 @@ func TestRunSiteEnvListAndShowUseCachedSites(t *testing.T) {
 			t.Fatalf("Run(site env show) = %d, want 0", got)
 		}
 	})
-	for _, want := range []string{`"requested_site": "client-kinsta"`, `"requested_env": "staging"`, `"resolved_site": "client-kinsta"`, `"resolved_env": "staging"`, `"kinsta_environment_id": "kenv-staging"`} {
+	for _, want := range []string{"Site: client-kinsta", "Env: staging", "Provider: kinsta", "Target: kinsta", "URL: https://staging.example.com/", "Branch: develop", "Kinsta environment ID: kenv-staging"} {
 		if !strings.Contains(showOutput, want) {
 			t.Fatalf("site env show output missing %q:\n%s", want, showOutput)
+		}
+	}
+	jsonOutput := captureStdout(t, func() {
+		if got := Run([]string{"site", "env", "show", "client-kinsta", "--staging", "--json"}); got != 0 {
+			t.Fatalf("Run(site env show --json) = %d, want 0", got)
+		}
+	})
+	for _, want := range []string{`"requested_site": "client-kinsta"`, `"requested_env": "staging"`, `"resolved_site": "client-kinsta"`, `"resolved_env": "staging"`, `"kinsta_environment_id": "kenv-staging"`} {
+		if !strings.Contains(jsonOutput, want) {
+			t.Fatalf("site env show --json output missing %q:\n%s", want, jsonOutput)
+		}
+	}
+}
+
+func TestRunSiteEnvShowLinodeUsesCachedTargets(t *testing.T) {
+	stateDir := t.TempDir()
+	t.Setenv("NF_STATE_HOME", stateDir)
+	if err := state.SaveStateRecords("providers", []map[string]any{{"provider": "linode", "targets": []map[string]any{{"name": "app2-linode", "provider": "linode", "hostname": "app2-linode.nonfiction.dev", "ssh": map[string]any{"user": "nonfiction", "host": "app2-linode.nonfiction.dev"}}}}}); err != nil {
+		t.Fatalf("SaveStateRecords(providers) error = %v", err)
+	}
+	if err := state.SaveStateRecords("sites", []map[string]any{
+		{"provider": "linode", "site_id": "happytents.app2-linode", "name": "happytents", "env": "live", "target": "app2-linode", "url": "https://happytents.app2-linode.nonfiction.dev", "hostname": "happytents.app2-linode.nonfiction.dev"},
+		{"provider": "linode", "site_id": "happytents.app2-linode", "name": "happytents", "env": "staging", "target": "app2-linode", "url": "https://happytents-staging.app2-linode.nonfiction.dev", "hostname": "happytents-staging.app2-linode.nonfiction.dev"},
+	}); err != nil {
+		t.Fatalf("SaveStateRecords(sites) error = %v", err)
+	}
+
+	showOutput := captureStdout(t, func() {
+		if got := Run([]string{"site", "env", "show", "happytents.app2-linode", "--staging"}); got != 0 {
+			t.Fatalf("Run(site env show) = %d, want 0", got)
+		}
+	})
+	for _, want := range []string{"Site: happytents.app2-linode", "Env: staging", "Provider: linode", "Target: app2-linode", "URL: https://happytents-staging.app2-linode.nonfiction.dev", "Target summary: app2-linode / linode / ssh nonfiction@app2-linode.nonfiction.dev"} {
+		if !strings.Contains(showOutput, want) {
+			t.Fatalf("site env show output missing %q:\n%s", want, showOutput)
+		}
+	}
+	jsonOutput := captureStdout(t, func() {
+		if got := Run([]string{"site", "env", "show", "happytents.app2-linode", "--staging", "--json"}); got != 0 {
+			t.Fatalf("Run(site env show --json) = %d, want 0", got)
+		}
+	})
+	for _, want := range []string{`"resolved_site": "happytents.app2-linode"`, `"resolved_env": "staging"`, `"resolved_target": "app2-linode"`, `"resolved_target_summary": "app2-linode / linode / ssh nonfiction@app2-linode.nonfiction.dev"`} {
+		if !strings.Contains(jsonOutput, want) {
+			t.Fatalf("site env show --json output missing %q:\n%s", want, jsonOutput)
 		}
 	}
 }
@@ -2014,6 +2069,54 @@ func TestRunSiteEnvListWithoutSitePromptsPicker(t *testing.T) {
 	}
 }
 
+func TestRunSiteEnvShowWithoutSitePromptsPicker(t *testing.T) {
+	stateDir := t.TempDir()
+	t.Setenv("NF_STATE_HOME", stateDir)
+	if err := state.SaveStateRecords("sites", []map[string]any{
+		{"provider": "kinsta", "site_id": "client-kinsta", "env": "live", "url": "https://www.example.com/", "kinsta": map[string]any{"site_id": "ksite123", "environment_id": "kenv-live"}},
+		{"provider": "kinsta", "site_id": "client-kinsta", "env": "staging", "url": "https://staging.example.com/", "kinsta": map[string]any{"site_id": "ksite123", "environment_id": "kenv-staging"}},
+	}); err != nil {
+		t.Fatalf("SaveStateRecords(sites) error = %v", err)
+	}
+	oldSelect := siteSelectFn
+	var selectTitle string
+	var selectOptions []ui.SelectOption
+	siteSelectFn = func(title string, options []ui.SelectOption) (string, error) {
+		selectTitle = title
+		selectOptions = append([]ui.SelectOption(nil), options...)
+		return "client-kinsta", nil
+	}
+	t.Cleanup(func() { siteSelectFn = oldSelect })
+
+	output := captureStdout(t, func() {
+		if got := Run([]string{"site", "env", "show", "--staging"}); got != 0 {
+			t.Fatalf("Run(site env show) = %d, want 0", got)
+		}
+	})
+	if selectTitle != "Choose a site to show an env for" {
+		t.Fatalf("select title = %q", selectTitle)
+	}
+	if len(selectOptions) != 1 || selectOptions[0].Value != "client-kinsta" {
+		t.Fatalf("select options = %#v", selectOptions)
+	}
+	for _, want := range []string{"Site: client-kinsta", "Env: staging", "URL: https://staging.example.com/"} {
+		if !strings.Contains(output, want) {
+			t.Fatalf("site env show output missing %q:\n%s", want, output)
+		}
+	}
+
+	jsonOutput := captureStdout(t, func() {
+		if got := Run([]string{"site", "env", "show", "--staging", "--json"}); got != 0 {
+			t.Fatalf("Run(site env show --json) = %d, want 0", got)
+		}
+	})
+	for _, want := range []string{`"resolved_site": "client-kinsta"`, `"resolved_env": "staging"`, `"kinsta_environment_id": "kenv-staging"`} {
+		if !strings.Contains(jsonOutput, want) {
+			t.Fatalf("site env show --json output missing %q:\n%s", want, jsonOutput)
+		}
+	}
+}
+
 func TestRunSiteEnvShellAndWpPreflightWithoutRunningRemoteCommands(t *testing.T) {
 	stateDir := t.TempDir()
 	t.Setenv("NF_STATE_HOME", stateDir)
@@ -2056,6 +2159,61 @@ func TestRunSiteEnvShellAndWpPreflightWithoutRunningRemoteCommands(t *testing.T)
 	})
 	if !strings.Contains(wpStderr, `Remote site env wp is not implemented for provider "kinsta"; no command was run.`) {
 		t.Fatalf("site env wp stderr = %q", wpStderr)
+	}
+}
+
+func TestRunSiteEnvShellWithoutSitePromptsPicker(t *testing.T) {
+	stateDir := t.TempDir()
+	t.Setenv("NF_STATE_HOME", stateDir)
+	if err := state.SaveStateRecords("sites", []map[string]any{{"provider": "kinsta", "site_id": "client-kinsta", "env": "live", "url": "https://www.example.com/"}}); err != nil {
+		t.Fatalf("SaveStateRecords(sites) error = %v", err)
+	}
+	oldSelect := siteSelectFn
+	var selectTitle string
+	var selectOptions []ui.SelectOption
+	siteSelectFn = func(title string, options []ui.SelectOption) (string, error) {
+		selectTitle = title
+		selectOptions = append([]ui.SelectOption(nil), options...)
+		return "client-kinsta", nil
+	}
+	t.Cleanup(func() { siteSelectFn = oldSelect })
+
+	stderr := captureStderr(t, func() {
+		stdout := captureStdout(t, func() {
+			if got := Run([]string{"site", "env", "shell"}); got != 1 {
+				t.Fatalf("Run(site env shell) = %d, want 1 while remote shell is unimplemented", got)
+			}
+		})
+		for _, want := range []string{"Site env shell preflight:", "site:     client-kinsta", "env:      live", "provider: kinsta", "url:      https://www.example.com/"} {
+			if !strings.Contains(stdout, want) {
+				t.Fatalf("site env shell stdout missing %q:\n%s", want, stdout)
+			}
+		}
+	})
+	if selectTitle != "Choose a site to shell into" {
+		t.Fatalf("select title = %q", selectTitle)
+	}
+	if len(selectOptions) != 1 || selectOptions[0].Value != "client-kinsta" {
+		t.Fatalf("select options = %#v", selectOptions)
+	}
+	if !strings.Contains(stderr, `Remote site env shell is not implemented for provider "kinsta"; no command was run.`) {
+		t.Fatalf("site env shell stderr = %q", stderr)
+	}
+}
+
+func TestRunSiteEnvWpWithoutArgsPrintsError(t *testing.T) {
+	for _, argv := range [][]string{
+		{"site", "env", "wp"},
+		{"site", "env", "wp", "--staging", "plugin", "list"},
+	} {
+		stderr := captureStderr(t, func() {
+			if got := Run(argv); got != 1 {
+				t.Fatalf("Run(%v) = %d, want 1", argv, got)
+			}
+		})
+		if !strings.Contains(stderr, "site env wp takes site and command") {
+			t.Fatalf("Run(%v) stderr = %q", argv, stderr)
+		}
 	}
 }
 
@@ -2806,11 +2964,11 @@ func TestRunSiteShowResolvesAliasAndIncludesServerSummary(t *testing.T) {
 	})
 
 	output := captureStdout(t, func() {
-		if got := Run([]string{"site", "show", "app1"}); got != 0 {
+		if got := Run([]string{"site", "show", "app1", "--json"}); got != 0 {
 			t.Fatalf("Run() = %d, want 0", got)
 		}
 	})
-	for _, wanted := range []string{`"requested_target": "app1"`, `"resolved_target": "client-app1-production"`, `"resolved_server_summary": "app1 / id 98222343 / linode / ssh nonfiction@app1.nfweb.dev"`, `"url": "https://client.app1.nfweb.dev/"`} {
+	for _, wanted := range []string{`"requested_target": "app1"`, `"resolved_target": "client-app1-production"`, `"resolved_target_summary": "app1 / id 98222343 / linode / ssh nonfiction@app1.nfweb.dev"`, `"url": "https://client.app1.nfweb.dev/"`} {
 		if !strings.Contains(output, wanted) {
 			t.Fatalf("Run() output missing %q:\n%s", wanted, output)
 		}
@@ -2878,7 +3036,7 @@ func TestRunSiteShowUsesDirectTargetWithoutAlias(t *testing.T) {
 	})
 
 	output := captureStdout(t, func() {
-		if got := Run([]string{"site", "show", "client-app1-production"}); got != 0 {
+		if got := Run([]string{"site", "show", "client-app1-production", "--json"}); got != 0 {
 			t.Fatalf("Run() = %d, want 0", got)
 		}
 	})
@@ -2924,9 +3082,19 @@ func TestRunSiteShowWithoutSitePromptsPicker(t *testing.T) {
 	if len(selectOptions) != 1 || selectOptions[0].Value != "foobar-app1-linode" || !strings.Contains(selectOptions[0].Label, "foobar") || !strings.Contains(selectOptions[0].Label, "target app1-linode") {
 		t.Fatalf("select options = %#v", selectOptions)
 	}
-	for _, want := range []string{`"site_id": "foobar-app1-linode"`, `"name": "foobar"`, `"env": "live"`, `"env": "staging"`} {
+	for _, want := range []string{"Site: foobar-app1-linode", "Name: foobar", "Provider: linode", "Target: app1-linode", "Environments:", "live", "staging"} {
 		if !strings.Contains(output, want) {
 			t.Fatalf("site show output missing %q:\n%s", want, output)
+		}
+	}
+	jsonOutput := captureStdout(t, func() {
+		if got := Run([]string{"site", "show", "--json"}); got != 0 {
+			t.Fatalf("Run(site show --json) = %d, want 0", got)
+		}
+	})
+	for _, want := range []string{`"site_id": "foobar-app1-linode"`, `"name": "foobar"`, `"env": "live"`, `"env": "staging"`} {
+		if !strings.Contains(jsonOutput, want) {
+			t.Fatalf("site show --json output missing %q:\n%s", want, jsonOutput)
 		}
 	}
 }
@@ -2968,7 +3136,7 @@ func TestRunSiteShowResolvesRepoRemoteAlias(t *testing.T) {
 	t.Cleanup(func() { _ = os.Chdir(oldwd) })
 
 	output := captureStdout(t, func() {
-		if got := Run([]string{"site", "show", "production"}); got != 0 {
+		if got := Run([]string{"site", "show", "production", "--json"}); got != 0 {
 			t.Fatalf("Run(site show production) = %d, want 0", got)
 		}
 	})
