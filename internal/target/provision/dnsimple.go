@@ -50,16 +50,24 @@ func (p *dnsimpleProvider) findZone(ctx context.Context, zone string) (string, e
 	return zone, nil
 }
 
-func (p *dnsimpleProvider) listARecords(ctx context.Context, zone string) ([]DNSRecord, error) {
-	resp, err := p.client.Zones.ListRecords(ctx, p.accountID, zone, &dnsimple.ZoneRecordListOptions{Type: dnsimple.String("A")})
+func (p *dnsimpleProvider) listRecords(ctx context.Context, zone, recordType string) ([]DNSRecord, error) {
+	recordType = strings.ToUpper(strings.TrimSpace(recordType))
+	if recordType == "" {
+		recordType = "A"
+	}
+	resp, err := p.client.Zones.ListRecords(ctx, p.accountID, zone, &dnsimple.ZoneRecordListOptions{Type: dnsimple.String(recordType)})
 	if err != nil {
-		return nil, Error{Msg: fmt.Sprintf("Listing DNSimple A records for zone %s: %v", zone, err)}
+		return nil, Error{Msg: fmt.Sprintf("Listing DNSimple %s records for zone %s: %v", recordType, zone, err)}
 	}
 	records := make([]DNSRecord, 0, len(resp.Data))
 	for _, record := range resp.Data {
 		records = append(records, dnsRecordFromZoneRecord(record))
 	}
 	return records, nil
+}
+
+func (p *dnsimpleProvider) listARecords(ctx context.Context, zone string) ([]DNSRecord, error) {
+	return p.listRecords(ctx, zone, "A")
 }
 
 func (p *dnsimpleProvider) upsertARecord(ctx context.Context, zone, name, ip string) (DNSRecord, string, error) {
@@ -102,11 +110,17 @@ func (p *dnsimpleProvider) upsertARecord(ctx context.Context, zone, name, ip str
 	return created, "created", nil
 }
 
-func (p *dnsimpleProvider) deleteARecord(ctx context.Context, zone, name string) (DNSRecord, string, error) {
-	records, err := p.listARecords(ctx, zone)
+func (p *dnsimpleProvider) deleteRecord(ctx context.Context, zone, name, recordType string) (DNSRecord, string, error) {
+	recordType = strings.ToUpper(strings.TrimSpace(recordType))
+	if recordType == "" {
+		recordType = "A"
+	}
+	records, err := p.listRecords(ctx, zone, recordType)
 	if err != nil {
 		return DNSRecord{}, "", err
 	}
+	deleted := DNSRecord{Name: strings.TrimSpace(name), Type: recordType}
+	deletedCount := 0
 	for _, record := range records {
 		if record.Name != name {
 			continue
@@ -116,11 +130,19 @@ func (p *dnsimpleProvider) deleteARecord(ctx context.Context, zone, name string)
 			return DNSRecord{}, "", Error{Msg: fmt.Sprintf("DNSimple record %s has invalid id %q", name, record.ID)}
 		}
 		if _, err := p.client.Zones.DeleteRecord(ctx, p.accountID, zone, recordID); err != nil {
-			return DNSRecord{}, "", Error{Msg: fmt.Sprintf("Deleting DNSimple A record %s in zone %s: %v", name, zone, err)}
+			return DNSRecord{}, "", Error{Msg: fmt.Sprintf("Deleting DNSimple %s record %s in zone %s: %v", recordType, name, zone, err)}
 		}
-		return record, "deleted", nil
+		deleted = record
+		deletedCount++
 	}
-	return DNSRecord{Name: strings.TrimSpace(name), Type: "A"}, "already absent", nil
+	if deletedCount > 0 {
+		return deleted, "deleted", nil
+	}
+	return deleted, "already absent", nil
+}
+
+func (p *dnsimpleProvider) deleteARecord(ctx context.Context, zone, name string) (DNSRecord, string, error) {
+	return p.deleteRecord(ctx, zone, name, "A")
 }
 
 func (p *dnsimpleProvider) waitForRecordDistribution(ctx context.Context, zone, recordID string, timeout time.Duration) error {
@@ -218,25 +240,45 @@ func defaultDNSimpleUpsertARecord(token, accountID, zone, name, ip string) error
 }
 
 func defaultDNSimpleDeleteARecord(token, accountID, zone, name string) error {
+	return defaultDNSimpleDeleteRecord(token, accountID, zone, name, "A")
+}
+
+func defaultDNSimpleDeleteTXTRecord(token, accountID, zone, name string) error {
+	return defaultDNSimpleDeleteRecord(token, accountID, zone, name, "TXT")
+}
+
+func defaultDNSimpleDeleteRecord(token, accountID, zone, name, recordType string) error {
 	provider, err := dnsimpleProviderFactory(context.Background(), token, accountID)
 	if err != nil {
 		return err
 	}
-	record, action, err := provider.deleteARecord(context.Background(), zone, name)
+	record, action, err := provider.deleteRecord(context.Background(), zone, name, recordType)
 	if err != nil {
 		return err
 	}
+	recordType = strings.ToUpper(strings.TrimSpace(record.Type))
+	if recordType == "" {
+		recordType = "A"
+	}
+	label := ""
+	if recordType != "A" {
+		label = recordType + " "
+	}
 	switch action {
 	case "deleted":
-		fmt.Printf("Deleted DNS %s\n", fqdnForDNSRecordName(name, zone))
+		fmt.Printf("Deleted DNS %s%s\n", label, fqdnForDNSRecordName(name, zone))
 	default:
-		fmt.Printf("DNS %s already absent\n", fqdnForDNSRecordName(record.Name, zone))
+		fmt.Printf("DNS %s%s already absent\n", label, fqdnForDNSRecordName(record.Name, zone))
 	}
 	return nil
 }
 
 func DeleteDNSimpleARecord(token, accountID, zone, name string) error {
 	return defaultDNSimpleDeleteARecord(token, accountID, zone, name)
+}
+
+func DeleteDNSimpleTXTRecord(token, accountID, zone, name string) error {
+	return defaultDNSimpleDeleteTXTRecord(token, accountID, zone, name)
 }
 
 func defaultDNSimpleWaitForRecordDistribution(token, accountID, zone, name string, timeout time.Duration) error {
