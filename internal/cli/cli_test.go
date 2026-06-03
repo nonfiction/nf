@@ -3252,7 +3252,7 @@ func TestRunRemoteAddRequiresCachedSiteEnv(t *testing.T) {
 
 func TestRunEnvHelpShowsCommandsWithoutShortcuts(t *testing.T) {
 	output := captureStdout(t, func() { _ = runEnvHelp() })
-	for _, wanted := range []string{"env\n\nCommands:\n", "\n  show                show local env paths, ports, and URLs\n", "\n  up                  start the local env\n", "\n  down                stop the local env\n", "\n  shell               open a shell in the local env\n", "\n  logs                tail WordPress logs\n", "\n  reset               destroy and recreate the local env\n", "\n  wp -- <args>        run wp-cli in the local env\n", "\n  push <remote>       preflight a remote env push\n", "\n  pull <remote>       preflight a remote env pull\n", "\n  snapshot            manage/list env snapshots\n"} {
+	for _, wanted := range []string{"env\n\nCommands:\n", "\n  show                show local env paths, ports, and URLs\n", "\n  password            show local env admin password only\n", "\n  up                  start the local env\n", "\n  down                stop the local env\n", "\n  shell               open a shell in the local env\n", "\n  logs                tail WordPress logs\n", "\n  reset               destroy and recreate the local env\n", "\n  wp -- <args>        run wp-cli in the local env\n", "\n  push <remote>       preflight a remote env push\n", "\n  pull <remote>       preflight a remote env pull\n", "\n  snapshot            manage/list env snapshots\n"} {
 		if !strings.Contains(output, wanted) {
 			t.Fatalf("runEnvHelp() output missing %q:\n%s", wanted, output)
 		}
@@ -4022,7 +4022,7 @@ func TestRunInitDefaultsProjectSlugFromGitRoot(t *testing.T) {
 	if got := Run([]string{"init"}); got != 0 {
 		t.Fatalf("Run() = %d, want 0", got)
 	}
-	data, err := os.ReadFile(filepath.Join(workdir, ".nf", "project.json"))
+	data, err := os.ReadFile(filepath.Join(repoRoot, ".nf", "project.json"))
 	if err != nil {
 		t.Fatalf("ReadFile() error = %v", err)
 	}
@@ -4210,9 +4210,6 @@ func TestRunEnvUpAutoInitializesProjectMetadata(t *testing.T) {
 	if err := os.MkdirAll(filepath.Join(repoRoot, ".git"), 0o755); err != nil {
 		t.Fatalf("MkdirAll() error = %v", err)
 	}
-	if err := os.MkdirAll(filepath.Join(repoRoot, ".nf"), 0o755); err != nil {
-		t.Fatalf("MkdirAll() error = %v", err)
-	}
 	if err := os.MkdirAll(filepath.Join(repoRoot, "work"), 0o755); err != nil {
 		t.Fatalf("MkdirAll() error = %v", err)
 	}
@@ -4225,6 +4222,7 @@ func TestRunEnvUpAutoInitializesProjectMetadata(t *testing.T) {
 	configHome := t.TempDir()
 	t.Setenv("NF_CONFIG_HOME", configHome)
 	t.Setenv("NF_DATA_HOME", configHome)
+	writeTestWPDefaults(t, "test-salt")
 	t.Setenv("DOCKER_LOG", logPath)
 	t.Setenv("PATH", dockerDir+string(os.PathListSeparator)+os.Getenv("PATH"))
 
@@ -4409,6 +4407,14 @@ func TestEnvDerivedPortsUseCleanedSlug(t *testing.T) {
 	}
 }
 
+func writeTestWPDefaults(t *testing.T, salt string) {
+	t.Helper()
+	t.Setenv("NF_PASSWORD_SALT", salt)
+	if err := saveGlobalConfig(map[string]string{"default_wp_email": "web@nonfiction.ca", "default_wp_user": "admin"}); err != nil {
+		t.Fatalf("saveGlobalConfig() error = %v", err)
+	}
+}
+
 func TestRenderEnvFileUsesComposeProjectName(t *testing.T) {
 	wpPort, mailpitPort := envDerivedPorts("client")
 	cfg := envConfig{ProjectSlug: "client", ProjectName: "Client", WordpressPort: wpPort, MailpitPort: mailpitPort}
@@ -4418,13 +4424,106 @@ func TestRenderEnvFileUsesComposeProjectName(t *testing.T) {
 	}
 }
 
+func TestEnvConfigWithAdminCredentialsUsesGlobalDefaultsAndProjectSlug(t *testing.T) {
+	configHome := t.TempDir()
+	t.Setenv("NF_CONFIG_HOME", configHome)
+	t.Setenv("NF_PASSWORD_SALT", "test-salt")
+	if err := saveGlobalConfig(map[string]string{"default_wp_email": "web@nonfiction.ca", "default_wp_user": "owner"}); err != nil {
+		t.Fatalf("saveGlobalConfig() error = %v", err)
+	}
+	cfg, err := envConfigWithAdminCredentials(envConfig{ProjectSlug: "sanjel", ProjectName: "Sanjel"})
+	if err != nil {
+		t.Fatalf("envConfigWithAdminCredentials() error = %v", err)
+	}
+	if got, want := cfg.AdminUser, "owner"; got != want {
+		t.Fatalf("AdminUser = %q, want %q", got, want)
+	}
+	if got, want := cfg.AdminEmail, "web@nonfiction.ca"; got != want {
+		t.Fatalf("AdminEmail = %q, want %q", got, want)
+	}
+	if got, want := cfg.AdminPassword, passwords.DerivePassword("sanjel", "wp-admin", "test-salt"); got != want {
+		t.Fatalf("AdminPassword = %q, want %q", got, want)
+	}
+}
+
+func TestRunEnvPasswordPrintsCurrentProjectAdminPassword(t *testing.T) {
+	configHome := t.TempDir()
+	t.Setenv("NF_CONFIG_HOME", configHome)
+	t.Setenv("NF_PASSWORD_SALT", "test-salt")
+	repoRoot := t.TempDir()
+	if err := os.Mkdir(filepath.Join(repoRoot, ".git"), 0o755); err != nil {
+		t.Fatalf("Mkdir(.git) error = %v", err)
+	}
+	if err := os.MkdirAll(filepath.Join(repoRoot, ".nf"), 0o755); err != nil {
+		t.Fatalf("MkdirAll(.nf) error = %v", err)
+	}
+	project := map[string]any{
+		"schema":    1,
+		"project":   map[string]any{"slug": "sanjel", "name": "Sanjel"},
+		"wordpress": map[string]any{"theme_path": "theme", "theme_slug": "theme"},
+		"env":       map[string]any{"compose": "docker compose", "wordpress_service": "wordpress", "cli_service": "cli", "theme_mount_slug": "theme", "uploads_path": "uploads"},
+	}
+	data, err := json.MarshalIndent(project, "", "  ")
+	if err != nil {
+		t.Fatalf("MarshalIndent() error = %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(repoRoot, ".nf", "project.json"), append(data, '\n'), 0o644); err != nil {
+		t.Fatalf("WriteFile(project.json) error = %v", err)
+	}
+	oldwd, err := os.Getwd()
+	if err != nil {
+		t.Fatalf("Getwd() error = %v", err)
+	}
+	if err := os.Chdir(repoRoot); err != nil {
+		t.Fatalf("Chdir() error = %v", err)
+	}
+	t.Cleanup(func() { _ = os.Chdir(oldwd) })
+
+	output := captureStdout(t, func() {
+		if got := Run([]string{"env", "password"}); got != 0 {
+			t.Fatalf("Run(env password) = %d, want 0", got)
+		}
+	})
+	want := passwords.DerivePassword("sanjel", "wp-admin", "test-salt") + "\n"
+	if output != want {
+		t.Fatalf("Run(env password) output = %q, want %q", output, want)
+	}
+}
+
+func TestRunEnvPasswordRejectsArgs(t *testing.T) {
+	repoRoot := t.TempDir()
+	if err := os.Mkdir(filepath.Join(repoRoot, ".git"), 0o755); err != nil {
+		t.Fatalf("Mkdir(.git) error = %v", err)
+	}
+	if err := os.MkdirAll(filepath.Join(repoRoot, ".nf"), 0o755); err != nil {
+		t.Fatalf("MkdirAll(.nf) error = %v", err)
+	}
+	oldwd, err := os.Getwd()
+	if err != nil {
+		t.Fatalf("Getwd() error = %v", err)
+	}
+	if err := os.Chdir(repoRoot); err != nil {
+		t.Fatalf("Chdir() error = %v", err)
+	}
+	t.Cleanup(func() { _ = os.Chdir(oldwd) })
+
+	stderr := captureStderr(t, func() {
+		if got := Run([]string{"env", "password", "sanjel"}); got != 1 {
+			t.Fatalf("Run(env password arg) = %d, want 1", got)
+		}
+	})
+	if !strings.Contains(stderr, "env password takes no arguments") {
+		t.Fatalf("stderr = %q, want no-args error", stderr)
+	}
+}
+
 func TestRenderEnvInfoUsesEffectivePorts(t *testing.T) {
 	cfg := envConfig{ProjectSlug: "client", ProjectName: "Client", EnvDir: filepath.Join("/data", "envs", "client"), WordpressPort: 18432, MailpitPort: 18433}
-	want := "Env:\n  project: client\n  path: /data/envs/client\n  compose project: nf_client_env\n  WordPress: http://localhost:18432\n  Mailpit:   http://localhost:18433"
+	want := "client:local\n────────────\nSite       client\nEnv        local\nURL        http://localhost:18432\nPath       /data/envs/client\nPHP        8.3\nDatabase   client\nCompose    nf_client_env\nMailpit    http://localhost:18433"
 	if got := renderEnvInfo(cfg, true); got != want {
 		t.Fatalf("renderEnvInfo(full) = %q, want %q", got, want)
 	}
-	want = "Env:\n  project: client\n  path: /data/envs/client\n  compose project: nf_client_env"
+	want = "client:local\n────────────\nSite       client\nEnv        local\nPath       /data/envs/client\nPHP        8.3\nDatabase   client\nCompose    nf_client_env"
 	if got := renderEnvInfo(cfg, false); got != want {
 		t.Fatalf("renderEnvInfo(short) = %q, want %q", got, want)
 	}
@@ -4537,6 +4636,32 @@ func TestPreflightEnvPortsDetectsSingleCollision(t *testing.T) {
 	}
 }
 
+func TestPreflightEnvPortsAllowsExistingManagedEnv(t *testing.T) {
+	configHome := t.TempDir()
+	t.Setenv("NF_DATA_HOME", configHome)
+	wpPort, mailpitPort := envDerivedPorts("client")
+	listener, err := net.Listen("tcp", fmt.Sprintf(":%d", wpPort))
+	if err != nil {
+		t.Fatalf("net.Listen() error = %v", err)
+	}
+	t.Cleanup(func() { _ = listener.Close() })
+
+	cfg := envConfig{ProjectSlug: "client", EnvDir: config.EnvDir("client"), WordpressPort: wpPort, MailpitPort: mailpitPort}
+	if err := os.MkdirAll(cfg.EnvDir, 0o755); err != nil {
+		t.Fatalf("MkdirAll() error = %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(cfg.EnvDir, "docker-compose.yml"), []byte("services: {}\n"), 0o644); err != nil {
+		t.Fatalf("WriteFile(compose) error = %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(cfg.EnvDir, ".env"), []byte("COMPOSE_PROJECT_NAME=nf_client_env\n"), 0o644); err != nil {
+		t.Fatalf("WriteFile(.env) error = %v", err)
+	}
+
+	if err := preflightEnvPorts(cfg); err != nil {
+		t.Fatalf("preflightEnvPorts() error = %v, want existing managed env allowed", err)
+	}
+}
+
 func TestPreflightEnvPortsDetectsBothCollisions(t *testing.T) {
 	wpPort, first, second := openAdjacentPortPair(t)
 	t.Cleanup(func() {
@@ -4628,6 +4753,7 @@ func TestEnsureManagedEnvWritesManagedFiles(t *testing.T) {
 	configHome := t.TempDir()
 	t.Setenv("NF_CONFIG_HOME", configHome)
 	t.Setenv("NF_DATA_HOME", configHome)
+	writeTestWPDefaults(t, "test-salt")
 	root := t.TempDir()
 	if err := os.MkdirAll(filepath.Join(root, "theme"), 0o755); err != nil {
 		t.Fatalf("MkdirAll() error = %v", err)
@@ -4648,14 +4774,19 @@ func TestEnsureManagedEnvWritesManagedFiles(t *testing.T) {
 		t.Fatalf("EnvDir = %q, want %q", got, want)
 	}
 	wpPort, mailpitPort := envDerivedPorts("client")
-	if err := ensureManagedEnv(cfg); err != nil {
+	credentialCfg, err := envConfigWithAdminCredentials(cfg)
+	if err != nil {
+		t.Fatalf("envConfigWithAdminCredentials() error = %v", err)
+	}
+	if err := ensureManagedEnv(credentialCfg); err != nil {
 		t.Fatalf("ensureManagedInstance() error = %v", err)
 	}
+	adminPassword := passwords.DerivePassword("client", "wp-admin", "test-salt")
 	checks := map[string][]string{
 		filepath.Join(cfg.EnvDir, "docker-compose.yml"):                   {filepath.Join(root, "theme") + ":/var/www/html/wp-content/themes/theme", "mailpit", "wordpress:cli-php8.4"},
-		filepath.Join(cfg.EnvDir, ".env"):                                 {"COMPOSE_PROJECT_NAME=nf_client_env", fmt.Sprintf("WP_PORT=%d", wpPort), fmt.Sprintf("MAILPIT_PORT=%d", mailpitPort), fmt.Sprintf("WP_URL=http://localhost:%d", wpPort), "WP_TITLE=Client"},
+		filepath.Join(cfg.EnvDir, ".env"):                                 {"COMPOSE_PROJECT_NAME=nf_client_env", fmt.Sprintf("WP_PORT=%d", wpPort), fmt.Sprintf("MAILPIT_PORT=%d", mailpitPort), fmt.Sprintf("WP_URL=http://localhost:%d", wpPort), "WP_TITLE=Client", "ADMIN_USER=admin", "ADMIN_PASSWORD=" + adminPassword, "ADMIN_EMAIL=web@nonfiction.ca"},
 		filepath.Join(cfg.EnvDir, "php", "uploads.ini"):                   {"upload_max_filesize=128M", "max_execution_time=120"},
-		filepath.Join(cfg.EnvDir, "wordpress", "Dockerfile"):              {"FROM wordpress:7.0-php8.4-apache", "COPY wordpress/wordpress-rewrites.conf"},
+		filepath.Join(cfg.EnvDir, "wordpress", "Dockerfile"):              {"FROM wordpress:php8.3-apache", "COPY wordpress/wordpress-rewrites.conf"},
 		filepath.Join(cfg.EnvDir, "wordpress", "wordpress-rewrites.conf"): {"RewriteRule . /index.php [L]"},
 	}
 	for path, wants := range checks {
@@ -4714,6 +4845,7 @@ func TestRunEnvUpPrintsUnderlyingCommands(t *testing.T) {
 	configHome := t.TempDir()
 	t.Setenv("NF_CONFIG_HOME", configHome)
 	t.Setenv("NF_DATA_HOME", configHome)
+	writeTestWPDefaults(t, "test-salt")
 	t.Setenv("DOCKER_LOG", logPath)
 	t.Setenv("PATH", dockerDir+string(os.PathListSeparator)+os.Getenv("PATH"))
 
@@ -4782,6 +4914,7 @@ func TestRunEnvUpActivatesThemeWhenAlreadyInstalled(t *testing.T) {
 	configHome := t.TempDir()
 	t.Setenv("NF_CONFIG_HOME", configHome)
 	t.Setenv("NF_DATA_HOME", configHome)
+	writeTestWPDefaults(t, "test-salt")
 	t.Setenv("DOCKER_LOG", logPath)
 	t.Setenv("PATH", dockerDir+string(os.PathListSeparator)+os.Getenv("PATH"))
 
@@ -4814,6 +4947,79 @@ func TestRunEnvUpActivatesThemeWhenAlreadyInstalled(t *testing.T) {
 	}
 	if _, err := os.Stat(logPath); err != nil {
 		t.Fatalf("docker log missing: %v", err)
+	}
+}
+
+func TestRunEnvUpBootstrapsMissingThemeDependencies(t *testing.T) {
+	repoRoot := filepath.Join(t.TempDir(), "client-site")
+	if err := os.MkdirAll(filepath.Join(repoRoot, ".git"), 0o755); err != nil {
+		t.Fatalf("MkdirAll(.git) error = %v", err)
+	}
+	if err := os.MkdirAll(filepath.Join(repoRoot, ".nf"), 0o755); err != nil {
+		t.Fatalf("MkdirAll(.nf) error = %v", err)
+	}
+	if err := os.MkdirAll(filepath.Join(repoRoot, "theme"), 0o755); err != nil {
+		t.Fatalf("MkdirAll(theme) error = %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(repoRoot, "theme", "composer.json"), []byte("{}\n"), 0o644); err != nil {
+		t.Fatalf("WriteFile(composer.json) error = %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(repoRoot, "theme", "package.json"), []byte(`{"scripts":{"build":"vite build"}}`), 0o644); err != nil {
+		t.Fatalf("WriteFile(package.json) error = %v", err)
+	}
+	project := map[string]any{
+		"schema":    1,
+		"project":   map[string]any{"slug": "client-site", "name": "Client Site", "type": "wordpress-theme"},
+		"wordpress": map[string]any{"deploy_unit": "theme", "theme_slug": "theme", "theme_path": "theme"},
+		"env":       map[string]any{"compose": "docker compose", "wordpress_service": "wordpress", "cli_service": "cli", "theme_mount_slug": "theme", "uploads_path": "uploads"},
+		"tasks": map[string]any{
+			"composer": map[string]any{"description": "Install Composer dependencies", "run": "mkdir -p theme/vendor && touch theme/vendor/autoload.php"},
+			"npm":      map[string]any{"description": "Install npm dependencies", "run": "mkdir -p theme/node_modules && touch theme/node_modules/.installed"},
+			"build":    map[string]any{"description": "Build theme assets", "run": "mkdir -p theme/dist && touch theme/dist/manifest.json"},
+		},
+	}
+	data, err := json.MarshalIndent(project, "", "  ")
+	if err != nil {
+		t.Fatalf("MarshalIndent() error = %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(repoRoot, ".nf", "project.json"), append(data, '\n'), 0o644); err != nil {
+		t.Fatalf("WriteFile(project.json) error = %v", err)
+	}
+
+	dockerDir := t.TempDir()
+	dockerScript := []byte("#!/bin/sh\ncase \"$*\" in\n  *\"wp core is-installed\"*) exit 0 ;;\n  *\"wp theme is-active\"*) exit 0 ;;\nesac\nexit 0\n")
+	if err := os.WriteFile(filepath.Join(dockerDir, "docker"), dockerScript, 0o755); err != nil {
+		t.Fatalf("WriteFile(docker) error = %v", err)
+	}
+	configHome := t.TempDir()
+	t.Setenv("NF_CONFIG_HOME", configHome)
+	t.Setenv("NF_DATA_HOME", configHome)
+	writeTestWPDefaults(t, "test-salt")
+	t.Setenv("PATH", dockerDir+string(os.PathListSeparator)+os.Getenv("PATH"))
+
+	oldwd, err := os.Getwd()
+	if err != nil {
+		t.Fatalf("Getwd() error = %v", err)
+	}
+	if err := os.Chdir(repoRoot); err != nil {
+		t.Fatalf("Chdir() error = %v", err)
+	}
+	t.Cleanup(func() { _ = os.Chdir(oldwd) })
+
+	output := captureStdout(t, func() {
+		if got := Run([]string{"env", "up"}); got != 0 {
+			t.Fatalf("Run(env up) = %d, want 0", got)
+		}
+	})
+	for _, want := range []string{"Theme bootstrap: running nf theme composer", "Theme bootstrap: running nf theme npm", "Theme bootstrap: running nf theme build"} {
+		if !strings.Contains(output, want) {
+			t.Fatalf("Run(env up) output missing %q:\n%s", want, output)
+		}
+	}
+	for _, path := range []string{filepath.Join(repoRoot, "theme", "vendor", "autoload.php"), filepath.Join(repoRoot, "theme", "node_modules", ".installed"), filepath.Join(repoRoot, "theme", "dist", "manifest.json")} {
+		if _, err := os.Stat(path); err != nil {
+			t.Fatalf("expected bootstrap output %s: %v", path, err)
+		}
 	}
 }
 
@@ -4854,6 +5060,7 @@ func TestRunEnvResetPrintsUnderlyingCommands(t *testing.T) {
 	configHome := t.TempDir()
 	t.Setenv("NF_CONFIG_HOME", configHome)
 	t.Setenv("NF_DATA_HOME", configHome)
+	writeTestWPDefaults(t, "test-salt")
 	t.Setenv("DOCKER_LOG", logPath)
 	t.Setenv("PATH", dockerDir+string(os.PathListSeparator)+os.Getenv("PATH"))
 
@@ -5113,6 +5320,10 @@ func TestRunRemovedTopLevelShellShortcutFails(t *testing.T) {
 }
 
 func TestRunEnvShowPrintsEnvInfo(t *testing.T) {
+	configHome := t.TempDir()
+	t.Setenv("NF_CONFIG_HOME", configHome)
+	t.Setenv("NF_DATA_HOME", configHome)
+	writeTestWPDefaults(t, "test-salt")
 	workdir := t.TempDir()
 	if err := os.Mkdir(filepath.Join(workdir, ".git"), 0o755); err != nil {
 		t.Fatalf("Mkdir() error = %v", err)
@@ -5144,7 +5355,8 @@ func TestRunEnvShowPrintsEnvInfo(t *testing.T) {
 		}
 	})
 	wpPort, mailpitPort := envDerivedPorts("client")
-	for _, want := range []string{"Env:\n", "  project: client\n", "  compose project: nf_client_env\n", fmt.Sprintf("  WordPress: http://localhost:%d\n", wpPort), fmt.Sprintf("  Mailpit:   http://localhost:%d", mailpitPort)} {
+	adminPassword := passwords.DerivePassword("client", "wp-admin", "test-salt")
+	for _, want := range []string{"client:local\n", "Site       client\n", "Env        local\n", "Compose    nf_client_env\n", fmt.Sprintf("URL        http://localhost:%d\n", wpPort), fmt.Sprintf("Mailpit    http://localhost:%d", mailpitPort), "Access\n", "  Admin user   admin\n", "  Admin pass   " + adminPassword} {
 		if !strings.Contains(output, want) {
 			t.Fatalf("Run(env show) output missing %q:\n%s", want, output)
 		}

@@ -106,6 +106,9 @@ type envConfig struct {
 	ThemeMountSlug   string
 	UploadsPath      string
 	ThemeSlug        string
+	AdminUser        string
+	AdminEmail       string
+	AdminPassword    string
 }
 
 type envSnapshotContents struct {
@@ -340,12 +343,22 @@ func (c envCommandRunner) envReadyForSnapshot(envDir string) bool {
 }
 
 func (c envCommandRunner) Execute(root string, extraArgs []string) error {
+	if c.name == "up" || c.name == "reset" {
+		cfg, err := envConfigWithAdminCredentials(c.cfg)
+		if err != nil {
+			return err
+		}
+		c.cfg = cfg
+	}
 	if err := ensureManagedEnv(c.cfg); err != nil {
 		return err
 	}
 	envDir := localEnvDir(c.cfg)
 	switch c.name {
 	case "up":
+		if err := bootstrapThemeForEnv(root, c.cfg); err != nil {
+			return err
+		}
 		return c.ensureUpInstalledActive(envDir)
 	case "down":
 		return runCommandSpec(execSpec{Dir: envDir, Args: envComposeArgs(c.cfg, "down")})
@@ -353,6 +366,9 @@ func (c envCommandRunner) Execute(root string, extraArgs []string) error {
 		return runCommandSpec(execSpec{Dir: envDir, Args: envComposeArgs(c.cfg, "logs", "-f", c.cfg.WordpressService)})
 	case "reset":
 		if err := runCommandSpec(execSpec{Dir: envDir, Args: envComposeArgs(c.cfg, "down", "-v", "--remove-orphans")}); err != nil {
+			return err
+		}
+		if err := bootstrapThemeForEnv(root, c.cfg); err != nil {
 			return err
 		}
 		return c.ensureUpInstalledActive(envDir)
@@ -392,6 +408,14 @@ func ensureEnvReadyForSnapshot(cfg envConfig) error {
 	if runner.envReadyForSnapshot(localEnvDir(cfg)) {
 		return nil
 	}
+	credentialCfg, err := envConfigWithAdminCredentials(cfg)
+	if err != nil {
+		return err
+	}
+	if err := ensureManagedEnv(credentialCfg); err != nil {
+		return err
+	}
+	runner.cfg = credentialCfg
 	return runner.ensureUpInstalledActive(localEnvDir(cfg))
 }
 
@@ -896,6 +920,40 @@ func ensureManagedEnv(cfg envConfig) error {
 	return nil
 }
 
+func envConfigWithAdminCredentials(cfg envConfig) (envConfig, error) {
+	if cfg.AdminUser != "" && cfg.AdminEmail != "" && cfg.AdminPassword != "" {
+		return cfg, nil
+	}
+	values, err := loadGlobalConfig()
+	if err != nil {
+		return cfg, err
+	}
+	adminEmail := firstNonEmpty(cfg.AdminEmail, values["default_wp_email"])
+	if adminEmail == "" {
+		return cfg, ProjectError{Msg: fmt.Sprintf("Expected default_wp_email in %s. Set it with nf config set-default-wp-email <email>.", config.ConfigFile())}
+	}
+	adminUser := firstNonEmpty(cfg.AdminUser, values["default_wp_user"], "admin")
+	adminPassword, err := envAdminPassword(cfg)
+	if err != nil {
+		return cfg, err
+	}
+	cfg.AdminUser = adminUser
+	cfg.AdminEmail = adminEmail
+	cfg.AdminPassword = adminPassword
+	return cfg, nil
+}
+
+func envAdminPassword(cfg envConfig) (string, error) {
+	if cfg.AdminPassword != "" {
+		return cfg.AdminPassword, nil
+	}
+	salt, err := passwords.SecretSalt()
+	if err != nil {
+		return "", err
+	}
+	return passwords.DerivePassword(cfg.ProjectSlug, "wp-admin", salt), nil
+}
+
 func writeManagedFile(path, contents string, mode os.FileMode) error {
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		return err
@@ -954,10 +1012,28 @@ func envPortCollisionMessage(cfg envConfig, occupied []int) string {
 }
 
 func preflightEnvPorts(cfg envConfig) error {
+	if envManagedComposeExists(cfg) {
+		return nil
+	}
 	if occupied := envPortsInUse(cfg); len(occupied) > 0 {
 		return fmt.Errorf("%s", envPortCollisionMessage(cfg, occupied))
 	}
 	return nil
+}
+
+func envManagedComposeExists(cfg envConfig) bool {
+	envDir := localEnvDir(cfg)
+	if strings.TrimSpace(envDir) == "" {
+		return false
+	}
+	if _, err := os.Stat(filepath.Join(envDir, "docker-compose.yml")); err != nil {
+		return false
+	}
+	values, err := config.ReadEnvFile(filepath.Join(envDir, ".env"))
+	if err != nil {
+		return false
+	}
+	return values["COMPOSE_PROJECT_NAME"] == envComposeProjectName(cfg.ProjectSlug)
 }
 
 func envComposeArgs(cfg envConfig, args ...string) []string {
@@ -1608,6 +1684,98 @@ func loadProjectTasks(root string) (map[string]projectCommand, error) {
 		parsed[name] = projectCommand{Description: desc, Run: run}
 	}
 	return parsed, nil
+}
+
+func bootstrapThemeForEnv(root string, cfg envConfig) error {
+	steps := themeBootstrapStepsNeeded(cfg.ThemePath)
+	if len(steps) == 0 {
+		return nil
+	}
+	tasks, err := loadProjectTasks(root)
+	if err != nil {
+		return err
+	}
+	for _, step := range steps {
+		task, ok := tasks[step]
+		if !ok {
+			return ProjectError{Msg: fmt.Sprintf("theme bootstrap needs task %q in .nf/project.json", step)}
+		}
+		fmt.Printf("Theme bootstrap: running nf theme %s\n", step)
+		if err := task.Run.Execute(root, nil); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func themeBootstrapStepsNeeded(themePath string) []string {
+	themePath = strings.TrimSpace(themePath)
+	if themePath == "" || !dirExists(themePath) {
+		return nil
+	}
+	steps := []string{}
+	if fileExists(filepath.Join(themePath, "composer.json")) && !fileExists(filepath.Join(themePath, "vendor", "autoload.php")) {
+		steps = append(steps, "composer")
+	}
+	if fileExists(filepath.Join(themePath, "package.json")) && !dirExists(filepath.Join(themePath, "node_modules")) {
+		steps = append(steps, "npm")
+	}
+	if themePackageHasBuildScript(filepath.Join(themePath, "package.json")) && !themeBuildOutputExists(themePath) {
+		steps = append(steps, "build")
+	}
+	return steps
+}
+
+func themePackageHasBuildScript(packagePath string) bool {
+	data, err := os.ReadFile(packagePath)
+	if err != nil {
+		return false
+	}
+	var payload struct {
+		Scripts map[string]any `json:"scripts"`
+	}
+	if err := json.Unmarshal(data, &payload); err != nil {
+		return false
+	}
+	return strings.TrimSpace(recordValueString(payload.Scripts["build"])) != ""
+}
+
+func themeBuildOutputExists(themePath string) bool {
+	for _, rel := range []string{"dist", filepath.Join("assets", "dist")} {
+		if dirHasFiles(filepath.Join(themePath, rel)) {
+			return true
+		}
+	}
+	return false
+}
+
+func fileExists(path string) bool {
+	info, err := os.Stat(path)
+	return err == nil && !info.IsDir()
+}
+
+func dirExists(path string) bool {
+	info, err := os.Stat(path)
+	return err == nil && info.IsDir()
+}
+
+func dirHasFiles(path string) bool {
+	entries, err := os.ReadDir(path)
+	if err != nil {
+		return false
+	}
+	for _, entry := range entries {
+		if entry.IsDir() {
+			if dirHasFiles(filepath.Join(path, entry.Name())) {
+				return true
+			}
+			continue
+		}
+		if entry.Name() != ".gitkeep" {
+			return true
+		}
+	}
+	return false
 }
 
 func formatProjectTaskLines(tasks map[string]projectCommand) []string {
@@ -4511,6 +4679,12 @@ func printDetailRows(rows []detailRow) {
 }
 
 func printIndentedDetailRows(rows []detailRow, indent int) {
+	for _, line := range detailRowLines(rows, indent) {
+		fmt.Println(line)
+	}
+}
+
+func detailRowLines(rows []detailRow, indent int) []string {
 	width := 0
 	for _, row := range rows {
 		if strings.TrimSpace(row.value) == "" {
@@ -4521,15 +4695,17 @@ func printIndentedDetailRows(rows []detailRow, indent int) {
 		}
 	}
 	if width == 0 {
-		return
+		return nil
 	}
 	prefix := strings.Repeat(" ", indent)
+	lines := []string{}
 	for _, row := range rows {
 		if strings.TrimSpace(row.value) == "" {
 			continue
 		}
-		fmt.Printf("%s%-*s   %s\n", prefix, width, row.label, row.value)
+		lines = append(lines, fmt.Sprintf("%s%-*s   %s", prefix, width, row.label, row.value))
 	}
+	return lines
 }
 
 type siteEnvSSHInfoValue struct {
@@ -5490,6 +5666,16 @@ func cmdSitePassword(needle string) int {
 	return 0
 }
 
+func cmdEnvPassword(cfg envConfig) int {
+	password, err := envAdminPassword(cfg)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		return 1
+	}
+	fmt.Println(password)
+	return 0
+}
+
 func preferredPasswordSiteRecord(records []map[string]any) map[string]any {
 	for _, record := range records {
 		if normalizedRecordString(siteEnvName(record)) == "live" {
@@ -5809,16 +5995,23 @@ func parseTargetShowArgs(argv []string) (string, bool, error) {
 }
 
 func cmdProjectInit(args projectInitArgs) int {
-	root, err := os.Getwd()
-	if err != nil {
-		fmt.Fprintln(os.Stderr, err)
-		return 1
-	}
+	root := projectInitRoot()
 	if err := writeProjectInit(root, args); err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		return 1
 	}
 	return 0
+}
+
+func projectInitRoot() string {
+	if root, ok := currentGitRoot(); ok {
+		return root
+	}
+	wd, err := os.Getwd()
+	if err != nil {
+		return "."
+	}
+	return wd
 }
 
 func writeProjectInit(root string, args projectInitArgs) error {
@@ -5861,6 +6054,7 @@ func ensureEnvProjectMetadata() error {
 
 func projectInitMetadata(args projectInitArgs) map[string]any {
 	themePath := firstNonEmpty(args.themeSource, "theme")
+	themePathArg := shellQuoteArg(themePath)
 	themeSlug := firstNonEmpty(args.themeSlug, "theme")
 	projectName := firstNonEmpty(args.projectName, slugToTitle(args.projectSlug))
 	projectSlug := args.projectSlug
@@ -5884,7 +6078,7 @@ func projectInitMetadata(args projectInitArgs) map[string]any {
 			"uploads_path":      "uploads",
 		},
 		"build": map[string]any{
-			"steps": []any{"composer install", "npm run build"},
+			"steps": []any{"composer --working-dir=" + themePathArg + " install", "npm --prefix " + themePathArg + " run build"},
 		},
 		"artifact": map[string]any{
 			"path":    filepath.ToSlash(filepath.Join("dist", projectSlug+"-v{version}.zip")),
@@ -6003,6 +6197,9 @@ volumes:
 
 func renderEnvFile(cfg envConfig) string {
 	wpTitle := firstNonEmpty(cfg.ProjectName, slugToTitle(cfg.ProjectSlug))
+	adminUser := firstNonEmpty(cfg.AdminUser, "admin")
+	adminPassword := firstNonEmpty(cfg.AdminPassword, "admin")
+	adminEmail := firstNonEmpty(cfg.AdminEmail, "web@nonfiction.ca")
 	return fmt.Sprintf(`COMPOSE_PROJECT_NAME=%s
 WP_PORT=%d
 MAILPIT_PORT=%d
@@ -6012,10 +6209,10 @@ DB_PASSWORD=wordpress
 DB_ROOT_PASSWORD=root
 WP_URL=http://localhost:%d
 WP_TITLE=%s
-ADMIN_USER=admin
-ADMIN_PASSWORD=admin
-ADMIN_EMAIL=web@nonfiction.ca
-`, envComposeProjectName(cfg.ProjectSlug), cfg.WordpressPort, cfg.MailpitPort, cfg.ProjectSlug, cfg.ProjectSlug, cfg.WordpressPort, wpTitle)
+ADMIN_USER=%s
+ADMIN_PASSWORD=%s
+ADMIN_EMAIL=%s
+`, envComposeProjectName(cfg.ProjectSlug), cfg.WordpressPort, cfg.MailpitPort, cfg.ProjectSlug, cfg.ProjectSlug, cfg.WordpressPort, wpTitle, adminUser, adminPassword, adminEmail)
 }
 
 func envComposeProjectName(projectSlug string) string {
@@ -6023,27 +6220,44 @@ func envComposeProjectName(projectSlug string) string {
 }
 
 func renderEnvInfo(cfg envConfig, includeURLs bool) string {
-	lines := []string{
-		"Env:",
-		"  project: " + cfg.ProjectSlug,
-		"  path: " + localEnvDir(cfg),
-		"  compose project: " + envComposeProjectName(cfg.ProjectSlug),
+	title := cfg.ProjectSlug + ":local"
+	lines := []string{title, strings.Repeat("─", len(title))}
+	rows := []detailRow{
+		{label: "Site", value: cfg.ProjectSlug},
+		{label: "Env", value: "local"},
 	}
 	if includeURLs {
-		lines = append(lines,
-			fmt.Sprintf("  WordPress: http://localhost:%d", cfg.WordpressPort),
-			fmt.Sprintf("  Mailpit:   http://localhost:%d", cfg.MailpitPort),
-		)
+		rows = append(rows, detailRow{label: "URL", value: fmt.Sprintf("http://localhost:%d", cfg.WordpressPort)})
+	}
+	rows = append(rows,
+		detailRow{label: "Path", value: localEnvDir(cfg)},
+		detailRow{label: "PHP", value: localEnvPHPVersion()},
+		detailRow{label: "Database", value: cfg.ProjectSlug},
+		detailRow{label: "Compose", value: envComposeProjectName(cfg.ProjectSlug)},
+	)
+	if includeURLs {
+		rows = append(rows, detailRow{label: "Mailpit", value: fmt.Sprintf("http://localhost:%d", cfg.MailpitPort)})
+	}
+	lines = append(lines, detailRowLines(rows, 0)...)
+	accessRows := []detailRow{
+		{label: "Admin user", value: cfg.AdminUser},
+		{label: "Admin pass", value: cfg.AdminPassword},
+	}
+	if includeURLs && hasDetailRows(accessRows) {
+		lines = append(lines, "", "Access")
+		lines = append(lines, detailRowLines(accessRows, 2)...)
 	}
 	return strings.Join(lines, "\n")
 }
+
+func localEnvPHPVersion() string { return "8.3" }
 
 func renderEnvUploadsINI() string {
 	return "file_uploads=On\nmemory_limit=256M\nupload_max_filesize=128M\npost_max_size=128M\nmax_execution_time=120\nmax_input_time=120\n"
 }
 
 func renderEnvDockerfile() string {
-	return `FROM wordpress:7.0-php8.4-apache
+	return `FROM wordpress:php8.3-apache
 
 RUN a2enmod rewrite \
   && sed -ri 's/AllowOverride None/AllowOverride All/g' /etc/apache2/apache2.conf
@@ -6324,6 +6538,7 @@ func runInitHelp() int {
 func runEnvHelp() int {
 	printGroupHelp("env", []string{
 		"show                show local env paths, ports, and URLs",
+		"password            show local env admin password only",
 		"up                  start the local env",
 		"down                stop the local env",
 		"shell               open a shell in the local env",
@@ -6449,7 +6664,7 @@ func runEnv(argv []string) int {
 	}
 	name := argv[0]
 	switch name {
-	case "show", "up", "down", "logs", "reset", "shell", "wp", "push", "pull", "snapshot":
+	case "show", "password", "up", "down", "logs", "reset", "shell", "wp", "push", "pull", "snapshot":
 	default:
 		fmt.Fprintln(os.Stderr, "unsupported env command")
 		return 1
@@ -6459,6 +6674,10 @@ func runEnv(argv []string) int {
 	}
 	if name == "show" && len(argv) != 1 {
 		fmt.Fprintln(os.Stderr, "env show takes no arguments")
+		return 1
+	}
+	if name == "password" && len(argv) != 1 {
+		fmt.Fprintln(os.Stderr, "env password takes no arguments")
 		return 1
 	}
 	if name == "shell" && len(argv) != 1 {
@@ -6471,15 +6690,15 @@ func runEnv(argv []string) int {
 			return 1
 		}
 	}
-	if err := requireProjectContext("env " + name); err != nil {
-		fmt.Fprintln(os.Stderr, err)
-		return 1
-	}
 	if name == "up" {
 		if err := ensureEnvProjectMetadata(); err != nil {
 			fmt.Fprintln(os.Stderr, err)
 			return 1
 		}
+	}
+	if err := requireProjectContext("env " + name); err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		return 1
 	}
 	root, err := discoverProjectRootOrError()
 	if err != nil {
@@ -6497,8 +6716,16 @@ func runEnv(argv []string) int {
 		return 1
 	}
 	if name == "show" {
-		fmt.Println(renderEnvInfo(cfg, true))
+		credentialCfg, err := envConfigWithAdminCredentials(cfg)
+		if err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			return 1
+		}
+		fmt.Println(renderEnvInfo(credentialCfg, true))
 		return 0
+	}
+	if name == "password" {
+		return cmdEnvPassword(cfg)
 	}
 	if name == "push" || name == "pull" {
 		return cmdEnvRemoteSyncPlan(name, argv[1], cfg, metadata)
@@ -6521,11 +6748,21 @@ func runEnv(argv []string) int {
 	case "up":
 		fmt.Println("Env started.")
 		fmt.Println()
-		fmt.Println(renderEnvInfo(cfg, true))
+		credentialCfg, err := envConfigWithAdminCredentials(cfg)
+		if err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			return 1
+		}
+		fmt.Println(renderEnvInfo(credentialCfg, true))
 	case "reset":
 		fmt.Println("Env reset.")
 		fmt.Println()
-		fmt.Println(renderEnvInfo(cfg, true))
+		credentialCfg, err := envConfigWithAdminCredentials(cfg)
+		if err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			return 1
+		}
+		fmt.Println(renderEnvInfo(credentialCfg, true))
 	case "down":
 		fmt.Println("Env stopped.")
 		fmt.Println()
@@ -6722,7 +6959,7 @@ func Run(argv []string) int {
 		}
 		return runRemote(argv[1:])
 	case "env":
-		if rejectOutsideProject(argv[0]) {
+		if !envUpCommand(argv[1:]) && rejectOutsideProject(argv[0]) {
 			return 1
 		}
 		return runEnv(argv[1:])
@@ -6741,6 +6978,10 @@ func Run(argv []string) int {
 		fmt.Fprintf(os.Stderr, "unsupported command: %s\n", argv[0])
 		return 1
 	}
+}
+
+func envUpCommand(argv []string) bool {
+	return len(argv) > 0 && argv[0] == "up"
 }
 
 func runTopicHelp(argv []string) int {
