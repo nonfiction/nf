@@ -44,6 +44,7 @@ var (
 	targetSSHReachableFn    = targetSSHReachable
 	runSSHScriptFn          = runSSHScript
 	runSSHCommandFn         = runSSHCommand
+	runSSHOutputFn          = runSSHOutput
 	targetSelectFn          = ui.Select
 	providerSelectFn        = ui.Select
 	siteSelectFn            = ui.Select
@@ -2681,6 +2682,25 @@ type siteAddPlan struct {
 	Envs          []siteEnvPlan
 }
 
+type siteRemoveEnvPlan struct {
+	Env      string
+	EnvID    string
+	Path     string
+	Database string
+	Hostname string
+}
+
+type siteRemovePlan struct {
+	SiteID     string
+	Name       string
+	Provider   string
+	Target     map[string]any
+	TargetName string
+	SSHUser    string
+	SSHHost    string
+	Envs       []siteRemoveEnvPlan
+}
+
 func cleanSiteSlug(input string) (string, error) {
 	slug := strings.ToLower(strings.TrimSpace(input))
 	if slug == "" {
@@ -2719,6 +2739,18 @@ func siteEnvHostname(site, targetName, baseDomain, env string) string {
 		label += "-staging"
 	}
 	return label + "." + targetName + "." + baseDomain
+}
+
+func linodeSiteID(site, targetName string) string {
+	return site + "." + targetName
+}
+
+func linodeEnvID(site, targetName, env string) string {
+	label := site
+	if env == "staging" {
+		label += "-staging"
+	}
+	return label + "." + targetName
 }
 
 func siteEnvTitle(site, env string) string {
@@ -2781,7 +2813,7 @@ func buildSiteAddPlan(args siteAddArgs) (siteAddPlan, error) {
 		SSHUser:       sshUser,
 		SSHHost:       sshHost,
 		Site:          siteSlug,
-		SiteID:        siteCanonicalID(siteSlug, targetName),
+		SiteID:        linodeSiteID(siteSlug, targetName),
 		BaseDomain:    baseDomain,
 		AdminUser:     adminUser,
 		AdminEmail:    adminEmail,
@@ -2803,7 +2835,7 @@ func buildSiteAddPlan(args siteAddArgs) (siteAddPlan, error) {
 }
 
 func siteAddRecord(plan siteAddPlan, env siteEnvPlan) map[string]any {
-	envID := plan.SiteID + "-" + env.Env
+	envID := linodeEnvID(plan.Site, plan.TargetName, env.Env)
 	return map[string]any{
 		"provider":        "linode",
 		"env_id":          envID,
@@ -2872,6 +2904,12 @@ func runSSHCommand(args []string) error {
 	return cmd.Run()
 }
 
+func runSSHOutput(args []string) ([]byte, error) {
+	cmd := exec.Command(args[0], args[1:]...)
+	cmd.Stderr = os.Stderr
+	return cmd.Output()
+}
+
 func renderSiteAddScript(plan siteAddPlan) string {
 	q := shellQuoteArg
 	var b strings.Builder
@@ -2934,7 +2972,7 @@ func renderSiteAddScript(plan siteAddPlan) string {
 	b.WriteString(" -g www-data -m 0664 \"$tmp\" /var/lib/nf/sites.json && rm -f \"$tmp\"\n")
 	b.WriteString("}\n")
 	for _, env := range plan.Envs {
-		stateTarget := plan.SiteID + "-" + env.Env
+		stateTarget := linodeEnvID(plan.Site, plan.TargetName, env.Env)
 		b.WriteString("create_env ")
 		b.WriteString(q(env.Env))
 		b.WriteByte(' ')
@@ -3037,6 +3075,237 @@ func cmdSiteAdd(args siteAddArgs) int {
 	return 0
 }
 
+func buildSiteRemovePlan(siteID string) (siteRemovePlan, error) {
+	records, err := state.LoadStateRecords("sites")
+	if err != nil {
+		return siteRemovePlan{}, err
+	}
+	matches, resolvedSiteID, err := siteRecordsMatchingSite(records, siteID)
+	if err != nil {
+		return siteRemovePlan{}, err
+	}
+	if len(matches) == 0 {
+		return siteRemovePlan{}, ProjectError{Msg: fmt.Sprintf("No site matched %q.", siteID)}
+	}
+	first := matches[0]
+	provider := strings.ToLower(strings.TrimSpace(recordValueString(first["provider"])))
+	if provider != "linode" {
+		return siteRemovePlan{}, ProjectError{Msg: fmt.Sprintf("Unsupported provider %q. Only linode site remove is available.", provider)}
+	}
+	targetName := siteProviderTarget(first)
+	if targetName == "" {
+		return siteRemovePlan{}, ProjectError{Msg: fmt.Sprintf("Site %q is missing a target.", siteID)}
+	}
+	targets, err := cachedTargets()
+	if err != nil {
+		return siteRemovePlan{}, err
+	}
+	target := state.MatchingRecord(targets, targetName)
+	if target == nil {
+		return siteRemovePlan{}, ProjectError{Msg: fmt.Sprintf("No target matched site target %q.", targetName)}
+	}
+	sshHost := serverSSHHost(target)
+	if sshHost == "" {
+		return siteRemovePlan{}, ProjectError{Msg: fmt.Sprintf("Target %q is missing an SSH host.", targetName)}
+	}
+	values, err := loadGlobalConfig()
+	if err != nil {
+		return siteRemovePlan{}, err
+	}
+	sshUser := firstNonEmpty(serverSSHUser(target), values["linode_default_user"])
+	if sshUser == "" {
+		return siteRemovePlan{}, ProjectError{Msg: fmt.Sprintf("Target %q is missing an SSH user. Set linode_default_user with nf config set-linode-default-user <user>.", targetName)}
+	}
+	plan := siteRemovePlan{
+		SiteID:     resolvedSiteID,
+		Name:       siteRecordName(first),
+		Provider:   provider,
+		Target:     target,
+		TargetName: targetName,
+		SSHUser:    sshUser,
+		SSHHost:    sshHost,
+		Envs:       make([]siteRemoveEnvPlan, 0, len(matches)),
+	}
+	for _, record := range matches {
+		env := siteRemoveEnvPlan{
+			Env:      siteEnvName(record),
+			EnvID:    firstRecordString(record, "env_id"),
+			Path:     firstRecordString(record, "path"),
+			Database: firstRecordString(record, "database", "db_name"),
+			Hostname: firstRecordString(record, "hostname", "url"),
+		}
+		if env.EnvID == "" {
+			env.EnvID = linodeEnvID(siteRecordName(record), targetName, env.Env)
+		}
+		if err := validateSiteRemoveEnv(env); err != nil {
+			return siteRemovePlan{}, err
+		}
+		plan.Envs = append(plan.Envs, env)
+	}
+	sort.SliceStable(plan.Envs, func(i, j int) bool {
+		left, right := siteListEnvOrder(plan.Envs[i].Env), siteListEnvOrder(plan.Envs[j].Env)
+		if left != right {
+			return left < right
+		}
+		return plan.Envs[i].Env < plan.Envs[j].Env
+	})
+	return plan, nil
+}
+
+func validateSiteRemoveEnv(env siteRemoveEnvPlan) error {
+	if strings.TrimSpace(env.Env) == "" {
+		return ProjectError{Msg: "Selected site has an env with no name."}
+	}
+	if strings.TrimSpace(env.EnvID) == "" {
+		return ProjectError{Msg: fmt.Sprintf("Selected site env %q has no env_id.", env.Env)}
+	}
+	if !safeDatabaseName(env.Database) {
+		return ProjectError{Msg: fmt.Sprintf("Selected site env %q has unsafe database name %q.", env.Env, env.Database)}
+	}
+	if !safeSitePath(env.Path) {
+		return ProjectError{Msg: fmt.Sprintf("Selected site env %q has unsafe path %q.", env.Env, env.Path)}
+	}
+	return nil
+}
+
+func safeDatabaseName(name string) bool {
+	if name == "" {
+		return false
+	}
+	for _, r := range name {
+		if r >= 'a' && r <= 'z' || r >= 'A' && r <= 'Z' || r >= '0' && r <= '9' || r == '_' {
+			continue
+		}
+		return false
+	}
+	return true
+}
+
+func safeSitePath(sitePath string) bool {
+	cleaned := path.Clean(sitePath)
+	return strings.HasPrefix(cleaned, "/var/www/sites/") && strings.HasSuffix(cleaned, "/public") && !strings.Contains(cleaned, "..")
+}
+
+func printSiteRemovePlan(plan siteRemovePlan, mode string) {
+	fmt.Println("Remove site plan:")
+	fmt.Printf("  site id: %s\n", plan.SiteID)
+	if plan.Name != "" {
+		fmt.Printf("  site: %s\n", plan.Name)
+	}
+	fmt.Printf("  target: %s\n", plan.TargetName)
+	fmt.Printf("  provider: %s\n", plan.Provider)
+	fmt.Printf("  ssh: %s@%s\n", plan.SSHUser, plan.SSHHost)
+	fmt.Println("  dns actions: none")
+	for _, env := range plan.Envs {
+		fmt.Printf("  env %s:\n", env.Env)
+		fmt.Printf("    env id: %s\n", env.EnvID)
+		fmt.Printf("    delete path: %s\n", env.Path)
+		fmt.Printf("    drop database: %s\n", env.Database)
+		if env.Hostname != "" {
+			fmt.Printf("    vhost: %s\n", env.Hostname)
+		}
+	}
+	fmt.Printf("  remote state: /var/lib/nf/sites.json\n")
+	fmt.Printf("  local state: %s\n", state.StatePath("sites"))
+	fmt.Printf("  mode: %s\n", mode)
+}
+
+func renderSiteRemoveScript(plan siteRemovePlan) string {
+	q := shellQuoteArg
+	var b strings.Builder
+	b.WriteString("set -euo pipefail\n")
+	b.WriteString("remove_env() {\n")
+	b.WriteString("  env_id=$1 site_path=$2 db_name=$3\n")
+	b.WriteString("  rm -f /etc/nginx/sites-enabled/nf-site-$env_id /etc/nginx/sites-available/nf-site-$env_id\n")
+	b.WriteString("  rm -f /var/log/nginx/sites/$env_id.access.log /var/log/nginx/sites/$env_id.error.log\n")
+	b.WriteString("  rm -rf -- \"$site_path\"\n")
+	b.WriteString("  parent=$(dirname \"$site_path\")\n")
+	b.WriteString("  rmdir --ignore-fail-on-non-empty -- \"$parent\" 2>/dev/null || true\n")
+	b.WriteString("  mariadb -uroot <<SQL\n")
+	b.WriteString("DROP DATABASE IF EXISTS \\`$db_name\\`;\n")
+	b.WriteString("DROP USER IF EXISTS '$db_name'@'localhost';\n")
+	b.WriteString("FLUSH PRIVILEGES;\n")
+	b.WriteString("SQL\n")
+	b.WriteString("}\n")
+	for _, env := range plan.Envs {
+		b.WriteString("remove_env ")
+		b.WriteString(q(env.EnvID))
+		b.WriteByte(' ')
+		b.WriteString(q(env.Path))
+		b.WriteByte(' ')
+		b.WriteString(q(env.Database))
+		b.WriteByte('\n')
+	}
+	b.WriteString("if [ -f /var/lib/nf/sites.json ]; then\n")
+	b.WriteString("  tmp=$(mktemp)\n")
+	b.WriteString("  jq --arg site_id ")
+	b.WriteString(q(plan.SiteID))
+	b.WriteString(" 'map(select(.site_id != $site_id))' /var/lib/nf/sites.json >\"$tmp\" && install -o ")
+	b.WriteString(q(plan.SSHUser))
+	b.WriteString(" -g www-data -m 0664 \"$tmp\" /var/lib/nf/sites.json && rm -f \"$tmp\"\n")
+	b.WriteString("fi\n")
+	b.WriteString("nginx -t\n")
+	b.WriteString("systemctl reload nginx\n")
+	b.WriteString("systemctl reload php8.3-fpm || systemctl restart php8.3-fpm\n")
+	return b.String()
+}
+
+func removeSiteFromLocalCache(siteID string) error {
+	_, err := state.DeleteStateRecords("sites", func(record map[string]any) bool {
+		return normalizedRecordString(siteRecordID(record)) == normalizedRecordString(siteID)
+	})
+	return err
+}
+
+func cmdSiteRemove(siteID string, dryRun, execute, yes, nonInteractive bool) int {
+	if execute && dryRun {
+		fmt.Fprintln(os.Stderr, "Choose either --execute or --dry-run, not both.")
+		return 1
+	}
+	if nonInteractive && execute && !yes {
+		fmt.Fprintln(os.Stderr, "Remote execution requires both --execute and --yes in non-interactive mode.")
+		return 1
+	}
+	if !execute && (dryRun || nonInteractive) {
+		dryRun = true
+	}
+	plan, err := buildSiteRemovePlan(siteID)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		return 1
+	}
+	willExecute := execute || (!dryRun && !nonInteractive)
+	mode := "dry-run"
+	if willExecute {
+		mode = "execute"
+	}
+	printSiteRemovePlan(plan, mode)
+	if !willExecute {
+		return 0
+	}
+	if !yes {
+		confirmed, err := ui.Confirm(fmt.Sprintf("Remove site %q from target %q and delete its databases and files?", plan.SiteID, plan.TargetName), false)
+		if err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			return 1
+		}
+		if !confirmed {
+			fmt.Fprintln(os.Stderr, "Aborted.")
+			return 1
+		}
+	}
+	if err := runSSHScriptFn(plan.SSHUser, plan.SSHHost, renderSiteRemoveScript(plan)); err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		return 1
+	}
+	if err := removeSiteFromLocalCache(plan.SiteID); err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		return 1
+	}
+	fmt.Println("Site removed.")
+	return 0
+}
+
 func cmdListSites(records, servers []map[string]any) int {
 	if len(records) == 0 {
 		fmt.Println("No sites found.")
@@ -3047,7 +3316,6 @@ func cmdListSites(records, servers []map[string]any) int {
 		Name       string
 		Target     string
 		Envs       map[string]bool
-		EnvURLs    map[string]string
 		FirstIndex int
 	}
 	grouped := map[string]*siteListRow{}
@@ -3061,7 +3329,7 @@ func cmdListSites(records, servers []map[string]any) int {
 		}
 		row := grouped[siteID]
 		if row == nil {
-			row = &siteListRow{SiteID: siteID, Name: siteRecordName(record), Target: siteProviderTarget(record), Envs: map[string]bool{}, EnvURLs: map[string]string{}, FirstIndex: len(grouped)}
+			row = &siteListRow{SiteID: siteID, Name: siteRecordName(record), Target: siteProviderTarget(record), Envs: map[string]bool{}, FirstIndex: len(grouped)}
 			grouped[siteID] = row
 		}
 		if row.Name == "" {
@@ -3072,9 +3340,6 @@ func cmdListSites(records, servers []map[string]any) int {
 		}
 		env := siteEnvName(record)
 		row.Envs[env] = true
-		if url := firstRecordString(record, "url", "site_url", "home_url", "hostname"); url != "" {
-			row.EnvURLs[env] = url
-		}
 	}
 	if len(grouped) == 0 {
 		fmt.Println("No sites found.")
@@ -3085,15 +3350,13 @@ func cmdListSites(records, servers []map[string]any) int {
 		rowsBySite = append(rowsBySite, row)
 	}
 	sort.Slice(rowsBySite, func(i, j int) bool { return rowsBySite[i].FirstIndex < rowsBySite[j].FirstIndex })
-	rows := [][]string{{"site id", "name", "target", "envs", "live url", "staging url"}}
+	rows := [][]string{{"site id", "name", "target", "envs"}}
 	for _, row := range rowsBySite {
 		rows = append(rows, []string{
 			row.SiteID,
 			row.Name,
 			row.Target,
 			strings.Join(sortedSiteListEnvs(row.Envs), ","),
-			row.EnvURLs["live"],
-			row.EnvURLs["staging"],
 		})
 	}
 	fmt.Println(formatTable(rows))
@@ -3478,8 +3741,167 @@ func cmdSiteRefresh() int {
 	for _, target := range targets {
 		fmt.Printf("  %s (%s)\n", firstRecordString(target, "_state_key", "target_name", "target", "name", "slug", "hostname", "label", "id"), recordValueString(target["provider"]))
 	}
-	fmt.Println("Remote target site discovery is not implemented yet; no site cache was changed.")
+	result, err := refreshRemoteTargetSites(targets)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		return 1
+	}
+	if result.Skipped > 0 {
+		fmt.Printf("Skipped targets: %d\n", result.Skipped)
+	}
+	for _, warning := range result.Warnings {
+		fmt.Fprintf(os.Stderr, "Warning: %s\n", warning)
+	}
+	if result.Refreshed == 0 {
+		fmt.Println("No remote targets were refreshed; no site cache was changed.")
+		if len(result.Warnings) > 0 {
+			return 1
+		}
+		return 0
+	}
+	fmt.Printf("Refreshed targets: %d\n", result.Refreshed)
+	fmt.Printf("Discovered remote site envs: %d\n", result.Discovered)
+	fmt.Printf("Saved site cache: %s\n", state.StatePath("sites"))
+	if len(result.Warnings) > 0 {
+		return 1
+	}
 	return 0
+}
+
+type siteRefreshResult struct {
+	Refreshed  int
+	Skipped    int
+	Discovered int
+	Warnings   []string
+}
+
+func refreshRemoteTargetSites(targets []map[string]any) (siteRefreshResult, error) {
+	result := siteRefreshResult{}
+	refreshedTargets := map[string]bool{}
+	discovered := []map[string]any{}
+	for _, target := range targets {
+		provider := strings.ToLower(strings.TrimSpace(recordValueString(target["provider"])))
+		if provider != "linode" {
+			result.Skipped++
+			continue
+		}
+		targetName := firstRecordString(target, "_state_key", "target_name", "target", "name", "slug", "hostname", "label", "id")
+		sshHost := serverSSHHost(target)
+		if sshHost == "" {
+			result.Warnings = append(result.Warnings, fmt.Sprintf("target %q has no SSH host", targetName))
+			continue
+		}
+		remote, err := discoverLinodeTargetSites(target)
+		if err != nil {
+			result.Warnings = append(result.Warnings, fmt.Sprintf("target %q: %v", targetName, err))
+			continue
+		}
+		result.Refreshed++
+		refreshedTargets[normalizedRecordString(targetName)] = true
+		for _, record := range remote {
+			normalizeRemoteSiteRecord(record, target)
+			discovered = append(discovered, record)
+		}
+	}
+	if result.Refreshed == 0 {
+		return result, nil
+	}
+	existing, err := state.LoadStateRecords("sites")
+	if err != nil {
+		return result, err
+	}
+	merged := make([]map[string]any, 0, len(existing)+len(discovered))
+	for _, record := range existing {
+		if refreshedTargets[normalizedRecordString(siteProviderTarget(record))] {
+			continue
+		}
+		if refreshedTargets[normalizedRecordString(siteServerReference(record))] {
+			continue
+		}
+		merged = append(merged, record)
+	}
+	merged = append(merged, discovered...)
+	if err := state.SaveStateRecords("sites", merged); err != nil {
+		return result, err
+	}
+	result.Discovered = len(discovered)
+	return result, nil
+}
+
+func discoverLinodeTargetSites(target map[string]any) ([]map[string]any, error) {
+	sshHost := serverSSHHost(target)
+	sshUser := serverSSHUser(target)
+	args := []string{"ssh", "-o", "BatchMode=yes", "-o", "StrictHostKeyChecking=no", "-o", "UserKnownHostsFile=/dev/null"}
+	if port := firstNonEmpty(mapStringAtPath(target, "ssh", "port"), firstRecordString(target, "ssh_port")); port != "" {
+		args = append(args, "-p", port)
+	}
+	destination := sshHost
+	if sshUser != "" {
+		destination = sshUser + "@" + sshHost
+	}
+	args = append(args, destination, "cat", "/var/lib/nf/sites.json")
+	data, err := runSSHOutputFn(args)
+	if err != nil {
+		return nil, err
+	}
+	return parseRemoteSiteRecords(data)
+}
+
+func parseRemoteSiteRecords(data []byte) ([]map[string]any, error) {
+	dec := json.NewDecoder(strings.NewReader(string(data)))
+	dec.UseNumber()
+	var payload any
+	if err := dec.Decode(&payload); err != nil {
+		return nil, fmt.Errorf("parse /var/lib/nf/sites.json: %w", err)
+	}
+	switch typed := payload.(type) {
+	case []any:
+		records := make([]map[string]any, 0, len(typed))
+		for _, item := range typed {
+			record, ok := item.(map[string]any)
+			if !ok {
+				return nil, ProjectError{Msg: "/var/lib/nf/sites.json must contain site objects"}
+			}
+			records = append(records, record)
+		}
+		return records, nil
+	case map[string]any:
+		if list, ok := typed["sites"].([]any); ok {
+			records := make([]map[string]any, 0, len(list))
+			for _, item := range list {
+				record, ok := item.(map[string]any)
+				if !ok {
+					return nil, ProjectError{Msg: "/var/lib/nf/sites.json sites must contain site objects"}
+				}
+				records = append(records, record)
+			}
+			return records, nil
+		}
+	}
+	return nil, ProjectError{Msg: "Unsupported JSON shape in /var/lib/nf/sites.json"}
+}
+
+func normalizeRemoteSiteRecord(record, target map[string]any) {
+	targetName := firstRecordString(target, "_state_key", "target_name", "target", "name", "slug", "hostname", "label", "id")
+	if targetName != "" {
+		if firstRecordString(record, "target", "server", "server_name", "server_id", "server_hostname", "server_label") == "" {
+			record["target"] = targetName
+		}
+		if siteServerReference(record) == "" {
+			record["server"] = targetName
+		}
+		if firstRecordString(record, "server_name") == "" {
+			record["server_name"] = targetName
+		}
+	}
+	if firstRecordString(record, "server_hostname") == "" {
+		if hostname := firstRecordString(target, "hostname", "host"); hostname != "" {
+			record["server_hostname"] = hostname
+		}
+	}
+	if recordValueString(record["provider"]) == "" {
+		record["provider"] = "linode"
+	}
 }
 
 func cmdServerRootPassword(needle string) int {
@@ -3552,6 +3974,40 @@ func siteRecordsByID(records []map[string]any, siteID string) []map[string]any {
 	return matches
 }
 
+func siteRecordsMatchingSite(records []map[string]any, needle string) ([]map[string]any, string, error) {
+	normalized := normalizedRecordString(needle)
+	if normalized == "" {
+		return nil, "", nil
+	}
+	matchedIDs := []string{}
+	seen := map[string]bool{}
+	for _, record := range records {
+		id := siteRecordID(record)
+		if id == "" {
+			continue
+		}
+		candidates := []string{id, siteEnvSiteID(record), siteRecordName(record), siteTargetName(record), firstRecordString(record, "hostname", "url", "site_url", "home_url")}
+		for _, candidate := range candidates {
+			if normalizedRecordString(candidate) != normalized {
+				continue
+			}
+			if !seen[id] {
+				seen[id] = true
+				matchedIDs = append(matchedIDs, id)
+			}
+			break
+		}
+	}
+	if len(matchedIDs) == 0 {
+		return nil, "", nil
+	}
+	if len(matchedIDs) > 1 {
+		sort.Strings(matchedIDs)
+		return nil, "", ProjectError{Msg: fmt.Sprintf("Site %q matched multiple sites: %s.", needle, strings.Join(matchedIDs, ", "))}
+	}
+	return siteRecordsByID(records, matchedIDs[0]), matchedIDs[0], nil
+}
+
 func siteDetailsOutput(requested, resolved string, records []map[string]any, servers []map[string]any) map[string]any {
 	first := records[0]
 	out := map[string]any{
@@ -3589,6 +4045,18 @@ func siteDetailsOutput(requested, resolved string, records []map[string]any, ser
 }
 
 func chooseSiteForShow() (string, error) {
+	return chooseSite("show")
+}
+
+func chooseSiteForRemove() (string, error) {
+	return chooseSite("remove")
+}
+
+func chooseSiteForEnvList() (string, error) {
+	return chooseSite("list envs for")
+}
+
+func chooseSite(action string) (string, error) {
 	bundle, err := state.LoadStateBundle()
 	if err != nil {
 		return "", err
@@ -3613,7 +4081,7 @@ func chooseSiteForShow() (string, error) {
 	if len(options) == 0 {
 		return "", ProjectError{Msg: "No selectable sites found."}
 	}
-	return siteSelectFn("Choose a site to show", options)
+	return siteSelectFn(fmt.Sprintf("Choose a site to %s", action), options)
 }
 
 func chooseTargetForShow() (string, error) {
@@ -4131,6 +4599,7 @@ func runSiteHelp() int {
 		"refresh             refresh local inventory cache",
 		"list                list sites",
 		"show <id-or-name>   show a site",
+		"remove [site] [flags]   remove a Linode site and delete its env data",
 		"env                 list, show, shell into, or run wp-cli against remote envs",
 	})
 	return 0
@@ -4545,6 +5014,14 @@ func parseRemoveTargetArgs(argv []string) (string, deleteServerOptions, error) {
 	needle, opts, err := parseDeleteServerArgs(argv)
 	if err != nil {
 		return "", opts, fmt.Errorf("%s", strings.Replace(err.Error(), "server delete", "target remove", 1))
+	}
+	return needle, opts, nil
+}
+
+func parseRemoveSiteArgs(argv []string) (string, deleteServerOptions, error) {
+	needle, opts, err := parseDeleteServerArgs(argv)
+	if err != nil {
+		return "", opts, fmt.Errorf("%s", strings.Replace(err.Error(), "server delete", "site remove", 1))
 	}
 	return needle, opts, nil
 }
@@ -5907,6 +6384,25 @@ func runSite(argv []string) int {
 			needle = selected
 		}
 		return cmdShowSite(needle)
+	case "remove":
+		needle, opts, err := parseRemoveSiteArgs(argv[1:])
+		if err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			return 1
+		}
+		if needle == "" {
+			if opts.nonInteractive {
+				fmt.Fprintln(os.Stderr, "site remove requires a site in non-interactive mode")
+				return 1
+			}
+			selected, err := chooseSiteForRemove()
+			if err != nil {
+				fmt.Fprintln(os.Stderr, err)
+				return 1
+			}
+			needle = selected
+		}
+		return cmdSiteRemove(needle, opts.dryRun, opts.execute, opts.yes, opts.nonInteractive)
 	case "env":
 		return runSiteEnv(argv[1:])
 	default:
@@ -5954,7 +6450,7 @@ func runSiteAdd(argv []string) int {
 func runSiteEnv(argv []string) int {
 	if len(argv) == 0 || argv[0] == "help" || argv[0] == "--help" || argv[0] == "-h" {
 		printGroupHelp("site env", []string{
-			"list <site>                 list remote envs for a site",
+			"list [site]                 list remote envs for a site",
 			"show <site> [--live|--staging]       show one remote env",
 			"shell <site> [--live|--staging]      shell into a remote env",
 			"wp <site> [--live|--staging] <cmd>   run wp-cli against a remote env",
@@ -5963,11 +6459,22 @@ func runSiteEnv(argv []string) int {
 	}
 	switch argv[0] {
 	case "list":
-		if len(argv) != 2 {
-			fmt.Fprintln(os.Stderr, "site env list takes exactly one site")
+		if len(argv) > 2 {
+			fmt.Fprintln(os.Stderr, "site env list takes at most one site")
 			return 1
 		}
-		return cmdListSiteEnvs(argv[1])
+		siteID := ""
+		if len(argv) == 2 {
+			siteID = argv[1]
+		} else {
+			selected, err := chooseSiteForEnvList()
+			if err != nil {
+				fmt.Fprintln(os.Stderr, err)
+				return 1
+			}
+			siteID = selected
+		}
+		return cmdListSiteEnvs(siteID)
 	case "show":
 		siteID, env, _, ok := parseSiteEnvFlag(argv[1:], false)
 		if !ok {
