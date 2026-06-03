@@ -19,6 +19,18 @@ func TestConfirmModelDefaultsAndKeys(t *testing.T) {
 		t.Fatalf("left selected = %d, want %d", got, want)
 	}
 
+	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyDown})
+	m = updated.(confirmModel)
+	if got, want := m.selected, 1; got != want {
+		t.Fatalf("down selected = %d, want %d", got, want)
+	}
+
+	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyUp})
+	m = updated.(confirmModel)
+	if got, want := m.selected, 0; got != want {
+		t.Fatalf("up selected = %d, want %d", got, want)
+	}
+
 	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyRight})
 	m = updated.(confirmModel)
 	if got, want := m.selected, 1; got != want {

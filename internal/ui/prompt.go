@@ -240,10 +240,10 @@ func (m confirmModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.result = false
 			m.answered = true
 			return m, tea.Quit
-		case "left", "h", "shift+tab":
+		case "left", "up", "h", "k", "shift+tab":
 			m = m.previous()
 			return m, nil
-		case "right", "l", "tab":
+		case "right", "down", "l", "j", "tab":
 			m = m.next()
 			return m, nil
 		}
@@ -270,7 +270,7 @@ func (m confirmModel) View() string {
 		labelStyle.Render(ensurePromptPunctuation(m.prompt)),
 		yes,
 		no,
-		hintStyle.Render("h/l or y/n choose · enter confirm · esc cancel"),
+		hintStyle.Render("↑/↓ or y/n choose · enter confirm · esc cancel"),
 	)
 	return body
 }
