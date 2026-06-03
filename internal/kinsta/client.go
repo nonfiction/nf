@@ -239,6 +239,22 @@ func (c *Client) CloneEnvironment(ctx context.Context, siteID string, req CloneE
 	return out.OperationID(), nil
 }
 
+func (c *Client) DeleteEnvironment(ctx context.Context, envID string) (string, error) {
+	var out operationResponse
+	if err := c.do(ctx, http.MethodDelete, "/sites/environments/"+url.PathEscape(envID), nil, &out); err != nil {
+		return "", err
+	}
+	return out.OperationID(), nil
+}
+
+func (c *Client) DeleteSite(ctx context.Context, siteID string) (string, error) {
+	var out operationResponse
+	if err := c.do(ctx, http.MethodDelete, "/sites/"+url.PathEscape(siteID), nil, &out); err != nil {
+		return "", err
+	}
+	return out.OperationID(), nil
+}
+
 func (c *Client) AddDomain(ctx context.Context, envID string, req AddDomainRequest) (string, error) {
 	var out operationResponse
 	if err := c.do(ctx, http.MethodPost, "/sites/environments/"+url.PathEscape(envID)+"/domains", req, &out); err != nil {

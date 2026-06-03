@@ -33,6 +33,12 @@ func TestClientSiteEnvironmentDomainFlow(t *testing.T) {
 			_ = json.NewEncoder(w).Encode(map[string]any{"site_domain": map[string]any{"verification_records": []map[string]any{{"name": "_acme-challenge.sanjel.kinsta.nonfiction.dev", "type": "TXT", "content": "token"}}, "pointing_records": []map[string]any{{"name": "sanjel.kinsta.nonfiction.dev", "type": "A", "content": "203.0.113.10", "ttl": 300}}}})
 		case "GET /operations/op123":
 			_ = json.NewEncoder(w).Encode(map[string]any{"operation": map[string]any{"id": "op123", "status": "complete"}})
+		case "DELETE /sites/environments/kenv-staging":
+			w.WriteHeader(http.StatusAccepted)
+			_ = json.NewEncoder(w).Encode(map[string]any{"operation_id": "op-delete-env", "status": 202})
+		case "DELETE /sites/ksite123":
+			w.WriteHeader(http.StatusAccepted)
+			_ = json.NewEncoder(w).Encode(map[string]any{"operation_id": "op-delete-site", "status": 202})
 		default:
 			http.NotFound(w, r)
 		}
@@ -78,6 +84,12 @@ func TestClientSiteEnvironmentDomainFlow(t *testing.T) {
 	}
 	if err := client.WaitOperation(ctx, "op123", 0); err != nil {
 		t.Fatalf("WaitOperation() error = %v", err)
+	}
+	if opID, err := client.DeleteEnvironment(ctx, "kenv-staging"); err != nil || opID != "op-delete-env" {
+		t.Fatalf("DeleteEnvironment() = %q, %v; want op-delete-env", opID, err)
+	}
+	if opID, err := client.DeleteSite(ctx, "ksite123"); err != nil || opID != "op-delete-site" {
+		t.Fatalf("DeleteSite() = %q, %v; want op-delete-site", opID, err)
 	}
 	if len(requests) == 0 {
 		t.Fatalf("server saw no requests")
