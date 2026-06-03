@@ -4441,53 +4441,153 @@ func siteEnvDetailsOutput(siteID, env string, record map[string]any) map[string]
 }
 
 func printSiteEnvDetails(out map[string]any) {
-	fmt.Printf("Site: %s\n", recordValueString(out["resolved_site"]))
-	fmt.Printf("Env: %s\n", recordValueString(out["resolved_env"]))
-	if provider := recordValueString(out["provider"]); provider != "" {
-		fmt.Printf("Provider: %s\n", provider)
+	site := recordValueString(out["resolved_site"])
+	env := recordValueString(out["resolved_env"])
+	title := site
+	if env != "" {
+		title += ":" + env
 	}
-	if target := recordValueString(out["resolved_target"]); target != "" {
-		fmt.Printf("Target: %s\n", target)
+	if title != "" {
+		fmt.Println(title)
+		fmt.Println(strings.Repeat("─", len(title)))
 	}
+	printDetailRows([]detailRow{
+		{label: "Site", value: site},
+		{label: "Env", value: env},
+		{label: "Provider", value: recordValueString(out["provider"])},
+		{label: "Target", value: recordValueString(out["resolved_target"])},
+		{label: "URL", value: firstRecordString(out, "url", "site_url", "home_url")},
+		{label: "Path", value: firstRecordString(out, "path", "root", "document_root")},
+		{label: "Branch", value: firstRecordString(out, "branch")},
+		{label: "PHP", value: firstRecordString(out, "php_version")},
+		{label: "Database", value: firstRecordString(out, "database", "db_name")},
+	})
 	requestedSite := recordValueString(out["requested_site"])
-	resolvedSite := recordValueString(out["resolved_site"])
-	if requestedSite != "" && resolvedSite != "" && requestedSite != resolvedSite {
-		fmt.Printf("Requested site: %s\n", requestedSite)
+	if requestedSite != "" && site != "" && requestedSite != site {
+		printDetailRows([]detailRow{{label: "Requested site", value: requestedSite}})
 	}
 	requestedEnv := recordValueString(out["requested_env"])
-	resolvedEnv := recordValueString(out["resolved_env"])
-	if requestedEnv != "" && resolvedEnv != "" && requestedEnv != resolvedEnv {
-		fmt.Printf("Requested env: %s\n", requestedEnv)
+	if requestedEnv != "" && env != "" && requestedEnv != env {
+		printDetailRows([]detailRow{{label: "Requested env", value: requestedEnv}})
 	}
-	for _, field := range []struct {
-		label string
-		keys  []string
-	}{
-		{label: "URL", keys: []string{"url", "site_url", "home_url"}},
-		{label: "Path", keys: []string{"path", "root", "document_root"}},
-		{label: "Database", keys: []string{"database", "db_name"}},
-		{label: "PHP", keys: []string{"php_version"}},
-		{label: "SSH", keys: []string{"resolved_ssh"}},
-		{label: "SSH host", keys: []string{"ssh_host"}},
-		{label: "SSH port", keys: []string{"ssh_port"}},
-		{label: "SSH user", keys: []string{"ssh_user", "ssh_username"}},
-		{label: "SSH command", keys: []string{"ssh_command"}},
-		{label: "Admin username", keys: []string{"resolved_admin_user", "admin_user", "admin_username", "wp_admin_user", "wordpress_admin_user"}},
-		{label: "Admin password", keys: []string{"resolved_admin_password", "admin_password", "wp_admin_password", "wordpress_admin_password"}},
-		{label: "Branch", keys: []string{"branch"}},
-		{label: "Kinsta site ID", keys: []string{"kinsta_site_id"}},
-		{label: "Kinsta environment ID", keys: []string{"kinsta_environment_id"}},
-	} {
-		if field.label == "SSH" {
-			if value := siteEnvSSHDisplay(out); value != "" {
-				fmt.Printf("%s: %s\n", field.label, value)
-			}
+	providerRows := []detailRow{
+		{label: "Kinsta site", value: firstRecordString(out, "kinsta_site_id")},
+		{label: "Kinsta env", value: firstRecordString(out, "kinsta_environment_id")},
+	}
+	if hasDetailRows(providerRows) {
+		fmt.Println()
+		fmt.Println("Provider IDs")
+		printIndentedDetailRows(providerRows, 2)
+	}
+	ssh := siteEnvSSHInfo(out)
+	accessRows := []detailRow{
+		{label: "SSH command", value: ssh.command()},
+		{label: "Admin user", value: firstRecordString(out, "resolved_admin_user", "admin_user", "admin_username", "wp_admin_user", "wordpress_admin_user")},
+		{label: "Admin pass", value: firstRecordString(out, "resolved_admin_password", "admin_password", "wp_admin_password", "wordpress_admin_password")},
+	}
+	if hasDetailRows(accessRows) {
+		fmt.Println()
+		fmt.Println("Access")
+		printIndentedDetailRows(accessRows, 2)
+	}
+}
+
+type detailRow struct {
+	label string
+	value string
+}
+
+func hasDetailRows(rows []detailRow) bool {
+	for _, row := range rows {
+		if strings.TrimSpace(row.value) != "" {
+			return true
+		}
+	}
+	return false
+}
+
+func printDetailRows(rows []detailRow) {
+	printIndentedDetailRows(rows, 0)
+}
+
+func printIndentedDetailRows(rows []detailRow, indent int) {
+	width := 0
+	for _, row := range rows {
+		if strings.TrimSpace(row.value) == "" {
 			continue
 		}
-		if value := firstRecordString(out, field.keys...); value != "" {
-			fmt.Printf("%s: %s\n", field.label, value)
+		if len(row.label) > width {
+			width = len(row.label)
 		}
 	}
+	if width == 0 {
+		return
+	}
+	prefix := strings.Repeat(" ", indent)
+	for _, row := range rows {
+		if strings.TrimSpace(row.value) == "" {
+			continue
+		}
+		fmt.Printf("%s%-*s   %s\n", prefix, width, row.label, row.value)
+	}
+}
+
+type siteEnvSSHInfoValue struct {
+	host       string
+	port       string
+	user       string
+	sshCommand string
+}
+
+func siteEnvSSHInfo(record map[string]any) siteEnvSSHInfoValue {
+	info := siteEnvSSHInfoValue{
+		host:       firstRecordString(record, "ssh_host"),
+		port:       firstRecordString(record, "ssh_port"),
+		user:       firstRecordString(record, "ssh_user", "ssh_username"),
+		sshCommand: firstRecordString(record, "ssh_command"),
+	}
+	if info.host == "" {
+		info.host = firstNonEmpty(mapStringAtPath(record, "ssh", "host"), mapStringAtPath(record, "kinsta", "ssh", "host"))
+	}
+	if info.port == "" {
+		info.port = firstNonEmpty(mapStringAtPath(record, "ssh", "port"), mapStringAtPath(record, "kinsta", "ssh", "port"))
+	}
+	if info.user == "" {
+		info.user = firstNonEmpty(mapStringAtPath(record, "ssh", "user"), mapStringAtPath(record, "kinsta", "ssh", "user"))
+	}
+	if info.sshCommand == "" {
+		info.sshCommand = firstNonEmpty(mapStringAtPath(record, "ssh", "command"), mapStringAtPath(record, "kinsta", "ssh", "command"))
+	}
+	target := mapMapAtPath(record, "resolved_target_record")
+	if target != nil {
+		if info.host == "" {
+			info.host = serverSSHHost(target)
+		}
+		if info.port == "" {
+			info.port = firstNonEmpty(mapStringAtPath(target, "ssh", "port"), firstRecordString(target, "ssh_port"))
+		}
+		if info.user == "" {
+			info.user = serverSSHUser(target)
+		}
+	}
+	return info
+}
+
+func (info siteEnvSSHInfoValue) command() string {
+	if info.sshCommand != "" {
+		return info.sshCommand
+	}
+	if info.host == "" {
+		return ""
+	}
+	destination := info.host
+	if info.user != "" {
+		destination = info.user + "@" + destination
+	}
+	if info.port != "" {
+		return "ssh " + destination + " -p " + info.port
+	}
+	return "ssh " + destination
 }
 
 func enrichSiteAdminCredentials(out, record map[string]any) error {
@@ -5400,50 +5500,38 @@ func preferredPasswordSiteRecord(records []map[string]any) map[string]any {
 }
 
 func printSiteDetails(out map[string]any) {
-	fmt.Printf("Site: %s\n", recordValueString(out["site_id"]))
-	if name := recordValueString(out["name"]); name != "" {
-		fmt.Printf("Name: %s\n", name)
+	siteID := recordValueString(out["site_id"])
+	if siteID != "" {
+		fmt.Println(siteID)
+		fmt.Println(strings.Repeat("─", len(siteID)))
 	}
-	if provider := recordValueString(out["provider"]); provider != "" {
-		fmt.Printf("Provider: %s\n", provider)
-	}
-	if target := recordValueString(out["target"]); target != "" {
-		fmt.Printf("Target: %s\n", target)
-	}
+	printDetailRows([]detailRow{
+		{label: "Site", value: siteID},
+		{label: "Name", value: recordValueString(out["name"])},
+		{label: "Provider", value: recordValueString(out["provider"])},
+		{label: "Target", value: recordValueString(out["target"])},
+	})
 	requested := recordValueString(out["requested_site"])
 	resolved := recordValueString(out["resolved_site"])
 	if requested != "" && resolved != "" && requested != resolved {
-		fmt.Printf("Requested: %s\n", requested)
-		fmt.Printf("Resolved: %s\n", resolved)
+		printDetailRows([]detailRow{
+			{label: "Requested", value: requested},
+			{label: "Resolved", value: resolved},
+		})
 	}
 	envs, _ := out["envs"].([]map[string]any)
 	if len(envs) == 0 {
 		return
 	}
+	fmt.Println()
 	fmt.Println("Environments:")
-	showSSH := false
+	rows := [][]string{{"env", "php", "url"}}
 	for _, env := range envs {
-		if siteEnvSSHDisplay(env) != "" {
-			showSSH = true
-			break
-		}
-	}
-	header := []string{"env", "url", "path", "database"}
-	if showSSH {
-		header = append(header, "ssh")
-	}
-	rows := [][]string{header}
-	for _, env := range envs {
-		row := []string{
+		rows = append(rows, []string{
 			siteEnvName(env),
+			sitePHPVersion(env),
 			firstRecordString(env, "url", "site_url", "home_url", "hostname"),
-			firstRecordString(env, "path", "root", "document_root"),
-			firstRecordString(env, "database", "db_name"),
-		}
-		if showSSH {
-			row = append(row, siteEnvSSHDisplay(env))
-		}
-		rows = append(rows, row)
+		})
 	}
 	fmt.Println(formatTable(rows))
 }

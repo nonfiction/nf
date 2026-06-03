@@ -1957,7 +1957,7 @@ func TestRunSiteAddLinodeExecuteRunsSSHAndCachesEnvs(t *testing.T) {
 			t.Fatalf("Run(site show) = %d, want 0", got)
 		}
 	})
-	for _, want := range []string{"Site: foobar.app1-linode", "Name: foobar", "Provider: linode", "Target: app1-linode", "Environments:", "live", "staging", "foobar.app1-linode.nonfiction.dev", "foobar-staging.app1-linode.nonfiction.dev"} {
+	for _, want := range []string{"foobar.app1-linode", "Site       foobar.app1-linode", "Name       foobar", "Provider   linode", "Target     app1-linode", "Environments:", "env", "php", "url", "live", "staging", "foobar.app1-linode.nonfiction.dev", "foobar-staging.app1-linode.nonfiction.dev"} {
 		if !strings.Contains(showOutput, want) {
 			t.Fatalf("site show output missing %q:\n%s", want, showOutput)
 		}
@@ -2111,9 +2111,14 @@ func TestRunSiteAddKinstaExecuteCachesEnvs(t *testing.T) {
 			t.Fatalf("Run(site show kinsta) = %d, want 0", got)
 		}
 	})
-	for _, want := range []string{"path", "database", "ssh", "/www/sanjel/public", "sanjel", "sanjel@203.0.113.10:12345", "/www/sanjelstaging/public", "sanjelstaging", "sanjelstaging@203.0.113.11:12346"} {
+	for _, want := range []string{"sanjel.kinsta", "Site       sanjel.kinsta", "Name       sanjel", "Provider   kinsta", "Target     kinsta", "Environments:", "env", "php", "url", "live     8.2", "staging  8.2", "https://sanjel.kinsta.nonfiction.dev", "https://sanjel-staging.kinsta.nonfiction.dev"} {
 		if !strings.Contains(showOutput, want) {
 			t.Fatalf("site show kinsta output missing %q:\n%s", want, showOutput)
+		}
+	}
+	for _, notWant := range []string{"path", "database", "ssh", "/www/sanjel/public", "sanjel@203.0.113.10:12345", "/www/sanjelstaging/public", "sanjelstaging@203.0.113.11:12346"} {
+		if strings.Contains(showOutput, notWant) {
+			t.Fatalf("site show kinsta output contains %q:\n%s", notWant, showOutput)
 		}
 	}
 }
@@ -2647,9 +2652,14 @@ func TestRunSiteEnvListAndShowUseCachedSites(t *testing.T) {
 			t.Fatalf("Run(site env show) = %d, want 0", got)
 		}
 	})
-	for _, want := range []string{"Site: client-kinsta", "Env: staging", "Provider: kinsta", "Target: kinsta", "URL: https://staging.example.com/", "PHP: 8.3", "SSH: clientstaging@203.0.113.11:12346", "SSH host: 203.0.113.11", "SSH port: 12346", "SSH user: clientstaging", "SSH command: ssh clientstaging@203.0.113.11 -p 12346", "Branch: develop", "Kinsta environment ID: kenv-staging"} {
+	for _, want := range []string{"client-kinsta:staging", "Site       client-kinsta", "Env        staging", "Provider   kinsta", "Target     kinsta", "URL        https://staging.example.com/", "PHP        8.3", "Provider IDs", "Kinsta env    kenv-staging", "Access", "SSH command   ssh clientstaging@203.0.113.11 -p 12346", "Branch     develop"} {
 		if !strings.Contains(showOutput, want) {
 			t.Fatalf("site env show output missing %q:\n%s", want, showOutput)
+		}
+	}
+	for _, notWant := range []string{"SSH host", "SSH port", "SSH user", "SSH address"} {
+		if strings.Contains(showOutput, notWant) {
+			t.Fatalf("site env show output contains %q:\n%s", notWant, showOutput)
 		}
 	}
 	jsonOutput := captureStdout(t, func() {
@@ -2684,12 +2694,12 @@ func TestRunSiteEnvShowLinodeUsesCachedTargets(t *testing.T) {
 		}
 	})
 	adminPassword := passwords.DerivePassword("happytents", "wp-admin", "test-salt")
-	for _, want := range []string{"Site: happytents.app2-linode", "Env: staging", "Provider: linode", "Target: app2-linode", "URL: https://happytents-staging.app2-linode.nonfiction.dev", "PHP: 8.3", "Admin username: admin", "Admin password: " + adminPassword} {
+	for _, want := range []string{"happytents.app2-linode:staging", "Site       happytents.app2-linode", "Env        staging", "Provider   linode", "Target     app2-linode", "URL        https://happytents-staging.app2-linode.nonfiction.dev", "PHP        8.3", "SSH command   ssh nonfiction@app2-linode.nonfiction.dev", "Admin user    admin", "Admin pass    " + adminPassword} {
 		if !strings.Contains(showOutput, want) {
 			t.Fatalf("site env show output missing %q:\n%s", want, showOutput)
 		}
 	}
-	for _, notWant := range []string{"Hostname:", "Target summary:"} {
+	for _, notWant := range []string{"Hostname:", "Target summary:", "SSH host", "SSH port", "SSH user", "SSH address"} {
 		if strings.Contains(showOutput, notWant) {
 			t.Fatalf("site env show output contains %q:\n%s", notWant, showOutput)
 		}
@@ -2837,7 +2847,7 @@ func TestRunSiteEnvShowWithoutSitePromptsPicker(t *testing.T) {
 	if len(selectOptions) != 1 || selectOptions[0] != (ui.SelectOption{Value: "client-kinsta", Label: "client-kinsta"}) {
 		t.Fatalf("select options = %#v", selectOptions)
 	}
-	for _, want := range []string{"Site: client-kinsta", "Env: staging", "URL: https://staging.example.com/"} {
+	for _, want := range []string{"client-kinsta:staging", "Site       client-kinsta", "Env        staging", "URL        https://staging.example.com/"} {
 		if !strings.Contains(output, want) {
 			t.Fatalf("site env show output missing %q:\n%s", want, output)
 		}
@@ -3823,7 +3833,7 @@ func TestRunSiteShowWithoutSitePromptsPicker(t *testing.T) {
 	if len(selectOptions) != 1 || selectOptions[0] != (ui.SelectOption{Value: "foobar-app1-linode", Label: "foobar-app1-linode"}) {
 		t.Fatalf("select options = %#v", selectOptions)
 	}
-	for _, want := range []string{"Site: foobar-app1-linode", "Name: foobar", "Provider: linode", "Target: app1-linode", "Environments:", "live", "staging"} {
+	for _, want := range []string{"foobar-app1-linode", "Site       foobar-app1-linode", "Name       foobar", "Provider   linode", "Target     app1-linode", "Environments:", "env", "php", "url", "live", "staging"} {
 		if !strings.Contains(output, want) {
 			t.Fatalf("site show output missing %q:\n%s", want, output)
 		}
