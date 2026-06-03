@@ -38,6 +38,7 @@ func (e ProjectError) Error() string { return e.Msg }
 var (
 	runLinodeDeleteFn       = runLinodeDelete
 	deleteDNSRecordFn       = provision.DeleteDNSimpleARecord
+	deleteDNSTXTRecordFn    = provision.DeleteDNSimpleTXTRecord
 	providerCheckDNSimpleFn = checkDNSimpleProvider
 	providerCheckKinstaFn   = checkKinstaProvider
 	providerCheckLinodeFn   = checkLinodeProvider
@@ -1332,10 +1333,11 @@ func isLinodeNotFoundError(err error) bool {
 }
 
 type serverDNSDeleteTarget struct {
-	provider  string
-	accountID string
-	zone      string
-	name      string
+	provider   string
+	accountID  string
+	zone       string
+	name       string
+	recordType string
 }
 
 func serverDNSDeleteTargets(server map[string]any) []serverDNSDeleteTarget {
@@ -1346,7 +1348,7 @@ func serverDNSDeleteTargets(server map[string]any) []serverDNSDeleteTarget {
 	provider := strings.ToLower(strings.TrimSpace(firstRecordString(dns, "provider")))
 	zone := firstRecordString(dns, "zone")
 	if provider == "" || zone == "" {
-		return nil
+		return inferredServerDNSDeleteTargets(server)
 	}
 	accountID := firstRecordString(dns, "account_id")
 	if provider == "dnsimple" && accountID == "" {
@@ -1364,18 +1366,44 @@ func serverDNSDeleteTargets(server map[string]any) []serverDNSDeleteTarget {
 		if name == "" {
 			continue
 		}
-		if _, ok := seen[name]; ok {
+		key := "A:" + name
+		if _, ok := seen[key]; ok {
 			continue
 		}
-		seen[name] = struct{}{}
-		targets = append(targets, serverDNSDeleteTarget{provider: provider, accountID: accountID, zone: zone, name: name})
+		seen[key] = struct{}{}
+		targets = append(targets, serverDNSDeleteTarget{provider: provider, accountID: accountID, zone: zone, name: name, recordType: "A"})
+	}
+	if provider == "dnsimple" {
+		for _, target := range inferredServerDNSDeleteTargetsForZone(server, zone, accountID) {
+			key := target.recordType + ":" + target.name
+			if _, ok := seen[key]; ok {
+				continue
+			}
+			seen[key] = struct{}{}
+			targets = append(targets, target)
+		}
+		for _, target := range inferredServerACMETXTDeleteTargetsForZone(server, zone, accountID) {
+			key := target.recordType + ":" + target.name
+			if _, ok := seen[key]; ok {
+				continue
+			}
+			seen[key] = struct{}{}
+			targets = append(targets, target)
+		}
 	}
 	return targets
 }
 
 func inferredServerDNSDeleteTargets(server map[string]any) []serverDNSDeleteTarget {
-	hostname := firstRecordString(server, "hostname", "host")
 	zone := baseDomainValue()
+	accountID := dnsimpleAccountIDValue()
+	targets := inferredServerDNSDeleteTargetsForZone(server, zone, accountID)
+	targets = append(targets, inferredServerACMETXTDeleteTargetsForZone(server, zone, accountID)...)
+	return targets
+}
+
+func inferredServerDNSDeleteTargetsForZone(server map[string]any, zone, accountID string) []serverDNSDeleteTarget {
+	hostname := firstRecordString(server, "hostname", "host")
 	if hostname == "" || zone == "" {
 		return nil
 	}
@@ -1390,9 +1418,27 @@ func inferredServerDNSDeleteTargets(server map[string]any) []serverDNSDeleteTarg
 		return nil
 	}
 	return []serverDNSDeleteTarget{
-		{provider: "dnsimple", accountID: dnsimpleAccountIDValue(), zone: zone, name: name},
-		{provider: "dnsimple", accountID: dnsimpleAccountIDValue(), zone: zone, name: "*." + name},
+		{provider: "dnsimple", accountID: accountID, zone: zone, name: name, recordType: "A"},
+		{provider: "dnsimple", accountID: accountID, zone: zone, name: "*." + name, recordType: "A"},
 	}
+}
+
+func inferredServerACMETXTDeleteTargetsForZone(server map[string]any, zone, accountID string) []serverDNSDeleteTarget {
+	hostname := firstRecordString(server, "hostname", "host")
+	if hostname == "" || zone == "" {
+		return nil
+	}
+	hostname = strings.TrimSuffix(strings.TrimSpace(hostname), ".")
+	zone = strings.TrimSuffix(strings.TrimSpace(zone), ".")
+	suffix := "." + zone
+	if hostname == zone || !strings.HasSuffix(hostname, suffix) {
+		return nil
+	}
+	name := strings.TrimSuffix(hostname, suffix)
+	if name == "" {
+		return nil
+	}
+	return []serverDNSDeleteTarget{{provider: "dnsimple", accountID: accountID, zone: zone, name: "_acme-challenge." + name, recordType: "TXT"}}
 }
 
 func provisionDNSRecordFQDN(target serverDNSDeleteTarget) string {
@@ -1425,7 +1471,11 @@ func deleteServerDNSRecord(target serverDNSDeleteTarget) error {
 		if strings.TrimSpace(token) == "" {
 			return fmt.Errorf("Expected DNSIMPLE_TOKEN in the environment or %s.", config.EnvFile())
 		}
-		if err := deleteDNSRecordFn(token, target.accountID, target.zone, target.name); err != nil {
+		deleteFn := deleteDNSRecordFn
+		if strings.EqualFold(target.recordType, "TXT") {
+			deleteFn = deleteDNSTXTRecordFn
+		}
+		if err := deleteFn(token, target.accountID, target.zone, target.name); err != nil {
 			if isDNSimpleRecordAlreadyAbsentError(err) {
 				fmt.Printf("DNSimple record %s already absent (%v)\n", provisionDNSRecordFQDN(target), err)
 				return nil
@@ -1782,7 +1832,11 @@ func cmdDeleteServer(needle string, dryRun, execute, yes, nonInteractive bool) i
 		fmt.Println("  dns actions: none")
 	} else {
 		for _, target := range dnsDeletes {
-			fmt.Printf("  dns action: delete %s %s\n", target.provider, provisionDNSRecordFQDN(target))
+			recordType := ""
+			if !strings.EqualFold(target.recordType, "A") && strings.TrimSpace(target.recordType) != "" {
+				recordType = " " + strings.ToUpper(strings.TrimSpace(target.recordType))
+			}
+			fmt.Printf("  dns action: delete %s%s %s\n", target.provider, recordType, provisionDNSRecordFQDN(target))
 		}
 	}
 	if len(matchedSites) == 0 {
@@ -1921,7 +1975,11 @@ func cmdRemoveTarget(needle string, dryRun, execute, yes, nonInteractive bool) i
 		fmt.Println("  dns actions: none")
 	} else {
 		for _, target := range dnsDeletes {
-			fmt.Printf("  dns action: delete %s %s\n", target.provider, provisionDNSRecordFQDN(target))
+			recordType := ""
+			if !strings.EqualFold(target.recordType, "A") && strings.TrimSpace(target.recordType) != "" {
+				recordType = " " + strings.ToUpper(strings.TrimSpace(target.recordType))
+			}
+			fmt.Printf("  dns action: delete %s%s %s\n", target.provider, recordType, provisionDNSRecordFQDN(target))
 		}
 	}
 	if len(relatedSiteNames) == 0 {
@@ -4227,14 +4285,7 @@ func chooseSite(action string) (string, error) {
 			continue
 		}
 		seen[siteID] = true
-		parts := []string{siteID}
-		if name := siteRecordName(record); name != "" && name != siteID {
-			parts = append(parts, name)
-		}
-		if target := siteProviderTarget(record); target != "" {
-			parts = append(parts, "target "+target)
-		}
-		options = append(options, ui.SelectOption{Value: siteID, Label: strings.Join(parts, " / ")})
+		options = append(options, ui.SelectOption{Value: siteID, Label: siteID})
 	}
 	if len(options) == 0 {
 		return "", ProjectError{Msg: "No selectable sites found."}
@@ -4342,11 +4393,7 @@ func chooseTarget(action string) (string, error) {
 		if value == "" {
 			continue
 		}
-		label := serverSummary(target)
-		if label == "" {
-			label = value
-		}
-		options = append(options, ui.SelectOption{Label: label, Value: value})
+		options = append(options, ui.SelectOption{Label: value, Value: value})
 	}
 	if len(options) == 0 {
 		return "", ProjectError{Msg: "No selectable targets found."}
@@ -5915,11 +5962,7 @@ func chooseProvider(action string) (string, error) {
 	statuses := providerConfigStatuses()
 	options := make([]ui.SelectOption, 0, len(statuses))
 	for _, status := range statuses {
-		label := fmt.Sprintf("%s (%s)", status.Name, providerStatusLabel(status))
-		if len(status.Missing) > 0 {
-			label = fmt.Sprintf("%s - missing %s", label, providerMissingLabel(status))
-		}
-		options = append(options, ui.SelectOption{Value: status.Name, Label: label})
+		options = append(options, ui.SelectOption{Value: status.Name, Label: status.Name})
 	}
 	if len(options) == 0 {
 		return "", ProjectError{Msg: "No selectable providers found."}

@@ -422,7 +422,7 @@ func TestRunProviderShowWithoutProviderPromptsPicker(t *testing.T) {
 	if selectTitle != "Choose a provider to show" {
 		t.Fatalf("select title = %q", selectTitle)
 	}
-	if len(selectOptions) != 3 || selectOptions[0].Value != "dnsimple" || !strings.Contains(selectOptions[2].Label, "linode") {
+	if len(selectOptions) != 3 || selectOptions[0] != (ui.SelectOption{Value: "dnsimple", Label: "dnsimple"}) || selectOptions[2] != (ui.SelectOption{Value: "linode", Label: "linode"}) {
 		t.Fatalf("select options = %#v", selectOptions)
 	}
 	for _, want := range []string{"Provider: kinsta", "Company ID: company-123", "Provider status: active", "Targets: 1", "kinsta (active)"} {
@@ -1010,7 +1010,7 @@ func TestRunTargetShowWithoutTargetPromptsPicker(t *testing.T) {
 	if selectTitle != "Choose a target to show" {
 		t.Fatalf("select title = %q", selectTitle)
 	}
-	if len(selectOptions) != 1 || selectOptions[0].Value != "app1-linode" || !strings.Contains(selectOptions[0].Label, "app1-linode") {
+	if len(selectOptions) != 1 || selectOptions[0] != (ui.SelectOption{Value: "app1-linode", Label: "app1-linode"}) {
 		t.Fatalf("select options = %#v", selectOptions)
 	}
 	for _, want := range []string{"Target: app1-linode", "Provider: linode", "Hostname: app1-linode.nonfiction.dev", "ID: 98222343", "Status: reachable"} {
@@ -1211,9 +1211,16 @@ func TestRunTargetRemoveLinodeDeletesRemoteDNSAndState(t *testing.T) {
 		deletedDNS = append(deletedDNS, token+"|"+accountID+"|"+zone+"|"+name)
 		return nil
 	}
+	deletedTXT := []string{}
+	oldTXTDelete := deleteDNSTXTRecordFn
+	deleteDNSTXTRecordFn = func(token, accountID, zone, name string) error {
+		deletedTXT = append(deletedTXT, token+"|"+accountID+"|"+zone+"|"+name)
+		return nil
+	}
 	t.Cleanup(func() {
 		runLinodeDeleteFn = oldLinodeDelete
 		deleteDNSRecordFn = oldDNSDelete
+		deleteDNSTXTRecordFn = oldTXTDelete
 	})
 
 	output := captureStdout(t, func() {
@@ -1221,7 +1228,7 @@ func TestRunTargetRemoveLinodeDeletesRemoteDNSAndState(t *testing.T) {
 			t.Fatalf("Run(target remove) = %d, want 0", got)
 		}
 	})
-	for _, want := range []string{"Remove target plan:", "Linode API delete instance 98222343", "delete dnsimple app1-linode.nfweb.dev", "delete dnsimple *.app1-linode.nfweb.dev", "mode: execute"} {
+	for _, want := range []string{"Remove target plan:", "Linode API delete instance 98222343", "delete dnsimple app1-linode.nfweb.dev", "delete dnsimple *.app1-linode.nfweb.dev", "delete dnsimple TXT _acme-challenge.app1-linode.nfweb.dev", "mode: execute"} {
 		if !strings.Contains(output, want) {
 			t.Fatalf("target remove output missing %q:\n%s", want, output)
 		}
@@ -1232,6 +1239,9 @@ func TestRunTargetRemoveLinodeDeletesRemoteDNSAndState(t *testing.T) {
 	if got, want := strings.Join(deletedDNS, ","), "token|14|nfweb.dev|app1-linode,token|14|nfweb.dev|*.app1-linode"; got != want {
 		t.Fatalf("deleted DNS = %q, want %q", got, want)
 	}
+	if got, want := strings.Join(deletedTXT, ","), "token|14|nfweb.dev|_acme-challenge.app1-linode"; got != want {
+		t.Fatalf("deleted TXT = %q, want %q", got, want)
+	}
 	records, err := state.LoadStateRecords("providers")
 	if err != nil {
 		t.Fatalf("LoadStateRecords(providers) error = %v", err)
@@ -1239,6 +1249,65 @@ func TestRunTargetRemoveLinodeDeletesRemoteDNSAndState(t *testing.T) {
 	targets := targetMaps(records[0]["targets"])
 	if len(targets) != 1 || recordValueString(targets[0]["name"]) != "app2-linode" {
 		t.Fatalf("provider targets = %#v, want only app2-linode", targets)
+	}
+}
+
+func TestRunTargetRemoveLinodeInfersDNSRecordsWhenCachedDNSNamesMissing(t *testing.T) {
+	stateDir := t.TempDir()
+	t.Setenv("NF_STATE_HOME", stateDir)
+	t.Setenv("DNSIMPLE_TOKEN", "token")
+	providers := []map[string]any{{
+		"provider": "linode",
+		"targets": []map[string]any{{
+			"id":       "98222343",
+			"name":     "app1-linode",
+			"provider": "linode",
+			"hostname": "app1-linode.nonfiction.dev",
+			"dns": map[string]any{
+				"provider":   "dnsimple",
+				"account_id": "14",
+				"zone":       "nonfiction.dev",
+			},
+		}},
+	}}
+	if err := state.SaveStateRecords("providers", providers); err != nil {
+		t.Fatalf("SaveStateRecords(providers) error = %v", err)
+	}
+	oldLinodeDelete := runLinodeDeleteFn
+	runLinodeDeleteFn = func(id string) error { return nil }
+	deletedDNS := []string{}
+	oldDNSDelete := deleteDNSRecordFn
+	deleteDNSRecordFn = func(token, accountID, zone, name string) error {
+		deletedDNS = append(deletedDNS, token+"|"+accountID+"|"+zone+"|"+name)
+		return nil
+	}
+	deletedTXT := []string{}
+	oldTXTDelete := deleteDNSTXTRecordFn
+	deleteDNSTXTRecordFn = func(token, accountID, zone, name string) error {
+		deletedTXT = append(deletedTXT, token+"|"+accountID+"|"+zone+"|"+name)
+		return nil
+	}
+	t.Cleanup(func() {
+		runLinodeDeleteFn = oldLinodeDelete
+		deleteDNSRecordFn = oldDNSDelete
+		deleteDNSTXTRecordFn = oldTXTDelete
+	})
+
+	output := captureStdout(t, func() {
+		if got := Run([]string{"target", "remove", "app1-linode", "--execute", "--yes", "--non-interactive"}); got != 0 {
+			t.Fatalf("Run(target remove) = %d, want 0", got)
+		}
+	})
+	for _, want := range []string{"delete dnsimple app1-linode.nonfiction.dev", "delete dnsimple *.app1-linode.nonfiction.dev", "delete dnsimple TXT _acme-challenge.app1-linode.nonfiction.dev"} {
+		if !strings.Contains(output, want) {
+			t.Fatalf("target remove output missing %q:\n%s", want, output)
+		}
+	}
+	if got, want := strings.Join(deletedDNS, ","), "token|14|nonfiction.dev|app1-linode,token|14|nonfiction.dev|*.app1-linode"; got != want {
+		t.Fatalf("deleted DNS = %q, want %q", got, want)
+	}
+	if got, want := strings.Join(deletedTXT, ","), "token|14|nonfiction.dev|_acme-challenge.app1-linode"; got != want {
+		t.Fatalf("deleted TXT = %q, want %q", got, want)
 	}
 }
 
@@ -1277,9 +1346,14 @@ func TestRunTargetRemoveContinuesWhenDNSimpleZoneAlreadyGone(t *testing.T) {
 	deleteDNSRecordFn = func(token, accountID, zone, name string) error {
 		return fmt.Errorf("Listing DNSimple A records for zone %s: GET https://api.dnsimple.com/v2/zones/%s/records?type=A: 404 Not Found", zone, zone)
 	}
+	oldTXTDelete := deleteDNSTXTRecordFn
+	deleteDNSTXTRecordFn = func(token, accountID, zone, name string) error {
+		return fmt.Errorf("Listing DNSimple TXT records for zone %s: GET https://api.dnsimple.com/v2/zones/%s/records?type=TXT: 404 Not Found", zone, zone)
+	}
 	t.Cleanup(func() {
 		runLinodeDeleteFn = oldLinodeDelete
 		deleteDNSRecordFn = oldDNSDelete
+		deleteDNSTXTRecordFn = oldTXTDelete
 	})
 
 	output := captureStdout(t, func() {
@@ -1336,7 +1410,7 @@ func TestRunTargetRemoveWithoutTargetPromptsPicker(t *testing.T) {
 	if selectTitle != "Choose a target to remove" {
 		t.Fatalf("select title = %q", selectTitle)
 	}
-	if len(selectOptions) != 1 || selectOptions[0].Value != "app1-linode" || !strings.Contains(selectOptions[0].Label, "app1-linode") {
+	if len(selectOptions) != 1 || selectOptions[0] != (ui.SelectOption{Value: "app1-linode", Label: "app1-linode"}) {
 		t.Fatalf("select options = %#v", selectOptions)
 	}
 	for _, want := range []string{"Remove target plan:", "target: app1-linode", "mode: dry-run"} {
@@ -1934,8 +2008,8 @@ func TestRunSiteRemoveWithoutArgUsesPicker(t *testing.T) {
 	if prompt != "Choose a site to remove" {
 		t.Fatalf("picker prompt = %q, want Choose a site to remove", prompt)
 	}
-	if len(options) != 1 || options[0].Value != "foobar.app1-linode" || !strings.Contains(options[0].Label, "target app1-linode") {
-		t.Fatalf("picker options = %#v, want foobar.app1-linode target app1-linode", options)
+	if len(options) != 1 || options[0] != (ui.SelectOption{Value: "foobar.app1-linode", Label: "foobar.app1-linode"}) {
+		t.Fatalf("picker options = %#v, want foobar.app1-linode", options)
 	}
 }
 
@@ -2059,7 +2133,7 @@ func TestRunSiteEnvListWithoutSitePromptsPicker(t *testing.T) {
 	if selectTitle != "Choose a site to list envs for" {
 		t.Fatalf("select title = %q", selectTitle)
 	}
-	if len(selectOptions) != 1 || selectOptions[0].Value != "client-kinsta" || !strings.Contains(selectOptions[0].Label, "target kinsta") {
+	if len(selectOptions) != 1 || selectOptions[0] != (ui.SelectOption{Value: "client-kinsta", Label: "client-kinsta"}) {
 		t.Fatalf("select options = %#v", selectOptions)
 	}
 	for _, want := range []string{"env", "site", "target", "url", "live", "staging", "client-kinsta", "https://www.example.com/", "https://staging.example.com/"} {
@@ -2096,7 +2170,7 @@ func TestRunSiteEnvShowWithoutSitePromptsPicker(t *testing.T) {
 	if selectTitle != "Choose a site to show an env for" {
 		t.Fatalf("select title = %q", selectTitle)
 	}
-	if len(selectOptions) != 1 || selectOptions[0].Value != "client-kinsta" {
+	if len(selectOptions) != 1 || selectOptions[0] != (ui.SelectOption{Value: "client-kinsta", Label: "client-kinsta"}) {
 		t.Fatalf("select options = %#v", selectOptions)
 	}
 	for _, want := range []string{"Site: client-kinsta", "Env: staging", "URL: https://staging.example.com/"} {
@@ -2193,7 +2267,7 @@ func TestRunSiteEnvShellWithoutSitePromptsPicker(t *testing.T) {
 	if selectTitle != "Choose a site to shell into" {
 		t.Fatalf("select title = %q", selectTitle)
 	}
-	if len(selectOptions) != 1 || selectOptions[0].Value != "client-kinsta" {
+	if len(selectOptions) != 1 || selectOptions[0] != (ui.SelectOption{Value: "client-kinsta", Label: "client-kinsta"}) {
 		t.Fatalf("select options = %#v", selectOptions)
 	}
 	if !strings.Contains(stderr, `Remote site env shell is not implemented for provider "kinsta"; no command was run.`) {
@@ -3079,7 +3153,7 @@ func TestRunSiteShowWithoutSitePromptsPicker(t *testing.T) {
 	if selectTitle != "Choose a site to show" {
 		t.Fatalf("select title = %q", selectTitle)
 	}
-	if len(selectOptions) != 1 || selectOptions[0].Value != "foobar-app1-linode" || !strings.Contains(selectOptions[0].Label, "foobar") || !strings.Contains(selectOptions[0].Label, "target app1-linode") {
+	if len(selectOptions) != 1 || selectOptions[0] != (ui.SelectOption{Value: "foobar-app1-linode", Label: "foobar-app1-linode"}) {
 		t.Fatalf("select options = %#v", selectOptions)
 	}
 	for _, want := range []string{"Site: foobar-app1-linode", "Name: foobar", "Provider: linode", "Target: app1-linode", "Environments:", "live", "staging"} {
