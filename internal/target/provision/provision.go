@@ -1304,6 +1304,9 @@ write_files:
         "provider": "__SERVER_PROVIDER__",
         "name": "__NAME__",
         "hostname": "__HOSTNAME__",
+        "php_version": "__PHP_VERSION__",
+        "php_service": "__PHP_FPM_SERVICE__",
+        "php_socket": "__PHP_FPM_SOCKET__",
         "sites_path": "/var/lib/nf/sites.json",
         "created_at": "${created_at}"
       }
