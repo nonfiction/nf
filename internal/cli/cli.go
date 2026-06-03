@@ -10,6 +10,7 @@ import (
 	"io"
 	"net"
 	"net/http"
+	"net/url"
 	"os"
 	"os/exec"
 	"path"
@@ -45,6 +46,7 @@ var (
 	providerCheckKinstaFn   = checkKinstaProvider
 	providerCheckLinodeFn   = checkLinodeProvider
 	kinstaProvisionSiteFn   = provisionKinstaSite
+	kinstaRemoveSiteFn      = removeKinstaSite
 	targetSSHReachableFn    = targetSSHReachable
 	runSSHScriptFn          = runSSHScript
 	runSSHCommandFn         = runSSHCommand
@@ -2806,20 +2808,25 @@ type kinstaProvisionResult struct {
 type siteRemoveEnvPlan struct {
 	Env      string
 	EnvID    string
+	DomainID string
 	Path     string
 	Database string
 	Hostname string
 }
 
 type siteRemovePlan struct {
-	SiteID     string
-	Name       string
-	Provider   string
-	Target     map[string]any
-	TargetName string
-	SSHUser    string
-	SSHHost    string
-	Envs       []siteRemoveEnvPlan
+	SiteID       string
+	Name         string
+	Provider     string
+	Target       map[string]any
+	TargetName   string
+	KinstaSiteID string
+	DNSZone      string
+	DNSAccountID string
+	DNSNames     []string
+	SSHUser      string
+	SSHHost      string
+	Envs         []siteRemoveEnvPlan
 }
 
 func cleanSiteSlug(input string) (string, error) {
@@ -3514,6 +3521,26 @@ func dnsimpleRelativeName(fqdn, zone string) string {
 	return fqdn
 }
 
+func dnsimpleFQDNForRelativeName(name, zone string) string {
+	name = strings.TrimSuffix(strings.TrimSpace(name), ".")
+	zone = strings.TrimSuffix(strings.TrimSpace(zone), ".")
+	if name == "" {
+		return zone
+	}
+	if zone == "" || strings.HasSuffix(strings.ToLower(name), "."+strings.ToLower(zone)) || strings.EqualFold(name, zone) {
+		return name
+	}
+	return name + "." + zone
+}
+
+func dnsimpleTLSChallengeName(name string) string {
+	name = strings.TrimSuffix(strings.TrimSpace(name), ".")
+	if name == "" {
+		return "_acme-challenge"
+	}
+	return "_acme-challenge." + name
+}
+
 func ensureSiteNotCached(records []map[string]any, site string) error {
 	for _, record := range records {
 		if siteEnvMatchesSite(record, site) {
@@ -3752,8 +3779,11 @@ func buildSiteRemovePlan(siteID string) (siteRemovePlan, error) {
 	}
 	first := matches[0]
 	provider := strings.ToLower(strings.TrimSpace(recordValueString(first["provider"])))
+	if provider == "kinsta" {
+		return buildKinstaSiteRemovePlan(matches, resolvedSiteID)
+	}
 	if provider != "linode" {
-		return siteRemovePlan{}, ProjectError{Msg: fmt.Sprintf("Unsupported provider %q. Only linode site remove is available.", provider)}
+		return siteRemovePlan{}, ProjectError{Msg: fmt.Sprintf("Unsupported provider %q. Only linode and kinsta site remove are available.", provider)}
 	}
 	targetName := siteProviderTarget(first)
 	if targetName == "" {
@@ -3815,6 +3845,117 @@ func buildSiteRemovePlan(siteID string) (siteRemovePlan, error) {
 	return plan, nil
 }
 
+func buildKinstaSiteRemovePlan(matches []map[string]any, resolvedSiteID string) (siteRemovePlan, error) {
+	first := matches[0]
+	values, err := loadGlobalConfig()
+	if err != nil {
+		return siteRemovePlan{}, err
+	}
+	dnsZone := strings.TrimSuffix(strings.TrimSpace(values["base_domain"]), ".")
+	if dnsZone == "" {
+		return siteRemovePlan{}, ProjectError{Msg: fmt.Sprintf("Expected base_domain in %s. Set it with nf config set-base-domain <domain>.", config.ConfigFile())}
+	}
+	dnsAccountID := firstNonEmpty(values["dnsimple_account_id"], dnsimpleAccountIDValue())
+	if dnsAccountID == "" {
+		return siteRemovePlan{}, ProjectError{Msg: fmt.Sprintf("Expected dnsimple_account_id in %s. Run nf provider check dnsimple.", config.ConfigFile())}
+	}
+	targetName := firstNonEmpty(siteProviderTarget(first), "kinsta")
+	kinstaSiteID := ""
+	plan := siteRemovePlan{
+		SiteID:       resolvedSiteID,
+		Name:         siteRecordName(first),
+		Provider:     "kinsta",
+		TargetName:   targetName,
+		DNSZone:      dnsZone,
+		DNSAccountID: dnsAccountID,
+		Envs:         make([]siteRemoveEnvPlan, 0, len(matches)),
+	}
+	if targets, err := cachedTargets(); err == nil {
+		if target := state.MatchingRecord(targets, targetName); target != nil {
+			plan.Target = target
+		}
+	}
+	for _, record := range matches {
+		if kinstaSiteID == "" {
+			kinstaSiteID = siteKinstaID(record, "site_id")
+		}
+		hostname := kinstaRemoveEnvHostname(record)
+		env := siteRemoveEnvPlan{
+			Env:      siteEnvName(record),
+			EnvID:    firstNonEmpty(siteKinstaID(record, "environment_id"), firstRecordString(record, "env_id")),
+			DomainID: siteKinstaID(record, "domain_id"),
+			Path:     firstNonEmpty(siteKinstaID(record, "path"), firstRecordString(record, "path")),
+			Database: firstNonEmpty(siteKinstaID(record, "database"), firstRecordString(record, "database", "db_name")),
+			Hostname: hostname,
+		}
+		if strings.TrimSpace(env.Env) == "" {
+			return siteRemovePlan{}, ProjectError{Msg: "Selected Kinsta site has an env with no name."}
+		}
+		if strings.TrimSpace(env.EnvID) == "" {
+			return siteRemovePlan{}, ProjectError{Msg: fmt.Sprintf("Selected Kinsta site env %q has no environment_id.", env.Env)}
+		}
+		plan.Envs = append(plan.Envs, env)
+		if hostname != "" {
+			plan.DNSNames = append(plan.DNSNames, dnsimpleRelativeName(hostname, dnsZone))
+		}
+	}
+	if strings.TrimSpace(kinstaSiteID) == "" {
+		return siteRemovePlan{}, ProjectError{Msg: fmt.Sprintf("Selected Kinsta site %q has no Kinsta site_id. Run nf site refresh and try again.", resolvedSiteID)}
+	}
+	plan.KinstaSiteID = kinstaSiteID
+	plan.DNSNames = uniqueNonEmptyStrings(plan.DNSNames)
+	sort.SliceStable(plan.Envs, func(i, j int) bool {
+		left, right := siteListEnvOrder(plan.Envs[i].Env), siteListEnvOrder(plan.Envs[j].Env)
+		if left != right {
+			return left < right
+		}
+		return plan.Envs[i].Env < plan.Envs[j].Env
+	})
+	return plan, nil
+}
+
+func kinstaRemoveEnvHostname(record map[string]any) string {
+	for _, value := range []string{firstRecordString(record, "hostname"), firstRecordString(record, "url", "site_url", "home_url")} {
+		value = strings.TrimSpace(value)
+		if value == "" {
+			continue
+		}
+		if strings.Contains(value, "://") {
+			parsed, err := url.Parse(value)
+			if err == nil && strings.TrimSpace(parsed.Hostname()) != "" {
+				return strings.TrimSpace(parsed.Hostname())
+			}
+		}
+		return strings.TrimSuffix(value, "/")
+	}
+	return ""
+}
+
+func uniqueNonEmptyStrings(values []string) []string {
+	seen := map[string]bool{}
+	out := []string{}
+	for _, value := range values {
+		value = strings.TrimSpace(value)
+		if value == "" || seen[value] {
+			continue
+		}
+		seen[value] = true
+		out = append(out, value)
+	}
+	return out
+}
+
+func sortedMapKeys(values map[string]bool) []string {
+	keys := make([]string, 0, len(values))
+	for key := range values {
+		if strings.TrimSpace(key) != "" {
+			keys = append(keys, key)
+		}
+	}
+	sort.Strings(keys)
+	return keys
+}
+
 func validateSiteRemoveEnv(env siteRemoveEnvPlan) error {
 	if strings.TrimSpace(env.Env) == "" {
 		return ProjectError{Msg: "Selected site has an env with no name."}
@@ -3864,6 +4005,28 @@ func printSiteRemovePlan(plan siteRemovePlan, mode string) {
 	}
 	fmt.Printf("  target: %s\n", plan.TargetName)
 	fmt.Printf("  provider: %s\n", plan.Provider)
+	if plan.Provider == "kinsta" {
+		fmt.Printf("  kinsta site id: %s\n", plan.KinstaSiteID)
+		fmt.Printf("  dns: dnsimple zone %s account %s\n", plan.DNSZone, plan.DNSAccountID)
+		for _, name := range plan.DNSNames {
+			fmt.Printf("  dns delete: A %s\n", dnsimpleFQDNForRelativeName(name, plan.DNSZone))
+			fmt.Printf("  dns delete: TXT %s\n", dnsimpleFQDNForRelativeName(dnsimpleTLSChallengeName(name), plan.DNSZone))
+		}
+		for _, env := range plan.Envs {
+			fmt.Printf("  env %s:\n", env.Env)
+			fmt.Printf("    kinsta environment id: %s\n", env.EnvID)
+			if env.DomainID != "" {
+				fmt.Printf("    kinsta domain id: %s\n", env.DomainID)
+			}
+			if env.Hostname != "" {
+				fmt.Printf("    domain: %s\n", env.Hostname)
+			}
+		}
+		fmt.Printf("  remote actions: delete Kinsta environments, delete Kinsta site\n")
+		fmt.Printf("  local state: %s\n", state.StatePath("sites"))
+		fmt.Printf("  mode: %s\n", mode)
+		return
+	}
 	fmt.Printf("  ssh: %s@%s\n", plan.SSHUser, plan.SSHHost)
 	fmt.Println("  dns actions: none")
 	for _, env := range plan.Envs {
@@ -3927,6 +4090,76 @@ func removeSiteFromLocalCache(siteID string) error {
 	return err
 }
 
+func removeKinstaSite(plan siteRemovePlan) error {
+	token := envwizard.Value("KINSTA_API_KEY")
+	if token == "" {
+		return fmt.Errorf("Expected KINSTA_API_KEY in the environment or %s.", config.EnvFile())
+	}
+	dnsToken := envwizard.Value("DNSIMPLE_TOKEN")
+	if dnsToken == "" {
+		return fmt.Errorf("Expected DNSIMPLE_TOKEN in the environment or %s.", config.EnvFile())
+	}
+	client := kinsta.NewClient(firstNonEmpty(envwizard.Value("KINSTA_BASE_URL"), "https://api.kinsta.com/v2"), token)
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Minute)
+	defer cancel()
+	aRecords := map[string]bool{}
+	txtRecords := map[string]bool{}
+	for _, name := range plan.DNSNames {
+		aRecords[name] = true
+		txtRecords[dnsimpleTLSChallengeName(name)] = true
+	}
+	for _, env := range plan.Envs {
+		if env.DomainID == "" {
+			continue
+		}
+		records, err := client.DomainRecords(ctx, env.DomainID)
+		if err != nil {
+			return err
+		}
+		for _, record := range append(append([]kinsta.DNSRecord{}, records.Pointing...), records.Verification...) {
+			fqdn := record.RecordName()
+			if !kinstaDNSRecordBelongsToDomain(fqdn, env.Hostname) {
+				continue
+			}
+			name := dnsimpleRelativeName(fqdn, plan.DNSZone)
+			switch strings.ToUpper(record.RecordTypeName()) {
+			case "A":
+				aRecords[name] = true
+			case "TXT":
+				txtRecords[name] = true
+			}
+		}
+	}
+	for _, name := range sortedMapKeys(aRecords) {
+		fmt.Printf("Deleting DNS A %s...\n", dnsimpleFQDNForRelativeName(name, plan.DNSZone))
+		if err := deleteDNSRecordFn(dnsToken, plan.DNSAccountID, plan.DNSZone, name); err != nil {
+			return err
+		}
+	}
+	for _, txtName := range sortedMapKeys(txtRecords) {
+		fmt.Printf("Deleting DNS TXT %s...\n", dnsimpleFQDNForRelativeName(txtName, plan.DNSZone))
+		if err := deleteDNSTXTRecordFn(dnsToken, plan.DNSAccountID, plan.DNSZone, txtName); err != nil {
+			return err
+		}
+	}
+	for _, env := range plan.Envs {
+		fmt.Printf("Deleting Kinsta environment %s (%s)...\n", env.Env, env.EnvID)
+		opID, err := client.DeleteEnvironment(ctx, env.EnvID)
+		if err != nil {
+			return err
+		}
+		if err := waitKinstaOperation(ctx, client, opID); err != nil {
+			return err
+		}
+	}
+	fmt.Printf("Deleting Kinsta site %s...\n", plan.KinstaSiteID)
+	opID, err := client.DeleteSite(ctx, plan.KinstaSiteID)
+	if err != nil {
+		return err
+	}
+	return waitKinstaOperation(ctx, client, opID)
+}
+
 func cmdSiteRemove(siteID string, dryRun, execute, yes, nonInteractive bool) int {
 	if execute && dryRun {
 		fmt.Fprintln(os.Stderr, "Choose either --execute or --dry-run, not both.")
@@ -3954,7 +4187,11 @@ func cmdSiteRemove(siteID string, dryRun, execute, yes, nonInteractive bool) int
 		return 0
 	}
 	if !yes {
-		confirmed, err := ui.Confirm(fmt.Sprintf("Remove site %q from target %q and delete its databases and files?", plan.SiteID, plan.TargetName), false)
+		message := fmt.Sprintf("Remove site %q from target %q and delete its databases and files?", plan.SiteID, plan.TargetName)
+		if plan.Provider == "kinsta" {
+			message = fmt.Sprintf("Remove Kinsta site %q, delete all cached Kinsta environments, and free it from the Kinsta account?", plan.SiteID)
+		}
+		confirmed, err := ui.Confirm(message, false)
 		if err != nil {
 			fmt.Fprintln(os.Stderr, err)
 			return 1
@@ -3964,9 +4201,16 @@ func cmdSiteRemove(siteID string, dryRun, execute, yes, nonInteractive bool) int
 			return 1
 		}
 	}
-	if err := runSSHScriptFn(plan.SSHUser, plan.SSHHost, renderSiteRemoveScript(plan)); err != nil {
-		fmt.Fprintln(os.Stderr, err)
-		return 1
+	if plan.Provider == "kinsta" {
+		if err := kinstaRemoveSiteFn(plan); err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			return 1
+		}
+	} else {
+		if err := runSSHScriptFn(plan.SSHUser, plan.SSHHost, renderSiteRemoveScript(plan)); err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			return 1
+		}
 	}
 	if err := removeSiteFromLocalCache(plan.SiteID); err != nil {
 		fmt.Fprintln(os.Stderr, err)
