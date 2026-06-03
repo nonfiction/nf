@@ -3399,7 +3399,7 @@ func ensureKinstaEnvironments(ctx context.Context, client *kinsta.Client, siteID
 		return live, staging, nil
 	}
 	fmt.Println("Creating Kinsta staging environment...")
-	opID, err := client.CloneEnvironment(ctx, siteID, kinsta.CloneEnvironmentRequest{DisplayName: "staging", IsPremium: false, SourceEnvID: live.ID})
+	opID, err := client.CloneEnvironment(ctx, siteID, kinsta.CloneEnvironmentRequest{DisplayName: "Staging", IsPremium: false, SourceEnvID: live.ID})
 	if err != nil {
 		return kinsta.Environment{}, kinsta.Environment{}, err
 	}

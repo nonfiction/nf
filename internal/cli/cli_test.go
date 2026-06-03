@@ -2170,6 +2170,13 @@ func TestProvisionKinstaSiteCreatesStagingDomainsDNSAndPrimaryDomains(t *testing
 		case "GET /sites/ksite123/environments/kenv-staging/ssh/config":
 			_ = json.NewEncoder(w).Encode(map[string]any{"host": "203.0.113.11", "port": "12346", "user": "sanjelstaging", "ssh_command": "ssh sanjelstaging@203.0.113.11 -p 12346"})
 		case "POST /sites/ksite123/environments/clone":
+			var payload map[string]any
+			if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
+				t.Fatalf("clone environment decode error = %v", err)
+			}
+			if payload["display_name"] != "Staging" || payload["source_env_id"] != "kenv-live" || payload["is_premium"] != false {
+				t.Fatalf("clone environment payload = %#v", payload)
+			}
 			createdStaging = true
 			_ = json.NewEncoder(w).Encode(map[string]any{"operation_id": "op-clone-staging"})
 		case "GET /sites/environments/kenv-live/domains":
