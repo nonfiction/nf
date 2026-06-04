@@ -67,6 +67,10 @@ func EnvsDir() string { return filepath.Join(DataHome(), "envs") }
 
 func SnapshotsDir() string { return filepath.Join(DataHome(), "snapshots") }
 
+func LocalSnapshotsDir() string { return filepath.Join(SnapshotsDir(), "local") }
+
+func RemoteSnapshotsDir() string { return filepath.Join(SnapshotsDir(), "remote") }
+
 func EnvDir(projectSlug string) string {
 	projectSlug = strings.TrimSpace(projectSlug)
 	if projectSlug == "" {
@@ -80,11 +84,19 @@ func SnapshotProjectDir(projectSlug string) string {
 	if projectSlug == "" {
 		projectSlug = "project"
 	}
-	return filepath.Join(SnapshotsDir(), projectSlug)
+	return filepath.Join(LocalSnapshotsDir(), projectSlug)
 }
 
 func SnapshotDir(projectSlug, snapshotName string) string {
 	return filepath.Join(SnapshotProjectDir(projectSlug), snapshotName)
+}
+
+func RemoteSnapshotDir(snapshotName string) string {
+	snapshotName = strings.TrimSpace(snapshotName)
+	if snapshotName == "" {
+		snapshotName = "snapshot"
+	}
+	return filepath.Join(RemoteSnapshotsDir(), snapshotName)
 }
 
 func ProjectFile(root string) string {
