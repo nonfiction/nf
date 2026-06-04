@@ -103,7 +103,8 @@ Local state is disposable. Provider truth is canonical remotely.
 * Remote target site discovery is not implemented yet.
 * Linode-hosted site/env truth is intended to live on each target at `/var/lib/nf/sites.json`, read over SSH as the standard user.
 * `nf remote add` validates the requested site/env exists in local cache before writing `.nf/project.json`.
-* `nf site env shell/wp` and `nf env push/pull` are preflight-only today; they must not mutate remote state yet.
+* `nf site env shell/wp` are preflight-only today; they must not mutate remote state yet.
+* `nf env push/pull [remote]` defaults to an interactive confirmation before executing remote sync. Use `--dry-run` or `--non-interactive` without `--execute` for preflight-only output. Non-interactive execution requires `--execute --yes`.
 
 ## Project-context gotchas
 

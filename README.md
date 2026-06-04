@@ -318,7 +318,7 @@ Current behavior:
 * `nf site remove [site]` removes a Linode site and deletes its env data.
 * `nf remote add` validates against the cache, then repo remotes are stored in `.nf/project.json` under `deploy.remotes`.
 * `nf site env shell/wp ...` currently preflights against the cache, then stops without running remote commands.
-* `nf env push/pull <remote>` currently preflights against the cache, then stops without syncing data.
+* `nf env push/pull [remote]` syncs database and mutable `wp-content` after an interactive confirmation. Omit `remote` to pick from configured repo remotes. Add `--dry-run` for a non-mutating plan, or use `--non-interactive` without `--execute` for preflight-only output.
 
 State/cache lives under:
 
@@ -343,4 +343,4 @@ Password derivation uses `NF_PASSWORD_SALT` from the environment or `~/.config/n
 
 ## Safety
 
-Database and uploads sync are high risk. Future implementation must print a reviewable plan, preserve production credentials where possible, and require confirmation before destructive changes.
+Database and uploads sync are high risk. Sync commands must print a reviewable plan, preserve production credentials where possible, and require confirmation before destructive changes.

@@ -362,7 +362,7 @@ Current readers:
 * `nf site env show`
 * `nf remote add`
 * `nf remote show`
-* `nf env push/pull` preflight
+* `nf env push/pull` guarded sync with dry-run/preflight mode
 * `nf site env shell/wp` preflight
 
 Desired refresh behavior:
@@ -589,14 +589,14 @@ Goal: add guarded pull/push workflows.
 
 Status:
 
-* [x] preflight-only `nf env push <remote>`
-* [x] preflight-only `nf env pull <remote>`
-* [ ] explicit source/destination planning
+* [x] guarded `nf env push [remote]`
+* [x] guarded `nf env pull [remote]`
+* [x] explicit source/destination planning
 * [ ] production credential preservation
 * [ ] uploads protections
-* [ ] confirmation gates for destructive direction
-* [ ] Kinsta sync adapter
-* [ ] Linode sync adapter
+* [x] confirmation gates for destructive direction
+* [x] Kinsta sync adapter
+* [x] Linode sync adapter
 
 ### Phase 8: Distribution and team polish
 
