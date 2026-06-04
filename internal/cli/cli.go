@@ -140,6 +140,31 @@ type envSnapshotRecord struct {
 	CreatedAt        time.Time
 }
 
+type envRemoteSyncOptions struct {
+	dryRun         bool
+	execute        bool
+	yes            bool
+	nonInteractive bool
+}
+
+type envRemoteSyncTarget struct {
+	Provider      string
+	RemoteName    string
+	SiteID        string
+	Env           string
+	URL           string
+	TargetLabel   string
+	TargetRef     string
+	AccessLabel   string
+	AccessSummary string
+	SSHUser       string
+	SSHHost       string
+	SSHPort       string
+	WordPressPath string
+	WPCommand     string
+	SudoFileOps   bool
+}
+
 const envSnapshotSchema = 1
 
 var (
@@ -147,6 +172,7 @@ var (
 	envSnapshotConfirm       = ui.Confirm
 	envSnapshotSelect        = ui.Select
 	envSnapshotIsInteractive = envSnapshotInteractive
+	envRemoteSyncConfirm     = ui.Confirm
 	configPromptString       = ui.PromptString
 	configIsInteractive      = envwizard.IsInteractiveTerminal
 )
@@ -4846,6 +4872,14 @@ func cachedSiteEnv(siteID, env string) (map[string]any, []map[string]any, error)
 	return nil, bundle.Servers, nil
 }
 
+func cachedSiteTarget(targetRef string) (map[string]any, error) {
+	targets, err := cachedTargets()
+	if err != nil {
+		return nil, err
+	}
+	return state.MatchingRecord(targets, targetRef), nil
+}
+
 type themeDeployTarget struct {
 	Provider       string
 	RemoteName     string
@@ -5037,57 +5071,297 @@ func themeDeployActivateArgs(target themeDeployTarget, themeSlug string) []strin
 	return []string{"ssh", "-p", target.SSHPort, target.SSHUser + "@" + target.SSHHost, remoteCommand}
 }
 
-func cmdEnvRemoteSyncPlan(action, remoteName string, cfg envConfig, metadata map[string]any) int {
+func resolveEnvRemoteSyncTarget(action, remoteName string, metadata map[string]any) (envRemoteSyncTarget, error) {
 	remoteName = strings.TrimSpace(remoteName)
 	if remoteName == "" {
-		fmt.Fprintf(os.Stderr, "env %s requires a non-empty remote\n", action)
-		return 1
+		return envRemoteSyncTarget{}, ProjectError{Msg: fmt.Sprintf("env %s requires a non-empty remote", action)}
 	}
 	siteID, remoteEnv, ok, err := projectRemoteAlias(metadata, remoteName)
 	if err != nil {
-		fmt.Fprintln(os.Stderr, err)
-		return 1
+		return envRemoteSyncTarget{}, err
 	}
 	if !ok {
-		fmt.Fprintf(os.Stderr, "No remote named %q in .nf/project.json deploy.remotes.\n", remoteName)
+		return envRemoteSyncTarget{}, ProjectError{Msg: fmt.Sprintf("No remote named %q in .nf/project.json deploy.remotes.", remoteName)}
+	}
+	record, _, err := cachedSiteEnv(siteID, remoteEnv)
+	if err != nil {
+		return envRemoteSyncTarget{}, err
+	}
+	if record == nil {
+		return envRemoteSyncTarget{}, ProjectError{Msg: fmt.Sprintf("No cached remote env matched site %q env %q. Run nf site refresh after target cache is current, or update the local state cache.", siteID, remoteEnv)}
+	}
+	if err := validateSiteRecord(record); err != nil {
+		return envRemoteSyncTarget{}, err
+	}
+	provider := strings.ToLower(strings.TrimSpace(recordValueString(record["provider"])))
+	target := envRemoteSyncTarget{Provider: provider, RemoteName: remoteName, SiteID: siteID, Env: remoteEnv, URL: firstRecordString(record, "url", "site_url", "home_url", "hostname"), TargetLabel: "target", TargetRef: siteProviderTarget(record), AccessLabel: "target record"}
+	switch provider {
+	case "kinsta":
+		target.TargetLabel = ""
+		target.TargetRef = ""
+		target.AccessLabel = "environment ssh"
+		target.SSHHost = firstNonEmpty(mapStringAtPath(record, "ssh", "host"), mapStringAtPath(record, "kinsta", "ssh", "host"), firstRecordString(record, "ssh_host"))
+		if target.SSHHost == "" {
+			return envRemoteSyncTarget{}, ProjectError{Msg: fmt.Sprintf("Kinsta env %q is missing SSH host in the site cache. Run nf site refresh.", siteSummary(record))}
+		}
+		target.SSHUser = firstNonEmpty(mapStringAtPath(record, "ssh", "user"), mapStringAtPath(record, "kinsta", "ssh", "user"), firstRecordString(record, "ssh_user", "ssh_username"))
+		if target.SSHUser == "" {
+			return envRemoteSyncTarget{}, ProjectError{Msg: fmt.Sprintf("Kinsta env %q is missing SSH user in the site cache. Run nf site refresh.", siteSummary(record))}
+		}
+		target.SSHPort = firstNonEmpty(mapStringAtPath(record, "ssh", "port"), mapStringAtPath(record, "kinsta", "ssh", "port"), firstRecordString(record, "ssh_port"), "22")
+		target.WordPressPath = normalizeKinstaCachedPath(firstRecordString(record, "path"))
+		if target.WordPressPath == "" {
+			return envRemoteSyncTarget{}, ProjectError{Msg: fmt.Sprintf("Kinsta env %q is missing path in the site cache. Run nf site refresh.", siteSummary(record))}
+		}
+		target.AccessSummary = fmt.Sprintf("%s@%s", target.SSHUser, target.SSHHost)
+		target.WPCommand = "wp"
+	case "linode":
+		resolved, err := cachedSiteTarget(target.TargetRef)
+		if err != nil {
+			return envRemoteSyncTarget{}, err
+		}
+		if resolved == nil {
+			return envRemoteSyncTarget{}, ProjectError{Msg: fmt.Sprintf("Linode site %q references target %q, but no cached target matched. Run nf provider check linode.", siteSummary(record), target.TargetRef)}
+		}
+		target.AccessSummary = serverSummary(resolved)
+		target.SSHUser = serverSSHUser(resolved)
+		if target.SSHUser == "" {
+			values, err := loadGlobalConfig()
+			if err != nil {
+				return envRemoteSyncTarget{}, err
+			}
+			target.SSHUser = values["linode_default_user"]
+		}
+		if target.SSHUser == "" {
+			return envRemoteSyncTarget{}, ProjectError{Msg: fmt.Sprintf("Target %q is missing an SSH user. Set linode_default_user with nf config set-linode-default-user <user>.", target.TargetRef)}
+		}
+		target.SSHHost = firstNonEmpty(firstRecordString(record, "hostname"), serverSSHHost(resolved))
+		if target.SSHHost == "" {
+			return envRemoteSyncTarget{}, ProjectError{Msg: fmt.Sprintf("Site env %q is missing hostname.", siteSummary(record))}
+		}
+		target.SSHPort = firstNonEmpty(mapStringAtPath(resolved, "ssh", "port"), firstRecordString(resolved, "ssh_port"), "22")
+		target.WordPressPath = firstRecordString(record, "path")
+		if target.WordPressPath == "" {
+			return envRemoteSyncTarget{}, ProjectError{Msg: fmt.Sprintf("Site env %q is missing path.", siteSummary(record))}
+		}
+		target.WPCommand = "sudo -u www-data wp"
+		target.SudoFileOps = true
+	default:
+		return envRemoteSyncTarget{}, ProjectError{Msg: fmt.Sprintf("Remote env sync is not implemented for provider %q; no data was changed.", provider)}
+	}
+	return target, nil
+}
+
+func cmdEnvRemoteSyncPlan(action, remoteName string, cfg envConfig, metadata map[string]any, opts envRemoteSyncOptions) int {
+	if opts.execute && opts.dryRun {
+		fmt.Fprintln(os.Stderr, "Choose either --execute or --dry-run, not both.")
 		return 1
 	}
-	record, servers, err := cachedSiteEnv(siteID, remoteEnv)
+	if strings.TrimSpace(remoteName) == "" {
+		if opts.nonInteractive {
+			fmt.Fprintf(os.Stderr, "env %s requires a remote in non-interactive mode\n", action)
+			return 1
+		}
+		selected, err := chooseProjectRemote(action)
+		if err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			return 1
+		}
+		remoteName = selected
+	}
+	target, err := resolveEnvRemoteSyncTarget(action, remoteName, metadata)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		return 1
 	}
-	if record == nil {
-		fmt.Fprintf(os.Stderr, "No cached remote env matched site %q env %q. Run nf site refresh after target cache is current, or update the local state cache.\n", siteID, remoteEnv)
-		return 1
-	}
-	if err := validateSiteRecord(record); err != nil {
-		fmt.Fprintln(os.Stderr, err)
-		return 1
-	}
-	provider := strings.ToLower(strings.TrimSpace(recordValueString(record["provider"])))
 	fmt.Printf("Env %s preflight:\n", action)
 	fmt.Printf("  local project: %s\n", cfg.ProjectSlug)
 	fmt.Printf("  local env:     %s\n", localEnvDir(cfg))
-	fmt.Printf("  remote:        %s\n", remoteName)
-	fmt.Printf("  site:          %s\n", siteID)
-	fmt.Printf("  env:           %s\n", remoteEnv)
-	fmt.Printf("  provider:      %s\n", provider)
-	fmt.Printf("  target:        %s\n", siteProviderTarget(record))
-	if url := firstRecordString(record, "url", "site_url", "home_url", "hostname"); url != "" {
-		fmt.Printf("  url:           %s\n", url)
+	fmt.Printf("  remote:        %s\n", target.RemoteName)
+	fmt.Printf("  site:          %s\n", target.SiteID)
+	fmt.Printf("  env:           %s\n", target.Env)
+	fmt.Printf("  provider:      %s\n", target.Provider)
+	if target.TargetLabel != "" && target.TargetRef != "" {
+		fmt.Printf("  %s:        %s\n", target.TargetLabel, target.TargetRef)
 	}
-	if provider == "linode" {
-		serverRef := siteServerReference(record)
-		server := state.MatchingRecord(servers, serverRef)
-		if server == nil {
-			fmt.Fprintf(os.Stderr, "Linode site %q references server %q, but no server matched that target.\n", siteSummary(record), serverRef)
+	if target.URL != "" {
+		fmt.Printf("  url:           %s\n", target.URL)
+	}
+	if target.AccessSummary != "" {
+		fmt.Printf("  %s: %s\n", target.AccessLabel, target.AccessSummary)
+	}
+	willExecute := opts.execute || (!opts.dryRun && !opts.nonInteractive)
+	mode := "execute"
+	if !willExecute {
+		mode = "dry-run"
+	} else if opts.execute {
+		mode = "execute"
+	}
+	fmt.Printf("  mode:          %s\n", mode)
+	if !willExecute {
+		fmt.Println("No data was changed. Re-run with --execute to sync database and mutable wp-content.")
+		return 0
+	}
+	if target.Provider != "linode" && target.Provider != "kinsta" {
+		fmt.Fprintf(os.Stderr, "Remote env sync execution is not implemented for provider %q; no data was changed.\n", target.Provider)
+		return 1
+	}
+	if opts.nonInteractive && !opts.yes {
+		fmt.Fprintln(os.Stderr, "Remote execution requires both --execute and --yes in non-interactive mode.")
+		return 1
+	}
+	if !opts.yes {
+		displayAction := action
+		if displayAction != "" {
+			displayAction = strings.ToUpper(displayAction[:1]) + displayAction[1:]
+		}
+		message := fmt.Sprintf("%s %s:%s %s local env %s? This syncs the database and mutable wp-content.", displayAction, target.SiteID, target.Env, map[string]string{"pull": "into", "push": "from"}[action], cfg.ProjectSlug)
+		confirmed, err := envRemoteSyncConfirm(message, false)
+		if err != nil {
+			fmt.Fprintln(os.Stderr, err)
 			return 1
 		}
-		fmt.Printf("  server:        %s\n", serverSummary(server))
+		if !confirmed {
+			fmt.Fprintln(os.Stderr, "Aborted.")
+			return 1
+		}
 	}
-	fmt.Fprintln(os.Stderr, "Remote env sync is not implemented yet; no data was changed.")
-	return 1
+	if action == "pull" {
+		return executeEnvPull(cfg, target)
+	}
+	return executeEnvPush(cfg, target)
+}
+
+func remoteSyncTempDir(cfg envConfig, target envRemoteSyncTarget, action string) string {
+	return path.Join("/tmp", "nf-"+action+"-"+cleanEnvSlug(cfg.ProjectSlug)+"-"+strconv.FormatInt(time.Now().Unix(), 10))
+}
+
+func remoteFileOpPrefix(target envRemoteSyncTarget) string {
+	if target.SudoFileOps {
+		return "sudo "
+	}
+	return ""
+}
+
+func remoteExportScript(target envRemoteSyncTarget, remoteTmp string) string {
+	fileOp := remoteFileOpPrefix(target)
+	return fmt.Sprintf(`set -eu
+rm -rf %s
+mkdir -p %s
+chmod 777 %s
+cd %s
+%s --path=%s db export %s/database.sql
+%sgzip -f %s/database.sql
+%schmod 644 %s/database.sql.gz
+dirs=""
+for dir in wp-content/uploads wp-content/plugins wp-content/mu-plugins wp-content/languages; do
+  if [ -e %s/$dir ]; then dirs="$dirs $dir"; fi
+done
+if [ -n "$dirs" ]; then %star -C %s -czf %s/wp-content.tar.gz $dirs; else %star -C %s -czf %s/wp-content.tar.gz --files-from /dev/null; fi
+%schmod 644 %s/wp-content.tar.gz
+`, shellQuoteArg(remoteTmp), shellQuoteArg(remoteTmp), shellQuoteArg(remoteTmp), shellQuoteArg(target.WordPressPath), target.WPCommand, shellQuoteArg(target.WordPressPath), shellQuoteArg(remoteTmp), fileOp, shellQuoteArg(remoteTmp), fileOp, shellQuoteArg(remoteTmp), shellQuoteArg(target.WordPressPath), fileOp, shellQuoteArg(target.WordPressPath), shellQuoteArg(remoteTmp), fileOp, shellQuoteArg(target.WordPressPath), shellQuoteArg(remoteTmp), fileOp, shellQuoteArg(remoteTmp))
+}
+
+func remoteImportScript(target envRemoteSyncTarget, remoteTmp string) string {
+	fileOp := remoteFileOpPrefix(target)
+	chown := ""
+	if target.SudoFileOps {
+		chown = fmt.Sprintf("sudo chown -R www-data:www-data %s/wp-content/uploads %s/wp-content/plugins %s/wp-content/mu-plugins %s/wp-content/languages 2>/dev/null || true\n", shellQuoteArg(target.WordPressPath), shellQuoteArg(target.WordPressPath), shellQuoteArg(target.WordPressPath), shellQuoteArg(target.WordPressPath))
+	}
+	return fmt.Sprintf(`set -eu
+tmp_sql=%s/database.sql
+gzip -cd %s/database.sql.gz > "$tmp_sql"
+%s --path=%s db import "$tmp_sql"
+%srm -rf %s/wp-content/uploads %s/wp-content/plugins %s/wp-content/mu-plugins %s/wp-content/languages
+%star -xzf %s/wp-content.tar.gz -C %s
+%s`, shellQuoteArg(remoteTmp), shellQuoteArg(remoteTmp), target.WPCommand, shellQuoteArg(target.WordPressPath), fileOp, shellQuoteArg(target.WordPressPath), shellQuoteArg(target.WordPressPath), shellQuoteArg(target.WordPressPath), shellQuoteArg(target.WordPressPath), fileOp, shellQuoteArg(remoteTmp), shellQuoteArg(target.WordPressPath), chown)
+}
+
+func remoteSSHArgs(target envRemoteSyncTarget, script string) []string {
+	return []string{"ssh", "-p", target.SSHPort, target.SSHUser + "@" + target.SSHHost, script}
+}
+
+func executeEnvPull(cfg envConfig, target envRemoteSyncTarget) int {
+	if err := ensureEnvReadyForSnapshot(cfg); err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		return 1
+	}
+	safetyName := defaultPreRestoreSnapshotName(time.Now())
+	if envSnapshotExists(cfg, safetyName) {
+		fmt.Fprintf(os.Stderr, "env snapshot %q already exists.\n", safetyName)
+		return 1
+	}
+	if err := envSnapshotCreateArchives(cfg, safetyName); err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		return 1
+	}
+	meta, _ := envSnapshotMetadataJSON(newEnvSnapshotMetadata(cfg, safetyName, time.Now()))
+	if err := os.WriteFile(envSnapshotMetadataPath(cfg, safetyName), []byte(meta), 0o644); err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		return 1
+	}
+	name := "pull-" + target.RemoteName + "-" + defaultEnvSnapshotName(time.Now())
+	if err := os.MkdirAll(envSnapshotDir(cfg, name), 0o777); err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		return 1
+	}
+	remoteTmp := remoteSyncTempDir(cfg, target, "pull")
+	if err := runSSHCommandFn(remoteSSHArgs(target, remoteExportScript(target, remoteTmp))); err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		return 1
+	}
+	if err := runRsyncCommandFn([]string{"rsync", "-az", "-e", "ssh -p " + target.SSHPort, target.SSHUser + "@" + target.SSHHost + ":" + remoteTmp + "/", envSnapshotDir(cfg, name) + string(filepath.Separator)}); err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		return 1
+	}
+	meta, _ = envSnapshotMetadataJSON(newEnvSnapshotMetadata(cfg, name, time.Now()))
+	if err := os.WriteFile(envSnapshotMetadataPath(cfg, name), []byte(meta), 0o644); err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		return 1
+	}
+	if err := envSnapshotRestoreArchives(cfg, name); err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		return 1
+	}
+	fmt.Printf("Env pulled.\n\nRestored snapshot: %s\nSafety snapshot: %s\n", name, safetyName)
+	return 0
+}
+
+func executeEnvPush(cfg envConfig, target envRemoteSyncTarget) int {
+	if err := ensureEnvReadyForSnapshot(cfg); err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		return 1
+	}
+	name := "push-" + target.RemoteName + "-" + defaultEnvSnapshotName(time.Now())
+	if err := envSnapshotCreateArchives(cfg, name); err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		return 1
+	}
+	meta, _ := envSnapshotMetadataJSON(newEnvSnapshotMetadata(cfg, name, time.Now()))
+	if err := os.WriteFile(envSnapshotMetadataPath(cfg, name), []byte(meta), 0o644); err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		return 1
+	}
+	remoteTmp := remoteSyncTempDir(cfg, target, "push")
+	if err := runSSHCommandFn(remoteSSHArgs(target, "rm -rf "+shellQuoteArg(remoteTmp)+" && mkdir -p "+shellQuoteArg(remoteTmp))); err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		return 1
+	}
+	if err := runRsyncCommandFn([]string{"rsync", "-az", "-e", "ssh -p " + target.SSHPort, envSnapshotDir(cfg, name) + string(filepath.Separator), target.SSHUser + "@" + target.SSHHost + ":" + remoteTmp + "/"}); err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		return 1
+	}
+	backupTmp := remoteSyncTempDir(cfg, target, "backup")
+	if err := runSSHCommandFn(remoteSSHArgs(target, remoteExportScript(target, backupTmp))); err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		return 1
+	}
+	if err := runSSHCommandFn(remoteSSHArgs(target, remoteImportScript(target, remoteTmp))); err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		return 1
+	}
+	fmt.Printf("Env pushed.\n\nLocal snapshot: %s\nRemote backup: %s\n", name, backupTmp)
+	return 0
 }
 
 func cmdSiteEnvRemoteCommandPlan(action, siteID, env string, args []string) int {
@@ -7227,8 +7501,8 @@ func runEnvHelp() int {
 		{"shell", "open a shell in the local env"},
 		{"wp -- <args>", "run wp-cli in the local env"},
 		{"snapshot", "manage env snapshots"},
-		{"pull <remote>", "preflight a remote env pull"},
-		{"push <remote>", "preflight a remote env push"},
+		{"pull [remote] [--dry-run] [--execute] [--yes]", "pull database and mutable wp-content from a remote env"},
+		{"push [remote] [--dry-run] [--execute] [--yes]", "push database and mutable wp-content to a remote env"},
 		{"reset", "destroy and recreate the local env"},
 	})
 	return 0
@@ -7252,6 +7526,37 @@ func runThemeHelp() int {
 		}
 	}
 	return 0
+}
+
+func parseEnvRemoteSyncArgs(action string, args []string) (string, envRemoteSyncOptions, bool) {
+	var opts envRemoteSyncOptions
+	positionals := make([]string, 0, 1)
+	for _, arg := range args {
+		switch arg {
+		case "--dry-run":
+			opts.dryRun = true
+		case "--execute":
+			opts.execute = true
+		case "--yes":
+			opts.yes = true
+		case "--non-interactive":
+			opts.nonInteractive = true
+		default:
+			if strings.HasPrefix(arg, "-") {
+				fmt.Fprintf(os.Stderr, "unknown env %s flag: %s\n", action, arg)
+				return "", opts, false
+			}
+			positionals = append(positionals, arg)
+		}
+	}
+	if len(positionals) > 1 {
+		fmt.Fprintf(os.Stderr, "env %s takes at most one remote\n", action)
+		return "", opts, false
+	}
+	if len(positionals) == 0 {
+		return "", opts, true
+	}
+	return positionals[0], opts, true
 }
 
 func runInit(argv []string) int {
@@ -7387,9 +7692,22 @@ func runEnv(argv []string) int {
 		return 1
 	}
 	if name == "push" || name == "pull" {
-		if len(argv) != 2 {
-			fmt.Fprintf(os.Stderr, "env %s takes exactly one remote\n", name)
+		remoteName, opts, ok := parseEnvRemoteSyncArgs(name, argv[1:])
+		if !ok {
 			return 1
+		}
+		argv = []string{name, remoteName}
+		if opts.dryRun {
+			argv = append(argv, "--dry-run")
+		}
+		if opts.execute {
+			argv = append(argv, "--execute")
+		}
+		if opts.yes {
+			argv = append(argv, "--yes")
+		}
+		if opts.nonInteractive {
+			argv = append(argv, "--non-interactive")
 		}
 	}
 	if name == "up" {
@@ -7430,7 +7748,11 @@ func runEnv(argv []string) int {
 		return cmdEnvPassword(cfg)
 	}
 	if name == "push" || name == "pull" {
-		return cmdEnvRemoteSyncPlan(name, argv[1], cfg, metadata)
+		remoteName, opts, ok := parseEnvRemoteSyncArgs(name, argv[1:])
+		if !ok {
+			return 1
+		}
+		return cmdEnvRemoteSyncPlan(name, remoteName, cfg, metadata, opts)
 	}
 	if name == "up" {
 		if err := preflightEnvPorts(cfg); err != nil {
@@ -8177,7 +8499,7 @@ func cmdRemoteShow(name string) int {
 	fmt.Printf("Remote: %s\n", name)
 	fmt.Printf("Site: %s\n", siteID)
 	fmt.Printf("Env: %s\n", remoteEnv)
-	record, servers, err := cachedSiteEnv(siteID, remoteEnv)
+	record, _, err := cachedSiteEnv(siteID, remoteEnv)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		return 1
@@ -8201,13 +8523,17 @@ func cmdRemoteShow(name string) int {
 		fmt.Printf("URL: %s\n", url)
 	}
 	if provider == "linode" {
-		serverRef := siteServerReference(record)
-		server := state.MatchingRecord(servers, serverRef)
-		if server == nil {
-			fmt.Fprintf(os.Stderr, "Linode site %q references server %q, but no server matched that target.\n", siteSummary(record), serverRef)
+		targetRef := siteProviderTarget(record)
+		target, err := cachedSiteTarget(targetRef)
+		if err != nil {
+			fmt.Fprintln(os.Stderr, err)
 			return 1
 		}
-		fmt.Printf("Server: %s\n", serverSummary(server))
+		if target == nil {
+			fmt.Fprintf(os.Stderr, "Linode site %q references target %q, but no cached target matched. Run nf provider check linode.\n", siteSummary(record), targetRef)
+			return 1
+		}
+		fmt.Printf("Target record: %s\n", serverSummary(target))
 	}
 	return 0
 }

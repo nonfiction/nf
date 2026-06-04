@@ -3201,7 +3201,7 @@ func TestRunEnvPushPreflightsRepoRemoteWithoutSyncing(t *testing.T) {
 	stateDir := t.TempDir()
 	t.Setenv("NF_STATE_HOME", stateDir)
 	t.Setenv("NF_DATA_HOME", t.TempDir())
-	sites := map[string]any{"sites": map[string]any{"live-client-kinsta": map[string]any{"provider": "kinsta", "site_id": "client-kinsta", "env": "live", "url": "https://www.example.com/", "kinsta": map[string]any{"site_id": "ksite123", "environment_id": "kenv-live"}}}}
+	sites := map[string]any{"sites": map[string]any{"live-client-kinsta": map[string]any{"provider": "kinsta", "site_id": "client-kinsta", "env": "live", "url": "https://www.example.com/", "path": "/www/client/public", "ssh": map[string]any{"host": "203.0.113.10", "user": "client", "port": "12345"}, "kinsta": map[string]any{"site_id": "ksite123", "environment_id": "kenv-live"}}}}
 	data, err := json.MarshalIndent(sites, "", "  ")
 	if err != nil {
 		t.Fatalf("MarshalIndent(sites) error = %v", err)
@@ -3242,18 +3242,115 @@ func TestRunEnvPushPreflightsRepoRemoteWithoutSyncing(t *testing.T) {
 
 	stderr := captureStderr(t, func() {
 		stdout := captureStdout(t, func() {
-			if got := Run([]string{"env", "push", "production"}); got != 1 {
-				t.Fatalf("Run(env push) = %d, want 1 while sync is unimplemented", got)
+			if got := Run([]string{"env", "push", "production", "--dry-run"}); got != 0 {
+				t.Fatalf("Run(env push) = %d, want 0 for preflight", got)
 			}
 		})
-		for _, want := range []string{"Env push preflight:", "local project: client", "remote:        production", "site:          client-kinsta", "env:           live", "provider:      kinsta", "url:           https://www.example.com/"} {
+		for _, want := range []string{"Env push preflight:", "local project: client", "remote:        production", "site:          client-kinsta", "env:           live", "provider:      kinsta", "url:           https://www.example.com/", "environment ssh: client@203.0.113.10"} {
 			if !strings.Contains(stdout, want) {
 				t.Fatalf("env push stdout missing %q:\n%s", want, stdout)
 			}
 		}
+		if strings.Contains(stdout, "target record:") || strings.Contains(stdout, "target:        kinsta") {
+			t.Fatalf("env push stdout used target wording for Kinsta:\n%s", stdout)
+		}
 	})
-	if !strings.Contains(stderr, "Remote env sync is not implemented yet; no data was changed.") {
+	if stderr != "" {
 		t.Fatalf("env push stderr = %q", stderr)
+	}
+}
+
+func TestRunEnvPullPreflightResolvesLinodeTargetFromProvidersCache(t *testing.T) {
+	stateDir := t.TempDir()
+	t.Setenv("NF_STATE_HOME", stateDir)
+	t.Setenv("NF_DATA_HOME", t.TempDir())
+	providers := []map[string]any{{
+		"provider": "linode",
+		"targets": []map[string]any{{
+			"name":     "app4-linode",
+			"provider": "linode",
+			"hostname": "app4-linode.nonfiction.dev",
+			"ssh":      map[string]any{"user": "nonfiction", "host": "app4-linode.nonfiction.dev", "port": "22"},
+		}},
+	}}
+	if err := state.SaveStateRecords("providers", providers); err != nil {
+		t.Fatalf("SaveStateRecords(providers) error = %v", err)
+	}
+	sites := []map[string]any{{
+		"provider": "linode",
+		"site_id":  "sanjel.app4-linode",
+		"env":      "live",
+		"target":   "app4-linode",
+		"hostname": "sanjel.app4-linode.nonfiction.dev",
+		"url":      "https://sanjel.app4-linode.nonfiction.dev",
+		"path":     "/var/www/sites/sanjel_live/public",
+	}}
+	if err := state.SaveStateRecords("sites", sites); err != nil {
+		t.Fatalf("SaveStateRecords(sites) error = %v", err)
+	}
+
+	repoRoot := t.TempDir()
+	for _, dir := range []string{".git", ".nf"} {
+		if err := os.MkdirAll(filepath.Join(repoRoot, dir), 0o755); err != nil {
+			t.Fatalf("MkdirAll(%s) error = %v", dir, err)
+		}
+	}
+	project := map[string]any{
+		"schema":    1,
+		"project":   map[string]any{"slug": "sanjel", "name": "Sanjel"},
+		"wordpress": map[string]any{"theme_path": "theme", "theme_slug": "theme"},
+		"env":       map[string]any{"compose": "docker compose", "wordpress_service": "wordpress", "cli_service": "cli", "theme_mount_slug": "theme", "uploads_path": "uploads"},
+		"deploy":    map[string]any{"remotes": map[string]any{"live": map[string]any{"site_id": "sanjel.app4-linode", "env": "live"}}},
+	}
+	projectData, err := json.MarshalIndent(project, "", "  ")
+	if err != nil {
+		t.Fatalf("MarshalIndent(project) error = %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(repoRoot, ".nf", "project.json"), append(projectData, '\n'), 0o644); err != nil {
+		t.Fatalf("WriteFile(project) error = %v", err)
+	}
+	oldwd, err := os.Getwd()
+	if err != nil {
+		t.Fatalf("Getwd() error = %v", err)
+	}
+	if err := os.Chdir(repoRoot); err != nil {
+		t.Fatalf("Chdir() error = %v", err)
+	}
+	t.Cleanup(func() { _ = os.Chdir(oldwd) })
+
+	stderr := captureStderr(t, func() {
+		stdout := captureStdout(t, func() {
+			if got := Run([]string{"env", "pull", "live", "--dry-run"}); got != 0 {
+				t.Fatalf("Run(env pull) = %d, want 0 for preflight", got)
+			}
+		})
+		for _, want := range []string{"Env pull preflight:", "local project: sanjel", "remote:        live", "site:          sanjel.app4-linode", "provider:      linode", "target:        app4-linode", "target record: app4-linode", "mode:          dry-run", "No data was changed."} {
+			if !strings.Contains(stdout, want) {
+				t.Fatalf("env pull stdout missing %q:\n%s", want, stdout)
+			}
+		}
+	})
+	if stderr != "" {
+		t.Fatalf("env pull stderr = %q", stderr)
+	}
+
+	oldRemoteSelect := remoteSelectFn
+	selectedTitle := ""
+	remoteSelectFn = func(title string, options []ui.SelectOption) (string, error) {
+		selectedTitle = title
+		if len(options) != 1 || options[0].Value != "live" {
+			t.Fatalf("remote picker options = %#v, want live", options)
+		}
+		return "live", nil
+	}
+	t.Cleanup(func() { remoteSelectFn = oldRemoteSelect })
+	stdout := captureStdout(t, func() {
+		if got := Run([]string{"env", "pull", "--dry-run"}); got != 0 {
+			t.Fatalf("Run(env pull --dry-run) = %d, want 0", got)
+		}
+	})
+	if selectedTitle != "Choose a remote to pull" || !strings.Contains(stdout, "remote:        live") {
+		t.Fatalf("env pull picker title/output = %q /\n%s", selectedTitle, stdout)
 	}
 }
 
@@ -3554,7 +3651,7 @@ func TestRunRemoteAddRequiresCachedSiteEnv(t *testing.T) {
 
 func TestRunEnvHelpShowsCommandsWithoutShortcuts(t *testing.T) {
 	output := captureStdout(t, func() { _ = runEnvHelp() })
-	for _, wanted := range []string{"env\n\nCommands:\n", "\n  show           show paths, ports, and URLs\n", "\n  password       show admin password only\n", "\n  up             start the local env\n", "\n  down           stop the local env\n", "\n  logs           tail WordPress logs\n", "\n  shell          open a shell in the local env\n", "\n  reset          destroy and recreate the local env\n", "\n  wp -- <args>   run wp-cli in the local env\n", "\n  push <remote>  preflight a remote env push\n", "\n  pull <remote>  preflight a remote env pull\n", "\n  snapshot       manage env snapshots\n"} {
+	for _, wanted := range []string{"env\n\nCommands:\n", "show", "show paths, ports, and URLs", "password", "show admin password only", "up", "start the local env", "down", "stop the local env", "logs", "tail WordPress logs", "shell", "open a shell in the local env", "reset", "destroy and recreate the local env", "wp -- <args>", "run wp-cli in the local env", "push [remote] [--dry-run] [--execute] [--yes]", "pull [remote] [--dry-run] [--execute] [--yes]", "snapshot", "manage env snapshots"} {
 		if !strings.Contains(output, wanted) {
 			t.Fatalf("runEnvHelp() output missing %q:\n%s", wanted, output)
 		}
