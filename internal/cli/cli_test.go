@@ -216,7 +216,7 @@ func TestRunInitHelpShowsFlags(t *testing.T) {
 
 func TestRunProviderHelpShowsCommands(t *testing.T) {
 	output := captureStdout(t, func() { _ = runProviderHelp() })
-	for _, wanted := range []string{"provider\n\nCommands:\n", "\n  list                       list provider integrations\n", "\n  check [provider] [--json]  run provider healthcheck\n", "\n  show [provider] [--json]   show cached provider metadata\n"} {
+	for _, wanted := range []string{"provider\n\nCommands:\n", "\n  list, ls                   list provider integrations\n", "\n  check [provider] [--json]  run provider healthcheck\n", "\n  show [provider] [--json]   show cached provider metadata\n"} {
 		if !strings.Contains(output, wanted) {
 			t.Fatalf("runProviderHelp() output missing %q:\n%s", wanted, output)
 		}
@@ -225,7 +225,7 @@ func TestRunProviderHelpShowsCommands(t *testing.T) {
 
 func TestRunTargetHelpShowsRefresh(t *testing.T) {
 	output := captureStdout(t, func() { _ = runTargetHelp() })
-	for _, wanted := range []string{"target\n\nCommands:\n", "\n  list                       list deployable targets\n", "\n  refresh                    refresh targets from providers\n"} {
+	for _, wanted := range []string{"target\n\nCommands:\n", "\n  list, ls                   list deployable targets\n", "\n  refresh                    refresh targets from providers\n"} {
 		if !strings.Contains(output, wanted) {
 			t.Fatalf("runTargetHelp() output missing %q:\n%s", wanted, output)
 		}
@@ -3665,7 +3665,7 @@ func TestRunEnvHelpShowsCommandsWithoutShortcuts(t *testing.T) {
 
 func TestRunEnvSnapshotHelpShowsDedicatedCommands(t *testing.T) {
 	output := captureStdout(t, func() { _ = runEnvSnapshot([]string{"help"}) })
-	for _, want := range []string{"env snapshot\n\nCommands:\n", "\n  list           list env snapshots\n", "\n  add [name]     create an env snapshot\n", "\n  use [name]     restore an env snapshot\n", "\n  remove [name]  delete an env snapshot\n"} {
+	for _, want := range []string{"env snapshot\n\nCommands:\n", "\n  list, ls           list env snapshots\n", "\n  add [name]         create an env snapshot\n", "\n  use [name]         restore an env snapshot\n", "\n  remove, rm [name]  delete an env snapshot\n"} {
 		if !strings.Contains(output, want) {
 			t.Fatalf("runEnvSnapshot(help) output missing %q:\n%s", want, output)
 		}

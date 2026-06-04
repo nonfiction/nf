@@ -6983,6 +6983,19 @@ type helpLine struct {
 	Description string
 }
 
+func cliCommandAlias(name string) string {
+	switch name {
+	case "ls":
+		return "list"
+	case "rm":
+		return "remove"
+	case "ssh":
+		return "shell"
+	default:
+		return name
+	}
+}
+
 func printGroupHelp(title string, lines []helpLine) {
 	fmt.Println(title)
 	fmt.Println("\nCommands:")
@@ -7008,7 +7021,7 @@ func printGroupHelp(title string, lines []helpLine) {
 func runServerHelp() int {
 	printGroupHelp("server", []helpLine{
 		{"provision [flags]", "provision an infrastructure host"},
-		{"list", "list servers"},
+		{"list, ls", "list servers"},
 		{"show <id-or-name>", "show a server"},
 		{"root-password <id-or-name>", "derive the Linode root password"},
 		{"delete <id-or-name> [flags]", "delete a server"},
@@ -7018,7 +7031,7 @@ func runServerHelp() int {
 
 func runProviderHelp() int {
 	printGroupHelp("provider", []helpLine{
-		{"list", "list provider integrations"},
+		{"list, ls", "list provider integrations"},
 		{"check [provider] [--json]", "run provider healthcheck"},
 		{"show [provider] [--json]", "show cached provider metadata"},
 	})
@@ -7027,34 +7040,34 @@ func runProviderHelp() int {
 
 func runTargetHelp() int {
 	printGroupHelp("target", []helpLine{
-		{"list", "list deployable targets"},
+		{"list, ls", "list deployable targets"},
 		{"show <target>", "show a deployable target"},
 		{"refresh", "refresh targets from providers"},
 		{"add linode <name> [flags]", "create a Linode target"},
-		{"remove <target>", "remove an empty Linode target"},
+		{"remove, rm <target>", "remove an empty Linode target"},
 	})
 	return 0
 }
 
 func runRemoteHelp() int {
 	printGroupHelp("remote", []helpLine{
-		{"list", "list repo remotes"},
+		{"list, ls", "list repo remotes"},
 		{"show <name>", "show a repo remote"},
 		{"add <name> <site-id> <env>", "add a repo remote"},
-		{"remove <name>", "remove a repo remote"},
+		{"remove, rm <name>", "remove a repo remote"},
 	})
 	return 0
 }
 
 func runSiteHelp() int {
 	printGroupHelp("site", []helpLine{
-		{"list", "list sites"},
+		{"list, ls", "list sites"},
 		{"show [site] [--json]", "show a site"},
 		{"env", "manage remote envs"},
 		{"password [site]", "show admin password only"},
 		{"refresh", "refresh local site cache"},
 		{"add <target> <site> [flags]", "create live and staging envs"},
-		{"remove [site] [flags]", "remove a Linode site"},
+		{"remove, rm [site] [flags]", "remove a Linode site"},
 	})
 	return 0
 }
@@ -7210,8 +7223,9 @@ func rootCompletionCandidates() []string {
 
 func providerCompletionCandidates(args []string) []string {
 	if len(args) == 0 {
-		return []string{"list", "check", "show", "help"}
+		return []string{"list", "ls", "check", "show", "help"}
 	}
+	args[0] = cliCommandAlias(args[0])
 	switch args[0] {
 	case "check", "show":
 		return []string{"dnsimple", "kinsta", "linode"}
@@ -7222,8 +7236,9 @@ func providerCompletionCandidates(args []string) []string {
 
 func targetCompletionCandidates(args []string) []string {
 	if len(args) == 0 {
-		return []string{"list", "show", "refresh", "add", "remove", "help"}
+		return []string{"list", "ls", "show", "refresh", "add", "remove", "rm", "help"}
 	}
+	args[0] = cliCommandAlias(args[0])
 	switch args[0] {
 	case "add":
 		if len(args) == 1 {
@@ -7245,8 +7260,9 @@ func targetAddFlagCandidates() []string {
 
 func siteCompletionCandidates(args []string) []string {
 	if len(args) == 0 {
-		return []string{"list", "show", "env", "password", "refresh", "add", "remove", "help"}
+		return []string{"list", "ls", "show", "env", "password", "refresh", "add", "remove", "rm", "help"}
 	}
+	args[0] = cliCommandAlias(args[0])
 	switch args[0] {
 	case "show":
 		return cachedSiteCompletionNames()
@@ -7268,8 +7284,9 @@ func siteCompletionCandidates(args []string) []string {
 
 func siteEnvCompletionCandidates(args []string) []string {
 	if len(args) == 0 {
-		return []string{"list", "show", "shell", "wp", "help"}
+		return []string{"list", "ls", "show", "shell", "ssh", "wp", "help"}
 	}
+	args[0] = cliCommandAlias(args[0])
 	sites := cachedSiteCompletionNames()
 	switch args[0] {
 	case "list":
@@ -7287,8 +7304,9 @@ func siteEnvCompletionCandidates(args []string) []string {
 
 func remoteCompletionCandidates(args []string) []string {
 	if len(args) == 0 {
-		return []string{"list", "show", "add", "remove", "help"}
+		return []string{"list", "ls", "show", "add", "remove", "rm", "help"}
 	}
+	args[0] = cliCommandAlias(args[0])
 	switch args[0] {
 	case "show", "remove":
 		return projectRemoteCompletionNames()
@@ -7305,8 +7323,9 @@ func remoteCompletionCandidates(args []string) []string {
 
 func envCompletionCandidates(args []string) []string {
 	if len(args) == 0 {
-		return []string{"show", "password", "up", "down", "logs", "shell", "wp", "snapshot", "pull", "push", "reset", "help"}
+		return []string{"show", "password", "up", "down", "logs", "shell", "ssh", "wp", "snapshot", "pull", "push", "reset", "help"}
 	}
+	args[0] = cliCommandAlias(args[0])
 	switch args[0] {
 	case "pull", "push":
 		return projectRemoteCompletionNames()
@@ -7319,8 +7338,9 @@ func envCompletionCandidates(args []string) []string {
 
 func envSnapshotCompletionCandidates(args []string) []string {
 	if len(args) == 0 {
-		return []string{"list", "add", "use", "remove", "help"}
+		return []string{"list", "ls", "add", "use", "remove", "rm", "help"}
 	}
+	args[0] = cliCommandAlias(args[0])
 	switch args[0] {
 	case "use", "remove":
 		return envSnapshotCompletionNames()
@@ -7498,7 +7518,7 @@ func runEnvHelp() int {
 		{"up", "start the local env"},
 		{"down", "stop the local env"},
 		{"logs", "tail WordPress logs"},
-		{"shell", "open a shell in the local env"},
+		{"shell, ssh", "open a shell in the local env"},
 		{"wp -- <args>", "run wp-cli in the local env"},
 		{"snapshot", "manage env snapshots"},
 		{"pull [remote] [--dry-run] [--execute] [--yes]", "pull database and mutable wp-content from a remote env"},
@@ -7670,6 +7690,7 @@ func runEnv(argv []string) int {
 		return runEnvHelp()
 	}
 	name := argv[0]
+	name = cliCommandAlias(name)
 	switch name {
 	case "show", "password", "up", "down", "logs", "reset", "shell", "wp", "push", "pull", "snapshot":
 	default:
@@ -7798,14 +7819,14 @@ func runEnv(argv []string) int {
 func runEnvSnapshot(argv []string) int {
 	if len(argv) == 0 || argv[0] == "help" {
 		printGroupHelp("env snapshot", []helpLine{
-			{"list", "list env snapshots"},
+			{"list, ls", "list env snapshots"},
 			{"add [name]", "create an env snapshot"},
 			{"use [name]", "restore an env snapshot"},
-			{"remove [name]", "delete an env snapshot"},
+			{"remove, rm [name]", "delete an env snapshot"},
 		})
 		return 0
 	}
-	cmd := argv[0]
+	cmd := cliCommandAlias(argv[0])
 	args := argv[1:]
 	switch cmd {
 	case "list":
@@ -8580,6 +8601,7 @@ func runProvider(argv []string) int {
 	if len(argv) == 0 || argv[0] == "help" || argv[0] == "--help" || argv[0] == "-h" {
 		return runProviderHelp()
 	}
+	argv[0] = cliCommandAlias(argv[0])
 	switch argv[0] {
 	case "list":
 		if len(argv) != 1 {
@@ -9208,6 +9230,7 @@ func runTarget(argv []string) int {
 	if len(argv) == 0 || argv[0] == "help" || argv[0] == "--help" || argv[0] == "-h" {
 		return runTargetHelp()
 	}
+	argv[0] = cliCommandAlias(argv[0])
 	switch argv[0] {
 	case "refresh":
 		if len(argv) != 1 {
@@ -9276,6 +9299,7 @@ func runRemote(argv []string) int {
 	if len(argv) == 0 || argv[0] == "help" || argv[0] == "--help" || argv[0] == "-h" {
 		return runRemoteHelp()
 	}
+	argv[0] = cliCommandAlias(argv[0])
 	if err := requireProjectContext("remote " + argv[0]); err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		return 1
@@ -9315,6 +9339,7 @@ func runServer(argv []string) int {
 	if len(argv) == 0 || argv[0] == "help" {
 		return runServerHelp()
 	}
+	argv[0] = cliCommandAlias(argv[0])
 	switch argv[0] {
 	case "provision":
 		return runProvision(argv[1:])
@@ -9376,6 +9401,7 @@ func runSite(argv []string) int {
 	if len(argv) == 0 || argv[0] == "help" {
 		return runSiteHelp()
 	}
+	argv[0] = cliCommandAlias(argv[0])
 	switch argv[0] {
 	case "add":
 		return runSiteAdd(argv[1:])
@@ -9538,13 +9564,14 @@ func runSiteAdd(argv []string) int {
 func runSiteEnv(argv []string) int {
 	if len(argv) == 0 || argv[0] == "help" || argv[0] == "--help" || argv[0] == "-h" {
 		printGroupHelp("site env", []helpLine{
-			{"list [site]", "list remote envs for a site"},
+			{"list, ls [site]", "list remote envs for a site"},
 			{"show [site] [--live|--staging] [--json]", "show one remote env"},
-			{"shell [site] [--live|--staging]", "shell into a remote env"},
+			{"shell, ssh [site] [--live|--staging]", "shell into a remote env"},
 			{"wp <site> [--live|--staging] <cmd>", "run wp-cli against a remote env"},
 		})
 		return 0
 	}
+	argv[0] = cliCommandAlias(argv[0])
 	switch argv[0] {
 	case "list":
 		if len(argv) > 2 {
