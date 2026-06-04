@@ -56,6 +56,7 @@ var (
 	providerSelectFn        = ui.Select
 	siteSelectFn            = ui.Select
 	remoteSelectFn          = ui.Select
+	remotePromptString      = ui.PromptString
 	siteIsInteractiveFn     = envwizard.IsInteractiveTerminal
 )
 
@@ -2745,10 +2746,10 @@ func resolveSiteTarget(requested string) (string, map[string]any, bool, bool, er
 	} else if targetAliasFound {
 		return targetAlias, metadata, projectFileExists, true, nil
 	}
-	if remoteSiteID, _, remoteFound, err := projectRemoteAlias(metadata, resolved); err != nil {
+	if remoteSiteID, remoteEnv, remoteFound, err := projectRemoteAlias(metadata, resolved); err != nil {
 		return "", nil, false, false, err
 	} else if remoteFound {
-		return remoteSiteID, metadata, projectFileExists, true, nil
+		return canonicalEnvID(remoteSiteID, remoteEnv), metadata, projectFileExists, true, nil
 	}
 	return resolved, metadata, projectFileExists, false, nil
 }
@@ -6118,6 +6119,9 @@ func cmdShowSite(needle string, jsonOutput bool) int {
 		fmt.Fprintln(os.Stderr, err)
 		return 1
 	}
+	if siteID, env, ok := splitSiteEnvRef(resolved); ok {
+		return cmdShowSiteEnv(siteID, env, jsonOutput)
+	}
 	bundle, err := state.LoadStateBundle()
 	if err != nil {
 		fmt.Fprintln(os.Stderr, err)
@@ -6151,6 +6155,9 @@ func cmdSitePassword(needle string) int {
 	if err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		return 1
+	}
+	if siteID, _, ok := splitSiteEnvRef(resolved); ok {
+		resolved = siteID
 	}
 	bundle, err := state.LoadStateBundle()
 	if err != nil {
@@ -6372,6 +6379,10 @@ func chooseSite(action string) (string, error) {
 }
 
 func chooseSiteEnv(action, siteID string) (string, error) {
+	return selectSiteEnv(fmt.Sprintf("Choose a remote env to %s", action), siteID)
+}
+
+func selectSiteEnv(title, siteID string) (string, error) {
 	bundle, err := state.LoadStateBundle()
 	if err != nil {
 		return "", err
@@ -6407,7 +6418,7 @@ func chooseSiteEnv(action, siteID string) (string, error) {
 		}
 		return leftEnv < rightEnv
 	})
-	return siteSelectFn(fmt.Sprintf("Choose a remote env to %s", action), options)
+	return siteSelectFn(title, options)
 }
 
 func parseSiteShowArgs(argv []string) (string, bool, error) {
@@ -6892,20 +6903,39 @@ func parseThemeDeployArgs(args []string) (remote string, dryRun bool, ok bool) {
 }
 
 func chooseProjectRemote(action string) (string, error) {
+	options, err := projectRemoteSelectOptions(action)
+	if err != nil {
+		return "", err
+	}
+	return remoteSelectFn("Choose a remote to "+action, options)
+}
+
+func chooseProjectRemoteOrOnly(action string) (string, error) {
+	options, err := projectRemoteSelectOptions(action)
+	if err != nil {
+		return "", err
+	}
+	if len(options) == 1 {
+		return options[0].Value, nil
+	}
+	return remoteSelectFn("Choose a remote to "+action, options)
+}
+
+func projectRemoteSelectOptions(action string) ([]ui.SelectOption, error) {
 	root, ok := currentGitRoot()
 	if !ok {
-		return "", ProjectError{Msg: fmt.Sprintf("%s requires a .git repository above the current directory", action)}
+		return nil, ProjectError{Msg: fmt.Sprintf("%s requires a .git repository above the current directory", action)}
 	}
 	metadata, err := loadProjectMetadataOrError(root)
 	if err != nil {
-		return "", err
+		return nil, err
 	}
 	remotes, err := projectRemotes(metadata, false)
 	if err != nil {
-		return "", err
+		return nil, err
 	}
 	if len(remotes) == 0 {
-		return "", ProjectError{Msg: "No remotes found. Add one with nf remote add <name> <site-id>:<env>."}
+		return nil, ProjectError{Msg: "No remotes found. Add one with nf remote add <name> <site.target:env>."}
 	}
 	names := make([]string, 0, len(remotes))
 	for name := range remotes {
@@ -6927,7 +6957,7 @@ func chooseProjectRemote(action string) (string, error) {
 		}
 		options = append(options, ui.SelectOption{Value: name, Label: label})
 	}
-	return remoteSelectFn("Choose a remote to "+action, options)
+	return options, nil
 }
 
 func validateThemeDeploySlug(slug string) error {
@@ -7145,7 +7175,7 @@ func runRemoteHelp() int {
 	printGroupHelp("remote", []helpLine{
 		{"list, ls", "list repo remotes"},
 		{"show <name>", "show a repo remote"},
-		{"add <name> <site-id>[:env]", "add a repo remote"},
+		{"add [name] [env]", "add a repo remote"},
 		{"remove, rm <name>", "remove a repo remote"},
 	})
 	return 0
@@ -7392,10 +7422,7 @@ func remoteCompletionCandidates(args []string) []string {
 		return projectRemoteCompletionNames()
 	case "add":
 		if len(args) == 2 {
-			return cachedSiteCompletionNames()
-		}
-		if len(args) >= 3 {
-			return []string{"live", "staging"}
+			return cachedSiteEnvCompletionNames()
 		}
 	}
 	return nil
@@ -8506,11 +8533,15 @@ func cmdConfigShow() int {
 	return 0
 }
 
-func cmdRemoteAdd(name, siteID, env string) int {
+func cmdRemoteAdd(name, envRef string) int {
 	name = strings.TrimSpace(name)
-	siteID, env = normalizeSiteEnvRequest(siteID, env)
-	if name == "" || siteID == "" || env == "" {
-		fmt.Fprintln(os.Stderr, "remote add requires non-empty name and env ref")
+	siteID, env, ok := splitSiteEnvRef(strings.TrimSpace(envRef))
+	if name == "" {
+		fmt.Fprintln(os.Stderr, "remote add requires a non-empty name")
+		return 1
+	}
+	if !ok || siteID == "" || env == "" {
+		fmt.Fprintln(os.Stderr, "remote add requires an env ref like site.target:env")
 		return 1
 	}
 	root, ok := currentGitRoot()
@@ -8546,7 +8577,7 @@ func cmdRemoteAdd(name, siteID, env string) int {
 		fmt.Fprintln(os.Stderr, err)
 		return 1
 	}
-	fmt.Printf("Added remote %s -> %s:%s\n", name, siteID, env)
+	fmt.Printf("Added remote %s -> %s\n", name, canonicalEnvID(siteID, env))
 	return 0
 }
 
@@ -8613,9 +8644,9 @@ func cmdRemoteShow(name string) int {
 		fmt.Fprintf(os.Stderr, "No remote named %q in .nf/project.json deploy.remotes.\n", name)
 		return 1
 	}
+	envID := canonicalEnvID(siteID, remoteEnv)
 	fmt.Printf("Remote: %s\n", name)
-	fmt.Printf("Site: %s\n", siteID)
-	fmt.Printf("Env: %s\n", remoteEnv)
+	fmt.Printf("Env: %s\n", envID)
 	record, _, err := cachedSiteEnv(siteID, remoteEnv)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, err)
@@ -8680,14 +8711,20 @@ func cmdRemoteList() int {
 		names = append(names, name)
 	}
 	sort.Strings(names)
-	rows := [][]string{{"name", "site", "env"}}
+	rows := [][]string{{"remote", "env"}}
 	for _, name := range names {
 		remote, ok := remotes[name].(map[string]any)
 		if !ok || remote == nil {
 			fmt.Fprintf(os.Stderr, ".nf/project.json deploy.remotes.%s must be an object\n", name)
 			return 1
 		}
-		rows = append(rows, []string{name, recordValueString(remote["site_id"]), recordValueString(remote["env"])})
+		siteID := strings.TrimSpace(recordValueString(remote["site_id"]))
+		env := strings.TrimSpace(recordValueString(remote["env"]))
+		if siteID == "" || env == "" {
+			fmt.Fprintf(os.Stderr, ".nf/project.json deploy.remotes.%s must include site_id and env\n", name)
+			return 1
+		}
+		rows = append(rows, []string{name, canonicalEnvID(siteID, env)})
 	}
 	fmt.Println(formatTable(rows))
 	return 0
@@ -9402,27 +9439,67 @@ func runRemote(argv []string) int {
 	}
 	switch argv[0] {
 	case "add":
-		if len(argv) != 3 && len(argv) != 4 {
-			fmt.Fprintln(os.Stderr, "remote add takes name and env ref, or name, site-id, and env")
+		if len(argv) > 3 {
+			fmt.Fprintln(os.Stderr, "remote add takes at most name and env ref")
 			return 1
 		}
-		env := ""
-		if len(argv) == 4 {
-			env = argv[3]
+		name := ""
+		envRef := ""
+		if len(argv) >= 2 {
+			name = argv[1]
+		} else {
+			prompted, err := remotePromptString("Remote name", "", false)
+			if err != nil {
+				fmt.Fprintln(os.Stderr, err)
+				return 1
+			}
+			name = strings.TrimSpace(prompted)
 		}
-		return cmdRemoteAdd(argv[1], argv[2], env)
+		if len(argv) == 3 {
+			envRef = argv[2]
+		} else {
+			selected, err := selectSiteEnv("Choose a remote env", "")
+			if err != nil {
+				fmt.Fprintln(os.Stderr, err)
+				return 1
+			}
+			envRef = selected
+		}
+		return cmdRemoteAdd(name, envRef)
 	case "remove":
-		if len(argv) != 2 {
-			fmt.Fprintln(os.Stderr, "remote remove takes exactly one name")
+		if len(argv) > 2 {
+			fmt.Fprintln(os.Stderr, "remote remove takes at most one name")
 			return 1
 		}
-		return cmdRemoteRemove(argv[1])
+		name := ""
+		if len(argv) == 2 {
+			name = argv[1]
+		} else {
+			selected, err := chooseProjectRemote("remove")
+			if err != nil {
+				fmt.Fprintln(os.Stderr, err)
+				return 1
+			}
+			name = selected
+		}
+		return cmdRemoteRemove(name)
 	case "show":
-		if len(argv) != 2 {
-			fmt.Fprintln(os.Stderr, "remote show takes exactly one name")
+		if len(argv) > 2 {
+			fmt.Fprintln(os.Stderr, "remote show takes at most one name")
 			return 1
 		}
-		return cmdRemoteShow(argv[1])
+		name := ""
+		if len(argv) == 2 {
+			name = argv[1]
+		} else {
+			selected, err := chooseProjectRemoteOrOnly("show")
+			if err != nil {
+				fmt.Fprintln(os.Stderr, err)
+				return 1
+			}
+			name = selected
+		}
+		return cmdRemoteShow(name)
 	case "list":
 		if len(argv) != 1 {
 			fmt.Fprintln(os.Stderr, "remote list takes no arguments")
