@@ -19,6 +19,23 @@
           subPackages = ["cmd/nf"];
           vendorHash = "sha256-DeRPEIZL//++6CBlY6WHSUQFywsNf4iHBvlHDmYCGpI=";
         };
+        nf-dev-build = pkgs.writeShellScriptBin "nf-dev-build" ''
+          set -eu
+
+          repo="$PWD"
+          while [ "$repo" != "/" ] && { [ ! -f "$repo/go.mod" ] || [ ! -d "$repo/cmd/nf" ]; }; do
+            repo="$(dirname "$repo")"
+          done
+
+          if [ ! -f "$repo/go.mod" ] || [ ! -d "$repo/cmd/nf" ]; then
+            echo "nf-dev-build: run from the nf repo or one of its subdirectories" >&2
+            exit 1
+          fi
+
+          mkdir -p "$repo/.cache"
+          (cd "$repo" && go build -o .cache/nf ./cmd/nf)
+          echo "built $repo/.cache/nf"
+        '';
       in {
         packages.default = nf;
         packages.nf = nf;
@@ -34,7 +51,10 @@
         };
 
         devShells.default = pkgs.mkShell {
-          packages = [pkgs.go pkgs.gotools nf];
+          packages = [pkgs.go pkgs.gotools nf nf-dev-build];
+          shellHook = ''
+            echo "nf dev: run nf-dev-build to refresh .cache/nf for shell completion"
+          '';
         };
       }
     );

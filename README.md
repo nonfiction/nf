@@ -35,21 +35,68 @@ Always available:
 nf
 
 Commands:
-  init          initialize project metadata
-  provider      manage provider integrations
-  target        refresh, list, and show deployable targets
-  site          refresh, list, and show remote sites/envs
-  config        manage global config
-  password      derive passwords
-  help          show help
+  init        initialize project metadata
+  provider    manage provider integrations
+  target      manage deployable targets
+  site        manage remote sites and envs
+  config      manage global config
+  password    derive passwords
+  completion  print shell completion scripts
+  help        show help
 ```
 
 Inside an `nf` project repo with `.nf/` next to `.git`, help also shows:
 
 ```text
-  remote        manage repo deploy remotes
-  theme         package artifacts and run theme tasks
-  env           manage the local development env
+  remote      manage repo remotes
+  env         manage the local development env
+  theme       package files and run theme tasks
+```
+
+## Shell completion
+
+`nf` can print completion scripts for bash and zsh:
+
+```sh
+nf completion bash
+nf completion zsh
+```
+
+Temporary setup for the current shell:
+
+```sh
+# bash
+source <(nf completion bash)
+
+# zsh
+source <(nf completion zsh)
+```
+
+Persistent setup depends on your shell config. Save the generated script into a file loaded by your shell, such as a bash completion directory or a zsh `$fpath` completion file.
+
+During rapid development, avoid wrappers that run `nix run` for every completion query. In the dev shell, refresh a cached binary:
+
+```sh
+nix develop
+nf-dev-build
+```
+
+Then point completion queries at `.cache/nf` from your local wrapper:
+
+```sh
+#!/usr/bin/env sh
+
+DEV_NF=/home/jon/src/nonfiction/nf/.cache/nf
+
+case "$1" in
+  __complete|completion)
+    if [ -x "$DEV_NF" ]; then
+      exec "$DEV_NF" "$@"
+    fi
+    ;;
+esac
+
+exec nix run /home/jon/src/nonfiction/nf -- "$@"
 ```
 
 Removed old public routes:
