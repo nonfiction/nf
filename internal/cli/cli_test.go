@@ -366,6 +366,33 @@ func TestRunCompleteSuggestsProjectValues(t *testing.T) {
 	if strings.TrimSpace(themeOutput) != "build" {
 		t.Fatalf("theme completion = %q, want build", themeOutput)
 	}
+
+	themeCommandOutput := captureStdout(t, func() {
+		if got := Run([]string{"__complete", "--", "theme", "d"}); got != 0 {
+			t.Fatalf("Run(__complete theme d) = %d, want 0", got)
+		}
+	})
+	if strings.TrimSpace(themeCommandOutput) != "deploy" {
+		t.Fatalf("theme command completion = %q, want deploy", themeCommandOutput)
+	}
+
+	themeDeployOutput := captureStdout(t, func() {
+		if got := Run([]string{"__complete", "--", "theme", "deploy", "pro"}); got != 0 {
+			t.Fatalf("Run(__complete theme deploy pro) = %d, want 0", got)
+		}
+	})
+	if strings.TrimSpace(themeDeployOutput) != "production" {
+		t.Fatalf("theme deploy completion = %q, want production", themeDeployOutput)
+	}
+
+	themeDeployAllOutput := captureStdout(t, func() {
+		if got := Run([]string{"__complete", "--", "theme", "deploy", ""}); got != 0 {
+			t.Fatalf("Run(__complete theme deploy) = %d, want 0", got)
+		}
+	})
+	if got, want := strings.TrimSpace(themeDeployAllOutput), "production"; got != want {
+		t.Fatalf("theme deploy completion order = %q, want %q", got, want)
+	}
 }
 
 func TestRunProviderListShowsProviders(t *testing.T) {
@@ -3230,6 +3257,145 @@ func TestRunEnvPushPreflightsRepoRemoteWithoutSyncing(t *testing.T) {
 	}
 }
 
+func TestRunThemeDeployDryRunRsyncsThemeToConfiguredRemote(t *testing.T) {
+	stateDir := t.TempDir()
+	t.Setenv("NF_STATE_HOME", stateDir)
+	if err := state.SaveStateRecords("sites", []map[string]any{{"provider": "kinsta", "site_id": "client-kinsta", "env": "live", "url": "https://www.example.com/", "path": "/www/client/public", "ssh": map[string]any{"host": "203.0.113.10", "port": "12345", "user": "client"}}}); err != nil {
+		t.Fatalf("SaveStateRecords(sites) error = %v", err)
+	}
+
+	repoRoot := t.TempDir()
+	for _, dir := range []string{".git", ".nf", "build/theme"} {
+		if err := os.MkdirAll(filepath.Join(repoRoot, dir), 0o755); err != nil {
+			t.Fatalf("MkdirAll(%s) error = %v", dir, err)
+		}
+	}
+	if err := os.WriteFile(filepath.Join(repoRoot, "build", "theme", "style.css"), []byte("/* Theme */\n"), 0o644); err != nil {
+		t.Fatalf("WriteFile(style.css) error = %v", err)
+	}
+	project := map[string]any{
+		"schema":    1,
+		"project":   map[string]any{"slug": "client", "name": "Client"},
+		"wordpress": map[string]any{"theme_path": "build/theme", "theme_slug": "theme"},
+		"deploy":    map[string]any{"remotes": map[string]any{"production": map[string]any{"site_id": "client-kinsta", "env": "live"}}},
+	}
+	projectData, err := json.MarshalIndent(project, "", "  ")
+	if err != nil {
+		t.Fatalf("MarshalIndent(project) error = %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(repoRoot, ".nf", "project.json"), append(projectData, '\n'), 0o644); err != nil {
+		t.Fatalf("WriteFile(project) error = %v", err)
+	}
+	oldwd, err := os.Getwd()
+	if err != nil {
+		t.Fatalf("Getwd() error = %v", err)
+	}
+	if err := os.Chdir(repoRoot); err != nil {
+		t.Fatalf("Chdir() error = %v", err)
+	}
+	t.Cleanup(func() { _ = os.Chdir(oldwd) })
+
+	var rsyncCommands [][]string
+	oldRunRsync := runRsyncCommandFn
+	runRsyncCommandFn = func(args []string) error {
+		rsyncCommands = append(rsyncCommands, append([]string(nil), args...))
+		printCommandArgs(args)
+		return nil
+	}
+	t.Cleanup(func() { runRsyncCommandFn = oldRunRsync })
+	oldRunSSH := runSSHCommandFn
+	runSSHCommandFn = func(args []string) error {
+		t.Fatalf("runSSHCommandFn called during dry-run: %#v", args)
+		return nil
+	}
+	t.Cleanup(func() { runSSHCommandFn = oldRunSSH })
+
+	stdout := captureStdout(t, func() {
+		if got := Run([]string{"theme", "deploy", "production", "--dry-run"}); got != 0 {
+			t.Fatalf("Run(theme deploy --dry-run) = %d, want 0", got)
+		}
+	})
+	for _, want := range []string{"Theme deploy plan:", "remote:      production", "site:        client-kinsta", "env:         live", "provider:    kinsta", "source:      " + filepath.Join(repoRoot, "build", "theme"), "destination: client@203.0.113.10:/www/client/public/wp-content/themes/theme", "mode:        dry-run", "> ssh -p 12345 client@203.0.113.10 'mkdir -p /www/client/public/wp-content/themes/theme'", "> rsync -az --delete --dry-run -e 'ssh -p 12345'", "> ssh -p 12345 client@203.0.113.10 'wp --path=/www/client/public theme activate theme --allow-root'", "No remote files were changed."} {
+		if !strings.Contains(stdout, want) {
+			t.Fatalf("theme deploy stdout missing %q:\n%s", want, stdout)
+		}
+	}
+	if len(rsyncCommands) != 1 {
+		t.Fatalf("rsync commands len = %d, want 1: %#v", len(rsyncCommands), rsyncCommands)
+	}
+	wantDest := "client@203.0.113.10:/www/client/public/wp-content/themes/theme/"
+	if got := rsyncCommands[0][len(rsyncCommands[0])-1]; got != wantDest {
+		t.Fatalf("rsync destination = %q, want %q", got, wantDest)
+	}
+}
+
+func TestRunThemeDeployWithoutRemotePromptsPicker(t *testing.T) {
+	stateDir := t.TempDir()
+	t.Setenv("NF_STATE_HOME", stateDir)
+	if err := state.SaveStateRecords("sites", []map[string]any{{"provider": "kinsta", "site_id": "client-kinsta", "env": "live", "path": "/www/client/public", "ssh": map[string]any{"host": "203.0.113.10", "port": "12345", "user": "client"}}}); err != nil {
+		t.Fatalf("SaveStateRecords(sites) error = %v", err)
+	}
+
+	repoRoot := t.TempDir()
+	for _, dir := range []string{".git", ".nf", "theme"} {
+		if err := os.MkdirAll(filepath.Join(repoRoot, dir), 0o755); err != nil {
+			t.Fatalf("MkdirAll(%s) error = %v", dir, err)
+		}
+	}
+	project := map[string]any{
+		"schema":    1,
+		"project":   map[string]any{"slug": "client"},
+		"wordpress": map[string]any{"theme_path": "theme", "theme_slug": "theme"},
+		"deploy":    map[string]any{"remotes": map[string]any{"production": map[string]any{"site_id": "client-kinsta", "env": "live"}}},
+	}
+	projectData, err := json.MarshalIndent(project, "", "  ")
+	if err != nil {
+		t.Fatalf("MarshalIndent(project) error = %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(repoRoot, ".nf", "project.json"), append(projectData, '\n'), 0o644); err != nil {
+		t.Fatalf("WriteFile(project) error = %v", err)
+	}
+	oldwd, err := os.Getwd()
+	if err != nil {
+		t.Fatalf("Getwd() error = %v", err)
+	}
+	if err := os.Chdir(repoRoot); err != nil {
+		t.Fatalf("Chdir() error = %v", err)
+	}
+	t.Cleanup(func() { _ = os.Chdir(oldwd) })
+
+	oldSelect := remoteSelectFn
+	var selectTitle string
+	var selectOptions []ui.SelectOption
+	remoteSelectFn = func(title string, options []ui.SelectOption) (string, error) {
+		selectTitle = title
+		selectOptions = append([]ui.SelectOption(nil), options...)
+		return "production", nil
+	}
+	t.Cleanup(func() { remoteSelectFn = oldSelect })
+	oldRunRsync := runRsyncCommandFn
+	runRsyncCommandFn = func(args []string) error { return nil }
+	t.Cleanup(func() { runRsyncCommandFn = oldRunRsync })
+	oldRunSSH := runSSHCommandFn
+	runSSHCommandFn = func(args []string) error { return nil }
+	t.Cleanup(func() { runSSHCommandFn = oldRunSSH })
+
+	stdout := captureStdout(t, func() {
+		if got := Run([]string{"theme", "deploy"}); got != 0 {
+			t.Fatalf("Run(theme deploy) = %d, want 0", got)
+		}
+	})
+	if selectTitle != "Choose a remote to deploy theme to" {
+		t.Fatalf("select title = %q", selectTitle)
+	}
+	if len(selectOptions) != 1 || selectOptions[0] != (ui.SelectOption{Value: "production", Label: "production -> client-kinsta:live"}) {
+		t.Fatalf("select options = %#v", selectOptions)
+	}
+	if !strings.Contains(stdout, "remote:      production") || !strings.Contains(stdout, "Theme deployed.") {
+		t.Fatalf("theme deploy picker stdout = %q", stdout)
+	}
+}
+
 func TestRunRemoteAddListRemoveWritesProjectMetadata(t *testing.T) {
 	stateDir := t.TempDir()
 	t.Setenv("NF_STATE_HOME", stateDir)
@@ -3744,7 +3910,7 @@ func TestRunThemeHelpShowsThemeCommandsInsideGit(t *testing.T) {
 	t.Cleanup(func() { _ = os.Chdir(oldwd) })
 
 	output := captureStdout(t, func() { _ = runThemeHelp() })
-	for _, wanted := range []string{"\n  tasks                                      list configured theme tasks\n", "\n  package [--dry-run] [--source] [--output]  package theme files\n", "\nTheme tasks:\n"} {
+	for _, wanted := range []string{"\n  tasks                                      list configured theme tasks\n", "\n  package [--dry-run] [--source] [--output]  package theme files\n", "\n  deploy <remote> [--dry-run]                rsync theme files to a repo remote\n", "\nTheme tasks:\n"} {
 		if !strings.Contains(output, wanted) {
 			t.Fatalf("runThemeHelp() output missing %q:\n%s", wanted, output)
 		}
@@ -3763,7 +3929,7 @@ func TestRunThemeHelpShowsCommandsOnlyOutsideGit(t *testing.T) {
 	t.Cleanup(func() { _ = os.Chdir(oldwd) })
 
 	output := captureStdout(t, func() { _ = runThemeHelp() })
-	for _, want := range []string{"\n  tasks                                      list configured theme tasks\n", "\n  package [--dry-run] [--source] [--output]  package theme files\n"} {
+	for _, want := range []string{"\n  tasks                                      list configured theme tasks\n", "\n  package [--dry-run] [--source] [--output]  package theme files\n", "\n  deploy <remote> [--dry-run]                rsync theme files to a repo remote\n"} {
 		if !strings.Contains(output, want) {
 			t.Fatalf("runThemeHelp() output missing %q:\n%s", want, output)
 		}

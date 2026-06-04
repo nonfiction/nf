@@ -51,9 +51,11 @@ var (
 	runSSHScriptFn          = runSSHScript
 	runSSHCommandFn         = runSSHCommand
 	runSSHOutputFn          = runSSHOutput
+	runRsyncCommandFn       = runRsyncCommand
 	targetSelectFn          = ui.Select
 	providerSelectFn        = ui.Select
 	siteSelectFn            = ui.Select
+	remoteSelectFn          = ui.Select
 )
 
 type repoCommandRunner interface {
@@ -852,6 +854,18 @@ func runCommandSpecQuiet(spec execSpec) error {
 	cmd.Dir = spec.Dir
 	cmd.Stdout = io.Discard
 	cmd.Stderr = io.Discard
+	cmd.Stdin = os.Stdin
+	return cmd.Run()
+}
+
+func runRsyncCommand(args []string) error {
+	if len(args) == 0 {
+		return fmt.Errorf("unsupported rsync command")
+	}
+	printCommandArgs(args)
+	cmd := exec.Command(args[0], args[1:]...)
+	cmd.Stdout = os.Stdout
+	cmd.Stderr = os.Stderr
 	cmd.Stdin = os.Stdin
 	return cmd.Run()
 }
@@ -4832,6 +4846,197 @@ func cachedSiteEnv(siteID, env string) (map[string]any, []map[string]any, error)
 	return nil, bundle.Servers, nil
 }
 
+type themeDeployTarget struct {
+	Provider       string
+	RemoteName     string
+	SiteID         string
+	Env            string
+	URL            string
+	SSHUser        string
+	SSHHost        string
+	SSHPort        string
+	WordPressPath  string
+	RemoteThemeDir string
+	WPCommand      string
+}
+
+func cmdThemeDeploy(remoteName string, dryRun bool) int {
+	remoteName = strings.TrimSpace(remoteName)
+	if remoteName == "" {
+		fmt.Fprintln(os.Stderr, "theme deploy requires a non-empty remote")
+		return 1
+	}
+	root, err := discoverProjectRootOrError()
+	if err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		return 1
+	}
+	metadata, err := loadProjectMetadataOrError(root)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		return 1
+	}
+	themeSource := firstNonEmpty(mapStringAtPath(metadata, "wordpress", "theme_path"), "theme")
+	if !filepath.IsAbs(themeSource) {
+		themeSource = filepath.Join(root, themeSource)
+	}
+	info, err := os.Stat(themeSource)
+	if err != nil || !info.IsDir() {
+		fmt.Fprintf(os.Stderr, "Theme source directory does not exist: %s\n", themeSource)
+		return 1
+	}
+	themeSlug := firstNonEmpty(mapStringAtPath(metadata, "wordpress", "theme_slug"), filepath.Base(themeSource), "theme")
+	if err := validateThemeDeploySlug(themeSlug); err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		return 1
+	}
+	target, err := resolveThemeDeployTarget(remoteName, themeSlug, metadata)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		return 1
+	}
+
+	fmt.Println("Theme deploy plan:")
+	fmt.Printf("  remote:      %s\n", target.RemoteName)
+	fmt.Printf("  site:        %s\n", target.SiteID)
+	fmt.Printf("  env:         %s\n", target.Env)
+	fmt.Printf("  provider:    %s\n", target.Provider)
+	if target.URL != "" {
+		fmt.Printf("  url:         %s\n", target.URL)
+	}
+	fmt.Printf("  source:      %s\n", themeSource)
+	fmt.Printf("  destination: %s@%s:%s\n", target.SSHUser, target.SSHHost, target.RemoteThemeDir)
+	if dryRun {
+		fmt.Println("  mode:        dry-run")
+	}
+
+	sshArgs := themeDeployMkdirArgs(target)
+	printCommandArgs(sshArgs)
+	if !dryRun {
+		if err := runSSHCommandFn(sshArgs); err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			return 1
+		}
+	}
+	rsyncArgs := themeDeployRsyncArgs(themeSource, target, dryRun)
+	if err := runRsyncCommandFn(rsyncArgs); err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		return 1
+	}
+	activateArgs := themeDeployActivateArgs(target, themeSlug)
+	printCommandArgs(activateArgs)
+	if !dryRun {
+		if err := runSSHCommandFn(activateArgs); err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			return 1
+		}
+	}
+	if dryRun {
+		fmt.Println("No remote files were changed.")
+	} else {
+		fmt.Println("Theme deployed.")
+	}
+	return 0
+}
+
+func resolveThemeDeployTarget(remoteName, themeSlug string, metadata map[string]any) (themeDeployTarget, error) {
+	siteID, remoteEnv, ok, err := projectRemoteAlias(metadata, remoteName)
+	if err != nil {
+		return themeDeployTarget{}, err
+	}
+	if !ok {
+		return themeDeployTarget{}, ProjectError{Msg: fmt.Sprintf("No remote named %q in .nf/project.json deploy.remotes.", remoteName)}
+	}
+	record, _, err := cachedSiteEnv(siteID, remoteEnv)
+	if err != nil {
+		return themeDeployTarget{}, err
+	}
+	if record == nil {
+		return themeDeployTarget{}, ProjectError{Msg: fmt.Sprintf("No cached remote env matched site %q env %q. Run nf site refresh after target cache is current, or update the local state cache.", siteID, remoteEnv)}
+	}
+	if err := validateSiteRecord(record); err != nil {
+		return themeDeployTarget{}, err
+	}
+	provider := strings.ToLower(strings.TrimSpace(recordValueString(record["provider"])))
+	target := themeDeployTarget{Provider: provider, RemoteName: remoteName, SiteID: siteID, Env: remoteEnv, URL: firstRecordString(record, "url", "site_url", "home_url", "hostname")}
+	switch provider {
+	case "kinsta":
+		target.SSHHost = firstNonEmpty(mapStringAtPath(record, "ssh", "host"), mapStringAtPath(record, "kinsta", "ssh", "host"), firstRecordString(record, "ssh_host"))
+		target.SSHUser = firstNonEmpty(mapStringAtPath(record, "ssh", "user"), mapStringAtPath(record, "kinsta", "ssh", "user"), firstRecordString(record, "ssh_user", "ssh_username"))
+		target.SSHPort = firstNonEmpty(mapStringAtPath(record, "ssh", "port"), mapStringAtPath(record, "kinsta", "ssh", "port"), firstRecordString(record, "ssh_port"), "22")
+		target.WordPressPath = normalizeKinstaCachedPath(firstRecordString(record, "path"))
+		target.WPCommand = "wp"
+	case "linode":
+		sshUser, sshHost, sshPort, wpPath, err := linodeThemeDeploySSHInfo(record)
+		if err != nil {
+			return themeDeployTarget{}, err
+		}
+		target.SSHUser = sshUser
+		target.SSHHost = sshHost
+		target.SSHPort = sshPort
+		target.WordPressPath = wpPath
+		target.WPCommand = "sudo -u www-data wp"
+	default:
+		return themeDeployTarget{}, ProjectError{Msg: fmt.Sprintf("Theme deploy is not implemented for provider %q; no files were changed.", provider)}
+	}
+	if target.SSHHost == "" {
+		return themeDeployTarget{}, ProjectError{Msg: fmt.Sprintf("Site env %q is missing SSH host. Run nf site refresh.", siteSummary(record))}
+	}
+	if target.SSHUser == "" {
+		return themeDeployTarget{}, ProjectError{Msg: fmt.Sprintf("Site env %q is missing SSH user. Run nf site refresh.", siteSummary(record))}
+	}
+	if target.WordPressPath == "" {
+		return themeDeployTarget{}, ProjectError{Msg: fmt.Sprintf("Site env %q is missing path. Run nf site refresh.", siteSummary(record))}
+	}
+	target.RemoteThemeDir = path.Join(target.WordPressPath, "wp-content", "themes", themeSlug)
+	return target, nil
+}
+
+func linodeThemeDeploySSHInfo(record map[string]any) (user, host, port, wpPath string, err error) {
+	targetRef := siteProviderTarget(record)
+	targets, err := cachedTargets()
+	if err != nil {
+		return "", "", "", "", err
+	}
+	target := state.MatchingRecord(targets, targetRef)
+	if target == nil {
+		return "", "", "", "", ProjectError{Msg: fmt.Sprintf("Linode site %q references target %q, but no cached target matched. Run nf provider check linode.", siteSummary(record), targetRef)}
+	}
+	values, err := loadGlobalConfig()
+	if err != nil {
+		return "", "", "", "", err
+	}
+	user = firstNonEmpty(serverSSHUser(target), values["linode_default_user"])
+	if user == "" {
+		return "", "", "", "", ProjectError{Msg: fmt.Sprintf("Target %q is missing an SSH user. Set linode_default_user with nf config set-linode-default-user <user>.", targetRef)}
+	}
+	host = firstRecordString(record, "hostname")
+	if host == "" {
+		host = serverSSHHost(target)
+	}
+	port = firstNonEmpty(mapStringAtPath(target, "ssh", "port"), firstRecordString(target, "ssh_port"), "22")
+	wpPath = firstRecordString(record, "path")
+	return user, host, port, wpPath, nil
+}
+
+func themeDeployMkdirArgs(target themeDeployTarget) []string {
+	return []string{"ssh", "-p", target.SSHPort, target.SSHUser + "@" + target.SSHHost, "mkdir -p " + shellQuoteArg(target.RemoteThemeDir)}
+}
+
+func themeDeployRsyncArgs(sourceDir string, target themeDeployTarget, dryRun bool) []string {
+	args := []string{"rsync", "-az", "--delete"}
+	if dryRun {
+		args = append(args, "--dry-run")
+	}
+	args = append(args, "-e", "ssh -p "+target.SSHPort)
+	return append(args, filepath.Clean(sourceDir)+string(filepath.Separator), target.SSHUser+"@"+target.SSHHost+":"+target.RemoteThemeDir+"/")
+}
+
+func themeDeployActivateArgs(target themeDeployTarget, themeSlug string) []string {
+	remoteCommand := target.WPCommand + " --path=" + shellQuoteArg(target.WordPressPath) + " theme activate " + shellQuoteArg(themeSlug) + " --allow-root"
+	return []string{"ssh", "-p", target.SSHPort, target.SSHUser + "@" + target.SSHHost, remoteCommand}
+}
+
 func cmdEnvRemoteSyncPlan(action, remoteName string, cfg envConfig, metadata map[string]any) int {
 	remoteName = strings.TrimSpace(remoteName)
 	if remoteName == "" {
@@ -6300,6 +6505,76 @@ func cmdThemePackage(source, output string, dryRun bool) int {
 	return cmdPackage("theme package", source, output, dryRun)
 }
 
+func parseThemeDeployArgs(args []string) (remote string, dryRun bool, ok bool) {
+	for _, arg := range args {
+		switch arg {
+		case "--dry-run":
+			dryRun = true
+		case "--":
+			return "", false, false
+		default:
+			if strings.HasPrefix(arg, "-") {
+				return "", false, false
+			}
+			if remote != "" {
+				return "", false, false
+			}
+			remote = arg
+		}
+	}
+	return remote, dryRun, true
+}
+
+func chooseProjectRemote(action string) (string, error) {
+	root, ok := currentGitRoot()
+	if !ok {
+		return "", ProjectError{Msg: fmt.Sprintf("%s requires a .git repository above the current directory", action)}
+	}
+	metadata, err := loadProjectMetadataOrError(root)
+	if err != nil {
+		return "", err
+	}
+	remotes, err := projectRemotes(metadata, false)
+	if err != nil {
+		return "", err
+	}
+	if len(remotes) == 0 {
+		return "", ProjectError{Msg: "No remotes found. Add one with nf remote add <name> <site-id> <env>."}
+	}
+	names := make([]string, 0, len(remotes))
+	for name := range remotes {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	options := make([]ui.SelectOption, 0, len(names))
+	for _, name := range names {
+		remote, _ := remotes[name].(map[string]any)
+		label := name
+		if remote != nil {
+			if siteID := strings.TrimSpace(recordValueString(remote["site_id"])); siteID != "" {
+				if env := strings.TrimSpace(recordValueString(remote["env"])); env != "" {
+					label += " -> " + siteID + ":" + env
+				} else {
+					label += " -> " + siteID
+				}
+			}
+		}
+		options = append(options, ui.SelectOption{Value: name, Label: label})
+	}
+	return remoteSelectFn("Choose a remote to "+action, options)
+}
+
+func validateThemeDeploySlug(slug string) error {
+	slug = strings.TrimSpace(slug)
+	if slug == "" {
+		return ProjectError{Msg: "wordpress.theme_slug cannot be empty"}
+	}
+	if filepath.IsAbs(slug) || strings.ContainsAny(slug, "/\\") || strings.Contains(slug, "..") {
+		return ProjectError{Msg: fmt.Sprintf("wordpress.theme_slug %q must be one safe directory name", slug)}
+	}
+	return nil
+}
+
 func cmdPackage(commandName, source, output string, dryRun bool) int {
 	root, _ := config.DiscoverProjectRoot("")
 	if root == "" {
@@ -6782,14 +7057,18 @@ func envSnapshotCompletionCandidates(args []string) []string {
 
 func themeCompletionCandidates(args []string) []string {
 	if len(args) == 0 {
-		candidates := []string{"tasks", "package", "help"}
+		candidates := []string{"tasks", "package", "deploy", "help"}
 		candidates = append(candidates, projectTaskCompletionNames()...)
 		return uniqueSortedStrings(candidates)
 	}
-	if args[0] == "package" {
+	switch args[0] {
+	case "package":
 		return []string{"--dry-run", "--source", "--output"}
+	case "deploy":
+		return projectRemoteCompletionNames()
+	default:
+		return nil
 	}
-	return nil
 }
 
 func cachedTargetCompletionNames() []string {
@@ -6889,7 +7168,7 @@ func envSnapshotCompletionNames() []string {
 
 func filterCompletionCandidates(candidates []string, prefix string) []string {
 	values := make([]string, 0, len(candidates))
-	for _, candidate := range uniqueSortedStrings(candidates) {
+	for _, candidate := range uniqueStrings(candidates) {
 		if strings.HasPrefix(candidate, prefix) {
 			values = append(values, candidate)
 		}
@@ -6897,7 +7176,7 @@ func filterCompletionCandidates(candidates []string, prefix string) []string {
 	return values
 }
 
-func uniqueSortedStrings(values []string) []string {
+func uniqueStrings(values []string) []string {
 	seen := map[string]struct{}{}
 	unique := make([]string, 0, len(values))
 	for _, value := range values {
@@ -6911,6 +7190,11 @@ func uniqueSortedStrings(values []string) []string {
 		seen[value] = struct{}{}
 		unique = append(unique, value)
 	}
+	return unique
+}
+
+func uniqueSortedStrings(values []string) []string {
+	unique := uniqueStrings(values)
 	sort.Strings(unique)
 	return unique
 }
@@ -6954,6 +7238,7 @@ func runThemeHelp() int {
 	lines := []helpLine{
 		{"tasks", "list configured theme tasks"},
 		{"package [--dry-run] [--source] [--output]", "package theme files"},
+		{"deploy <remote> [--dry-run]", "rsync theme files to a repo remote"},
 	}
 	printGroupHelp("theme", lines)
 	if projectContextAvailable() {
@@ -7028,6 +7313,25 @@ func runTheme(argv []string) int {
 			return 1
 		}
 		return cmdThemePackage(*source, *output, *dryRun)
+	case "deploy":
+		if err := requireProjectContext("theme deploy"); err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			return 1
+		}
+		remote, dryRun, ok := parseThemeDeployArgs(argv[1:])
+		if !ok {
+			fmt.Fprintln(os.Stderr, "theme deploy takes exactly one remote")
+			return 1
+		}
+		if strings.TrimSpace(remote) == "" {
+			selected, err := chooseProjectRemote("deploy theme to")
+			if err != nil {
+				fmt.Fprintln(os.Stderr, err)
+				return 1
+			}
+			remote = selected
+		}
+		return cmdThemeDeploy(remote, dryRun)
 	default:
 		if err := requireProjectContext("theme " + argv[0]); err != nil {
 			fmt.Fprintln(os.Stderr, err)
