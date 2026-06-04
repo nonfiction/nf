@@ -139,12 +139,12 @@ func TestRunHelpShowsTopLevelCommandsOutsideGit(t *testing.T) {
 	t.Cleanup(func() { _ = os.Chdir(oldwd) })
 
 	output := captureStdout(t, func() { _ = runHelp() })
-	for _, wanted := range []string{"\n  init          initialize project metadata\n", "\n  provider      manage provider integrations\n", "\n  target        refresh, list, and show deployable targets\n", "\n  site          refresh, list, and show remote sites/envs\n", "\n  config        manage global config\n", "\n  password      derive passwords\n", "\n  help          show help\n"} {
+	for _, wanted := range []string{"\n  init      initialize project metadata\n", "\n  provider  manage provider integrations\n", "\n  target    manage deployable targets\n", "\n  site      manage remote sites and envs\n", "\n  config    manage global config\n", "\n  password  derive passwords\n", "\n  help      show help\n"} {
 		if !strings.Contains(output, wanted) {
 			t.Fatalf("runHelp() output missing %q:\n%s", wanted, output)
 		}
 	}
-	for _, unwanted := range []string{"\n  remote        ", "\n  theme         ", "\n  env           ", "\n  repo          ", "\n  instance      ", "\n  server        ", "Shortcuts:", "nf up", "nf shell", "snapshot create", "\n  commands\n", "\n  run <name>\n", "\n  build\n"} {
+	for _, unwanted := range []string{"\n  remote  ", "\n  theme   ", "\n  env     ", "\n  repo  ", "\n  instance  ", "\n  server  ", "Shortcuts:", "nf up", "nf shell", "snapshot create", "\n  commands\n", "\n  run <name>\n", "\n  build\n"} {
 		if strings.Contains(output, unwanted) {
 			t.Fatalf("runHelp() output unexpectedly contained %q:\n%s", unwanted, output)
 		}
@@ -166,12 +166,12 @@ func TestRunHelpHidesProjectCommandsInsideGitWithoutNFDir(t *testing.T) {
 	t.Cleanup(func() { _ = os.Chdir(oldwd) })
 
 	output := captureStdout(t, func() { _ = runHelp() })
-	for _, wanted := range []string{"\n  init          initialize project metadata\n", "\n  provider      manage provider integrations\n", "\n  config        manage global config\n"} {
+	for _, wanted := range []string{"\n  init      initialize project metadata\n", "\n  provider  manage provider integrations\n", "\n  config    manage global config\n"} {
 		if !strings.Contains(output, wanted) {
 			t.Fatalf("runHelp() output missing %q:\n%s", wanted, output)
 		}
 	}
-	for _, unwanted := range []string{"\n  remote        ", "\n  theme         ", "\n  env           ", "\n  instance      ", "\n  server        ", "Shortcuts:", "nf up", "nf shell", "snapshot create", "\n  commands\n", "\n  run <name>\n", "\n  build\n"} {
+	for _, unwanted := range []string{"\n  remote  ", "\n  theme   ", "\n  env     ", "\n  instance  ", "\n  server  ", "Shortcuts:", "nf up", "nf shell", "snapshot create", "\n  commands\n", "\n  run <name>\n", "\n  build\n"} {
 		if strings.Contains(output, unwanted) {
 			t.Fatalf("runHelp() output unexpectedly contained %q:\n%s", unwanted, output)
 		}
@@ -195,7 +195,7 @@ func TestRunHelpShowsProjectCommandsInsideNFProject(t *testing.T) {
 	t.Cleanup(func() { _ = os.Chdir(oldwd) })
 
 	output := captureStdout(t, func() { _ = runHelp() })
-	for _, wanted := range []string{"\n  remote        manage repo deploy remotes\n", "\n  theme         package artifacts and run theme tasks\n", "\n  env           manage the local development env\n"} {
+	for _, wanted := range []string{"\n  remote    manage repo remotes\n", "\n  env       manage the local development env\n", "\n  theme     package files and run theme tasks\n"} {
 		if !strings.Contains(output, wanted) {
 			t.Fatalf("runHelp() output missing %q:\n%s", wanted, output)
 		}
@@ -216,7 +216,7 @@ func TestRunInitHelpShowsFlags(t *testing.T) {
 
 func TestRunProviderHelpShowsCommands(t *testing.T) {
 	output := captureStdout(t, func() { _ = runProviderHelp() })
-	for _, wanted := range []string{"provider\n\nCommands:\n", "\n  list                 list provider integrations\n", "\n  show [provider] [--json]   show cached provider metadata\n", "\n  check [provider] [--json]  run provider healthcheck\n"} {
+	for _, wanted := range []string{"provider\n\nCommands:\n", "\n  list                       list provider integrations\n", "\n  check [provider] [--json]  run provider healthcheck\n", "\n  show [provider] [--json]   show cached provider metadata\n"} {
 		if !strings.Contains(output, wanted) {
 			t.Fatalf("runProviderHelp() output missing %q:\n%s", wanted, output)
 		}
@@ -225,7 +225,7 @@ func TestRunProviderHelpShowsCommands(t *testing.T) {
 
 func TestRunTargetHelpShowsRefresh(t *testing.T) {
 	output := captureStdout(t, func() { _ = runTargetHelp() })
-	for _, wanted := range []string{"target\n\nCommands:\n", "\n  refresh             refresh target metadata from providers\n", "\n  list                list deployable targets\n"} {
+	for _, wanted := range []string{"target\n\nCommands:\n", "\n  list                       list deployable targets\n", "\n  refresh                    refresh targets from providers\n"} {
 		if !strings.Contains(output, wanted) {
 			t.Fatalf("runTargetHelp() output missing %q:\n%s", wanted, output)
 		}
@@ -3252,7 +3252,7 @@ func TestRunRemoteAddRequiresCachedSiteEnv(t *testing.T) {
 
 func TestRunEnvHelpShowsCommandsWithoutShortcuts(t *testing.T) {
 	output := captureStdout(t, func() { _ = runEnvHelp() })
-	for _, wanted := range []string{"env\n\nCommands:\n", "\n  show                show local env paths, ports, and URLs\n", "\n  password            show local env admin password only\n", "\n  up                  start the local env\n", "\n  down                stop the local env\n", "\n  shell               open a shell in the local env\n", "\n  logs                tail WordPress logs\n", "\n  reset               destroy and recreate the local env\n", "\n  wp -- <args>        run wp-cli in the local env\n", "\n  push <remote>       preflight a remote env push\n", "\n  pull <remote>       preflight a remote env pull\n", "\n  snapshot            manage/list env snapshots\n"} {
+	for _, wanted := range []string{"env\n\nCommands:\n", "\n  show           show paths, ports, and URLs\n", "\n  password       show admin password only\n", "\n  up             start the local env\n", "\n  down           stop the local env\n", "\n  logs           tail WordPress logs\n", "\n  shell          open a shell in the local env\n", "\n  reset          destroy and recreate the local env\n", "\n  wp -- <args>   run wp-cli in the local env\n", "\n  push <remote>  preflight a remote env push\n", "\n  pull <remote>  preflight a remote env pull\n", "\n  snapshot       manage env snapshots\n"} {
 		if !strings.Contains(output, wanted) {
 			t.Fatalf("runEnvHelp() output missing %q:\n%s", wanted, output)
 		}
@@ -3266,7 +3266,7 @@ func TestRunEnvHelpShowsCommandsWithoutShortcuts(t *testing.T) {
 
 func TestRunEnvSnapshotHelpShowsDedicatedCommands(t *testing.T) {
 	output := captureStdout(t, func() { _ = runEnvSnapshot([]string{"help"}) })
-	for _, want := range []string{"env snapshot\n\nCommands:\n", "\n  add [name]          create an env snapshot\n", "\n  list                list env snapshots\n", "\n  use [name]          restore an env snapshot\n", "\n  remove [name]       delete an env snapshot\n"} {
+	for _, want := range []string{"env snapshot\n\nCommands:\n", "\n  list           list env snapshots\n", "\n  add [name]     create an env snapshot\n", "\n  use [name]     restore an env snapshot\n", "\n  remove [name]  delete an env snapshot\n"} {
 		if !strings.Contains(output, want) {
 			t.Fatalf("runEnvSnapshot(help) output missing %q:\n%s", want, output)
 		}
@@ -3608,7 +3608,7 @@ func TestRunThemeHelpShowsThemeCommandsInsideGit(t *testing.T) {
 	t.Cleanup(func() { _ = os.Chdir(oldwd) })
 
 	output := captureStdout(t, func() { _ = runThemeHelp() })
-	for _, wanted := range []string{"\n  tasks               list configured theme tasks\n", "\n  package [--dry-run] [--source] [--output]   package theme artifacts\n", "\nTheme tasks:\n"} {
+	for _, wanted := range []string{"\n  tasks                                      list configured theme tasks\n", "\n  package [--dry-run] [--source] [--output]  package theme files\n", "\nTheme tasks:\n"} {
 		if !strings.Contains(output, wanted) {
 			t.Fatalf("runThemeHelp() output missing %q:\n%s", wanted, output)
 		}
@@ -3627,7 +3627,7 @@ func TestRunThemeHelpShowsCommandsOnlyOutsideGit(t *testing.T) {
 	t.Cleanup(func() { _ = os.Chdir(oldwd) })
 
 	output := captureStdout(t, func() { _ = runThemeHelp() })
-	for _, want := range []string{"\n  tasks               list configured theme tasks\n", "\n  package [--dry-run] [--source] [--output]   package theme artifacts\n"} {
+	for _, want := range []string{"\n  tasks                                      list configured theme tasks\n", "\n  package [--dry-run] [--source] [--output]  package theme files\n"} {
 		if !strings.Contains(output, want) {
 			t.Fatalf("runThemeHelp() output missing %q:\n%s", want, output)
 		}

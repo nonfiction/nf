@@ -6429,90 +6429,109 @@ func normalizePassthroughArgs(args []string) []string {
 
 func buildParser() *flag.FlagSet { return flag.NewFlagSet("nf", flag.ContinueOnError) }
 
-func printGroupHelp(title string, lines []string) {
+type helpLine struct {
+	Command     string
+	Description string
+}
+
+func printGroupHelp(title string, lines []helpLine) {
 	fmt.Println(title)
 	fmt.Println("\nCommands:")
+	width := 0
 	for _, line := range lines {
-		fmt.Printf("  %s\n", line)
+		if len(line.Command) > width {
+			width = len(line.Command)
+		}
+	}
+	for _, line := range lines {
+		if line.Command == "" && line.Description == "" {
+			fmt.Println()
+			continue
+		}
+		if line.Description == "" {
+			fmt.Printf("  %s\n", line.Command)
+			continue
+		}
+		fmt.Printf("  %-*s  %s\n", width, line.Command, line.Description)
 	}
 }
 
 func runServerHelp() int {
-	printGroupHelp("server", []string{
-		"provision [flags]   provision an infrastructure host",
-		"list                list servers",
-		"show <id-or-name>   show a server",
-		"root-password <id-or-name>   derive the Linode root password for a server",
-		"delete [flags] <id-or-name>   delete a server (flags may also follow the id)",
+	printGroupHelp("server", []helpLine{
+		{"provision [flags]", "provision an infrastructure host"},
+		{"list", "list servers"},
+		{"show <id-or-name>", "show a server"},
+		{"root-password <id-or-name>", "derive the Linode root password"},
+		{"delete <id-or-name> [flags]", "delete a server"},
 	})
 	return 0
 }
 
 func runProviderHelp() int {
-	printGroupHelp("provider", []string{
-		"list                 list provider integrations",
-		"show [provider] [--json]   show cached provider metadata",
-		"check [provider] [--json]  run provider healthcheck",
+	printGroupHelp("provider", []helpLine{
+		{"list", "list provider integrations"},
+		{"check [provider] [--json]", "run provider healthcheck"},
+		{"show [provider] [--json]", "show cached provider metadata"},
 	})
 	return 0
 }
 
 func runTargetHelp() int {
-	printGroupHelp("target", []string{
-		"add linode <name> [flags]   create or ensure a Linode target",
-		"refresh             refresh target metadata from providers",
-		"list                list deployable targets",
-		"show <target>       show a deployable target",
-		"remove <target>     remove an empty Linode target",
+	printGroupHelp("target", []helpLine{
+		{"list", "list deployable targets"},
+		{"show <target>", "show a deployable target"},
+		{"refresh", "refresh targets from providers"},
+		{"add linode <name> [flags]", "create a Linode target"},
+		{"remove <target>", "remove an empty Linode target"},
 	})
 	return 0
 }
 
 func runRemoteHelp() int {
-	printGroupHelp("remote", []string{
-		"add <name> <site-id> <env>   add a repo remote",
-		"show <name>                  show a repo remote",
-		"remove <name>                remove a repo remote",
-		"list                         list repo remotes",
+	printGroupHelp("remote", []helpLine{
+		{"list", "list repo remotes"},
+		{"show <name>", "show a repo remote"},
+		{"add <name> <site-id> <env>", "add a repo remote"},
+		{"remove <name>", "remove a repo remote"},
 	})
 	return 0
 }
 
 func runSiteHelp() int {
-	printGroupHelp("site", []string{
-		"add <target> <site> [flags]   create live and staging WordPress envs on a target",
-		"refresh             refresh local inventory cache",
-		"list                list sites",
-		"show [site] [--json]   show a site",
-		"password [site]     show admin password only",
-		"remove [site] [flags]   remove a Linode site and delete its env data",
-		"env                 list, show, shell into, or run wp-cli against remote envs",
+	printGroupHelp("site", []helpLine{
+		{"list", "list sites"},
+		{"show [site] [--json]", "show a site"},
+		{"env", "manage remote envs"},
+		{"password [site]", "show admin password only"},
+		{"refresh", "refresh local site cache"},
+		{"add <target> <site> [flags]", "create live and staging envs"},
+		{"remove [site] [flags]", "remove a Linode site"},
 	})
 	return 0
 }
 
 func runConfigHelp() int {
-	printGroupHelp("config", []string{
-		"init                         initialize local secret config",
-		"set-base-domain <domain>      set provider base domain",
-		"set-default-wp-email <email>  set default WordPress email",
-		"set-default-wp-user <user>    set default WordPress user",
-		"set-kinsta-default-php <version>      set default Kinsta PHP version",
-		"set-kinsta-default-region <region>   set default Kinsta region",
-		"set-linode-default-region <region>   set default Linode region",
-		"set-linode-default-type <type>       set default Linode type",
-		"set-linode-default-image <image>     set default Linode image",
-		"set-linode-default-user <user>       set default Linode SSH user",
-		"show                         show global config",
+	printGroupHelp("config", []helpLine{
+		{"init", "initialize local config"},
+		{"show", "show global config"},
+		{"set-base-domain <domain>", "set provider base domain"},
+		{"set-default-wp-email <email>", "set default WordPress email"},
+		{"set-default-wp-user <user>", "set default WordPress user"},
+		{"set-kinsta-default-region <region>", "set default Kinsta region"},
+		{"set-kinsta-default-php <version>", "set default Kinsta PHP version"},
+		{"set-linode-default-region <region>", "set default Linode region"},
+		{"set-linode-default-type <type>", "set default Linode type"},
+		{"set-linode-default-image <image>", "set default Linode image"},
+		{"set-linode-default-user <user>", "set default Linode SSH user"},
 	})
 	return 0
 }
 
 func runPasswordHelp() int {
-	printGroupHelp("password", []string{
-		"set-salt <salt>             save the shared password salt",
-		"show-salt                   show the masked password salt",
-		"derive <scope> [args...]    derive a password",
+	printGroupHelp("password", []helpLine{
+		{"show-salt", "show the masked password salt"},
+		{"set-salt <salt>", "save the shared password salt"},
+		{"derive <scope> [args...]", "derive a password"},
 	})
 	return 0
 }
@@ -6536,26 +6555,26 @@ func runInitHelp() int {
 }
 
 func runEnvHelp() int {
-	printGroupHelp("env", []string{
-		"show                show local env paths, ports, and URLs",
-		"password            show local env admin password only",
-		"up                  start the local env",
-		"down                stop the local env",
-		"shell               open a shell in the local env",
-		"logs                tail WordPress logs",
-		"reset               destroy and recreate the local env",
-		"wp -- <args>        run wp-cli in the local env",
-		"push <remote>       preflight a remote env push",
-		"pull <remote>       preflight a remote env pull",
-		"snapshot            manage/list env snapshots",
+	printGroupHelp("env", []helpLine{
+		{"show", "show paths, ports, and URLs"},
+		{"password", "show admin password only"},
+		{"up", "start the local env"},
+		{"down", "stop the local env"},
+		{"logs", "tail WordPress logs"},
+		{"shell", "open a shell in the local env"},
+		{"wp -- <args>", "run wp-cli in the local env"},
+		{"snapshot", "manage env snapshots"},
+		{"pull <remote>", "preflight a remote env pull"},
+		{"push <remote>", "preflight a remote env push"},
+		{"reset", "destroy and recreate the local env"},
 	})
 	return 0
 }
 
 func runThemeHelp() int {
-	lines := []string{
-		"tasks               list configured theme tasks",
-		"package [--dry-run] [--source] [--output]   package theme artifacts",
+	lines := []helpLine{
+		{"tasks", "list configured theme tasks"},
+		{"package [--dry-run] [--source] [--output]", "package theme files"},
 	}
 	printGroupHelp("theme", lines)
 	if projectContextAvailable() {
@@ -6773,11 +6792,11 @@ func runEnv(argv []string) int {
 
 func runEnvSnapshot(argv []string) int {
 	if len(argv) == 0 || argv[0] == "help" {
-		printGroupHelp("env snapshot", []string{
-			"add [name]          create an env snapshot",
-			"list                list env snapshots",
-			"use [name]          restore an env snapshot",
-			"remove [name]       delete an env snapshot",
+		printGroupHelp("env snapshot", []helpLine{
+			{"list", "list env snapshots"},
+			{"add [name]", "create an env snapshot"},
+			{"use [name]", "restore an env snapshot"},
+			{"remove [name]", "delete an env snapshot"},
 		})
 		return 0
 	}
@@ -6844,20 +6863,25 @@ func runEnvSnapshot(argv []string) int {
 }
 
 func runHelp() int {
-	fmt.Println("nf")
-	fmt.Println("\nCommands:")
-	fmt.Println("  init          initialize project metadata")
-	fmt.Println("  provider      manage provider integrations")
-	fmt.Println("  target        refresh, list, and show deployable targets")
-	fmt.Println("  site          refresh, list, and show remote sites/envs")
-	if projectContextAvailable() {
-		fmt.Println("  remote        manage repo deploy remotes")
-		fmt.Println("  theme         package artifacts and run theme tasks")
-		fmt.Println("  env           manage the local development env")
+	lines := []helpLine{
+		{"init", "initialize project metadata"},
+		{"provider", "manage provider integrations"},
+		{"target", "manage deployable targets"},
+		{"site", "manage remote sites and envs"},
 	}
-	fmt.Println("  config        manage global config")
-	fmt.Println("  password      derive passwords")
-	fmt.Println("  help          show help")
+	if projectContextAvailable() {
+		lines = append(lines,
+			helpLine{"remote", "manage repo remotes"},
+			helpLine{"env", "manage the local development env"},
+			helpLine{"theme", "package files and run theme tasks"},
+		)
+	}
+	lines = append(lines,
+		helpLine{"config", "manage global config"},
+		helpLine{"password", "derive passwords"},
+		helpLine{"help", "show help"},
+	)
+	printGroupHelp("nf", lines)
 	return 0
 }
 
@@ -8424,8 +8448,14 @@ func runSite(argv []string) int {
 
 func runSiteAdd(argv []string) int {
 	if len(argv) == 0 || argv[0] == "help" || argv[0] == "--help" || argv[0] == "-h" {
-		printGroupHelp("site add", []string{
-			"<target> <site> [--region <region>] [--php <version>] [--execute] [--yes] [--non-interactive] [--dry-run]",
+		printGroupHelp("site add", []helpLine{
+			{"<target> <site> [flags]", "create live and staging envs"},
+			{"--region <region>", "Kinsta region override"},
+			{"--php <version>", "Kinsta PHP version override"},
+			{"--dry-run", "show the plan only"},
+			{"--execute", "execute the plan"},
+			{"--yes", "confirm execution"},
+			{"--non-interactive", "fail instead of prompting"},
 		})
 		return 0
 	}
@@ -8491,11 +8521,11 @@ func runSiteAdd(argv []string) int {
 
 func runSiteEnv(argv []string) int {
 	if len(argv) == 0 || argv[0] == "help" || argv[0] == "--help" || argv[0] == "-h" {
-		printGroupHelp("site env", []string{
-			"list [site]                 list remote envs for a site",
-			"show [site] [--live|--staging] [--json]   show one remote env",
-			"shell [site] [--live|--staging]      shell into a remote env",
-			"wp <site> [--live|--staging] <cmd>   run wp-cli against a remote env",
+		printGroupHelp("site env", []helpLine{
+			{"list [site]", "list remote envs for a site"},
+			{"show [site] [--live|--staging] [--json]", "show one remote env"},
+			{"shell [site] [--live|--staging]", "shell into a remote env"},
+			{"wp <site> [--live|--staging] <cmd>", "run wp-cli against a remote env"},
 		})
 		return 0
 	}
