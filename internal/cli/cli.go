@@ -142,6 +142,12 @@ type envSnapshotRecord struct {
 	CreatedAt        time.Time
 }
 
+type envSnapshotPruneOptions struct {
+	keep   int
+	dryRun bool
+	yes    bool
+}
+
 type envRemoteSyncOptions struct {
 	dryRun         bool
 	execute        bool
@@ -167,7 +173,14 @@ type envRemoteSyncTarget struct {
 	SudoFileOps   bool
 }
 
+type siteSnapshotOptions struct {
+	output string
+	dryRun bool
+}
+
 const envSnapshotSchema = 1
+
+const wpCLIPasswordlessLoginWarning = "WARNING: option --ssl-verify-server-cert is disabled, because of an insecure passwordless login."
 
 var (
 	envSnapshotPromptString  = ui.PromptString
@@ -189,6 +202,10 @@ func defaultPreRestoreSnapshotName(now time.Time) string {
 
 func envSnapshotProjectDir(cfg envConfig) string {
 	return config.SnapshotProjectDir(cfg.ProjectSlug)
+}
+
+func remoteSnapshotDir(envID string, now time.Time) string {
+	return config.RemoteSnapshotDir(envIDFileSlug(envID) + "-" + defaultEnvSnapshotName(now))
 }
 
 func envSnapshotDir(cfg envConfig, name string) string {
@@ -395,6 +412,11 @@ func (c envCommandRunner) Execute(root string, extraArgs []string) error {
 	case "logs":
 		return runCommandSpec(execSpec{Dir: envDir, Args: envComposeArgs(c.cfg, "logs", "-f", c.cfg.WordpressService)})
 	case "reset":
+		safetyName, err := createPreRestoreSnapshot(c.cfg)
+		if err != nil {
+			return err
+		}
+		fmt.Printf("Safety snapshot: %s\n", safetyName)
 		if err := runCommandSpec(execSpec{Dir: envDir, Args: envComposeArgs(c.cfg, "down", "-v", "--remove-orphans")}); err != nil {
 			return err
 		}
@@ -422,7 +444,7 @@ func (c envCommandRunner) Render() string {
 	case "reset":
 		return "docker compose down -v --remove-orphans; nuke env data and recreate it with docker compose up -d, install WordPress if missing, and ensure the mounted theme is active"
 	case "shell":
-		return "docker compose exec " + firstNonEmpty(c.cfg.WordpressService, "wordpress") + " sh"
+		return "docker compose exec " + firstNonEmpty(c.cfg.WordpressService, "wordpress") + " bash"
 	case "wp":
 		return "docker compose run --rm " + c.cfg.CliService + " wp ... --allow-root"
 	default:
@@ -447,6 +469,27 @@ func ensureEnvReadyForSnapshot(cfg envConfig) error {
 	}
 	runner.cfg = credentialCfg
 	return runner.ensureUpInstalledActive(localEnvDir(cfg))
+}
+
+func createPreRestoreSnapshot(cfg envConfig) (string, error) {
+	if err := ensureEnvReadyForSnapshot(cfg); err != nil {
+		return "", err
+	}
+	safetyName := defaultPreRestoreSnapshotName(time.Now())
+	if envSnapshotExists(cfg, safetyName) {
+		return "", fmt.Errorf("env snapshot %q already exists", safetyName)
+	}
+	if err := envSnapshotCreateArchives(cfg, safetyName); err != nil {
+		return "", err
+	}
+	meta, err := envSnapshotMetadataJSON(newEnvSnapshotMetadata(cfg, safetyName, time.Now()))
+	if err != nil {
+		return "", err
+	}
+	if err := os.WriteFile(envSnapshotMetadataPath(cfg, safetyName), []byte(meta), 0o644); err != nil {
+		return "", err
+	}
+	return safetyName, nil
 }
 
 func envSnapshotCreateScript(name string) string {
@@ -490,6 +533,56 @@ func envSnapshotComposeArgs(cfg envConfig, args ...string) []string {
 	return append(envComposeArgs(cfg, "run", "--rm", firstNonEmpty(cfg.CliService, "cli"), "sh", "-lc"), args...)
 }
 
+type exactLineFilterWriter struct {
+	dst     io.Writer
+	filters map[string]bool
+	buf     strings.Builder
+}
+
+func newExactLineFilterWriter(dst io.Writer, filters ...string) *exactLineFilterWriter {
+	set := make(map[string]bool, len(filters))
+	for _, filter := range filters {
+		set[filter] = true
+	}
+	return &exactLineFilterWriter{dst: dst, filters: set}
+}
+
+func (w *exactLineFilterWriter) Write(p []byte) (int, error) {
+	for _, b := range p {
+		if b == '\n' {
+			if err := w.writeLine(w.buf.String(), true); err != nil {
+				return 0, err
+			}
+			w.buf.Reset()
+			continue
+		}
+		w.buf.WriteByte(b)
+	}
+	return len(p), nil
+}
+
+func (w *exactLineFilterWriter) Flush() error {
+	if w.buf.Len() == 0 {
+		return nil
+	}
+	line := w.buf.String()
+	w.buf.Reset()
+	return w.writeLine(line, false)
+}
+
+func (w *exactLineFilterWriter) writeLine(line string, newline bool) error {
+	trimmed := strings.TrimRight(line, "\r")
+	if w.filters[trimmed] {
+		return nil
+	}
+	if newline {
+		_, err := fmt.Fprintln(w.dst, line)
+		return err
+	}
+	_, err := fmt.Fprint(w.dst, line)
+	return err
+}
+
 func runCommandSpecNoPreview(spec execSpec) error {
 	if len(spec.Args) == 0 {
 		return fmt.Errorf("unsupported repo command type")
@@ -497,9 +590,14 @@ func runCommandSpecNoPreview(spec execSpec) error {
 	cmd := exec.Command(spec.Args[0], spec.Args[1:]...)
 	cmd.Dir = spec.Dir
 	cmd.Stdout = os.Stdout
-	cmd.Stderr = os.Stderr
+	stderr := newExactLineFilterWriter(os.Stderr, wpCLIPasswordlessLoginWarning)
+	cmd.Stderr = stderr
 	cmd.Stdin = os.Stdin
-	return cmd.Run()
+	err := cmd.Run()
+	if flushErr := stderr.Flush(); flushErr != nil && err == nil {
+		err = flushErr
+	}
+	return err
 }
 
 func envSnapshotCreateArchives(cfg envConfig, name string) error {
@@ -776,6 +874,135 @@ func cmdEnvSnapshotDelete(cfg envConfig, name string, nonInteractive bool) int {
 	}
 	fmt.Printf("Deleted env snapshot.\n\nDeleted:\n  name: %s\n  path: %s\n", normalized, path)
 	return 0
+}
+
+func envSnapshotAutoPruneCandidate(name string) bool {
+	return strings.HasPrefix(name, "pull-") || strings.HasPrefix(name, "push-") || strings.HasSuffix(name, "-pre-restore")
+}
+
+func envSnapshotTotalSize(record envSnapshotRecord) int64 {
+	total := int64(0)
+	if record.DatabaseSize > 0 {
+		total += record.DatabaseSize
+	}
+	if record.WpContentSize > 0 {
+		total += record.WpContentSize
+	}
+	return total
+}
+
+func envSnapshotPruneRows(records []envSnapshotRecord) [][]string {
+	rows := [][]string{{"name", "created", "database", "wp-content", "path"}}
+	for _, record := range records {
+		rows = append(rows, []string{
+			firstNonEmpty(record.Metadata.Name, filepath.Base(record.Directory)),
+			formatEnvSnapshotTime(record.Metadata.CreatedAt),
+			formatEnvSnapshotSize(record.DatabaseSize),
+			formatEnvSnapshotSize(record.WpContentSize),
+			record.Directory,
+		})
+	}
+	return rows
+}
+
+func envSnapshotPrunePlan(records []envSnapshotRecord, keep int) []envSnapshotRecord {
+	if keep < 0 {
+		keep = 0
+	}
+	candidates := make([]envSnapshotRecord, 0)
+	for _, record := range records {
+		name := firstNonEmpty(record.Metadata.Name, filepath.Base(record.Directory))
+		if envSnapshotAutoPruneCandidate(name) {
+			candidates = append(candidates, record)
+		}
+	}
+	if len(candidates) <= keep {
+		return nil
+	}
+	return candidates[keep:]
+}
+
+func cmdEnvSnapshotPrune(cfg envConfig, opts envSnapshotPruneOptions) int {
+	if opts.keep < 0 {
+		fmt.Fprintln(os.Stderr, "env snapshot prune --keep must be 0 or greater")
+		return 1
+	}
+	records, err := loadEnvSnapshots(cfg)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		return 1
+	}
+	prune := envSnapshotPrunePlan(records, opts.keep)
+	if len(prune) == 0 {
+		fmt.Printf("No env snapshots to prune. Keeping %d newest auto snapshots.\n", opts.keep)
+		return 0
+	}
+	total := int64(0)
+	for _, record := range prune {
+		total += envSnapshotTotalSize(record)
+	}
+	fmt.Printf("Env snapshot prune plan:\n  keep newest auto snapshots: %d\n  delete snapshots:            %d\n  reclaim about:               %s\n\n", opts.keep, len(prune), formatEnvSnapshotSize(total))
+	fmt.Println(formatTable(envSnapshotPruneRows(prune)))
+	if opts.dryRun {
+		fmt.Println("\nNo snapshots were deleted. Re-run without --dry-run to prune.")
+		return 0
+	}
+	if !opts.yes {
+		if !envSnapshotIsInteractive() {
+			fmt.Fprintln(os.Stderr, "env snapshot prune requires --yes when stdin is not interactive")
+			return 1
+		}
+		confirmed, err := envSnapshotConfirm(fmt.Sprintf("Delete %d auto env snapshots? This removes %s.", len(prune), formatEnvSnapshotSize(total)), false)
+		if err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			return 1
+		}
+		if !confirmed {
+			fmt.Fprintln(os.Stderr, "Aborted.")
+			return 1
+		}
+	}
+	for _, record := range prune {
+		if err := os.RemoveAll(record.Directory); err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			return 1
+		}
+	}
+	fmt.Printf("\nDeleted %d env snapshots. Reclaimed about %s.\n", len(prune), formatEnvSnapshotSize(total))
+	return 0
+}
+
+func parseEnvSnapshotPruneArgs(args []string) (envSnapshotPruneOptions, error) {
+	opts := envSnapshotPruneOptions{keep: 3}
+	for i := 0; i < len(args); i++ {
+		arg := args[i]
+		switch {
+		case arg == "--dry-run":
+			opts.dryRun = true
+		case arg == "--yes":
+			opts.yes = true
+		case arg == "--keep":
+			if i+1 >= len(args) {
+				return opts, ProjectError{Msg: "env snapshot prune --keep requires a number"}
+			}
+			i++
+			keep, err := strconv.Atoi(args[i])
+			if err != nil || keep < 0 {
+				return opts, ProjectError{Msg: "env snapshot prune --keep must be 0 or greater"}
+			}
+			opts.keep = keep
+		case strings.HasPrefix(arg, "--keep="):
+			keepText := strings.TrimPrefix(arg, "--keep=")
+			keep, err := strconv.Atoi(keepText)
+			if err != nil || keep < 0 {
+				return opts, ProjectError{Msg: "env snapshot prune --keep must be 0 or greater"}
+			}
+			opts.keep = keep
+		default:
+			return opts, ProjectError{Msg: fmt.Sprintf("unsupported env snapshot prune option %q", arg)}
+		}
+	}
+	return opts, nil
 }
 
 func cmdEnvSnapshotRestore(cfg envConfig, name string, nonInteractive bool) int {
@@ -1092,7 +1319,7 @@ func envWpArgs(cfg envConfig, args ...string) []string {
 }
 
 func envShellArgs(cfg envConfig) []string {
-	return envComposeArgs(cfg, "exec", firstNonEmpty(cfg.WordpressService, "wordpress"), "sh")
+	return envComposeArgs(cfg, "exec", firstNonEmpty(cfg.WordpressService, "wordpress"), "bash")
 }
 
 func envWpProbeArgs(cfg envConfig, args ...string) []string {
@@ -3882,9 +4109,14 @@ func runSSHScript(user, host, script string) error {
 func runSSHCommand(args []string) error {
 	cmd := exec.Command(args[0], args[1:]...)
 	cmd.Stdout = os.Stdout
-	cmd.Stderr = os.Stderr
+	stderr := newExactLineFilterWriter(os.Stderr, wpCLIPasswordlessLoginWarning)
+	cmd.Stderr = stderr
 	cmd.Stdin = os.Stdin
-	return cmd.Run()
+	err := cmd.Run()
+	if flushErr := stderr.Flush(); flushErr != nil && err == nil {
+		err = flushErr
+	}
+	return err
 }
 
 func runSSHOutput(args []string) ([]byte, error) {
@@ -5163,8 +5395,22 @@ func resolveEnvRemoteSyncTarget(action, remoteName string, metadata map[string]a
 	if record == nil {
 		return envRemoteSyncTarget{}, ProjectError{Msg: fmt.Sprintf("No cached remote env matched site %q env %q. Run nf site refresh after target cache is current, or update the local state cache.", siteID, remoteEnv)}
 	}
+	target, err := envRemoteSyncTargetFromSiteRecord(record, remoteName, siteID, remoteEnv)
+	if err != nil {
+		return envRemoteSyncTarget{}, err
+	}
+	return target, nil
+}
+
+func envRemoteSyncTargetFromSiteRecord(record map[string]any, remoteName, siteID, remoteEnv string) (envRemoteSyncTarget, error) {
 	if err := validateSiteRecord(record); err != nil {
 		return envRemoteSyncTarget{}, err
+	}
+	if siteID == "" {
+		siteID = siteRecordID(record)
+	}
+	if remoteEnv == "" {
+		remoteEnv = siteEnvName(record)
 	}
 	provider := strings.ToLower(strings.TrimSpace(recordValueString(record["provider"])))
 	target := envRemoteSyncTarget{Provider: provider, RemoteName: remoteName, SiteID: siteID, Env: remoteEnv, URL: firstRecordString(record, "url", "site_url", "home_url", "hostname"), TargetLabel: "target", TargetRef: siteProviderTarget(record), AccessLabel: "target record"}
@@ -5352,6 +5598,109 @@ gzip -cd %s/database.sql.gz > "$tmp_sql"
 
 func remoteSSHArgs(target envRemoteSyncTarget, script string) []string {
 	return []string{"ssh", "-p", target.SSHPort, target.SSHUser + "@" + target.SSHHost, script}
+}
+
+func remoteSnapshotMetadataJSON(target envRemoteSyncTarget, envID, outputDir string, now time.Time) string {
+	data, _ := json.MarshalIndent(map[string]any{
+		"schema":     1,
+		"source":     "remote",
+		"env_id":     envID,
+		"site_id":    target.SiteID,
+		"env":        target.Env,
+		"provider":   target.Provider,
+		"target":     target.TargetRef,
+		"url":        target.URL,
+		"created_at": now.Format(time.RFC3339),
+		"path":       outputDir,
+		"contents": map[string]any{
+			"database":         "database.sql.gz",
+			"wp_content":       "wp-content.tar.gz",
+			"wp_content_paths": envSnapshotContentPaths(),
+		},
+	}, "", "  ")
+	return string(append(data, '\n'))
+}
+
+func cmdSiteSnapshot(envRef string, opts siteSnapshotOptions) int {
+	if strings.TrimSpace(envRef) == "" {
+		selected, err := chooseSiteEnv("snapshot", "")
+		if err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			return 1
+		}
+		envRef = selected
+	}
+	siteID, env, ok := splitSiteEnvRef(envRef)
+	if !ok {
+		fmt.Fprintln(os.Stderr, "site snapshot requires an env ref like site.target:env")
+		return 1
+	}
+	record, _, err := cachedSiteEnv(siteID, env)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		return 1
+	}
+	if record == nil {
+		fmt.Fprintf(os.Stderr, "No cached remote env matched %q.\n", canonicalEnvID(siteID, env))
+		return 1
+	}
+	target, err := envRemoteSyncTargetFromSiteRecord(record, canonicalEnvID(siteID, env), siteID, env)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		return 1
+	}
+	if target.Provider != "linode" && target.Provider != "kinsta" {
+		fmt.Fprintf(os.Stderr, "site snapshot is not implemented for provider %q; no data was changed.\n", target.Provider)
+		return 1
+	}
+	envID := canonicalEnvID(siteID, env)
+	outputDir := strings.TrimSpace(opts.output)
+	now := time.Now()
+	if outputDir == "" {
+		outputDir = remoteSnapshotDir(envID, now)
+	}
+	absOutputDir, err := filepath.Abs(outputDir)
+	if err == nil {
+		outputDir = absOutputDir
+	}
+	remoteTmp := path.Join("/tmp", "nf-snapshot-"+cleanEnvSlug(envIDFileSlug(envID))+"-"+strconv.FormatInt(now.Unix(), 10))
+	fmt.Println("Site snapshot plan:")
+	fmt.Printf("  env:           %s\n", envID)
+	fmt.Printf("  provider:      %s\n", target.Provider)
+	if target.TargetLabel != "" && target.TargetRef != "" {
+		fmt.Printf("  %s:        %s\n", target.TargetLabel, target.TargetRef)
+	}
+	if target.URL != "" {
+		fmt.Printf("  url:           %s\n", target.URL)
+	}
+	if target.AccessSummary != "" {
+		fmt.Printf("  %s: %s\n", target.AccessLabel, target.AccessSummary)
+	}
+	fmt.Printf("  output:        %s\n", outputDir)
+	if opts.dryRun {
+		fmt.Println("  mode:          dry-run")
+		fmt.Println("No data was changed. Re-run without --dry-run to create a remote snapshot.")
+		return 0
+	}
+	if err := os.MkdirAll(outputDir, 0o755); err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		return 1
+	}
+	if err := runSSHCommandFn(remoteSSHArgs(target, remoteExportScript(target, remoteTmp))); err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		return 1
+	}
+	if err := runRsyncCommandFn([]string{"rsync", "-az", "-e", "ssh -p " + target.SSHPort, target.SSHUser + "@" + target.SSHHost + ":" + remoteTmp + "/", outputDir + string(filepath.Separator)}); err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		return 1
+	}
+	if err := os.WriteFile(filepath.Join(outputDir, "snapshot.json"), []byte(remoteSnapshotMetadataJSON(target, envID, outputDir, now)), 0o644); err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		return 1
+	}
+	_ = runSSHCommandFn(remoteSSHArgs(target, "rm -rf "+shellQuoteArg(remoteTmp)))
+	fmt.Printf("Site snapshot created.\n\nSnapshot:\n  source: remote\n  env: %s\n  path: %s\n  database: database.sql.gz\n  wp-content: wp-content.tar.gz\n", envID, outputDir)
+	return 0
 }
 
 func executeEnvPull(cfg envConfig, target envRemoteSyncTarget) int {
@@ -7187,6 +7536,7 @@ func runSiteHelp() int {
 		{"show [site|env] [--json]", "show a site or remote env"},
 		{"shell, ssh <env>", "shell into a remote env"},
 		{"wp <env> -- <args>", "run wp-cli against a remote env"},
+		{"snapshot [env] [--output path] [--dry-run]", "download remote database and mutable wp-content"},
 		{"password [site]", "show admin password only"},
 		{"refresh", "refresh local site cache"},
 		{"add <target> <site> [flags]", "create live and staging envs"},
@@ -7383,7 +7733,7 @@ func targetAddFlagCandidates() []string {
 
 func siteCompletionCandidates(args []string) []string {
 	if len(args) == 0 {
-		return []string{"list", "ls", "show", "shell", "ssh", "wp", "password", "refresh", "add", "remove", "rm", "help"}
+		return []string{"list", "ls", "show", "shell", "ssh", "wp", "snapshot", "password", "refresh", "add", "remove", "rm", "help"}
 	}
 	args[0] = cliCommandAlias(args[0])
 	switch args[0] {
@@ -7396,7 +7746,7 @@ func siteCompletionCandidates(args []string) []string {
 		return []string{"--envs"}
 	case "show":
 		return cachedSiteAndEnvCompletionNames()
-	case "shell", "wp":
+	case "shell", "wp", "snapshot":
 		return cachedSiteEnvCompletionNames()
 	case "password":
 		return cachedSiteCompletionNames()
@@ -7445,12 +7795,14 @@ func envCompletionCandidates(args []string) []string {
 
 func envSnapshotCompletionCandidates(args []string) []string {
 	if len(args) == 0 {
-		return []string{"list", "ls", "add", "use", "remove", "rm", "help"}
+		return []string{"list", "ls", "add", "use", "remove", "rm", "prune", "help"}
 	}
 	args[0] = cliCommandAlias(args[0])
 	switch args[0] {
 	case "use", "remove":
 		return envSnapshotCompletionNames()
+	case "prune":
+		return []string{"--keep", "--dry-run", "--yes"}
 	default:
 		return nil
 	}
@@ -7947,6 +8299,7 @@ func runEnvSnapshot(argv []string) int {
 			{"add [name]", "create an env snapshot"},
 			{"use [name]", "restore an env snapshot"},
 			{"remove, rm [name]", "delete an env snapshot"},
+			{"prune [--keep N] [--dry-run] [--yes]", "delete old auto snapshots"},
 		})
 		return 0
 	}
@@ -7963,6 +8316,7 @@ func runEnvSnapshot(argv []string) int {
 			fmt.Fprintln(os.Stderr, "env snapshot command takes at most one name")
 			return 1
 		}
+	case "prune":
 	default:
 		fmt.Fprintln(os.Stderr, "unsupported env snapshot command")
 		return 1
@@ -8007,6 +8361,13 @@ func runEnvSnapshot(argv []string) int {
 			name = args[0]
 		}
 		return cmdEnvSnapshotDelete(cfg, name, false)
+	case "prune":
+		opts, err := parseEnvSnapshotPruneArgs(args)
+		if err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			return 1
+		}
+		return cmdEnvSnapshotPrune(cfg, opts)
 	default:
 		return 1
 	}
@@ -8110,6 +8471,43 @@ func parseRemoveSiteArgs(argv []string) (string, deleteServerOptions, error) {
 		return "", opts, fmt.Errorf("%s", strings.Replace(err.Error(), "server delete", "site remove", 1))
 	}
 	return needle, opts, nil
+}
+
+func parseSiteSnapshotArgs(argv []string) (string, siteSnapshotOptions, error) {
+	var opts siteSnapshotOptions
+	positionals := make([]string, 0, 1)
+	for i := 0; i < len(argv); i++ {
+		arg := argv[i]
+		switch arg {
+		case "--dry-run":
+			opts.dryRun = true
+		case "--output":
+			if i+1 >= len(argv) || strings.TrimSpace(argv[i+1]) == "" {
+				return "", opts, fmt.Errorf("site snapshot --output requires a path")
+			}
+			i++
+			opts.output = argv[i]
+		default:
+			if strings.HasPrefix(arg, "--output=") {
+				opts.output = strings.TrimPrefix(arg, "--output=")
+				if strings.TrimSpace(opts.output) == "" {
+					return "", opts, fmt.Errorf("site snapshot --output requires a path")
+				}
+				continue
+			}
+			if strings.HasPrefix(arg, "-") {
+				return "", opts, fmt.Errorf("unsupported flag %s", arg)
+			}
+			positionals = append(positionals, arg)
+		}
+	}
+	if len(positionals) > 1 {
+		return "", opts, fmt.Errorf("site snapshot takes at most one env ref")
+	}
+	if len(positionals) == 0 {
+		return "", opts, nil
+	}
+	return positionals[0], opts, nil
 }
 
 func Run(argv []string) int {
@@ -9639,6 +10037,13 @@ func runSite(argv []string) int {
 			return 1
 		}
 		return cmdSiteRemoteCommandPlan("wp", envRef, command)
+	case "snapshot":
+		envRef, opts, err := parseSiteSnapshotArgs(argv[1:])
+		if err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			return 1
+		}
+		return cmdSiteSnapshot(envRef, opts)
 	case "password":
 		if len(argv) > 2 {
 			fmt.Fprintln(os.Stderr, "site password takes at most one site")
