@@ -348,6 +348,35 @@ func TestRunCompleteSuggestsStaticAndCachedValues(t *testing.T) {
 	if strings.TrimSpace(remoteAddOutput) != "client-app1-linode:live" {
 		t.Fatalf("remote add completion = %q, want env id only", remoteAddOutput)
 	}
+
+	siteSnapshotOutput := captureStdout(t, func() {
+		if got := Run([]string{"__complete", "--", "site", "snapshot", "client"}); got != 0 {
+			t.Fatalf("Run(__complete site snapshot) = %d, want 0", got)
+		}
+	})
+	if strings.TrimSpace(siteSnapshotOutput) != "client-app1-linode:live" {
+		t.Fatalf("site snapshot completion = %q, want env id only", siteSnapshotOutput)
+	}
+
+	snapshotOutput := captureStdout(t, func() {
+		if got := Run([]string{"__complete", "--", "env", "snapshot", "pr"}); got != 0 {
+			t.Fatalf("Run(__complete env snapshot) = %d, want 0", got)
+		}
+	})
+	if strings.TrimSpace(snapshotOutput) != "prune" {
+		t.Fatalf("env snapshot completion = %q, want prune", snapshotOutput)
+	}
+
+	pruneOutput := captureStdout(t, func() {
+		if got := Run([]string{"__complete", "--", "env", "snapshot", "prune", "--"}); got != 0 {
+			t.Fatalf("Run(__complete env snapshot prune) = %d, want 0", got)
+		}
+	})
+	for _, want := range []string{"--keep\n", "--dry-run\n", "--yes\n"} {
+		if !strings.Contains(pruneOutput, want) {
+			t.Fatalf("env snapshot prune completion missing %q:\n%s", want, pruneOutput)
+		}
+	}
 }
 
 func TestRunCompleteSuggestsProjectValues(t *testing.T) {
@@ -3555,6 +3584,99 @@ func TestRunThemeDeployWithoutRemotePromptsPicker(t *testing.T) {
 	}
 }
 
+func TestRunSiteSnapshotDownloadsRemoteEnvSnapshot(t *testing.T) {
+	stateDir := t.TempDir()
+	t.Setenv("NF_STATE_HOME", stateDir)
+	t.Setenv("NF_DATA_HOME", t.TempDir())
+	if err := state.SaveStateRecords("sites", []map[string]any{{"provider": "kinsta", "site_id": "client-kinsta", "env": "live", "url": "https://www.example.com/", "path": "/www/client/public", "ssh": map[string]any{"host": "203.0.113.10", "port": "12345", "user": "client"}}}); err != nil {
+		t.Fatalf("SaveStateRecords(sites) error = %v", err)
+	}
+	outputDir := filepath.Join(t.TempDir(), "client-snapshot")
+	oldRunSSH := runSSHCommandFn
+	var sshCommands [][]string
+	runSSHCommandFn = func(args []string) error {
+		sshCommands = append(sshCommands, append([]string(nil), args...))
+		return nil
+	}
+	t.Cleanup(func() { runSSHCommandFn = oldRunSSH })
+	oldRunRsync := runRsyncCommandFn
+	var rsyncCommands [][]string
+	runRsyncCommandFn = func(args []string) error {
+		rsyncCommands = append(rsyncCommands, append([]string(nil), args...))
+		return nil
+	}
+	t.Cleanup(func() { runRsyncCommandFn = oldRunRsync })
+
+	stdout := captureStdout(t, func() {
+		if got := Run([]string{"site", "snapshot", "client-kinsta:live", "--output", outputDir}); got != 0 {
+			t.Fatalf("Run(site snapshot) = %d, want 0", got)
+		}
+	})
+	for _, want := range []string{"Site snapshot plan:", "env:           client-kinsta:live", "provider:      kinsta", "environment ssh: client@203.0.113.10", "output:        " + outputDir, "Site snapshot created.", "source: remote", "database: database.sql.gz", "wp-content: wp-content.tar.gz"} {
+		if !strings.Contains(stdout, want) {
+			t.Fatalf("site snapshot stdout missing %q:\n%s", want, stdout)
+		}
+	}
+	if len(sshCommands) != 2 {
+		t.Fatalf("ssh commands len = %d, want snapshot and cleanup: %#v", len(sshCommands), sshCommands)
+	}
+	if !strings.Contains(sshCommands[0][len(sshCommands[0])-1], "wp --path=/www/client/public db export") {
+		t.Fatalf("snapshot ssh command = %#v", sshCommands[0])
+	}
+	if len(rsyncCommands) != 1 {
+		t.Fatalf("rsync commands len = %d, want 1: %#v", len(rsyncCommands), rsyncCommands)
+	}
+	if got, want := rsyncCommands[0][3], "ssh -p 12345"; got != want {
+		t.Fatalf("rsync ssh option = %q, want %q", got, want)
+	}
+	if got, want := rsyncCommands[0][len(rsyncCommands[0])-1], outputDir+string(filepath.Separator); got != want {
+		t.Fatalf("rsync output = %q, want %q", got, want)
+	}
+	metadataPath := filepath.Join(outputDir, "snapshot.json")
+	data, err := os.ReadFile(metadataPath)
+	if err != nil {
+		t.Fatalf("ReadFile(snapshot.json) error = %v", err)
+	}
+	for _, want := range []string{`"source": "remote"`, `"env_id": "client-kinsta:live"`, `"database": "database.sql.gz"`, `"wp_content": "wp-content.tar.gz"`} {
+		if !strings.Contains(string(data), want) {
+			t.Fatalf("snapshot metadata missing %q:\n%s", want, data)
+		}
+	}
+}
+
+func TestRunSiteSnapshotWithoutEnvPromptsPicker(t *testing.T) {
+	stateDir := t.TempDir()
+	t.Setenv("NF_STATE_HOME", stateDir)
+	if err := state.SaveStateRecords("sites", []map[string]any{{"provider": "kinsta", "site_id": "client-kinsta", "env": "live", "path": "/www/client/public", "ssh": map[string]any{"host": "203.0.113.10", "port": "12345", "user": "client"}}}); err != nil {
+		t.Fatalf("SaveStateRecords(sites) error = %v", err)
+	}
+	oldSelect := siteSelectFn
+	var selectTitle string
+	siteSelectFn = func(title string, options []ui.SelectOption) (string, error) {
+		selectTitle = title
+		return "client-kinsta:live", nil
+	}
+	t.Cleanup(func() { siteSelectFn = oldSelect })
+	oldRunSSH := runSSHCommandFn
+	runSSHCommandFn = func(args []string) error { return nil }
+	t.Cleanup(func() { runSSHCommandFn = oldRunSSH })
+	oldRunRsync := runRsyncCommandFn
+	runRsyncCommandFn = func(args []string) error { return nil }
+	t.Cleanup(func() { runRsyncCommandFn = oldRunRsync })
+
+	stdout := captureStdout(t, func() {
+		if got := Run([]string{"site", "snapshot", "--dry-run"}); got != 0 {
+			t.Fatalf("Run(site snapshot --dry-run) = %d, want 0", got)
+		}
+	})
+	if selectTitle != "Choose a remote env to snapshot" {
+		t.Fatalf("select title = %q", selectTitle)
+	}
+	if !strings.Contains(stdout, "mode:          dry-run") || !strings.Contains(stdout, "No data was changed") {
+		t.Fatalf("site snapshot dry-run output = %q", stdout)
+	}
+}
+
 func TestRunRemoteAddListRemoveWritesProjectMetadata(t *testing.T) {
 	stateDir := t.TempDir()
 	t.Setenv("NF_STATE_HOME", stateDir)
@@ -3940,7 +4062,7 @@ func TestRunEnvHelpShowsCommandsWithoutShortcuts(t *testing.T) {
 
 func TestRunEnvSnapshotHelpShowsDedicatedCommands(t *testing.T) {
 	output := captureStdout(t, func() { _ = runEnvSnapshot([]string{"help"}) })
-	for _, want := range []string{"env snapshot\n\nCommands:\n", "\n  list, ls           list env snapshots\n", "\n  add [name]         create an env snapshot\n", "\n  use [name]         restore an env snapshot\n", "\n  remove, rm [name]  delete an env snapshot\n"} {
+	for _, want := range []string{"env snapshot\n\nCommands:\n", "list, ls", "list env snapshots", "add [name]", "create an env snapshot", "use [name]", "restore an env snapshot", "remove, rm [name]", "delete an env snapshot", "prune [--keep N] [--dry-run] [--yes]"} {
 		if !strings.Contains(output, want) {
 			t.Fatalf("runEnvSnapshot(help) output missing %q:\n%s", want, output)
 		}
@@ -3975,7 +4097,7 @@ func TestRunEnvSnapshotAddSkipsComposeUpWhenReady(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(repoRoot, ".nf", "project.json"), append(data, '\n'), 0o644); err != nil {
 		t.Fatalf("WriteFile() error = %v", err)
 	}
-	snapshotDir := filepath.Join(config.DataHome(), "snapshots", "client", "demo-snapshot")
+	snapshotDir := filepath.Join(config.DataHome(), "snapshots", "local", "client", "demo-snapshot")
 	dockerDir := t.TempDir()
 	dockerScript := []byte("#!/bin/sh\nexit 0\n")
 	if err := os.WriteFile(filepath.Join(dockerDir, "docker"), dockerScript, 0o755); err != nil {
@@ -4038,7 +4160,7 @@ func TestRunEnvSnapshotListShowsSnapshots(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(repoRoot, "theme", "style.css"), []byte("/* demo */\n"), 0o644); err != nil {
 		t.Fatalf("WriteFile(style.css) error = %v", err)
 	}
-	snapshotDir := filepath.Join(config.DataHome(), "snapshots", "client", "2026-05-28-093012")
+	snapshotDir := filepath.Join(config.DataHome(), "snapshots", "local", "client", "2026-05-28-093012")
 	if err := os.MkdirAll(snapshotDir, 0o755); err != nil {
 		t.Fatalf("MkdirAll(snapshotDir) error = %v", err)
 	}
@@ -4111,7 +4233,7 @@ func TestRunEnvSnapshotUseSkipsComposeUpWhenReady(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(repoRoot, ".nf", "project.json"), append(projectData, '\n'), 0o644); err != nil {
 		t.Fatalf("WriteFile(project.json) error = %v", err)
 	}
-	sourceSnapshotDir := filepath.Join(config.DataHome(), "snapshots", "client", "restore-source")
+	sourceSnapshotDir := filepath.Join(config.DataHome(), "snapshots", "local", "client", "restore-source")
 	if err := os.MkdirAll(sourceSnapshotDir, 0o755); err != nil {
 		t.Fatalf("MkdirAll(sourceSnapshotDir) error = %v", err)
 	}
@@ -4208,7 +4330,7 @@ func TestRunEnvSnapshotRemoveRemovesSnapshotAfterConfirmation(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(repoRoot, ".nf", "project.json"), append(projectData, '\n'), 0o644); err != nil {
 		t.Fatalf("WriteFile(project.json) error = %v", err)
 	}
-	snapshotDir := filepath.Join(config.DataHome(), "snapshots", "client", "delete-me")
+	snapshotDir := filepath.Join(config.DataHome(), "snapshots", "local", "client", "delete-me")
 	if err := os.MkdirAll(snapshotDir, 0o755); err != nil {
 		t.Fatalf("MkdirAll(snapshotDir) error = %v", err)
 	}
@@ -4253,6 +4375,147 @@ func TestRunEnvSnapshotRemoveRemovesSnapshotAfterConfirmation(t *testing.T) {
 	}
 	if _, err := os.Stat(snapshotDir); !os.IsNotExist(err) {
 		t.Fatalf("snapshot dir still exists: %v", err)
+	}
+}
+
+func TestExactLineFilterWriterSuppressesOnlyKnownDBWarning(t *testing.T) {
+	var out bytes.Buffer
+	filter := newExactLineFilterWriter(&out, wpCLIPasswordlessLoginWarning)
+	input := "before\n" + wpCLIPasswordlessLoginWarning + "\nWARNING: keep this\nafter"
+	if _, err := filter.Write([]byte(input)); err != nil {
+		t.Fatalf("Write() error = %v", err)
+	}
+	if err := filter.Flush(); err != nil {
+		t.Fatalf("Flush() error = %v", err)
+	}
+	got := out.String()
+	if strings.Contains(got, wpCLIPasswordlessLoginWarning) {
+		t.Fatalf("filtered output still contains warning: %q", got)
+	}
+	for _, want := range []string{"before\n", "WARNING: keep this\n", "after"} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("filtered output missing %q: %q", want, got)
+		}
+	}
+}
+
+func TestRunEnvSnapshotPruneDryRunShowsOldAutoSnapshots(t *testing.T) {
+	repoRoot, cfg := writeTestEnvProject(t)
+	writeTestEnvSnapshot(t, cfg, "known-good", "2026-06-04T12:00:00Z", 10, 10)
+	writeTestEnvSnapshot(t, cfg, "pull-live-2026-06-04-100000", "2026-06-04T10:00:00Z", 100, 0)
+	writeTestEnvSnapshot(t, cfg, "pull-live-2026-06-04-110000", "2026-06-04T11:00:00Z", 200, 0)
+	writeTestEnvSnapshot(t, cfg, "2026-06-04-113000-pre-restore", "2026-06-04T11:30:00Z", 300, 0)
+	writeTestEnvSnapshot(t, cfg, "push-live-2026-06-04-120000", "2026-06-04T12:00:00Z", 400, 0)
+	oldwd, err := os.Getwd()
+	if err != nil {
+		t.Fatalf("Getwd() error = %v", err)
+	}
+	if err := os.Chdir(repoRoot); err != nil {
+		t.Fatalf("Chdir() error = %v", err)
+	}
+	t.Cleanup(func() { _ = os.Chdir(oldwd) })
+
+	output := captureStdout(t, func() {
+		if got := Run([]string{"env", "snapshot", "prune", "--keep", "2", "--dry-run"}); got != 0 {
+			t.Fatalf("Run(prune --dry-run) = %d, want 0", got)
+		}
+	})
+	for _, want := range []string{"Env snapshot prune plan:", "keep newest auto snapshots: 2", "delete snapshots:            2", "name", "created", "database", "wp-content", "path", "200 B", "0 B", "pull-live-2026-06-04-110000", "pull-live-2026-06-04-100000", "No snapshots were deleted"} {
+		if !strings.Contains(output, want) {
+			t.Fatalf("prune dry-run output missing %q:\n%s", want, output)
+		}
+	}
+	for _, notWant := range []string{"known-good", "push-live-2026-06-04-120000"} {
+		if strings.Contains(output, notWant) {
+			t.Fatalf("prune dry-run output contains kept snapshot %q:\n%s", notWant, output)
+		}
+	}
+	if _, err := os.Stat(envSnapshotDir(cfg, "pull-live-2026-06-04-100000")); err != nil {
+		t.Fatalf("dry-run deleted old snapshot: %v", err)
+	}
+}
+
+func TestRunEnvSnapshotPruneDeletesOldAutoSnapshotsWithYes(t *testing.T) {
+	repoRoot, cfg := writeTestEnvProject(t)
+	writeTestEnvSnapshot(t, cfg, "known-good", "2026-06-04T12:00:00Z", 10, 10)
+	writeTestEnvSnapshot(t, cfg, "pull-live-2026-06-04-100000", "2026-06-04T10:00:00Z", 100, 0)
+	writeTestEnvSnapshot(t, cfg, "pull-live-2026-06-04-110000", "2026-06-04T11:00:00Z", 200, 0)
+	writeTestEnvSnapshot(t, cfg, "2026-06-04-113000-pre-restore", "2026-06-04T11:30:00Z", 300, 0)
+	oldwd, err := os.Getwd()
+	if err != nil {
+		t.Fatalf("Getwd() error = %v", err)
+	}
+	if err := os.Chdir(repoRoot); err != nil {
+		t.Fatalf("Chdir() error = %v", err)
+	}
+	t.Cleanup(func() { _ = os.Chdir(oldwd) })
+
+	output := captureStdout(t, func() {
+		if got := Run([]string{"env", "snapshot", "prune", "--keep=1", "--yes"}); got != 0 {
+			t.Fatalf("Run(prune --yes) = %d, want 0", got)
+		}
+	})
+	if !strings.Contains(output, "Deleted 2 env snapshots") {
+		t.Fatalf("prune output = %q", output)
+	}
+	for _, deleted := range []string{"pull-live-2026-06-04-110000", "pull-live-2026-06-04-100000"} {
+		if _, err := os.Stat(envSnapshotDir(cfg, deleted)); !os.IsNotExist(err) {
+			t.Fatalf("snapshot %q still exists: %v", deleted, err)
+		}
+	}
+	for _, kept := range []string{"known-good", "2026-06-04-113000-pre-restore"} {
+		if _, err := os.Stat(envSnapshotDir(cfg, kept)); err != nil {
+			t.Fatalf("snapshot %q missing: %v", kept, err)
+		}
+	}
+}
+
+func writeTestEnvProject(t *testing.T) (string, envConfig) {
+	t.Helper()
+	configHome := t.TempDir()
+	t.Setenv("NF_CONFIG_HOME", configHome)
+	t.Setenv("NF_DATA_HOME", configHome)
+	repoRoot := t.TempDir()
+	if err := os.Mkdir(filepath.Join(repoRoot, ".git"), 0o755); err != nil {
+		t.Fatalf("Mkdir(.git) error = %v", err)
+	}
+	if err := os.MkdirAll(filepath.Join(repoRoot, ".nf"), 0o755); err != nil {
+		t.Fatalf("MkdirAll(.nf) error = %v", err)
+	}
+	if err := os.MkdirAll(filepath.Join(repoRoot, "theme"), 0o755); err != nil {
+		t.Fatalf("MkdirAll(theme) error = %v", err)
+	}
+	project := map[string]any{"schema": 1, "project": map[string]any{"slug": "client", "name": "Client"}, "wordpress": map[string]any{"theme_path": "theme", "theme_slug": "theme"}, "env": map[string]any{"compose": "docker compose", "wordpress_service": "wordpress", "cli_service": "cli", "theme_mount_slug": "theme", "uploads_path": "uploads"}}
+	data, err := json.MarshalIndent(project, "", "  ")
+	if err != nil {
+		t.Fatalf("MarshalIndent(project) error = %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(repoRoot, ".nf", "project.json"), append(data, '\n'), 0o644); err != nil {
+		t.Fatalf("WriteFile(project.json) error = %v", err)
+	}
+	cfg := envConfig{ProjectSlug: "client", ProjectName: "Client", RepoRoot: repoRoot, ThemePath: "theme", EnvDir: config.EnvDir("client"), WordpressPort: 18432, MailpitPort: 18433, Compose: "docker compose", WordpressService: "wordpress", CliService: "cli", ThemeMountSlug: "theme", UploadsPath: "uploads", ThemeSlug: "theme"}
+	return repoRoot, cfg
+}
+
+func writeTestEnvSnapshot(t *testing.T, cfg envConfig, name, createdAt string, dbSize, contentSize int) {
+	t.Helper()
+	dir := envSnapshotDir(cfg, name)
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatalf("MkdirAll(snapshot) error = %v", err)
+	}
+	meta := envSnapshotMetadata{Schema: envSnapshotSchema, Name: name, ProjectSlug: cfg.ProjectSlug, CreatedAt: createdAt, EnvPath: cfg.EnvDir, ComposeProject: envComposeProjectName(cfg.ProjectSlug), WordpressURL: envSnapshotWordPressURL(cfg), Contents: envSnapshotContents{Database: "database.sql.gz", WpContent: "wp-content.tar.gz", WpContentPaths: envSnapshotContentPaths()}}
+	metaJSON, err := envSnapshotMetadataJSON(meta)
+	if err != nil {
+		t.Fatalf("envSnapshotMetadataJSON() error = %v", err)
+	}
+	if err := os.WriteFile(envSnapshotMetadataPath(cfg, name), []byte(metaJSON), 0o644); err != nil {
+		t.Fatalf("WriteFile(snapshot.json) error = %v", err)
+	}
+	if err := os.WriteFile(envSnapshotHostDatabaseArchive(cfg, name), bytes.Repeat([]byte("d"), dbSize), 0o644); err != nil {
+		t.Fatalf("WriteFile(database.sql.gz) error = %v", err)
+	}
+	if err := os.WriteFile(envSnapshotHostWpContentArchive(cfg, name), bytes.Repeat([]byte("w"), contentSize), 0o644); err != nil {
+		t.Fatalf("WriteFile(wp-content.tar.gz) error = %v", err)
 	}
 }
 
@@ -5377,7 +5640,7 @@ func TestEnvCommandHelpersBuildExpectedArgs(t *testing.T) {
 	if got, want := envWpArgs(cfg, "plugin", "list"), []string{"docker", "compose", "run", "--rm", "cli", "wp", "plugin", "list", "--allow-root"}; !reflect.DeepEqual(got, want) {
 		t.Fatalf("envWpArgs() = %#v, want %#v", got, want)
 	}
-	if got, want := envShellArgs(cfg), []string{"docker", "compose", "exec", "wordpress", "sh"}; !reflect.DeepEqual(got, want) {
+	if got, want := envShellArgs(cfg), []string{"docker", "compose", "exec", "wordpress", "bash"}; !reflect.DeepEqual(got, want) {
 		t.Fatalf("envShellArgs() = %#v, want %#v", got, want)
 	}
 	if got, want := envWpThemeIsActiveArgs(cfg, ""), []string{"docker", "compose", "run", "--rm", "cli", "wp", "theme", "is-active", "theme", "--allow-root"}; !reflect.DeepEqual(got, want) {
@@ -5418,7 +5681,7 @@ func TestEnvCommandHelpersBuildExpectedArgs(t *testing.T) {
 	if got, want := (envCommandRunner{name: "reset", cfg: cfg}).Render(), "docker compose down -v --remove-orphans; nuke env data and recreate it with docker compose up -d, install WordPress if missing, and ensure the mounted theme is active"; got != want {
 		t.Fatalf("reset Render() = %q, want %q", got, want)
 	}
-	if got, want := (envCommandRunner{name: "shell", cfg: cfg}).Render(), "docker compose exec wordpress sh"; got != want {
+	if got, want := (envCommandRunner{name: "shell", cfg: cfg}).Render(), "docker compose exec wordpress bash"; got != want {
 		t.Fatalf("shell Render() = %q, want %q", got, want)
 	}
 }
@@ -5753,6 +6016,7 @@ func TestRunEnvResetPrintsUnderlyingCommands(t *testing.T) {
 		}
 	})
 	for _, want := range []string{
+		"Safety snapshot:",
 		"> docker compose down -v --remove-orphans",
 		"> docker compose up -d",
 		"> docker compose run --rm cli wp core is-installed --allow-root",
@@ -5764,6 +6028,24 @@ func TestRunEnvResetPrintsUnderlyingCommands(t *testing.T) {
 	}
 	if _, err := os.Stat(logPath); err != nil {
 		t.Fatalf("docker log missing: %v", err)
+	}
+	records, err := loadEnvSnapshots(envConfig{ProjectSlug: "client-site"})
+	if err != nil {
+		t.Fatalf("loadEnvSnapshots() error = %v", err)
+	}
+	if len(records) != 1 {
+		t.Fatalf("loadEnvSnapshots() returned %d records, want 1", len(records))
+	}
+	if name := records[0].Metadata.Name; !strings.HasSuffix(name, "-pre-restore") {
+		t.Fatalf("reset safety snapshot name = %q, want pre-restore suffix", name)
+	}
+	logData, err := os.ReadFile(logPath)
+	if err != nil {
+		t.Fatalf("ReadFile(log) error = %v", err)
+	}
+	logText := string(logData)
+	if strings.Index(logText, "wp db export") == -1 || strings.Index(logText, "down\n-v\n--remove-orphans") == -1 || strings.Index(logText, "wp db export") > strings.Index(logText, "down\n-v\n--remove-orphans") {
+		t.Fatalf("reset did not create safety snapshot before down -v:\n%s", logText)
 	}
 }
 
@@ -6087,14 +6369,14 @@ func TestRunEnvShellExecutesWordpressShell(t *testing.T) {
 			t.Fatalf("Run(env shell) = %d, want 0", got)
 		}
 	})
-	if !strings.Contains(output, "> docker compose exec wordpress sh") {
+	if !strings.Contains(output, "> docker compose exec wordpress bash") {
 		t.Fatalf("Run(shell) stdout = %q, want compose exec preview", output)
 	}
 	args, err := os.ReadFile(capturePath)
 	if err != nil {
 		t.Fatalf("ReadFile() error = %v", err)
 	}
-	if got, want := strings.Split(strings.TrimSpace(string(args)), "\n"), []string{"compose", "exec", "wordpress", "sh"}; !reflect.DeepEqual(got, want) {
+	if got, want := strings.Split(strings.TrimSpace(string(args)), "\n"), []string{"compose", "exec", "wordpress", "bash"}; !reflect.DeepEqual(got, want) {
 		t.Fatalf("docker args = %#v, want %#v", got, want)
 	}
 }
