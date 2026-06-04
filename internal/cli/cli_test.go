@@ -289,8 +289,8 @@ func TestRunCompleteSuggestsStaticAndCachedValues(t *testing.T) {
 			t.Fatalf("Run(__complete target show) = %d, want 0", got)
 		}
 	})
-	if !strings.Contains(targetOutput, "app1-linode\n") || !strings.Contains(targetOutput, "app1.example.com\n") {
-		t.Fatalf("target completion missing cached target names:\n%s", targetOutput)
+	if strings.TrimSpace(targetOutput) != "app1-linode" {
+		t.Fatalf("target completion = %q, want app1-linode only", targetOutput)
 	}
 
 	siteOutput := captureStdout(t, func() {
@@ -300,6 +300,9 @@ func TestRunCompleteSuggestsStaticAndCachedValues(t *testing.T) {
 	})
 	if !strings.Contains(siteOutput, "client-app1-linode\n") {
 		t.Fatalf("site completion missing cached site:\n%s", siteOutput)
+	}
+	if strings.Contains(siteOutput, "--json") || strings.Contains(siteOutput, "app1-linode.nonfiction.dev") {
+		t.Fatalf("site completion included flags or aliases:\n%s", siteOutput)
 	}
 }
 

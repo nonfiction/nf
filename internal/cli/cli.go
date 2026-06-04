@@ -6684,7 +6684,7 @@ func targetCompletionCandidates(args []string) []string {
 	case "show":
 		return cachedTargetCompletionNames()
 	case "remove":
-		return append(cachedTargetCompletionNames(), "--dry-run", "--execute", "--yes", "--non-interactive")
+		return cachedTargetCompletionNames()
 	default:
 		return nil
 	}
@@ -6700,11 +6700,11 @@ func siteCompletionCandidates(args []string) []string {
 	}
 	switch args[0] {
 	case "show":
-		return append(cachedSiteCompletionNames(), "--json")
+		return cachedSiteCompletionNames()
 	case "password":
 		return cachedSiteCompletionNames()
 	case "remove":
-		return append(cachedSiteCompletionNames(), "--dry-run", "--execute", "--yes", "--non-interactive")
+		return cachedSiteCompletionNames()
 	case "add":
 		if len(args) == 1 {
 			return cachedTargetCompletionNames()
@@ -6726,11 +6726,11 @@ func siteEnvCompletionCandidates(args []string) []string {
 	case "list":
 		return sites
 	case "show":
-		return append(sites, "--live", "--staging", "--json")
+		return sites
 	case "shell":
-		return append(sites, "--live", "--staging")
+		return sites
 	case "wp":
-		return append(sites, "--live", "--staging")
+		return sites
 	default:
 		return nil
 	}
@@ -6793,15 +6793,26 @@ func themeCompletionCandidates(args []string) []string {
 }
 
 func cachedTargetCompletionNames() []string {
-	targets, err := cachedTargets()
+	targets, err := completionCachedTargets()
 	if err != nil {
 		return nil
 	}
-	values := make([]string, 0, len(targets)*3)
+	values := make([]string, 0, len(targets))
 	for _, target := range targets {
-		values = append(values, recordStringValues(target, "name", "id", "_state_key", "hostname", "label")...)
+		values = append(values, firstRecordString(target, "_state_key", "target_name", "target", "name", "slug", "hostname", "label", "id"))
 	}
 	return uniqueSortedStrings(values)
+}
+
+func completionCachedTargets() ([]map[string]any, error) {
+	providers, err := state.LoadStateRecords("providers")
+	if err != nil {
+		return nil, err
+	}
+	if len(providers) > 0 {
+		return providerTargetRecords(providers), nil
+	}
+	return state.LoadStateRecords("servers")
 }
 
 func cachedSiteCompletionNames() []string {
@@ -6809,9 +6820,9 @@ func cachedSiteCompletionNames() []string {
 	if err != nil {
 		return nil
 	}
-	values := make([]string, 0, len(sites)*3)
+	values := make([]string, 0, len(sites))
 	for _, site := range sites {
-		values = append(values, siteRecordID(site), siteRecordName(site), firstRecordString(site, "_state_key", "hostname"))
+		values = append(values, siteRecordID(site))
 	}
 	return uniqueSortedStrings(values)
 }
