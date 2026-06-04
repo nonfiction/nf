@@ -2488,7 +2488,7 @@ func siteKinstaID(site map[string]any, key string) string {
 	if value := mapStringAtPath(site, "kinsta", key); value != "" {
 		return value
 	}
-	return firstRecordString(site, "kinsta_"+key, key)
+	return firstRecordString(site, "kinsta_"+key)
 }
 
 func sitePHPVersion(site map[string]any) string {
@@ -2521,7 +2521,49 @@ func siteCanonicalID(name, target string) string {
 	if name == "" || target == "" {
 		return name
 	}
-	return name + "-" + target
+	return name + "." + target
+}
+
+func canonicalEnvID(siteID, env string) string {
+	siteID = strings.TrimSpace(siteID)
+	env = strings.TrimSpace(env)
+	if siteID == "" || env == "" {
+		return siteID
+	}
+	return siteID + ":" + env
+}
+
+func splitSiteEnvRef(ref string) (siteID, env string, ok bool) {
+	left, right, found := strings.Cut(strings.TrimSpace(ref), ":")
+	if !found || strings.TrimSpace(left) == "" || strings.TrimSpace(right) == "" {
+		return "", "", false
+	}
+	return strings.TrimSpace(left), strings.TrimSpace(right), true
+}
+
+func envIDFileSlug(envID string) string {
+	if siteID, env, ok := splitSiteEnvRef(envID); ok {
+		return siteID + "." + env
+	}
+	return strings.TrimSpace(envID)
+}
+
+func normalizeSiteEnvRequest(siteID, env string) (string, string) {
+	if parsedSiteID, parsedEnv, ok := splitSiteEnvRef(siteID); ok {
+		return parsedSiteID, parsedEnv
+	}
+	env = strings.TrimSpace(env)
+	if env == "" {
+		env = "live"
+	}
+	return strings.TrimSpace(siteID), env
+}
+
+func siteRecordEnvID(site map[string]any) string {
+	if envID := firstRecordString(site, "env_id"); envID != "" {
+		return envID
+	}
+	return canonicalEnvID(siteRecordID(site), siteEnvName(site))
 }
 
 func siteRecordID(site map[string]any) string {
@@ -2535,11 +2577,14 @@ func siteRecordID(site map[string]any) string {
 }
 
 func siteEnvMatchesSite(site map[string]any, siteID string) bool {
+	if parsedSiteID, _, ok := splitSiteEnvRef(siteID); ok {
+		siteID = parsedSiteID
+	}
 	needle := normalizedRecordString(siteID)
 	if needle == "" {
 		return true
 	}
-	for _, candidate := range []string{siteRecordID(site), siteEnvSiteID(site), siteTargetName(site), siteSummary(site), firstRecordString(site, "hostname", "url", "site_url", "home_url")} {
+	for _, candidate := range []string{siteRecordID(site), siteEnvSiteID(site), siteRecordName(site), siteRecordEnvID(site), siteTargetName(site), siteSummary(site), firstRecordString(site, "hostname", "url", "site_url", "home_url")} {
 		if normalizedRecordString(candidate) == needle {
 			return true
 		}
@@ -2548,11 +2593,17 @@ func siteEnvMatchesSite(site map[string]any, siteID string) bool {
 }
 
 func siteEnvMatchesEnv(site map[string]any, env string) bool {
+	if _, parsedEnv, ok := splitSiteEnvRef(env); ok {
+		env = parsedEnv
+	}
 	needle := normalizedRecordString(env)
 	if needle == "" {
 		return true
 	}
 	if normalizedRecordString(siteEnvName(site)) == needle {
+		return true
+	}
+	if _, parsedEnv, ok := splitSiteEnvRef(siteRecordEnvID(site)); ok && normalizedRecordString(parsedEnv) == needle {
 		return true
 	}
 	stateKey := normalizedRecordString(siteTargetName(site))
@@ -2615,9 +2666,6 @@ func enrichSiteOutput(out map[string]any, record map[string]any, servers []map[s
 		out["resolved_target_record"] = target
 	}
 	if provider == "kinsta" {
-		if value := siteKinstaID(record, "company_id"); value != "" {
-			out["kinsta_company_id"] = value
-		}
 		if value := siteKinstaID(record, "site_id"); value != "" {
 			out["kinsta_site_id"] = value
 		}
@@ -3094,11 +3142,38 @@ func linodeSiteID(site, targetName string) string {
 }
 
 func linodeEnvID(site, targetName, env string) string {
-	label := site
-	if env == "staging" {
-		label += "-staging"
+	return canonicalEnvID(linodeSiteID(site, targetName), env)
+}
+
+func sshRecord(user, host, port, command string) map[string]any {
+	ssh := map[string]any{}
+	if host != "" {
+		ssh["host"] = host
 	}
-	return label + "." + targetName
+	if port != "" {
+		ssh["port"] = port
+	}
+	if user != "" {
+		ssh["user"] = user
+	}
+	if command != "" {
+		ssh["command"] = command
+	}
+	return ssh
+}
+
+func sshCommand(user, host, port string) string {
+	if host == "" {
+		return ""
+	}
+	destination := host
+	if user != "" {
+		destination = user + "@" + host
+	}
+	if port != "" {
+		return "ssh " + destination + " -p " + port
+	}
+	return "ssh " + destination
 }
 
 func siteEnvTitle(site, env string) string {
@@ -3267,24 +3342,22 @@ func buildKinstaSiteAddPlan(args siteAddArgs) (kinstaSiteAddPlan, error) {
 }
 
 func siteAddRecord(plan siteAddPlan, env siteEnvPlan) map[string]any {
-	envID := linodeEnvID(plan.Site, plan.TargetName, env.Env)
+	envID := canonicalEnvID(plan.SiteID, env.Env)
+	sshPort := firstNonEmpty(mapStringAtPath(plan.Target, "ssh", "port"), firstRecordString(plan.Target, "ssh_port"), "22")
 	return map[string]any{
-		"provider":        "linode",
-		"env_id":          envID,
-		"site_id":         plan.SiteID,
-		"name":            plan.Site,
-		"env":             env.Env,
-		"environment":     env.Env,
-		"target":          plan.TargetName,
-		"server":          plan.TargetName,
-		"server_name":     plan.TargetName,
-		"server_hostname": firstRecordString(plan.Target, "hostname"),
-		"hostname":        env.Hostname,
-		"url":             env.URL,
-		"path":            env.Path,
-		"database":        env.Database,
-		"php_version":     plan.PHPVersion,
-		"status":          "active",
+		"provider":    "linode",
+		"env_id":      envID,
+		"site_id":     plan.SiteID,
+		"name":        plan.Site,
+		"env":         env.Env,
+		"target":      plan.TargetName,
+		"hostname":    env.Hostname,
+		"url":         env.URL,
+		"path":        env.Path,
+		"database":    env.Database,
+		"php_version": plan.PHPVersion,
+		"status":      "active",
+		"ssh":         sshRecord(plan.SSHUser, plan.SSHHost, sshPort, sshCommand(plan.SSHUser, plan.SSHHost, sshPort)),
 	}
 }
 
@@ -3309,42 +3382,25 @@ func appendSiteAddRecords(plan siteAddPlan) error {
 }
 
 func kinstaSiteAddRecord(plan kinstaSiteAddPlan, env kinstaSiteAddEnvPlan, result kinstaProvisionResult) map[string]any {
-	companyID := firstNonEmpty(result.CompanyID, plan.CompanyID)
 	return map[string]any{
 		"provider":    "kinsta",
-		"env_id":      env.EnvID,
+		"env_id":      canonicalEnvID(plan.SiteID, env.Env),
 		"site_id":     plan.SiteID,
 		"name":        plan.Site,
 		"env":         env.Env,
-		"environment": env.Env,
 		"target":      plan.TargetName,
 		"hostname":    env.Domain,
 		"url":         env.URL,
 		"path":        env.Path,
 		"database":    env.Database,
-		"branch":      env.Branch,
 		"php_version": plan.PHPVersion,
 		"status":      "active",
-		"ssh": map[string]any{
-			"host":    env.SSHHost,
-			"port":    env.SSHPort,
-			"user":    env.SSHUser,
-			"command": env.SSHCmd,
-		},
+		"ssh":         sshRecord(env.SSHUser, env.SSHHost, env.SSHPort, env.SSHCmd),
 		"kinsta": map[string]any{
-			"company_id":     companyID,
 			"site_id":        result.SiteID,
 			"environment_id": env.EnvID,
 			"domain_id":      env.DomainID,
-			"php_version":    plan.PHPVersion,
-			"path":           env.Path,
-			"database":       env.Database,
-			"ssh": map[string]any{
-				"host":    env.SSHHost,
-				"port":    env.SSHPort,
-				"user":    env.SSHUser,
-				"command": env.SSHCmd,
-			},
+			"branch":         env.Branch,
 		},
 	}
 }
@@ -3853,7 +3909,7 @@ func renderSiteAddScript(plan siteAddPlan) string {
 	b.WriteString(q(phpVersion))
 	b.WriteString("; fi\n")
 	b.WriteString("create_env() {\n")
-	b.WriteString("  env_name=$1 site_path=$2 db_name=$3 host_name=$4 site_url=$5 site_title=$6 state_target=$7\n")
+	b.WriteString("  env_name=$1 site_path=$2 db_name=$3 host_name=$4 site_url=$5 site_title=$6 state_target=$7 file_slug=$8\n")
 	b.WriteString("  install -d -o www-data -g www-data -m 2775 \"$site_path\"\n")
 	b.WriteString("  mariadb -uroot <<SQL\n")
 	b.WriteString("CREATE DATABASE IF NOT EXISTS \\`$db_name\\` CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;\n")
@@ -3879,11 +3935,11 @@ func renderSiteAddScript(plan siteAddPlan) string {
 	b.WriteString(q(plan.AdminEmail))
 	b.WriteString(" --skip-email --allow-root\n")
 	b.WriteString("  fi\n")
-	b.WriteString("  cat >/etc/nginx/sites-available/nf-site-$state_target <<EOF\n")
+	b.WriteString("  cat >/etc/nginx/sites-available/nf-site-$file_slug <<EOF\n")
 	b.WriteString("server {\n    listen 80;\n    listen [::]:80;\n    server_name $host_name;\n    return 301 https://$host_name\\$request_uri;\n}\n\n")
-	b.WriteString("server {\n    listen 443 ssl http2;\n    listen [::]:443 ssl http2;\n    server_name $host_name;\n    include /etc/nginx/snippets/nf-wildcard-cert.conf;\n    include /etc/nginx/snippets/nf-security-headers.conf;\n    root $site_path;\n    access_log /var/log/nginx/sites/$state_target.access.log;\n    error_log /var/log/nginx/sites/$state_target.error.log;\n    include /etc/nginx/snippets/nf-wordpress.conf;\n    include /etc/nginx/snippets/nf-static-assets.conf;\n    location ~ \\.php$ { include /etc/nginx/snippets/nf-fastcgi-php.conf; fastcgi_pass unix:/run/php/php${target_php_version}-fpm.sock; }\n}\n")
+	b.WriteString("server {\n    listen 443 ssl http2;\n    listen [::]:443 ssl http2;\n    server_name $host_name;\n    include /etc/nginx/snippets/nf-wildcard-cert.conf;\n    include /etc/nginx/snippets/nf-security-headers.conf;\n    root $site_path;\n    access_log /var/log/nginx/sites/$file_slug.access.log;\n    error_log /var/log/nginx/sites/$file_slug.error.log;\n    include /etc/nginx/snippets/nf-wordpress.conf;\n    include /etc/nginx/snippets/nf-static-assets.conf;\n    location ~ \\.php$ { include /etc/nginx/snippets/nf-fastcgi-php.conf; fastcgi_pass unix:/run/php/php${target_php_version}-fpm.sock; }\n}\n")
 	b.WriteString("EOF\n")
-	b.WriteString("  ln -sf /etc/nginx/sites-available/nf-site-$state_target /etc/nginx/sites-enabled/nf-site-$state_target\n")
+	b.WriteString("  ln -sf /etc/nginx/sites-available/nf-site-$file_slug /etc/nginx/sites-enabled/nf-site-$file_slug\n")
 	b.WriteString("  tmp=$(mktemp)\n")
 	b.WriteString("  jq --arg provider linode --arg site_id ")
 	b.WriteString(q(plan.SiteID))
@@ -3891,12 +3947,14 @@ func renderSiteAddScript(plan siteAddPlan) string {
 	b.WriteString(q(plan.Site))
 	b.WriteString(" --arg env_id \"$state_target\" --arg env \"$env_name\" --arg target ")
 	b.WriteString(q(plan.TargetName))
-	b.WriteString(" --arg server ")
-	b.WriteString(q(plan.TargetName))
-	b.WriteString(" --arg server_hostname ")
-	b.WriteString(q(firstRecordString(plan.Target, "hostname")))
+	b.WriteString(" --arg ssh_user ")
+	b.WriteString(q(plan.SSHUser))
+	b.WriteString(" --arg ssh_host ")
+	b.WriteString(q(plan.SSHHost))
+	b.WriteString(" --arg ssh_port ")
+	b.WriteString(q(firstNonEmpty(mapStringAtPath(plan.Target, "ssh", "port"), firstRecordString(plan.Target, "ssh_port"), "22")))
 	b.WriteString(" --arg hostname \"$host_name\" --arg url \"$site_url\" --arg path \"$site_path\" --arg database \"$db_name\" --arg php_version \"$target_php_version\" '\n")
-	b.WriteString("    map(select(.site_id != $site_id or .env != $env)) + [{provider:$provider,env_id:$env_id,site_id:$site_id,name:$name,env:$env,environment:$env,target:$target,server:$server,server_name:$server,server_hostname:$server_hostname,hostname:$hostname,url:$url,path:$path,database:$database,php_version:$php_version,status:\"active\"}]\n")
+	b.WriteString("    map(select(.site_id != $site_id or .env != $env)) + [{provider:$provider,env_id:$env_id,site_id:$site_id,name:$name,env:$env,target:$target,hostname:$hostname,url:$url,path:$path,database:$database,php_version:$php_version,status:\"active\",ssh:{host:$ssh_host,port:$ssh_port,user:$ssh_user,command:(\"ssh \" + $ssh_user + \"@\" + $ssh_host + \" -p \" + $ssh_port)}}]\n")
 	b.WriteString("  ' /var/lib/nf/sites.json >\"$tmp\" && install -o ")
 	b.WriteString(q(plan.SSHUser))
 	b.WriteString(" -g www-data -m 0664 \"$tmp\" /var/lib/nf/sites.json && rm -f \"$tmp\"\n")
@@ -3917,6 +3975,8 @@ func renderSiteAddScript(plan siteAddPlan) string {
 		b.WriteString(q(env.Title))
 		b.WriteByte(' ')
 		b.WriteString(q(stateTarget))
+		b.WriteByte(' ')
+		b.WriteString(q(envIDFileSlug(stateTarget)))
 		b.WriteByte('\n')
 	}
 	b.WriteString("nginx -t\n")
@@ -4319,9 +4379,13 @@ func renderSiteRemoveScript(plan siteRemovePlan) string {
 	var b strings.Builder
 	b.WriteString("set -euo pipefail\n")
 	b.WriteString("remove_env() {\n")
-	b.WriteString("  env_id=$1 site_path=$2 db_name=$3\n")
-	b.WriteString("  rm -f /etc/nginx/sites-enabled/nf-site-$env_id /etc/nginx/sites-available/nf-site-$env_id\n")
-	b.WriteString("  rm -f /var/log/nginx/sites/$env_id.access.log /var/log/nginx/sites/$env_id.error.log\n")
+	b.WriteString("  env_id=$1 file_slug=$2 site_path=$3 db_name=$4\n")
+	b.WriteString("  rm -f /etc/nginx/sites-enabled/nf-site-$file_slug /etc/nginx/sites-available/nf-site-$file_slug\n")
+	b.WriteString("  rm -f /var/log/nginx/sites/$file_slug.access.log /var/log/nginx/sites/$file_slug.error.log\n")
+	b.WriteString("  if [ \"$file_slug\" != \"$env_id\" ]; then\n")
+	b.WriteString("    rm -f /etc/nginx/sites-enabled/nf-site-$env_id /etc/nginx/sites-available/nf-site-$env_id\n")
+	b.WriteString("    rm -f /var/log/nginx/sites/$env_id.access.log /var/log/nginx/sites/$env_id.error.log\n")
+	b.WriteString("  fi\n")
 	b.WriteString("  rm -rf -- \"$site_path\"\n")
 	b.WriteString("  parent=$(dirname \"$site_path\")\n")
 	b.WriteString("  if [ \"$parent\" != /var/www/sites ]; then rmdir --ignore-fail-on-non-empty -- \"$parent\" 2>/dev/null || true; fi\n")
@@ -4334,6 +4398,8 @@ func renderSiteRemoveScript(plan siteRemovePlan) string {
 	for _, env := range plan.Envs {
 		b.WriteString("remove_env ")
 		b.WriteString(q(env.EnvID))
+		b.WriteByte(' ')
+		b.WriteString(q(envIDFileSlug(env.EnvID)))
 		b.WriteByte(' ')
 		b.WriteString(q(env.Path))
 		b.WriteByte(' ')
@@ -4579,8 +4645,7 @@ func cmdListSiteEnvs(siteID string) int {
 }
 
 func cmdShowSiteEnv(siteID, env string, jsonOutput bool) int {
-	siteID = strings.TrimSpace(siteID)
-	env = strings.TrimSpace(env)
+	siteID, env = normalizeSiteEnvRequest(siteID, env)
 	if siteID == "" || env == "" {
 		fmt.Fprintln(os.Stderr, "site env show requires site-id and env")
 		return 1
@@ -4666,7 +4731,7 @@ func printSiteEnvDetails(out map[string]any) {
 		{label: "Target", value: recordValueString(out["resolved_target"])},
 		{label: "URL", value: firstRecordString(out, "url", "site_url", "home_url")},
 		{label: "Path", value: firstRecordString(out, "path", "root", "document_root")},
-		{label: "Branch", value: firstRecordString(out, "branch")},
+		{label: "Branch", value: firstNonEmpty(firstRecordString(out, "branch"), mapStringAtPath(out, "kinsta", "branch"))},
 		{label: "PHP", value: firstRecordString(out, "php_version")},
 		{label: "Database", value: firstRecordString(out, "database", "db_name")},
 	})
@@ -4860,6 +4925,7 @@ func sitePasswordSlug(record map[string]any) string {
 }
 
 func cachedSiteEnv(siteID, env string) (map[string]any, []map[string]any, error) {
+	siteID, env = normalizeSiteEnvRequest(siteID, env)
 	bundle, err := state.LoadStateBundle()
 	if err != nil {
 		return nil, nil, err
@@ -5040,15 +5106,12 @@ func linodeThemeDeploySSHInfo(record map[string]any) (user, host, port, wpPath s
 	if err != nil {
 		return "", "", "", "", err
 	}
-	user = firstNonEmpty(serverSSHUser(target), values["linode_default_user"])
+	user = firstNonEmpty(mapStringAtPath(record, "ssh", "user"), firstRecordString(record, "ssh_user", "ssh_username"), serverSSHUser(target), values["linode_default_user"])
 	if user == "" {
 		return "", "", "", "", ProjectError{Msg: fmt.Sprintf("Target %q is missing an SSH user. Set linode_default_user with nf config set-linode-default-user <user>.", targetRef)}
 	}
-	host = firstRecordString(record, "hostname")
-	if host == "" {
-		host = serverSSHHost(target)
-	}
-	port = firstNonEmpty(mapStringAtPath(target, "ssh", "port"), firstRecordString(target, "ssh_port"), "22")
+	host = firstNonEmpty(mapStringAtPath(record, "ssh", "host"), firstRecordString(record, "ssh_host"), serverSSHHost(target), firstRecordString(record, "hostname"))
+	port = firstNonEmpty(mapStringAtPath(record, "ssh", "port"), firstRecordString(record, "ssh_port"), mapStringAtPath(target, "ssh", "port"), firstRecordString(target, "ssh_port"), "22")
 	wpPath = firstRecordString(record, "path")
 	return user, host, port, wpPath, nil
 }
@@ -5124,7 +5187,7 @@ func resolveEnvRemoteSyncTarget(action, remoteName string, metadata map[string]a
 			return envRemoteSyncTarget{}, ProjectError{Msg: fmt.Sprintf("Linode site %q references target %q, but no cached target matched. Run nf provider check linode.", siteSummary(record), target.TargetRef)}
 		}
 		target.AccessSummary = serverSummary(resolved)
-		target.SSHUser = serverSSHUser(resolved)
+		target.SSHUser = firstNonEmpty(mapStringAtPath(record, "ssh", "user"), firstRecordString(record, "ssh_user", "ssh_username"), serverSSHUser(resolved))
 		if target.SSHUser == "" {
 			values, err := loadGlobalConfig()
 			if err != nil {
@@ -5135,11 +5198,11 @@ func resolveEnvRemoteSyncTarget(action, remoteName string, metadata map[string]a
 		if target.SSHUser == "" {
 			return envRemoteSyncTarget{}, ProjectError{Msg: fmt.Sprintf("Target %q is missing an SSH user. Set linode_default_user with nf config set-linode-default-user <user>.", target.TargetRef)}
 		}
-		target.SSHHost = firstNonEmpty(firstRecordString(record, "hostname"), serverSSHHost(resolved))
+		target.SSHHost = firstNonEmpty(mapStringAtPath(record, "ssh", "host"), firstRecordString(record, "ssh_host"), serverSSHHost(resolved), firstRecordString(record, "hostname"))
 		if target.SSHHost == "" {
 			return envRemoteSyncTarget{}, ProjectError{Msg: fmt.Sprintf("Site env %q is missing hostname.", siteSummary(record))}
 		}
-		target.SSHPort = firstNonEmpty(mapStringAtPath(resolved, "ssh", "port"), firstRecordString(resolved, "ssh_port"), "22")
+		target.SSHPort = firstNonEmpty(mapStringAtPath(record, "ssh", "port"), firstRecordString(record, "ssh_port"), mapStringAtPath(resolved, "ssh", "port"), firstRecordString(resolved, "ssh_port"), "22")
 		target.WordPressPath = firstRecordString(record, "path")
 		if target.WordPressPath == "" {
 			return envRemoteSyncTarget{}, ProjectError{Msg: fmt.Sprintf("Site env %q is missing path.", siteSummary(record))}
@@ -5365,8 +5428,7 @@ func executeEnvPush(cfg envConfig, target envRemoteSyncTarget) int {
 }
 
 func cmdSiteEnvRemoteCommandPlan(action, siteID, env string, args []string) int {
-	siteID = strings.TrimSpace(siteID)
-	env = strings.TrimSpace(env)
+	siteID, env = normalizeSiteEnvRequest(siteID, env)
 	if siteID == "" || env == "" {
 		fmt.Fprintf(os.Stderr, "site env %s requires site-id and env\n", action)
 		return 1
@@ -5482,18 +5544,15 @@ func linodeSiteEnvSSHArgs(record map[string]any, action string, wpArgs []string)
 	if err != nil {
 		return nil, err
 	}
-	user := firstNonEmpty(serverSSHUser(target), values["linode_default_user"])
+	user := firstNonEmpty(mapStringAtPath(record, "ssh", "user"), firstRecordString(record, "ssh_user", "ssh_username"), serverSSHUser(target), values["linode_default_user"])
 	if user == "" {
 		return nil, ProjectError{Msg: fmt.Sprintf("Target %q is missing an SSH user. Set linode_default_user with nf config set-linode-default-user <user>.", targetRef)}
 	}
-	host := firstRecordString(record, "hostname")
-	if host == "" {
-		host = serverSSHHost(target)
-	}
+	host := firstNonEmpty(mapStringAtPath(record, "ssh", "host"), firstRecordString(record, "ssh_host"), serverSSHHost(target), firstRecordString(record, "hostname"))
 	if host == "" {
 		return nil, ProjectError{Msg: fmt.Sprintf("Site env %q is missing hostname.", siteSummary(record))}
 	}
-	port := firstNonEmpty(mapStringAtPath(target, "ssh", "port"), firstRecordString(target, "ssh_port"), "22")
+	port := firstNonEmpty(mapStringAtPath(record, "ssh", "port"), firstRecordString(record, "ssh_port"), mapStringAtPath(target, "ssh", "port"), firstRecordString(target, "ssh_port"), "22")
 	destination := user + "@" + host
 	path := firstRecordString(record, "path")
 	if path == "" {
@@ -5836,39 +5895,23 @@ func discoverKinstaTargetSites(target map[string]any) ([]map[string]any, error) 
 			domainValue := domainName(domain)
 			records = append(records, map[string]any{
 				"provider":    "kinsta",
-				"env_id":      env.ID,
+				"env_id":      canonicalEnvID(siteID, envName),
 				"site_id":     siteID,
 				"name":        siteName,
 				"env":         envName,
-				"environment": envName,
 				"target":      targetName,
 				"hostname":    domainValue,
 				"url":         kinstaURL(domainValue),
 				"path":        pathValue,
 				"database":    database,
-				"branch":      kinstaEnvBranch(envName),
 				"php_version": phpVersion,
 				"status":      "active",
-				"ssh": map[string]any{
-					"host":    host,
-					"port":    port,
-					"user":    user,
-					"command": cfg.SSHCommand,
-				},
+				"ssh":         sshRecord(user, host, port, cfg.SSHCommand),
 				"kinsta": map[string]any{
-					"company_id":     companyID,
 					"site_id":        site.ID,
 					"environment_id": env.ID,
 					"domain_id":      domain.ID,
-					"php_version":    phpVersion,
-					"path":           pathValue,
-					"database":       database,
-					"ssh": map[string]any{
-						"host":    host,
-						"port":    port,
-						"user":    user,
-						"command": cfg.SSHCommand,
-					},
+					"branch":         kinstaEnvBranch(envName),
 				},
 			})
 		}
@@ -6026,25 +6069,42 @@ func normalizeRemoteSiteRecord(record, target map[string]any) {
 		if firstRecordString(record, "target", "server", "server_name", "server_id", "server_hostname", "server_label") == "" {
 			record["target"] = targetName
 		}
-		if siteServerReference(record) == "" {
-			record["server"] = targetName
-		}
-		if firstRecordString(record, "server_name") == "" {
-			record["server_name"] = targetName
-		}
-	}
-	if firstRecordString(record, "server_hostname") == "" {
-		if hostname := firstRecordString(target, "hostname", "host"); hostname != "" {
-			record["server_hostname"] = hostname
-		}
 	}
 	if recordValueString(record["provider"]) == "" {
 		record["provider"] = "linode"
+	}
+	if firstRecordString(record, "site_id") == "" {
+		if siteID := siteCanonicalID(siteRecordName(record), siteProviderTarget(record)); siteID != "" {
+			record["site_id"] = siteID
+		}
+	}
+	if envID := canonicalEnvID(siteRecordID(record), siteEnvName(record)); envID != "" {
+		record["env_id"] = envID
 	}
 	if sitePHPVersion(record) == "" {
 		if phpVersion := targetPHPVersion(target); phpVersion != "" {
 			record["php_version"] = phpVersion
 		}
+	}
+	if mapStringAtPath(record, "ssh", "host") == "" {
+		sshHost := serverSSHHost(target)
+		sshUser := serverSSHUser(target)
+		sshPort := firstNonEmpty(mapStringAtPath(target, "ssh", "port"), firstRecordString(target, "ssh_port"), "22")
+		if sshHost != "" || sshUser != "" || sshPort != "" {
+			record["ssh"] = sshRecord(sshUser, sshHost, sshPort, sshCommand(sshUser, sshHost, sshPort))
+		}
+	}
+	if strings.EqualFold(recordValueString(record["provider"]), "linode") {
+		if linode := mapMapAtPath(record, "linode"); linode != nil {
+			delete(linode, "target_hostname")
+			if len(linode) == 0 {
+				delete(record, "linode")
+			}
+		}
+		delete(record, "server")
+		delete(record, "server_name")
+		delete(record, "server_hostname")
+		delete(record, "environment")
 	}
 }
 
@@ -6813,7 +6873,7 @@ func chooseProjectRemote(action string) (string, error) {
 		return "", err
 	}
 	if len(remotes) == 0 {
-		return "", ProjectError{Msg: "No remotes found. Add one with nf remote add <name> <site-id> <env>."}
+		return "", ProjectError{Msg: "No remotes found. Add one with nf remote add <name> <site-id>:<env>."}
 	}
 	names := make([]string, 0, len(remotes))
 	for name := range remotes {
@@ -7053,7 +7113,7 @@ func runRemoteHelp() int {
 	printGroupHelp("remote", []helpLine{
 		{"list, ls", "list repo remotes"},
 		{"show <name>", "show a repo remote"},
-		{"add <name> <site-id> <env>", "add a repo remote"},
+		{"add <name> <site-id>[:env]", "add a repo remote"},
 		{"remove, rm <name>", "remove a repo remote"},
 	})
 	return 0
@@ -8411,10 +8471,9 @@ func cmdConfigShow() int {
 
 func cmdRemoteAdd(name, siteID, env string) int {
 	name = strings.TrimSpace(name)
-	siteID = strings.TrimSpace(siteID)
-	env = strings.TrimSpace(env)
+	siteID, env = normalizeSiteEnvRequest(siteID, env)
 	if name == "" || siteID == "" || env == "" {
-		fmt.Fprintln(os.Stderr, "remote add requires non-empty name, site-id, and env")
+		fmt.Fprintln(os.Stderr, "remote add requires non-empty name and env ref")
 		return 1
 	}
 	root, ok := currentGitRoot()
@@ -8450,7 +8509,7 @@ func cmdRemoteAdd(name, siteID, env string) int {
 		fmt.Fprintln(os.Stderr, err)
 		return 1
 	}
-	fmt.Printf("Added remote %s -> %s %s\n", name, siteID, env)
+	fmt.Printf("Added remote %s -> %s:%s\n", name, siteID, env)
 	return 0
 }
 
@@ -9306,11 +9365,15 @@ func runRemote(argv []string) int {
 	}
 	switch argv[0] {
 	case "add":
-		if len(argv) != 4 {
-			fmt.Fprintln(os.Stderr, "remote add takes exactly name, site-id, and env")
+		if len(argv) != 3 && len(argv) != 4 {
+			fmt.Fprintln(os.Stderr, "remote add takes name and env ref, or name, site-id, and env")
 			return 1
 		}
-		return cmdRemoteAdd(argv[1], argv[2], argv[3])
+		env := ""
+		if len(argv) == 4 {
+			env = argv[3]
+		}
+		return cmdRemoteAdd(argv[1], argv[2], env)
 	case "remove":
 		if len(argv) != 2 {
 			fmt.Fprintln(os.Stderr, "remote remove takes exactly one name")

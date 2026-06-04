@@ -2078,10 +2078,7 @@ func TestRunSiteAddLinodeExecuteRunsSSHAndCachesEnvs(t *testing.T) {
 		if got := recordValueString(record["site_id"]); got != "foobar.app1-linode" {
 			t.Fatalf("%s site_id = %q, want foobar.app1-linode", want.env, got)
 		}
-		wantEnvID := "foobar.app1-linode"
-		if want.env == "staging" {
-			wantEnvID = "foobar-staging.app1-linode"
-		}
+		wantEnvID := "foobar.app1-linode:" + want.env
 		if got := recordValueString(record["env_id"]); got != wantEnvID {
 			t.Fatalf("%s env_id = %q, want %q", want.env, got, wantEnvID)
 		}
@@ -2091,13 +2088,32 @@ func TestRunSiteAddLinodeExecuteRunsSSHAndCachesEnvs(t *testing.T) {
 		if got := recordValueString(record["target_name"]); got != "" {
 			t.Fatalf("%s target_name = %q, want empty", want.env, got)
 		}
+		if got := mapStringAtPath(record, "ssh", "host"); got != "app1-linode.nonfiction.dev" {
+			t.Fatalf("%s ssh.host = %q, want app1-linode.nonfiction.dev", want.env, got)
+		}
+		if got := mapStringAtPath(record, "ssh", "user"); got != "nonfiction" {
+			t.Fatalf("%s ssh.user = %q, want nonfiction", want.env, got)
+		}
+		if _, ok := record["linode"]; ok {
+			t.Fatalf("%s linode should be omitted when empty", want.env)
+		}
+		for _, key := range []string{"environment", "server", "server_name", "server_hostname"} {
+			if _, ok := record[key]; ok {
+				t.Fatalf("%s %s should be omitted from normalized site data", want.env, key)
+			}
+		}
 	}
 	if !strings.Contains(sshScript, "--arg site_id foobar.app1-linode") {
 		t.Fatalf("ssh script missing canonical site id:\n%s", sshScript)
 	}
-	for _, want := range []string{"create_env live /var/www/sites/foobar/public foobar foobar.app1-linode.nonfiction.dev https://foobar.app1-linode.nonfiction.dev Foobar foobar.app1-linode", "create_env staging /var/www/sites/foobar_staging/public foobar_staging foobar-staging.app1-linode.nonfiction.dev https://foobar-staging.app1-linode.nonfiction.dev 'Foobar Staging' foobar-staging.app1-linode"} {
+	for _, want := range []string{"create_env live /var/www/sites/foobar/public foobar foobar.app1-linode.nonfiction.dev https://foobar.app1-linode.nonfiction.dev Foobar foobar.app1-linode:live foobar.app1-linode.live", "create_env staging /var/www/sites/foobar_staging/public foobar_staging foobar-staging.app1-linode.nonfiction.dev https://foobar-staging.app1-linode.nonfiction.dev 'Foobar Staging' foobar.app1-linode:staging foobar.app1-linode.staging"} {
 		if !strings.Contains(sshScript, want) {
 			t.Fatalf("ssh script missing env id command %q:\n%s", want, sshScript)
+		}
+	}
+	for _, want := range []string{"nf-site-$file_slug", "$file_slug.access.log", "$file_slug.error.log"} {
+		if !strings.Contains(sshScript, want) {
+			t.Fatalf("ssh script missing file slug usage %q:\n%s", want, sshScript)
 		}
 	}
 	listOutput := captureStdout(t, func() {
@@ -2130,7 +2146,7 @@ func TestRunSiteAddLinodeExecuteRunsSSHAndCachesEnvs(t *testing.T) {
 			t.Fatalf("Run(site show --json) = %d, want 0", got)
 		}
 	})
-	for _, want := range []string{`"site_id": "foobar.app1-linode"`, `"env_id": "foobar.app1-linode"`, `"env_id": "foobar-staging.app1-linode"`, `"name": "foobar"`, `"target": "app1-linode"`, `"envs":`, `"env": "live"`, `"env": "staging"`} {
+	for _, want := range []string{`"site_id": "foobar.app1-linode"`, `"env_id": "foobar.app1-linode:live"`, `"env_id": "foobar.app1-linode:staging"`, `"name": "foobar"`, `"target": "app1-linode"`, `"envs":`, `"env": "live"`, `"env": "staging"`} {
 		if !strings.Contains(jsonOutput, want) {
 			t.Fatalf("site show --json output missing %q:\n%s", want, jsonOutput)
 		}
@@ -2229,14 +2245,20 @@ func TestRunSiteAddKinstaExecuteCachesEnvs(t *testing.T) {
 		if got := recordValueString(record["site_id"]); got != "sanjel.kinsta" {
 			t.Fatalf("%s site_id = %q, want sanjel.kinsta", want.env, got)
 		}
+		if got := recordValueString(record["env_id"]); got != "sanjel.kinsta:"+want.env {
+			t.Fatalf("%s env_id = %q, want sanjel.kinsta:%s", want.env, got, want.env)
+		}
 		if got := recordValueString(record["target"]); got != "kinsta" {
 			t.Fatalf("%s target = %q, want kinsta", want.env, got)
 		}
 		if got := recordValueString(record["hostname"]); got != want.domain {
 			t.Fatalf("%s hostname = %q, want %q", want.env, got, want.domain)
 		}
-		if got := recordValueString(record["branch"]); got != want.branch {
-			t.Fatalf("%s branch = %q, want %q", want.env, got, want.branch)
+		if got := mapStringAtPath(record, "kinsta", "branch"); got != want.branch {
+			t.Fatalf("%s kinsta.branch = %q, want %q", want.env, got, want.branch)
+		}
+		if _, ok := record["branch"]; ok {
+			t.Fatalf("%s branch should be omitted from top-level normalized site data", want.env)
 		}
 		if got := recordValueString(record["php_version"]); got != "8.2" {
 			t.Fatalf("%s php_version = %q, want 8.2", want.env, got)
@@ -2265,8 +2287,10 @@ func TestRunSiteAddKinstaExecuteCachesEnvs(t *testing.T) {
 		if got := mapStringAtPath(record, "kinsta", "domain_id"); got != want.domainID {
 			t.Fatalf("%s kinsta domain_id = %q, want %q", want.env, got, want.domainID)
 		}
-		if got := mapStringAtPath(record, "kinsta", "php_version"); got != "8.2" {
-			t.Fatalf("%s kinsta php_version = %q, want 8.2", want.env, got)
+		for _, key := range []string{"company_id", "php_version", "path", "database", "ssh"} {
+			if _, ok := mapMapAtPath(record, "kinsta")[key]; ok {
+				t.Fatalf("%s kinsta.%s should be omitted from normalized provider data", want.env, key)
+			}
 		}
 	}
 	showOutput := captureStdout(t, func() {
@@ -2485,8 +2509,8 @@ func TestRunSiteRemoveLinodeDryRunPlansEnvDeletion(t *testing.T) {
 		t.Fatalf("SaveStateRecords(providers) error = %v", err)
 	}
 	if err := state.SaveStateRecords("sites", []map[string]any{
-		{"provider": "linode", "site_id": "foobar.app1-linode", "env_id": "foobar.app1-linode", "name": "foobar", "env": "live", "target": "app1-linode", "path": "/var/www/sites/foobar/public", "database": "foobar", "hostname": "foobar.app1-linode.nonfiction.dev"},
-		{"provider": "linode", "site_id": "foobar.app1-linode", "env_id": "foobar-staging.app1-linode", "name": "foobar", "env": "staging", "target": "app1-linode", "path": "/var/www/sites/foobar_staging/public", "database": "foobar_staging", "hostname": "foobar-staging.app1-linode.nonfiction.dev"},
+		{"provider": "linode", "site_id": "foobar.app1-linode", "env_id": "foobar.app1-linode:live", "name": "foobar", "env": "live", "target": "app1-linode", "path": "/var/www/sites/foobar/public", "database": "foobar", "hostname": "foobar.app1-linode.nonfiction.dev"},
+		{"provider": "linode", "site_id": "foobar.app1-linode", "env_id": "foobar.app1-linode:staging", "name": "foobar", "env": "staging", "target": "app1-linode", "path": "/var/www/sites/foobar_staging/public", "database": "foobar_staging", "hostname": "foobar-staging.app1-linode.nonfiction.dev"},
 	}); err != nil {
 		t.Fatalf("SaveStateRecords(sites) error = %v", err)
 	}
@@ -2502,7 +2526,7 @@ func TestRunSiteRemoveLinodeDryRunPlansEnvDeletion(t *testing.T) {
 			t.Fatalf("Run(site remove dry-run) = %d, want 0", got)
 		}
 	})
-	for _, want := range []string{"Remove site plan:", "site id: foobar.app1-linode", "target: app1-linode", "dns actions: none", "env live:", "env id: foobar.app1-linode", "delete path: /var/www/sites/foobar/public", "drop database: foobar", "env staging:", "env id: foobar-staging.app1-linode", "delete path: /var/www/sites/foobar_staging/public", "drop database: foobar_staging", "mode: dry-run"} {
+	for _, want := range []string{"Remove site plan:", "site id: foobar.app1-linode", "target: app1-linode", "dns actions: none", "env live:", "env id: foobar.app1-linode:live", "delete path: /var/www/sites/foobar/public", "drop database: foobar", "env staging:", "env id: foobar.app1-linode:staging", "delete path: /var/www/sites/foobar_staging/public", "drop database: foobar_staging", "mode: dry-run"} {
 		if !strings.Contains(output, want) {
 			t.Fatalf("site remove dry-run output missing %q:\n%s", want, output)
 		}
@@ -2554,8 +2578,8 @@ func TestRunSiteRemoveLinodeExecuteRunsSSHAndRemovesCache(t *testing.T) {
 		t.Fatalf("SaveStateRecords(providers) error = %v", err)
 	}
 	if err := state.SaveStateRecords("sites", []map[string]any{
-		{"provider": "linode", "site_id": "foobar.app1-linode", "env_id": "foobar.app1-linode", "name": "foobar", "env": "live", "target": "app1-linode", "path": "/var/www/sites/foobar/public", "database": "foobar", "hostname": "foobar.app1-linode.nonfiction.dev"},
-		{"provider": "linode", "site_id": "foobar.app1-linode", "env_id": "foobar-staging.app1-linode", "name": "foobar", "env": "staging", "target": "app1-linode", "path": "/var/www/sites/foobar_staging/public", "database": "foobar_staging", "hostname": "foobar-staging.app1-linode.nonfiction.dev"},
+		{"provider": "linode", "site_id": "foobar.app1-linode", "env_id": "foobar.app1-linode:live", "name": "foobar", "env": "live", "target": "app1-linode", "path": "/var/www/sites/foobar/public", "database": "foobar", "hostname": "foobar.app1-linode.nonfiction.dev"},
+		{"provider": "linode", "site_id": "foobar.app1-linode", "env_id": "foobar.app1-linode:staging", "name": "foobar", "env": "staging", "target": "app1-linode", "path": "/var/www/sites/foobar_staging/public", "database": "foobar_staging", "hostname": "foobar-staging.app1-linode.nonfiction.dev"},
 		{"provider": "linode", "site_id": "other.app1-linode", "env_id": "other.app1-linode", "name": "other", "env": "live", "target": "app1-linode", "path": "/var/www/sites/other/public", "database": "other"},
 	}); err != nil {
 		t.Fatalf("SaveStateRecords(sites) error = %v", err)
@@ -2579,7 +2603,7 @@ func TestRunSiteRemoveLinodeExecuteRunsSSHAndRemovesCache(t *testing.T) {
 	if sshUser != "nonfiction" || sshHost != "app1-linode.nonfiction.dev" {
 		t.Fatalf("ssh target = %s@%s, want nonfiction@app1-linode.nonfiction.dev", sshUser, sshHost)
 	}
-	for _, want := range []string{"rm -rf -- \"$site_path\"", "DROP DATABASE IF EXISTS \\`$db_name\\`;", "DROP USER IF EXISTS '$db_name'@'localhost';", "remove_env foobar.app1-linode /var/www/sites/foobar/public foobar", "remove_env foobar-staging.app1-linode /var/www/sites/foobar_staging/public foobar_staging", "jq --arg site_id foobar.app1-linode", "nginx -t", "systemctl reload nginx"} {
+	for _, want := range []string{"rm -rf -- \"$site_path\"", "DROP DATABASE IF EXISTS \\`$db_name\\`;", "DROP USER IF EXISTS '$db_name'@'localhost';", "remove_env foobar.app1-linode:live foobar.app1-linode.live /var/www/sites/foobar/public foobar", "remove_env foobar.app1-linode:staging foobar.app1-linode.staging /var/www/sites/foobar_staging/public foobar_staging", "nf-site-$file_slug", "nf-site-$env_id", "$file_slug.access.log", "$env_id.access.log", "jq --arg site_id foobar.app1-linode", "nginx -t", "systemctl reload nginx"} {
 		if !strings.Contains(sshScript, want) {
 			t.Fatalf("ssh script missing %q:\n%s", want, sshScript)
 		}
@@ -2783,8 +2807,8 @@ func TestRunSiteEnvListAndShowUseCachedSites(t *testing.T) {
 	stateDir := t.TempDir()
 	t.Setenv("NF_STATE_HOME", stateDir)
 	sites := map[string]any{"sites": map[string]any{
-		"live-client-kinsta":    map[string]any{"provider": "kinsta", "site_id": "client-kinsta", "env": "live", "url": "https://www.example.com/", "branch": "main", "php_version": "8.3", "kinsta": map[string]any{"site_id": "ksite123", "environment_id": "kenv-live", "php_version": "8.3"}},
-		"staging-client-kinsta": map[string]any{"provider": "kinsta", "site_id": "client-kinsta", "env": "staging", "url": "https://staging.example.com/", "branch": "develop", "php_version": "8.3", "ssh": map[string]any{"host": "203.0.113.11", "port": "12346", "user": "clientstaging", "command": "ssh clientstaging@203.0.113.11 -p 12346"}, "kinsta": map[string]any{"site_id": "ksite123", "environment_id": "kenv-staging", "php_version": "8.3"}},
+		"live-client-kinsta":    map[string]any{"provider": "kinsta", "site_id": "client-kinsta", "env": "live", "url": "https://www.example.com/", "php_version": "8.3", "kinsta": map[string]any{"site_id": "ksite123", "environment_id": "kenv-live", "branch": "main"}},
+		"staging-client-kinsta": map[string]any{"provider": "kinsta", "site_id": "client-kinsta", "env": "staging", "url": "https://staging.example.com/", "php_version": "8.3", "ssh": map[string]any{"host": "203.0.113.11", "port": "12346", "user": "clientstaging", "command": "ssh clientstaging@203.0.113.11 -p 12346"}, "kinsta": map[string]any{"site_id": "ksite123", "environment_id": "kenv-staging", "branch": "develop"}},
 	}}
 	data, err := json.MarshalIndent(sites, "", "  ")
 	if err != nil {
@@ -3143,8 +3167,8 @@ func TestRunSiteEnvShellAndWpRunSSHForLinode(t *testing.T) {
 		t.Fatalf("SaveStateRecords(providers) error = %v", err)
 	}
 	if err := state.SaveStateRecords("sites", []map[string]any{
-		{"provider": "linode", "site_id": "foobar", "env": "live", "target": "app1-linode", "server": "app1-linode", "hostname": "foobar.app1-linode.nonfiction.dev", "url": "https://foobar.app1-linode.nonfiction.dev", "path": "/var/www/sites/foobar/public"},
-		{"provider": "linode", "site_id": "foobar", "env": "staging", "target": "app1-linode", "server": "app1-linode", "hostname": "foobar-staging.app1-linode.nonfiction.dev", "url": "https://foobar-staging.app1-linode.nonfiction.dev", "path": "/var/www/sites/foobar_staging/public"},
+		{"provider": "linode", "site_id": "foobar.app1-linode", "env_id": "foobar.app1-linode:live", "name": "foobar", "env": "live", "target": "app1-linode", "hostname": "foobar.app1-linode.nonfiction.dev", "url": "https://foobar.app1-linode.nonfiction.dev", "path": "/var/www/sites/foobar/public", "ssh": map[string]any{"user": "nonfiction", "host": "app1-linode.nonfiction.dev", "port": "22"}},
+		{"provider": "linode", "site_id": "foobar.app1-linode", "env_id": "foobar.app1-linode:staging", "name": "foobar", "env": "staging", "target": "app1-linode", "hostname": "foobar-staging.app1-linode.nonfiction.dev", "url": "https://foobar-staging.app1-linode.nonfiction.dev", "path": "/var/www/sites/foobar_staging/public", "ssh": map[string]any{"user": "nonfiction", "host": "app1-linode.nonfiction.dev", "port": "22"}},
 	}); err != nil {
 		t.Fatalf("SaveStateRecords(sites) error = %v", err)
 	}
@@ -3161,7 +3185,7 @@ func TestRunSiteEnvShellAndWpRunSSHForLinode(t *testing.T) {
 			t.Fatalf("Run(site env shell) = %d, want 0", got)
 		}
 	})
-	for _, want := range []string{"Site env shell preflight:", "env:      live", "target:   app1-linode", "> ssh -t -p 22 nonfiction@foobar.app1-linode.nonfiction.dev", "cd /var/www/sites/foobar/public"} {
+	for _, want := range []string{"Site env shell preflight:", "env:      live", "target:   app1-linode", "> ssh -t -p 22 nonfiction@app1-linode.nonfiction.dev", "cd /var/www/sites/foobar/public"} {
 		if !strings.Contains(shellOutput, want) {
 			t.Fatalf("site env shell output missing %q:\n%s", want, shellOutput)
 		}
@@ -3170,7 +3194,7 @@ func TestRunSiteEnvShellAndWpRunSSHForLinode(t *testing.T) {
 		t.Fatalf("shell command = %#v", commands)
 	}
 	shellCommand := strings.Join(commands[0], " ")
-	for _, want := range []string{"ssh -t -p 22 nonfiction@foobar.app1-linode.nonfiction.dev", "cd /var/www/sites/foobar/public", "exec ${SHELL:-/bin/bash} -i"} {
+	for _, want := range []string{"ssh -t -p 22 nonfiction@app1-linode.nonfiction.dev", "cd /var/www/sites/foobar/public", "exec ${SHELL:-/bin/bash} -i"} {
 		if !strings.Contains(shellCommand, want) {
 			t.Fatalf("shell command missing %q: %#v", want, commands[0])
 		}
@@ -3181,7 +3205,7 @@ func TestRunSiteEnvShellAndWpRunSSHForLinode(t *testing.T) {
 			t.Fatalf("Run(site env wp) = %d, want 0", got)
 		}
 	})
-	for _, want := range []string{"Site env wp preflight:", "env:      staging", "wp args:  plugin list", "> ssh -p 22 nonfiction@foobar-staging.app1-linode.nonfiction.dev"} {
+	for _, want := range []string{"Site env wp preflight:", "env:      staging", "wp args:  plugin list", "> ssh -p 22 nonfiction@app1-linode.nonfiction.dev"} {
 		if !strings.Contains(wpOutput, want) {
 			t.Fatalf("site env wp output missing %q:\n%s", want, wpOutput)
 		}
@@ -3190,7 +3214,7 @@ func TestRunSiteEnvShellAndWpRunSSHForLinode(t *testing.T) {
 		t.Fatalf("commands len = %d, want 2: %#v", len(commands), commands)
 	}
 	wpCommand := strings.Join(commands[1], " ")
-	for _, want := range []string{"ssh -p 22 nonfiction@foobar-staging.app1-linode.nonfiction.dev", "cd /var/www/sites/foobar_staging/public", "sudo -u www-data wp --path=/var/www/sites/foobar_staging/public plugin list"} {
+	for _, want := range []string{"ssh -p 22 nonfiction@app1-linode.nonfiction.dev", "cd /var/www/sites/foobar_staging/public", "sudo -u www-data wp --path=/var/www/sites/foobar_staging/public plugin list"} {
 		if !strings.Contains(wpCommand, want) {
 			t.Fatalf("wp command missing %q: %#v", want, commands[1])
 		}
@@ -3539,11 +3563,11 @@ func TestRunRemoteAddListRemoveWritesProjectMetadata(t *testing.T) {
 	t.Cleanup(func() { _ = os.Chdir(oldwd) })
 
 	addOutput := captureStdout(t, func() {
-		if got := Run([]string{"remote", "add", "production", "client-app1-linode", "live"}); got != 0 {
+		if got := Run([]string{"remote", "add", "production", "client-app1-linode:live"}); got != 0 {
 			t.Fatalf("Run(remote add) = %d, want 0", got)
 		}
 	})
-	if !strings.Contains(addOutput, "Added remote production -> client-app1-linode live") {
+	if !strings.Contains(addOutput, "Added remote production -> client-app1-linode:live") {
 		t.Fatalf("remote add output = %q", addOutput)
 	}
 
