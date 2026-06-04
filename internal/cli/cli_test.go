@@ -139,7 +139,7 @@ func TestRunHelpShowsTopLevelCommandsOutsideGit(t *testing.T) {
 	t.Cleanup(func() { _ = os.Chdir(oldwd) })
 
 	output := captureStdout(t, func() { _ = runHelp() })
-	for _, wanted := range []string{"\n  init      initialize project metadata\n", "\n  provider  manage provider integrations\n", "\n  target    manage deployable targets\n", "\n  site      manage remote sites and envs\n", "\n  config    manage global config\n", "\n  password  derive passwords\n", "\n  help      show help\n"} {
+	for _, wanted := range []string{"\n  init        initialize project metadata\n", "\n  provider    manage provider integrations\n", "\n  target      manage deployable targets\n", "\n  site        manage remote sites and envs\n", "\n  config      manage global config\n", "\n  password    derive passwords\n", "\n  completion  print shell completion scripts\n", "\n  help        show help\n"} {
 		if !strings.Contains(output, wanted) {
 			t.Fatalf("runHelp() output missing %q:\n%s", wanted, output)
 		}
@@ -166,7 +166,7 @@ func TestRunHelpHidesProjectCommandsInsideGitWithoutNFDir(t *testing.T) {
 	t.Cleanup(func() { _ = os.Chdir(oldwd) })
 
 	output := captureStdout(t, func() { _ = runHelp() })
-	for _, wanted := range []string{"\n  init      initialize project metadata\n", "\n  provider  manage provider integrations\n", "\n  config    manage global config\n"} {
+	for _, wanted := range []string{"\n  init        initialize project metadata\n", "\n  provider    manage provider integrations\n", "\n  config      manage global config\n"} {
 		if !strings.Contains(output, wanted) {
 			t.Fatalf("runHelp() output missing %q:\n%s", wanted, output)
 		}
@@ -195,7 +195,7 @@ func TestRunHelpShowsProjectCommandsInsideNFProject(t *testing.T) {
 	t.Cleanup(func() { _ = os.Chdir(oldwd) })
 
 	output := captureStdout(t, func() { _ = runHelp() })
-	for _, wanted := range []string{"\n  remote    manage repo remotes\n", "\n  env       manage the local development env\n", "\n  theme     package files and run theme tasks\n"} {
+	for _, wanted := range []string{"\n  remote      manage repo remotes\n", "\n  env         manage the local development env\n", "\n  theme       package files and run theme tasks\n"} {
 		if !strings.Contains(output, wanted) {
 			t.Fatalf("runHelp() output missing %q:\n%s", wanted, output)
 		}
@@ -229,6 +229,125 @@ func TestRunTargetHelpShowsRefresh(t *testing.T) {
 		if !strings.Contains(output, wanted) {
 			t.Fatalf("runTargetHelp() output missing %q:\n%s", wanted, output)
 		}
+	}
+}
+
+func TestRunCompletionPrintsBashAndZshScripts(t *testing.T) {
+	bashOutput := captureStdout(t, func() {
+		if got := Run([]string{"completion", "bash"}); got != 0 {
+			t.Fatalf("Run(completion bash) = %d, want 0", got)
+		}
+	})
+	for _, want := range []string{"# bash completion for nf", "complete -F _nf_completion nf", "command -v nf", "__complete --"} {
+		if !strings.Contains(bashOutput, want) {
+			t.Fatalf("bash completion output missing %q:\n%s", want, bashOutput)
+		}
+	}
+
+	zshOutput := captureStdout(t, func() {
+		if got := Run([]string{"completion", "zsh"}); got != 0 {
+			t.Fatalf("Run(completion zsh) = %d, want 0", got)
+		}
+	})
+	for _, want := range []string{"#compdef nf", "compctl -d nf", "compdef _nf nf", "command -v nf", "__complete --", "compadd -Q -U -S ' '"} {
+		if !strings.Contains(zshOutput, want) {
+			t.Fatalf("zsh completion output missing %q:\n%s", want, zshOutput)
+		}
+	}
+}
+
+func TestRunCompleteSuggestsStaticAndCachedValues(t *testing.T) {
+	stateDir := t.TempDir()
+	t.Setenv("NF_STATE_HOME", stateDir)
+	if err := state.SaveStateRecords("providers", []map[string]any{{
+		"provider": "linode",
+		"targets":  []map[string]any{{"id": "123", "name": "app1-linode", "provider": "linode", "hostname": "app1.example.com"}},
+	}}); err != nil {
+		t.Fatalf("SaveStateRecords(providers) error = %v", err)
+	}
+	if err := state.SaveStateRecords("sites", []map[string]any{{
+		"_state_key": "client-app1-linode",
+		"site_id":    "client-app1-linode",
+		"site":       "client",
+		"env":        "live",
+		"target":     "app1-linode",
+	}}); err != nil {
+		t.Fatalf("SaveStateRecords(sites) error = %v", err)
+	}
+
+	rootOutput := captureStdout(t, func() {
+		if got := Run([]string{"__complete", "--", "pr"}); got != 0 {
+			t.Fatalf("Run(__complete root) = %d, want 0", got)
+		}
+	})
+	if strings.TrimSpace(rootOutput) != "provider" {
+		t.Fatalf("root completion = %q, want provider", rootOutput)
+	}
+
+	targetOutput := captureStdout(t, func() {
+		if got := Run([]string{"__complete", "--", "target", "show", "app"}); got != 0 {
+			t.Fatalf("Run(__complete target show) = %d, want 0", got)
+		}
+	})
+	if !strings.Contains(targetOutput, "app1-linode\n") || !strings.Contains(targetOutput, "app1.example.com\n") {
+		t.Fatalf("target completion missing cached target names:\n%s", targetOutput)
+	}
+
+	siteOutput := captureStdout(t, func() {
+		if got := Run([]string{"__complete", "--", "site", "show", "client"}); got != 0 {
+			t.Fatalf("Run(__complete site show) = %d, want 0", got)
+		}
+	})
+	if !strings.Contains(siteOutput, "client-app1-linode\n") {
+		t.Fatalf("site completion missing cached site:\n%s", siteOutput)
+	}
+}
+
+func TestRunCompleteSuggestsProjectValues(t *testing.T) {
+	workdir := t.TempDir()
+	for _, dir := range []string{".git", ".nf"} {
+		if err := os.Mkdir(filepath.Join(workdir, dir), 0o755); err != nil {
+			t.Fatalf("Mkdir(%s) error = %v", dir, err)
+		}
+	}
+	project := map[string]any{
+		"schema":  1,
+		"project": map[string]any{"slug": "client"},
+		"deploy":  map[string]any{"remotes": map[string]any{"production": map[string]any{"site_id": "client-app1-linode", "env": "live"}}},
+		"tasks":   map[string]any{"build": map[string]any{"description": "Build assets", "run": "npm run build"}},
+	}
+	projectData, err := json.MarshalIndent(project, "", "  ")
+	if err != nil {
+		t.Fatalf("MarshalIndent(project) error = %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(workdir, ".nf", "project.json"), append(projectData, '\n'), 0o644); err != nil {
+		t.Fatalf("WriteFile(project) error = %v", err)
+	}
+	oldwd, err := os.Getwd()
+	if err != nil {
+		t.Fatalf("Getwd() error = %v", err)
+	}
+	if err := os.Chdir(workdir); err != nil {
+		t.Fatalf("Chdir() error = %v", err)
+	}
+	t.Cleanup(func() { _ = os.Chdir(oldwd) })
+
+	remoteOutput := captureStdout(t, func() {
+		if got := Run([]string{"__complete", "--", "remote", "show", "pro"}); got != 0 {
+			t.Fatalf("Run(__complete remote show) = %d, want 0", got)
+		}
+	})
+	if strings.TrimSpace(remoteOutput) != "production" {
+		t.Fatalf("remote completion = %q, want production", remoteOutput)
+	}
+
+	themeOutput := captureStdout(t, func() {
+		if got := Run([]string{"__complete", "--", "theme", "b"}); got != 0 {
+			t.Fatalf("Run(__complete theme) = %d, want 0", got)
+		}
+	})
+	if strings.TrimSpace(themeOutput) != "build" {
+		t.Fatalf("theme completion = %q, want build", themeOutput)
 	}
 }
 

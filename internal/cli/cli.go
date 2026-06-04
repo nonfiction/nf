@@ -6536,6 +6536,374 @@ func runPasswordHelp() int {
 	return 0
 }
 
+func runCompletionHelp() int {
+	printGroupHelp("completion", []helpLine{
+		{"bash", "print bash completion script"},
+		{"zsh", "print zsh completion script"},
+	})
+	return 0
+}
+
+func runCompletion(argv []string) int {
+	if len(argv) == 0 || argv[0] == "help" || argv[0] == "--help" || argv[0] == "-h" {
+		return runCompletionHelp()
+	}
+	if len(argv) != 1 {
+		fmt.Fprintln(os.Stderr, "completion takes exactly one shell: bash or zsh")
+		return 1
+	}
+	switch argv[0] {
+	case "bash":
+		fmt.Print(bashCompletionScript())
+		return 0
+	case "zsh":
+		fmt.Print(zshCompletionScript())
+		return 0
+	default:
+		fmt.Fprintf(os.Stderr, "unsupported completion shell %q; use bash or zsh\n", argv[0])
+		return 1
+	}
+}
+
+func bashCompletionScript() string {
+	return `# bash completion for nf
+_nf_completion() {
+  local cur nf_command
+  cur="${COMP_WORDS[COMP_CWORD]}"
+  nf_command="$(command -v nf)"
+  COMPREPLY=( $(compgen -W "$("$nf_command" __complete -- "${COMP_WORDS[@]:1:$COMP_CWORD}")" -- "$cur") )
+}
+complete -F _nf_completion nf
+`
+}
+
+func zshCompletionScript() string {
+	return `#compdef nf
+# zsh completion for nf
+_nf() {
+  local -a args completions
+  local i nf_command
+  args=()
+  for (( i = 2; i <= CURRENT; i++ )); do
+    args+=("${words[i]}")
+  done
+  if [[ -n "$NF_COMPLETION_DEBUG" ]]; then
+    print -ru2 -- "nf completion debug: CURRENT=$CURRENT PREFIX=$PREFIX SUFFIX=$SUFFIX words=(${words[*]}) args=(${args[*]})"
+  fi
+  nf_command="$(command -v nf)"
+  completions=( ${(f)"$("$nf_command" __complete -- "${args[@]}")"} )
+  compadd -Q -U -S ' ' -- "${completions[@]}"
+}
+compctl -d nf 2>/dev/null || true
+compdef _nf nf
+`
+}
+
+func runComplete(argv []string) int {
+	if len(argv) > 0 && argv[0] == "--" {
+		argv = argv[1:]
+	}
+	for _, value := range completeCandidates(argv) {
+		fmt.Println(value)
+	}
+	return 0
+}
+
+func completeCandidates(argv []string) []string {
+	prefix := ""
+	args := append([]string{}, argv...)
+	if len(args) > 0 {
+		prefix = args[len(args)-1]
+		args = args[:len(args)-1]
+	}
+	candidates := completeContextCandidates(args)
+	return filterCompletionCandidates(candidates, prefix)
+}
+
+func completeContextCandidates(args []string) []string {
+	if len(args) == 0 {
+		return rootCompletionCandidates()
+	}
+	switch args[0] {
+	case "help":
+		return rootCompletionCandidates()
+	case "completion":
+		return []string{"bash", "zsh"}
+	case "provider":
+		return providerCompletionCandidates(args[1:])
+	case "target":
+		return targetCompletionCandidates(args[1:])
+	case "site":
+		return siteCompletionCandidates(args[1:])
+	case "config":
+		return []string{"init", "show", "set-base-domain", "set-default-wp-email", "set-default-wp-user", "set-kinsta-default-region", "set-kinsta-default-php", "set-linode-default-region", "set-linode-default-type", "set-linode-default-image", "set-linode-default-user", "help"}
+	case "password":
+		return []string{"show-salt", "set-salt", "derive", "help"}
+	case "remote":
+		return remoteCompletionCandidates(args[1:])
+	case "env":
+		return envCompletionCandidates(args[1:])
+	case "theme":
+		return themeCompletionCandidates(args[1:])
+	default:
+		return nil
+	}
+}
+
+func rootCompletionCandidates() []string {
+	candidates := []string{"init", "provider", "target", "site", "config", "password", "completion", "help"}
+	if projectContextAvailable() {
+		candidates = append(candidates, "remote", "env", "theme")
+	}
+	sort.Strings(candidates)
+	return candidates
+}
+
+func providerCompletionCandidates(args []string) []string {
+	if len(args) == 0 {
+		return []string{"list", "check", "show", "help"}
+	}
+	switch args[0] {
+	case "check", "show":
+		return []string{"dnsimple", "kinsta", "linode", "--json"}
+	default:
+		return nil
+	}
+}
+
+func targetCompletionCandidates(args []string) []string {
+	if len(args) == 0 {
+		return []string{"list", "show", "refresh", "add", "remove", "help"}
+	}
+	switch args[0] {
+	case "add":
+		if len(args) == 1 {
+			return []string{"linode"}
+		}
+		return targetAddFlagCandidates()
+	case "show":
+		return cachedTargetCompletionNames()
+	case "remove":
+		return append(cachedTargetCompletionNames(), "--dry-run", "--execute", "--yes", "--non-interactive")
+	default:
+		return nil
+	}
+}
+
+func targetAddFlagCandidates() []string {
+	return []string{"--region", "--type", "--image", "--ssh-user", "--execute", "--yes", "--non-interactive", "--dry-run"}
+}
+
+func siteCompletionCandidates(args []string) []string {
+	if len(args) == 0 {
+		return []string{"list", "show", "env", "password", "refresh", "add", "remove", "help"}
+	}
+	switch args[0] {
+	case "show":
+		return append(cachedSiteCompletionNames(), "--json")
+	case "password":
+		return cachedSiteCompletionNames()
+	case "remove":
+		return append(cachedSiteCompletionNames(), "--dry-run", "--execute", "--yes", "--non-interactive")
+	case "add":
+		if len(args) == 1 {
+			return cachedTargetCompletionNames()
+		}
+		return []string{"--region", "--php", "--dry-run", "--execute", "--yes", "--non-interactive"}
+	case "env":
+		return siteEnvCompletionCandidates(args[1:])
+	default:
+		return nil
+	}
+}
+
+func siteEnvCompletionCandidates(args []string) []string {
+	if len(args) == 0 {
+		return []string{"list", "show", "shell", "wp", "help"}
+	}
+	sites := cachedSiteCompletionNames()
+	switch args[0] {
+	case "list":
+		return sites
+	case "show":
+		return append(sites, "--live", "--staging", "--json")
+	case "shell":
+		return append(sites, "--live", "--staging")
+	case "wp":
+		return append(sites, "--live", "--staging")
+	default:
+		return nil
+	}
+}
+
+func remoteCompletionCandidates(args []string) []string {
+	if len(args) == 0 {
+		return []string{"list", "show", "add", "remove", "help"}
+	}
+	switch args[0] {
+	case "show", "remove":
+		return projectRemoteCompletionNames()
+	case "add":
+		if len(args) == 2 {
+			return cachedSiteCompletionNames()
+		}
+		if len(args) >= 3 {
+			return []string{"live", "staging"}
+		}
+	}
+	return nil
+}
+
+func envCompletionCandidates(args []string) []string {
+	if len(args) == 0 {
+		return []string{"show", "password", "up", "down", "logs", "shell", "wp", "snapshot", "pull", "push", "reset", "help"}
+	}
+	switch args[0] {
+	case "pull", "push":
+		return projectRemoteCompletionNames()
+	case "snapshot":
+		return envSnapshotCompletionCandidates(args[1:])
+	default:
+		return nil
+	}
+}
+
+func envSnapshotCompletionCandidates(args []string) []string {
+	if len(args) == 0 {
+		return []string{"list", "add", "use", "remove", "help"}
+	}
+	switch args[0] {
+	case "use", "remove":
+		return envSnapshotCompletionNames()
+	default:
+		return nil
+	}
+}
+
+func themeCompletionCandidates(args []string) []string {
+	if len(args) == 0 {
+		candidates := []string{"tasks", "package", "help"}
+		candidates = append(candidates, projectTaskCompletionNames()...)
+		return uniqueSortedStrings(candidates)
+	}
+	if args[0] == "package" {
+		return []string{"--dry-run", "--source", "--output"}
+	}
+	return nil
+}
+
+func cachedTargetCompletionNames() []string {
+	targets, err := cachedTargets()
+	if err != nil {
+		return nil
+	}
+	values := make([]string, 0, len(targets)*3)
+	for _, target := range targets {
+		values = append(values, recordStringValues(target, "name", "id", "_state_key", "hostname", "label")...)
+	}
+	return uniqueSortedStrings(values)
+}
+
+func cachedSiteCompletionNames() []string {
+	sites, err := state.LoadStateRecords("sites")
+	if err != nil {
+		return nil
+	}
+	values := make([]string, 0, len(sites)*3)
+	for _, site := range sites {
+		values = append(values, siteRecordID(site), siteRecordName(site), firstRecordString(site, "_state_key", "hostname"))
+	}
+	return uniqueSortedStrings(values)
+}
+
+func projectRemoteCompletionNames() []string {
+	root, ok := currentNFProjectRoot()
+	if !ok {
+		return nil
+	}
+	metadata, err := loadProjectMetadataOrError(root)
+	if err != nil {
+		return nil
+	}
+	remotes, err := projectRemotes(metadata, false)
+	if err != nil {
+		return nil
+	}
+	values := make([]string, 0, len(remotes))
+	for name := range remotes {
+		values = append(values, name)
+	}
+	return uniqueSortedStrings(values)
+}
+
+func projectTaskCompletionNames() []string {
+	root, ok := currentNFProjectRoot()
+	if !ok {
+		return nil
+	}
+	tasks, err := loadProjectTasks(root)
+	if err != nil {
+		return nil
+	}
+	values := make([]string, 0, len(tasks))
+	for name := range tasks {
+		values = append(values, name)
+	}
+	return uniqueSortedStrings(values)
+}
+
+func envSnapshotCompletionNames() []string {
+	root, ok := currentNFProjectRoot()
+	if !ok {
+		return nil
+	}
+	metadata, err := loadProjectMetadataOrError(root)
+	if err != nil {
+		return nil
+	}
+	cfg, ok := loadEnvConfig(root, metadata)
+	if !ok {
+		return nil
+	}
+	records, err := loadEnvSnapshots(cfg)
+	if err != nil {
+		return nil
+	}
+	values := make([]string, 0, len(records))
+	for _, record := range records {
+		values = append(values, firstNonEmpty(record.Metadata.Name, filepath.Base(record.Directory)))
+	}
+	return uniqueSortedStrings(values)
+}
+
+func filterCompletionCandidates(candidates []string, prefix string) []string {
+	values := make([]string, 0, len(candidates))
+	for _, candidate := range uniqueSortedStrings(candidates) {
+		if strings.HasPrefix(candidate, prefix) {
+			values = append(values, candidate)
+		}
+	}
+	return values
+}
+
+func uniqueSortedStrings(values []string) []string {
+	seen := map[string]struct{}{}
+	unique := make([]string, 0, len(values))
+	for _, value := range values {
+		value = strings.TrimSpace(value)
+		if value == "" || strings.ContainsAny(value, " \t\n\r") {
+			continue
+		}
+		if _, ok := seen[value]; ok {
+			continue
+		}
+		seen[value] = struct{}{}
+		unique = append(unique, value)
+	}
+	sort.Strings(unique)
+	return unique
+}
+
 func runInitHelp() int {
 	fmt.Println("init")
 	fmt.Println("\nUsage:")
@@ -6879,6 +7247,7 @@ func runHelp() int {
 	lines = append(lines,
 		helpLine{"config", "manage global config"},
 		helpLine{"password", "derive passwords"},
+		helpLine{"completion", "print shell completion scripts"},
 		helpLine{"help", "show help"},
 	)
 	printGroupHelp("nf", lines)
@@ -6971,6 +7340,10 @@ func Run(argv []string) int {
 			return runHelp()
 		}
 		return runTopicHelp(argv[1:])
+	case "__complete":
+		return runComplete(argv[1:])
+	case "completion":
+		return runCompletion(argv[1:])
 	case "provider":
 		return runProvider(argv[1:])
 	case "target":
@@ -7040,6 +7413,8 @@ func runTopicHelp(argv []string) int {
 		return runConfigHelp()
 	case "password":
 		return runPasswordHelp()
+	case "completion":
+		return runCompletionHelp()
 	default:
 		return runHelp()
 	}
