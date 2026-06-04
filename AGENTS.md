@@ -124,11 +124,13 @@ Local state is disposable. Provider truth is canonical remotely.
 ## Local env gotchas
 
 * Env-generated files stay under `NF_DATA_HOME` / `~/.local/share/nf/envs/<project-slug>/`.
-* Snapshot files stay under `NF_DATA_HOME` / `~/.local/share/nf/snapshots/<project-slug>/<snapshot-name>/`.
+* Local snapshot files stay under `NF_DATA_HOME` / `~/.local/share/nf/snapshots/local/<project-slug>/<snapshot-name>/`.
+* Remote snapshot files stay under `NF_DATA_HOME` / `~/.local/share/nf/snapshots/remote/<env-id-slug>-YYYY-MM-DD-HHMMSS/`.
 * `nf env up` should be idempotent: ensure env exists, start Compose, install WordPress if missing, activate mounted theme.
 * `nf env reset` is destructive for local env only.
 * Snapshot archives include uploads/plugins/mu-plugins/languages, not themes.
 * `nf env snapshot use` creates a safety snapshot named `YYYY-MM-DD-HHMMSS-pre-restore` before restore.
+* `nf env snapshot use --remote <name>` imports the remote snapshot into local snapshots, then restores the local copy.
 
 ## Safety rules
 

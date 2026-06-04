@@ -187,14 +187,17 @@ NF_DATA_HOME=/tmp/nf-data
 ```sh
 nf env snapshot add [name]
 nf env snapshot list
-nf env snapshot use [name]
+nf env snapshot import [remote-snapshot] [--name name]
+nf env snapshot use [name] [--yes]
+nf env snapshot use --remote <remote-snapshot> [--name name] [--yes]
 nf env snapshot remove [name]
+nf env snapshot prune [--keep N] [--dry-run] [--yes]
 ```
 
-Snapshots live under:
+Local env snapshots live under:
 
 ```text
-~/.local/share/nf/snapshots/<project-slug>/<snapshot-name>/
+~/.local/share/nf/snapshots/local/<project-slug>/<snapshot-name>/
 ```
 
 Each snapshot contains:
@@ -205,7 +208,30 @@ Each snapshot contains:
 
 The `wp-content` archive includes only `uploads/`, `plugins/`, `mu-plugins/`, and `languages/`. It skips themes.
 
-`nf env snapshot use` creates a safety snapshot named `YYYY-MM-DD-HHMMSS-pre-restore` before restoring the selected snapshot.
+`nf env snapshot use` creates a safety snapshot named `YYYY-MM-DD-HHMMSS-pre-restore` before restoring the selected snapshot. Add `--yes` to skip the interactive confirmation.
+
+Remote snapshots are downloaded from cached remote site env records and live under:
+
+```text
+~/.local/share/nf/snapshots/remote/<env-id-slug>-YYYY-MM-DD-HHMMSS/
+```
+
+Remote snapshot workflow:
+
+```sh
+nf site snapshot <site.target:env>
+nf site snapshot list
+nf env snapshot import <remote-snapshot-name> --name live-copy
+nf env snapshot use live-copy --yes
+```
+
+Shortcut restore from a remote snapshot:
+
+```sh
+nf env snapshot use --remote <remote-snapshot-name> --name live-copy --yes
+```
+
+This imports the remote snapshot into the current project's local snapshots, restores it, creates the normal pre-restore safety snapshot first, and keeps the imported local snapshot for audit/reuse.
 
 ## Config and secrets
 
@@ -277,15 +303,17 @@ nf target list
 nf target show <target>
 nf site add <target> <site> [--region region] [--php version] [--execute --yes]
 nf site refresh
-nf site list [--refresh]
-nf site show <site-id-or-alias>
+nf site list [--refresh] [--envs]
+nf site show <site-id-or-alias-or-env-id>
+nf site shell <site.target:env>
+nf site wp <site.target:env> -- <cmd>
+nf site snapshot <site.target:env> [--output path] [--dry-run]
+nf site snapshot list
+nf site snapshot remove <name> [--yes]
+nf site snapshot prune [--keep N] [--dry-run] [--yes]
 nf site password [site-id-or-alias]
 nf site remove [site-id-or-alias] [--dry-run] [--execute --yes]
-nf site env list [site-id]
-nf site env show [site-id] [--live|--staging] [--json]
-nf site env shell [site-id] [--live|--staging]
-nf site env wp <site-id> [--live|--staging] <cmd>
-nf remote add <name> <site-id> <env>
+nf remote add [name] [site.target:env]
 nf remote show <name>
 nf remote remove <name>
 nf remote list
@@ -313,11 +341,11 @@ Current behavior:
 * `nf target list/show` read target records from `providers.json`, with a legacy `servers.json` fallback.
 * `nf site add <target> <site>` creates live and staging WordPress envs on a target.
 * `nf site refresh` discovers sites from the cached target list. Remote target site discovery is not implemented yet.
-* `nf site list/show` and `nf site env list/show` read the local disposable site cache for now.
+* `nf site list --envs`, `nf site show`, `nf site shell`, `nf site wp`, and `nf site snapshot` read the local disposable site cache for now.
 * `nf site password [site]` shows the derived admin password only.
 * `nf site remove [site]` removes a Linode site and deletes its env data.
-* `nf remote add` validates against the cache, then repo remotes are stored in `.nf/project.json` under `deploy.remotes`.
-* `nf site env shell/wp ...` currently preflights against the cache, then stops without running remote commands.
+* `nf remote add` validates an env ID against the cache, then repo remotes are stored in `.nf/project.json` under `deploy.remotes`.
+* `nf site shell/wp ...` currently preflights against the cache, then stops without running remote commands.
 * `nf env push/pull [remote]` syncs database and mutable `wp-content` after an interactive confirmation. Omit `remote` to pick from configured repo remotes. Add `--dry-run` for a non-mutating plan, or use `--non-interactive` without `--execute` for preflight-only output.
 
 State/cache lives under:

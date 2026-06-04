@@ -202,7 +202,8 @@ Generated data root:
 ```text
 ~/.local/share/nf/
   envs/<project-slug>/
-  snapshots/<project-slug>/<snapshot-name>/
+  snapshots/local/<project-slug>/<snapshot-name>/
+  snapshots/remote/<env-id-slug>-YYYY-MM-DD-HHMMSS/
 ```
 
 Overrides:
@@ -270,14 +271,13 @@ Do not add old compatibility routes unless explicitly requested.
 * [x] `nf target remove <target>` remove an empty Linode target
 * [x] `nf site add <target> <site>` create live and staging env scaffolds on a target
 * [x] `nf site refresh` target-based scaffold
-* [x] `nf site list [--refresh]`
-* [x] `nf site show <site-id-or-alias>`
+* [x] `nf site list [--refresh] [--envs]`
+* [x] `nf site show <site-id-or-alias-or-env-id>`
+* [x] `nf site shell <env-id>`
+* [x] `nf site wp <env-id> -- <args>`
 * [x] `nf site password [site]`
 * [x] `nf site remove [site]`
-* [x] `nf site env list [site-id]`
-* [x] `nf site env show [site-id] [--live|--staging]`
-* [x] `nf site env shell/wp ...` preflight against cached site/env state
-* [x] `nf remote add <name> <site-id> <env>` with cache validation
+* [x] `nf remote add [name] [env-id]` with cache validation and prompts for omitted values
 * [x] `nf remote show <name>`
 * [x] `nf remote remove <name>`
 * [x] `nf remote list`
@@ -293,8 +293,13 @@ Do not add old compatibility routes unless explicitly requested.
 * [x] `nf env wp -- <args>`
 * [x] `nf env snapshot add [name]`
 * [x] `nf env snapshot list`
-* [x] `nf env snapshot use [name]`
+* [x] `nf env snapshot import [remote] [--name name]`
+* [x] `nf env snapshot use [name] [--yes]`
+* [x] `nf env snapshot use --remote <remote> [--name name] [--yes]`
 * [x] `nf env snapshot remove [name]`
+* [x] `nf env snapshot prune [--keep N] [--dry-run] [--yes]`
+* [x] `nf site snapshot <env> [--output path] [--dry-run]`
+* [x] `nf site snapshot list/remove/prune`
 * [x] `nf config init`
 * [x] `nf config set-base-domain <domain>`
 * [x] `nf config set-default-wp-email <email>`
@@ -470,10 +475,12 @@ Rules:
 
 Snapshots:
 
-* stored under `NF_DATA_HOME/snapshots/<project-slug>/<snapshot-name>/`
-* contain `snapshot.json`, `database.sql.gz`, `wp-content.tar.gz`
+* local env snapshots are stored under `NF_DATA_HOME/snapshots/local/<project-slug>/<snapshot-name>/`
+* remote site snapshots are stored under `NF_DATA_HOME/snapshots/remote/<env-id-slug>-YYYY-MM-DD-HHMMSS/`
+* local and remote snapshots contain `snapshot.json`, `database.sql.gz`, `wp-content.tar.gz`
 * `wp-content.tar.gz` includes uploads/plugins/mu-plugins/languages only
-* restore creates a pre-restore safety snapshot
+* local restore creates a pre-restore safety snapshot
+* remote snapshots are imported into local snapshots before restore; direct restore from remote files is intentionally avoided
 
 ## Remote execution and sync safety
 
