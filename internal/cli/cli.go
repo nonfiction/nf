@@ -6665,7 +6665,7 @@ func providerCompletionCandidates(args []string) []string {
 	}
 	switch args[0] {
 	case "check", "show":
-		return []string{"dnsimple", "kinsta", "linode", "--json"}
+		return []string{"dnsimple", "kinsta", "linode"}
 	default:
 		return nil
 	}

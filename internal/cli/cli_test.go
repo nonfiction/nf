@@ -284,6 +284,20 @@ func TestRunCompleteSuggestsStaticAndCachedValues(t *testing.T) {
 		t.Fatalf("root completion = %q, want provider", rootOutput)
 	}
 
+	providerOutput := captureStdout(t, func() {
+		if got := Run([]string{"__complete", "--", "provider", "show", ""}); got != 0 {
+			t.Fatalf("Run(__complete provider show) = %d, want 0", got)
+		}
+	})
+	for _, want := range []string{"dnsimple\n", "kinsta\n", "linode\n"} {
+		if !strings.Contains(providerOutput, want) {
+			t.Fatalf("provider completion missing %q:\n%s", want, providerOutput)
+		}
+	}
+	if strings.Contains(providerOutput, "--json") {
+		t.Fatalf("provider completion included --json:\n%s", providerOutput)
+	}
+
 	targetOutput := captureStdout(t, func() {
 		if got := Run([]string{"__complete", "--", "target", "show", "app"}); got != 0 {
 			t.Fatalf("Run(__complete target show) = %d, want 0", got)
