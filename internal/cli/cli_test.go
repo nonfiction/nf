@@ -414,6 +414,25 @@ func TestRunCompleteSuggestsStaticAndCachedValues(t *testing.T) {
 			t.Fatalf("env snapshot prune completion missing %q:\n%s", want, pruneOutput)
 		}
 	}
+
+	useOutput := captureStdout(t, func() {
+		if got := Run([]string{"__complete", "--", "env", "snapshot", "use", "--"}); got != 0 {
+			t.Fatalf("Run(__complete env snapshot use --) = %d, want 0", got)
+		}
+	})
+	for _, want := range []string{"--yes\n", "--remote\n", "--name\n"} {
+		if !strings.Contains(useOutput, want) {
+			t.Fatalf("env snapshot use completion missing %q:\n%s", want, useOutput)
+		}
+	}
+	useRemoteOutput := captureStdout(t, func() {
+		if got := Run([]string{"__complete", "--", "env", "snapshot", "use", "client"}); got != 0 {
+			t.Fatalf("Run(__complete env snapshot use client) = %d, want 0", got)
+		}
+	})
+	if strings.TrimSpace(useRemoteOutput) != "client-kinsta.live-2026-06-04-120000" {
+		t.Fatalf("env snapshot use remote completion = %q, want remote snapshot name", useRemoteOutput)
+	}
 }
 
 func TestRunCompleteSuggestsProjectValues(t *testing.T) {
@@ -4256,7 +4275,7 @@ func TestRunEnvHelpShowsCommandsWithoutShortcuts(t *testing.T) {
 
 func TestRunEnvSnapshotHelpShowsDedicatedCommands(t *testing.T) {
 	output := captureStdout(t, func() { _ = runEnvSnapshot([]string{"help"}) })
-	for _, want := range []string{"env snapshot\n\nCommands:\n", "list, ls", "list env snapshots", "add [name]", "create an env snapshot", "import [remote] [--name name]", "import a remote snapshot", "use [name]", "restore an env snapshot", "remove, rm [name]", "delete an env snapshot", "prune [--keep N] [--dry-run] [--yes]"} {
+	for _, want := range []string{"env snapshot\n\nCommands:\n", "list, ls", "list env snapshots", "add [name]", "create an env snapshot", "import [remote] [--name name]", "import a remote snapshot", "use [name] [--remote remote] [--name name] [--yes]", "restore an env snapshot", "remove, rm [name]", "delete an env snapshot", "prune [--keep N] [--dry-run] [--yes]"} {
 		if !strings.Contains(output, want) {
 			t.Fatalf("runEnvSnapshot(help) output missing %q:\n%s", want, output)
 		}
@@ -4570,6 +4589,103 @@ func TestRunEnvSnapshotUseSkipsComposeUpWhenReady(t *testing.T) {
 	}
 	if strings.Contains(output, "> docker compose run --rm cli sh -lc") {
 		t.Fatalf("Run() output unexpectedly exposed snapshot shell script preview:\n%s", output)
+	}
+	logData, err := os.ReadFile(logPath)
+	if err != nil {
+		t.Fatalf("ReadFile(docker log) error = %v", err)
+	}
+	logText := string(logData)
+	if strings.Index(logText, "wp db export") == -1 || strings.Index(logText, "wp db import") == -1 || strings.Index(logText, "wp db export") > strings.Index(logText, "wp db import") {
+		t.Fatalf("restore command order looks wrong:\n%s", logText)
+	}
+}
+
+func TestRunEnvSnapshotUseYesSkipsInteractiveConfirmation(t *testing.T) {
+	repoRoot, cfg := writeTestEnvProject(t)
+	writeTestEnvSnapshot(t, cfg, "restore-source", "2026-05-28T09:30:12Z", 2, 7)
+	dockerDir := t.TempDir()
+	logPath := filepath.Join(dockerDir, "docker-args.txt")
+	dockerScript := []byte("#!/bin/sh\nprintf '%s\\n' \"$@\" >> \"$DOCKER_LOG\"\nexit 0\n")
+	if err := os.WriteFile(filepath.Join(dockerDir, "docker"), dockerScript, 0o755); err != nil {
+		t.Fatalf("WriteFile(docker) error = %v", err)
+	}
+	t.Setenv("DOCKER_LOG", logPath)
+	t.Setenv("PATH", dockerDir+string(os.PathListSeparator)+os.Getenv("PATH"))
+	oldConfirm := envSnapshotConfirm
+	envSnapshotConfirm = func(prompt string, defaultYes bool) (bool, error) {
+		t.Fatalf("envSnapshotConfirm called with %q", prompt)
+		return false, nil
+	}
+	t.Cleanup(func() { envSnapshotConfirm = oldConfirm })
+	oldwd, err := os.Getwd()
+	if err != nil {
+		t.Fatalf("Getwd() error = %v", err)
+	}
+	if err := os.Chdir(repoRoot); err != nil {
+		t.Fatalf("Chdir() error = %v", err)
+	}
+	t.Cleanup(func() { _ = os.Chdir(oldwd) })
+
+	output := captureStdout(t, func() {
+		if got := Run([]string{"env", "snapshot", "use", "restore-source", "--yes"}); got != 0 {
+			t.Fatalf("Run(env snapshot use --yes) = %d, want 0", got)
+		}
+	})
+	for _, want := range []string{"Snapshot restored.", "name: restore-source", "Safety snapshot:"} {
+		if !strings.Contains(output, want) {
+			t.Fatalf("Run(env snapshot use --yes) output missing %q:\n%s", want, output)
+		}
+	}
+	logData, err := os.ReadFile(logPath)
+	if err != nil {
+		t.Fatalf("ReadFile(docker log) error = %v", err)
+	}
+	logText := string(logData)
+	if strings.Index(logText, "wp db export") == -1 || strings.Index(logText, "wp db import") == -1 || strings.Index(logText, "wp db export") > strings.Index(logText, "wp db import") {
+		t.Fatalf("restore command order looks wrong:\n%s", logText)
+	}
+}
+
+func TestRunEnvSnapshotUseRemoteImportsThenRestores(t *testing.T) {
+	repoRoot, cfg := writeTestEnvProject(t)
+	remoteName := "client-kinsta.live-2026-06-04-120000"
+	writeTestRemoteSnapshot(t, remoteName, "client-kinsta:live", "2026-06-04T12:00:00Z", 2, 7)
+	dockerDir := t.TempDir()
+	logPath := filepath.Join(dockerDir, "docker-args.txt")
+	dockerScript := []byte("#!/bin/sh\nprintf '%s\\n' \"$@\" >> \"$DOCKER_LOG\"\nexit 0\n")
+	if err := os.WriteFile(filepath.Join(dockerDir, "docker"), dockerScript, 0o755); err != nil {
+		t.Fatalf("WriteFile(docker) error = %v", err)
+	}
+	t.Setenv("DOCKER_LOG", logPath)
+	t.Setenv("PATH", dockerDir+string(os.PathListSeparator)+os.Getenv("PATH"))
+	oldConfirm := envSnapshotConfirm
+	envSnapshotConfirm = func(prompt string, defaultYes bool) (bool, error) {
+		t.Fatalf("envSnapshotConfirm called with %q", prompt)
+		return false, nil
+	}
+	t.Cleanup(func() { envSnapshotConfirm = oldConfirm })
+	oldwd, err := os.Getwd()
+	if err != nil {
+		t.Fatalf("Getwd() error = %v", err)
+	}
+	if err := os.Chdir(repoRoot); err != nil {
+		t.Fatalf("Chdir() error = %v", err)
+	}
+	t.Cleanup(func() { _ = os.Chdir(oldwd) })
+
+	stdout := captureStdout(t, func() {
+		if got := Run([]string{"env", "snapshot", "use", "--remote", remoteName, "--name", "live-copy", "--yes"}); got != 0 {
+			t.Fatalf("Run(env snapshot use --remote --yes) = %d, want 0", got)
+		}
+	})
+	localDir := envSnapshotDir(cfg, "live-copy")
+	for _, want := range []string{"Remote snapshot imported.", "name: live-copy", "remote: " + remoteName, "env: client-kinsta:live", "Snapshot restored.", "Safety snapshot:"} {
+		if !strings.Contains(stdout, want) {
+			t.Fatalf("env snapshot use --remote output missing %q:\n%s", want, stdout)
+		}
+	}
+	if _, err := os.Stat(filepath.Join(localDir, "snapshot.json")); err != nil {
+		t.Fatalf("imported local snapshot missing: %v", err)
 	}
 	logData, err := os.ReadFile(logPath)
 	if err != nil {

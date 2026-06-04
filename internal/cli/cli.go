@@ -173,6 +173,13 @@ type envSnapshotPruneOptions struct {
 	yes    bool
 }
 
+type envSnapshotUseOptions struct {
+	name       string
+	yes        bool
+	remoteName string
+	localName  string
+}
+
 type envRemoteSyncOptions struct {
 	dryRun         bool
 	execute        bool
@@ -969,67 +976,65 @@ func importedRemoteSnapshotName(record remoteSnapshotRecord) string {
 	return "remote-" + name
 }
 
-func cmdEnvSnapshotImport(cfg envConfig, remoteName, localName string, nonInteractive bool) int {
-	records, err := loadRemoteSnapshots()
-	if err != nil {
-		fmt.Fprintln(os.Stderr, err)
-		return 1
-	}
-	selectedName := strings.TrimSpace(remoteName)
-	var record remoteSnapshotRecord
-	if selectedName == "" {
-		if nonInteractive || !envSnapshotIsInteractive() {
-			fmt.Fprintln(os.Stderr, "env snapshot import requires a remote snapshot name when stdin is not interactive")
-			return 1
-		}
-		selected, err := chooseRemoteSnapshot(records, "import")
-		if err != nil {
-			fmt.Fprintln(os.Stderr, err)
-			return 1
-		}
-		record = selected
-		selectedName = selected.Name
-	} else {
-		normalized, err := remoteSnapshotSafeName(selectedName)
-		if err != nil {
-			fmt.Fprintln(os.Stderr, err)
-			return 1
-		}
-		selectedName = normalized
-		found, ok := remoteSnapshotByName(records, selectedName)
-		if !ok {
-			fmt.Fprintf(os.Stderr, "No remote snapshot matched %q.\n", selectedName)
-			return 1
-		}
-		record = found
-	}
+func createEnvSnapshotFromRemote(cfg envConfig, record remoteSnapshotRecord, localName string) (string, error) {
 	if strings.TrimSpace(localName) == "" {
 		localName = importedRemoteSnapshotName(record)
 	}
 	normalizedLocalName, err := envSnapshotNormalizedName(localName)
 	if err != nil {
-		fmt.Fprintln(os.Stderr, err)
-		return 1
+		return "", err
 	}
 	if envSnapshotExists(cfg, normalizedLocalName) {
-		fmt.Fprintf(os.Stderr, "env snapshot %q already exists.\n", normalizedLocalName)
-		return 1
+		return "", fmt.Errorf("env snapshot %q already exists.", normalizedLocalName)
 	}
 	if err := copyFile(record.DatabaseArchive, envSnapshotHostDatabaseArchive(cfg, normalizedLocalName)); err != nil {
-		fmt.Fprintln(os.Stderr, err)
-		return 1
+		return "", err
 	}
 	if err := copyFile(record.WpContentArchive, envSnapshotHostWpContentArchive(cfg, normalizedLocalName)); err != nil {
-		fmt.Fprintln(os.Stderr, err)
-		return 1
+		return "", err
 	}
 	meta := newEnvSnapshotMetadata(cfg, normalizedLocalName, time.Now())
 	jsonText, err := envSnapshotMetadataJSON(meta)
 	if err != nil {
+		return "", err
+	}
+	if err := os.WriteFile(envSnapshotMetadataPath(cfg, normalizedLocalName), []byte(jsonText), 0o644); err != nil {
+		return "", err
+	}
+	return normalizedLocalName, nil
+}
+
+func selectRemoteSnapshot(remoteName string, nonInteractive bool, action string) (remoteSnapshotRecord, error) {
+	records, err := loadRemoteSnapshots()
+	if err != nil {
+		return remoteSnapshotRecord{}, err
+	}
+	selectedName := strings.TrimSpace(remoteName)
+	if selectedName == "" {
+		if nonInteractive || !envSnapshotIsInteractive() {
+			return remoteSnapshotRecord{}, ProjectError{Msg: fmt.Sprintf("env snapshot %s requires a remote snapshot name when stdin is not interactive", action)}
+		}
+		return chooseRemoteSnapshot(records, action)
+	}
+	normalized, err := remoteSnapshotSafeName(selectedName)
+	if err != nil {
+		return remoteSnapshotRecord{}, err
+	}
+	found, ok := remoteSnapshotByName(records, normalized)
+	if !ok {
+		return remoteSnapshotRecord{}, fmt.Errorf("No remote snapshot matched %q.", normalized)
+	}
+	return found, nil
+}
+
+func cmdEnvSnapshotImport(cfg envConfig, remoteName, localName string, nonInteractive bool) int {
+	record, err := selectRemoteSnapshot(remoteName, nonInteractive, "import")
+	if err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		return 1
 	}
-	if err := os.WriteFile(envSnapshotMetadataPath(cfg, normalizedLocalName), []byte(jsonText), 0o644); err != nil {
+	normalizedLocalName, err := createEnvSnapshotFromRemote(cfg, record, localName)
+	if err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		return 1
 	}
@@ -1455,7 +1460,74 @@ func parseEnvSnapshotImportArgs(args []string) (string, string, error) {
 	return remoteName, localName, nil
 }
 
-func cmdEnvSnapshotRestore(cfg envConfig, name string, nonInteractive bool) int {
+func parseEnvSnapshotUseArgs(args []string) (envSnapshotUseOptions, error) {
+	var opts envSnapshotUseOptions
+	for i := 0; i < len(args); i++ {
+		arg := args[i]
+		switch {
+		case arg == "--yes":
+			opts.yes = true
+		case arg == "--remote":
+			if i+1 >= len(args) || strings.TrimSpace(args[i+1]) == "" {
+				return opts, ProjectError{Msg: "env snapshot use --remote requires a remote snapshot name"}
+			}
+			i++
+			opts.remoteName = args[i]
+		case strings.HasPrefix(arg, "--remote="):
+			opts.remoteName = strings.TrimPrefix(arg, "--remote=")
+			if strings.TrimSpace(opts.remoteName) == "" {
+				return opts, ProjectError{Msg: "env snapshot use --remote requires a remote snapshot name"}
+			}
+		case arg == "--name":
+			if i+1 >= len(args) || strings.TrimSpace(args[i+1]) == "" {
+				return opts, ProjectError{Msg: "env snapshot use --name requires a name"}
+			}
+			i++
+			opts.localName = args[i]
+		case strings.HasPrefix(arg, "--name="):
+			opts.localName = strings.TrimPrefix(arg, "--name=")
+			if strings.TrimSpace(opts.localName) == "" {
+				return opts, ProjectError{Msg: "env snapshot use --name requires a name"}
+			}
+		default:
+			if strings.HasPrefix(arg, "-") {
+				return opts, ProjectError{Msg: fmt.Sprintf("unsupported env snapshot use option %q", arg)}
+			}
+			if opts.name != "" {
+				return opts, ProjectError{Msg: "env snapshot use takes at most one name"}
+			}
+			opts.name = arg
+		}
+	}
+	if opts.remoteName != "" && opts.name != "" {
+		return opts, ProjectError{Msg: "env snapshot use takes either a local snapshot name or --remote, not both"}
+	}
+	if opts.remoteName == "" && opts.localName != "" {
+		return opts, ProjectError{Msg: "env snapshot use --name requires --remote"}
+	}
+	return opts, nil
+}
+
+func cmdEnvSnapshotUse(cfg envConfig, opts envSnapshotUseOptions, nonInteractive bool) int {
+	name := opts.name
+	if opts.remoteName != "" {
+		record, err := selectRemoteSnapshot(opts.remoteName, nonInteractive, "restore")
+		if err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			return 1
+		}
+		importedName, err := createEnvSnapshotFromRemote(cfg, record, opts.localName)
+		if err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			return 1
+		}
+		fmt.Printf("Remote snapshot imported.\n\nSnapshot:\n  project: %s\n  name: %s\n  remote: %s\n  env: %s\n  path: %s\n\n", cfg.ProjectSlug, importedName, record.Name, record.Metadata.EnvID, envSnapshotDir(cfg, importedName))
+		name = importedName
+	}
+	return cmdEnvSnapshotRestore(cfg, name, nonInteractive, opts.yes)
+}
+
+func cmdEnvSnapshotRestore(cfg envConfig, name string, nonInteractive bool, yes bool) int {
 	records, err := loadEnvSnapshots(cfg)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, err)
@@ -1488,18 +1560,20 @@ func cmdEnvSnapshotRestore(cfg envConfig, name string, nonInteractive bool) int 
 		fmt.Fprintln(os.Stderr, err)
 		return 1
 	}
-	if nonInteractive || !envSnapshotIsInteractive() {
+	if !yes && (nonInteractive || !envSnapshotIsInteractive()) {
 		fmt.Fprintln(os.Stderr, "env snapshot use requires an interactive terminal for confirmation")
 		return 1
 	}
-	confirmed, err := envSnapshotConfirm(fmt.Sprintf("Restore env snapshot %q? This will overwrite the current local env database and mutable wp-content.", normalized), false)
-	if err != nil {
-		fmt.Fprintln(os.Stderr, err)
-		return 1
-	}
-	if !confirmed {
-		fmt.Fprintln(os.Stderr, "Aborted.")
-		return 1
+	if !yes {
+		confirmed, err := envSnapshotConfirm(fmt.Sprintf("Restore env snapshot %q? This will overwrite the current local env database and mutable wp-content.", normalized), false)
+		if err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			return 1
+		}
+		if !confirmed {
+			fmt.Fprintln(os.Stderr, "Aborted.")
+			return 1
+		}
 	}
 	if err := ensureEnvReadyForSnapshot(cfg); err != nil {
 		fmt.Fprintln(os.Stderr, err)
@@ -8262,7 +8336,10 @@ func envSnapshotCompletionCandidates(args []string) []string {
 	switch args[0] {
 	case "import":
 		return append(remoteSnapshotCompletionNames(), "--name")
-	case "use", "remove":
+	case "use":
+		candidates := append(envSnapshotCompletionNames(), remoteSnapshotCompletionNames()...)
+		return append(candidates, "--remote", "--name", "--yes")
+	case "remove":
 		return envSnapshotCompletionNames()
 	case "prune":
 		return []string{"--keep", "--dry-run", "--yes"}
@@ -8761,7 +8838,7 @@ func runEnvSnapshot(argv []string) int {
 			{"list, ls", "list env snapshots"},
 			{"add [name]", "create an env snapshot"},
 			{"import [remote] [--name name]", "import a remote snapshot"},
-			{"use [name]", "restore an env snapshot"},
+			{"use [name] [--remote remote] [--name name] [--yes]", "restore an env snapshot"},
 			{"remove, rm [name]", "delete an env snapshot"},
 			{"prune [--keep N] [--dry-run] [--yes]", "delete old auto snapshots"},
 		})
@@ -8775,11 +8852,12 @@ func runEnvSnapshot(argv []string) int {
 			fmt.Fprintln(os.Stderr, "env snapshot list takes no arguments")
 			return 1
 		}
-	case "add", "use", "remove":
+	case "add", "remove":
 		if len(args) > 1 {
 			fmt.Fprintln(os.Stderr, "env snapshot command takes at most one name")
 			return 1
 		}
+	case "use":
 	case "import":
 	case "prune":
 	default:
@@ -8822,11 +8900,12 @@ func runEnvSnapshot(argv []string) int {
 		}
 		return cmdEnvSnapshotImport(cfg, remoteName, localName, false)
 	case "use":
-		name := ""
-		if len(args) == 1 {
-			name = args[0]
+		opts, err := parseEnvSnapshotUseArgs(args)
+		if err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			return 1
 		}
-		return cmdEnvSnapshotRestore(cfg, name, false)
+		return cmdEnvSnapshotUse(cfg, opts, false)
 	case "remove":
 		name := ""
 		if len(args) == 1 {
