@@ -339,6 +339,15 @@ func TestRunCompleteSuggestsStaticAndCachedValues(t *testing.T) {
 	if strings.TrimSpace(sitePasswordOutput) != "client-app1-linode" {
 		t.Fatalf("site password completion = %q, want site id only", sitePasswordOutput)
 	}
+
+	remoteAddOutput := captureStdout(t, func() {
+		if got := Run([]string{"__complete", "--", "remote", "add", "production", "client"}); got != 0 {
+			t.Fatalf("Run(__complete remote add) = %d, want 0", got)
+		}
+	})
+	if strings.TrimSpace(remoteAddOutput) != "client-app1-linode:live" {
+		t.Fatalf("remote add completion = %q, want env id only", remoteAddOutput)
+	}
 }
 
 func TestRunCompleteSuggestsProjectValues(t *testing.T) {
@@ -3605,9 +3614,14 @@ func TestRunRemoteAddListRemoveWritesProjectMetadata(t *testing.T) {
 			t.Fatalf("Run(remote list) = %d, want 0", got)
 		}
 	})
-	for _, want := range []string{"name", "site", "env", "production", "client-app1-linode", "live"} {
+	for _, want := range []string{"remote", "env", "production", "client-app1-linode:live"} {
 		if !strings.Contains(listOutput, want) {
 			t.Fatalf("remote list output missing %q:\n%s", want, listOutput)
+		}
+	}
+	for _, notWant := range []string{"name", "site\n", "client-app1-linode  live"} {
+		if strings.Contains(listOutput, notWant) {
+			t.Fatalf("remote list output contains %q:\n%s", notWant, listOutput)
 		}
 	}
 
@@ -3616,11 +3630,33 @@ func TestRunRemoteAddListRemoveWritesProjectMetadata(t *testing.T) {
 			t.Fatalf("Run(remote show) = %d, want 0", got)
 		}
 	})
-	for _, want := range []string{"Remote: production", "Site: client-app1-linode", "Env: live", "Provider: linode", "Target: app1-linode", "URL: https://client.app1.nfweb.dev/"} {
+	for _, want := range []string{"Remote: production", "Env: client-app1-linode:live", "Provider: linode", "Target: app1-linode", "URL: https://client.app1.nfweb.dev/"} {
 		if !strings.Contains(showOutput, want) {
 			t.Fatalf("remote show output missing %q:\n%s", want, showOutput)
 		}
 	}
+	if strings.Contains(showOutput, "Site: client-app1-linode") {
+		t.Fatalf("remote show output contains separate site field:\n%s", showOutput)
+	}
+
+	oldRemoteSelect := remoteSelectFn
+	showPickerCalled := false
+	remoteSelectFn = func(title string, options []ui.SelectOption) (string, error) {
+		showPickerCalled = true
+		return "", fmt.Errorf("unexpected picker")
+	}
+	showOnlyOutput := captureStdout(t, func() {
+		if got := Run([]string{"remote", "show"}); got != 0 {
+			t.Fatalf("Run(remote show without arg) = %d, want 0", got)
+		}
+	})
+	if showPickerCalled {
+		t.Fatalf("remote show without arg opened picker with one remote")
+	}
+	if !strings.Contains(showOnlyOutput, "Env: client-app1-linode:live") {
+		t.Fatalf("remote show without arg output = %q", showOnlyOutput)
+	}
+	remoteSelectFn = oldRemoteSelect
 
 	projectData, err := os.ReadFile(projectPath)
 	if err != nil {
@@ -3635,11 +3671,25 @@ func TestRunRemoteAddListRemoveWritesProjectMetadata(t *testing.T) {
 		t.Fatalf("deploy.remotes.production.site_id = %#v, want client-app1-linode", mapMapAtPath(metadata, "deploy", "remotes", "production"))
 	}
 
+	var removeSelectTitle string
+	var removeSelectOptions []ui.SelectOption
+	remoteSelectFn = func(title string, options []ui.SelectOption) (string, error) {
+		removeSelectTitle = title
+		removeSelectOptions = append([]ui.SelectOption(nil), options...)
+		return "production", nil
+	}
+	t.Cleanup(func() { remoteSelectFn = oldRemoteSelect })
 	removeOutput := captureStdout(t, func() {
-		if got := Run([]string{"remote", "remove", "production"}); got != 0 {
+		if got := Run([]string{"remote", "remove"}); got != 0 {
 			t.Fatalf("Run(remote remove) = %d, want 0", got)
 		}
 	})
+	if removeSelectTitle != "Choose a remote to remove" {
+		t.Fatalf("remote remove select title = %q", removeSelectTitle)
+	}
+	if len(removeSelectOptions) != 1 || removeSelectOptions[0] != (ui.SelectOption{Value: "production", Label: "production -> client-app1-linode:live"}) {
+		t.Fatalf("remote remove select options = %#v", removeSelectOptions)
+	}
 	if !strings.Contains(removeOutput, "Removed remote production") {
 		t.Fatalf("remote remove output = %q", removeOutput)
 	}
@@ -3682,7 +3732,7 @@ func TestRunRemoteAddRequiresCachedSiteEnv(t *testing.T) {
 	t.Cleanup(func() { _ = os.Chdir(oldwd) })
 
 	stderr := captureStderr(t, func() {
-		if got := Run([]string{"remote", "add", "production", "client-kinsta", "live"}); got != 1 {
+		if got := Run([]string{"remote", "add", "production", "client-kinsta:live"}); got != 1 {
 			t.Fatalf("Run(remote add) = %d, want 1", got)
 		}
 	})
@@ -3699,6 +3749,178 @@ func TestRunRemoteAddRequiresCachedSiteEnv(t *testing.T) {
 	}
 	if len(mapMapAtPath(metadata, "deploy", "remotes")) != 0 {
 		t.Fatalf("remote add wrote metadata despite missing cache: %#v", mapMapAtPath(metadata, "deploy", "remotes"))
+	}
+}
+
+func TestRunRemoteAddRequiresEnvRef(t *testing.T) {
+	repoRoot := t.TempDir()
+	if err := os.Mkdir(filepath.Join(repoRoot, ".git"), 0o755); err != nil {
+		t.Fatalf("Mkdir(.git) error = %v", err)
+	}
+	if err := os.MkdirAll(filepath.Join(repoRoot, ".nf"), 0o755); err != nil {
+		t.Fatalf("MkdirAll(.nf) error = %v", err)
+	}
+	project := map[string]any{"schema": 1, "project": map[string]any{"slug": "client"}, "deploy": map[string]any{"remotes": map[string]any{}}}
+	data, err := json.MarshalIndent(project, "", "  ")
+	if err != nil {
+		t.Fatalf("MarshalIndent(project) error = %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(repoRoot, ".nf", "project.json"), append(data, '\n'), 0o644); err != nil {
+		t.Fatalf("WriteFile(project) error = %v", err)
+	}
+	oldwd, err := os.Getwd()
+	if err != nil {
+		t.Fatalf("Getwd() error = %v", err)
+	}
+	if err := os.Chdir(repoRoot); err != nil {
+		t.Fatalf("Chdir() error = %v", err)
+	}
+	t.Cleanup(func() { _ = os.Chdir(oldwd) })
+
+	stderr := captureStderr(t, func() {
+		if got := Run([]string{"remote", "add", "production", "client-kinsta"}); got != 1 {
+			t.Fatalf("Run(remote add site) = %d, want 1", got)
+		}
+	})
+	if !strings.Contains(stderr, "remote add requires an env ref like site.target:env") {
+		t.Fatalf("remote add stderr = %q", stderr)
+	}
+}
+
+func TestRunRemoteAddWithoutEnvPromptsEnvPicker(t *testing.T) {
+	stateDir := t.TempDir()
+	t.Setenv("NF_STATE_HOME", stateDir)
+	if err := state.SaveStateRecords("sites", []map[string]any{
+		{"provider": "kinsta", "site_id": "client-kinsta", "env": "live", "url": "https://www.example.com/"},
+		{"provider": "kinsta", "site_id": "client-kinsta", "env": "staging", "url": "https://staging.example.com/"},
+	}); err != nil {
+		t.Fatalf("SaveStateRecords(sites) error = %v", err)
+	}
+	repoRoot, projectPath := writeTestProject(t)
+	oldwd, err := os.Getwd()
+	if err != nil {
+		t.Fatalf("Getwd() error = %v", err)
+	}
+	if err := os.Chdir(repoRoot); err != nil {
+		t.Fatalf("Chdir() error = %v", err)
+	}
+	t.Cleanup(func() { _ = os.Chdir(oldwd) })
+	oldSelect := siteSelectFn
+	var selectTitle string
+	var selectOptions []ui.SelectOption
+	siteSelectFn = func(title string, options []ui.SelectOption) (string, error) {
+		selectTitle = title
+		selectOptions = append([]ui.SelectOption(nil), options...)
+		return "client-kinsta:staging", nil
+	}
+	t.Cleanup(func() { siteSelectFn = oldSelect })
+
+	output := captureStdout(t, func() {
+		if got := Run([]string{"remote", "add", "staging"}); got != 0 {
+			t.Fatalf("Run(remote add name) = %d, want 0", got)
+		}
+	})
+	if selectTitle != "Choose a remote env" {
+		t.Fatalf("select title = %q", selectTitle)
+	}
+	if len(selectOptions) != 2 || selectOptions[0] != (ui.SelectOption{Value: "client-kinsta:live", Label: "client-kinsta:live"}) || selectOptions[1] != (ui.SelectOption{Value: "client-kinsta:staging", Label: "client-kinsta:staging"}) {
+		t.Fatalf("select options = %#v", selectOptions)
+	}
+	if !strings.Contains(output, "Added remote staging -> client-kinsta:staging") {
+		t.Fatalf("remote add output = %q", output)
+	}
+	assertProjectRemote(t, projectPath, "staging", "client-kinsta", "staging")
+}
+
+func TestRunRemoteAddWithoutNamePromptsNameAndEnvPicker(t *testing.T) {
+	stateDir := t.TempDir()
+	t.Setenv("NF_STATE_HOME", stateDir)
+	if err := state.SaveStateRecords("sites", []map[string]any{{"provider": "kinsta", "site_id": "client-kinsta", "env": "live", "url": "https://www.example.com/"}}); err != nil {
+		t.Fatalf("SaveStateRecords(sites) error = %v", err)
+	}
+	repoRoot, projectPath := writeTestProject(t)
+	oldwd, err := os.Getwd()
+	if err != nil {
+		t.Fatalf("Getwd() error = %v", err)
+	}
+	if err := os.Chdir(repoRoot); err != nil {
+		t.Fatalf("Chdir() error = %v", err)
+	}
+	t.Cleanup(func() { _ = os.Chdir(oldwd) })
+	oldPrompt := remotePromptString
+	oldSelect := siteSelectFn
+	var promptTitle string
+	remotePromptString = func(prompt, defaultValue string, allowBlank bool) (string, error) {
+		promptTitle = prompt
+		if defaultValue != "" || allowBlank {
+			t.Fatalf("remote prompt default/allowBlank = %q/%v, want empty/false", defaultValue, allowBlank)
+		}
+		return "production", nil
+	}
+	var selectTitle string
+	siteSelectFn = func(title string, options []ui.SelectOption) (string, error) {
+		selectTitle = title
+		return "client-kinsta:live", nil
+	}
+	t.Cleanup(func() {
+		remotePromptString = oldPrompt
+		siteSelectFn = oldSelect
+	})
+
+	output := captureStdout(t, func() {
+		if got := Run([]string{"remote", "add"}); got != 0 {
+			t.Fatalf("Run(remote add) = %d, want 0", got)
+		}
+	})
+	if promptTitle != "Remote name" {
+		t.Fatalf("prompt title = %q", promptTitle)
+	}
+	if selectTitle != "Choose a remote env" {
+		t.Fatalf("select title = %q", selectTitle)
+	}
+	if !strings.Contains(output, "Added remote production -> client-kinsta:live") {
+		t.Fatalf("remote add output = %q", output)
+	}
+	assertProjectRemote(t, projectPath, "production", "client-kinsta", "live")
+}
+
+func writeTestProject(t *testing.T) (string, string) {
+	t.Helper()
+	repoRoot := t.TempDir()
+	if err := os.Mkdir(filepath.Join(repoRoot, ".git"), 0o755); err != nil {
+		t.Fatalf("Mkdir(.git) error = %v", err)
+	}
+	if err := os.MkdirAll(filepath.Join(repoRoot, ".nf"), 0o755); err != nil {
+		t.Fatalf("MkdirAll(.nf) error = %v", err)
+	}
+	project := map[string]any{"schema": 1, "project": map[string]any{"slug": "client"}, "deploy": map[string]any{"remotes": map[string]any{}}}
+	data, err := json.MarshalIndent(project, "", "  ")
+	if err != nil {
+		t.Fatalf("MarshalIndent(project) error = %v", err)
+	}
+	projectPath := filepath.Join(repoRoot, ".nf", "project.json")
+	if err := os.WriteFile(projectPath, append(data, '\n'), 0o644); err != nil {
+		t.Fatalf("WriteFile(project) error = %v", err)
+	}
+	return repoRoot, projectPath
+}
+
+func assertProjectRemote(t *testing.T, projectPath, remoteName, wantSiteID, wantEnv string) {
+	t.Helper()
+	projectData, err := os.ReadFile(projectPath)
+	if err != nil {
+		t.Fatalf("ReadFile(project) error = %v", err)
+	}
+	var metadata map[string]any
+	if err := json.Unmarshal(projectData, &metadata); err != nil {
+		t.Fatalf("Unmarshal(project) error = %v", err)
+	}
+	remote := mapMapAtPath(metadata, "deploy", "remotes", remoteName)
+	if got := recordValueString(remote["site_id"]); got != wantSiteID {
+		t.Fatalf("deploy.remotes.%s.site_id = %q, want %q", remoteName, got, wantSiteID)
+	}
+	if got := recordValueString(remote["env"]); got != wantEnv {
+		t.Fatalf("deploy.remotes.%s.env = %q, want %q", remoteName, got, wantEnv)
 	}
 }
 
@@ -4343,7 +4565,7 @@ func TestRunSiteShowResolvesRepoRemoteAlias(t *testing.T) {
 			t.Fatalf("Run(site show production) = %d, want 0", got)
 		}
 	})
-	for _, want := range []string{`"requested_target": "production"`, `"resolved_target": "client-kinsta"`, `"kinsta_site_id": "ksite123"`, `"kinsta_environment_id": "kenv123"`} {
+	for _, want := range []string{`"requested_site": "client-kinsta"`, `"requested_env": "live"`, `"resolved_site": "client-kinsta"`, `"resolved_env": "live"`, `"resolved_target": "kinsta"`, `"kinsta_site_id": "ksite123"`, `"kinsta_environment_id": "kenv123"`} {
 		if !strings.Contains(output, want) {
 			t.Fatalf("site show remote alias output missing %q:\n%s", want, output)
 		}
