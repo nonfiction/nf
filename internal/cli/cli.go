@@ -56,6 +56,7 @@ var (
 	providerSelectFn        = ui.Select
 	siteSelectFn            = ui.Select
 	remoteSelectFn          = ui.Select
+	siteIsInteractiveFn     = envwizard.IsInteractiveTerminal
 )
 
 type repoCommandRunner interface {
@@ -4620,14 +4621,15 @@ func cmdListSiteEnvs(siteID string) int {
 		fmt.Fprintln(os.Stderr, err)
 		return 1
 	}
-	rows := [][]string{{"env", "site", "php", "url"}}
+	rows := [][]string{{"env id", "site", "env", "php", "url"}}
 	for _, record := range bundle.Sites {
 		if !siteEnvMatchesSite(record, siteID) {
 			continue
 		}
 		rows = append(rows, []string{
-			siteEnvName(record),
+			siteRecordEnvID(record),
 			siteEnvDisplaySite(record),
+			siteEnvName(record),
 			sitePHPVersion(record),
 			firstRecordString(record, "url", "site_url", "home_url", "hostname"),
 		})
@@ -4644,10 +4646,17 @@ func cmdListSiteEnvs(siteID string) int {
 	return 0
 }
 
+func cmdShowSiteRef(needle string, jsonOutput bool) int {
+	if siteID, env, ok := splitSiteEnvRef(needle); ok {
+		return cmdShowSiteEnv(siteID, env, jsonOutput)
+	}
+	return cmdShowSite(needle, jsonOutput)
+}
+
 func cmdShowSiteEnv(siteID, env string, jsonOutput bool) int {
 	siteID, env = normalizeSiteEnvRequest(siteID, env)
 	if siteID == "" || env == "" {
-		fmt.Fprintln(os.Stderr, "site env show requires site-id and env")
+		fmt.Fprintln(os.Stderr, "site show requires a site or env ref")
 		return 1
 	}
 	bundle, err := state.LoadStateBundle()
@@ -5427,16 +5436,20 @@ func executeEnvPush(cfg envConfig, target envRemoteSyncTarget) int {
 	return 0
 }
 
-func cmdSiteEnvRemoteCommandPlan(action, siteID, env string, args []string) int {
-	siteID, env = normalizeSiteEnvRequest(siteID, env)
+func cmdSiteRemoteCommandPlan(action, envRef string, args []string) int {
+	siteID, env, ok := splitSiteEnvRef(envRef)
 	if siteID == "" || env == "" {
-		fmt.Fprintf(os.Stderr, "site env %s requires site-id and env\n", action)
+		fmt.Fprintf(os.Stderr, "site %s requires an env ref like site.target:env\n", action)
+		return 1
+	}
+	if !ok {
+		fmt.Fprintf(os.Stderr, "site %s requires an env ref like site.target:env\n", action)
 		return 1
 	}
 	if action == "wp" {
 		args = normalizePassthroughArgs(args)
 		if len(args) == 0 {
-			fmt.Fprintln(os.Stderr, "site env wp requires a wp-cli command")
+			fmt.Fprintln(os.Stderr, "site wp requires an env ref and wp-cli command")
 			return 1
 		}
 	}
@@ -5446,7 +5459,7 @@ func cmdSiteEnvRemoteCommandPlan(action, siteID, env string, args []string) int 
 		return 1
 	}
 	if record == nil {
-		fmt.Fprintf(os.Stderr, "No cached remote env matched site %q env %q.\n", siteID, env)
+		fmt.Fprintf(os.Stderr, "No cached remote env matched %q.\n", canonicalEnvID(siteID, env))
 		return 1
 	}
 	if err := validateSiteRecord(record); err != nil {
@@ -5454,7 +5467,7 @@ func cmdSiteEnvRemoteCommandPlan(action, siteID, env string, args []string) int 
 		return 1
 	}
 	provider := strings.ToLower(strings.TrimSpace(recordValueString(record["provider"])))
-	fmt.Printf("Site env %s preflight:\n", action)
+	fmt.Printf("Site %s preflight:\n", action)
 	fmt.Printf("  site:     %s\n", siteID)
 	fmt.Printf("  env:      %s\n", env)
 	fmt.Printf("  provider: %s\n", provider)
@@ -5568,41 +5581,6 @@ func linodeSiteEnvSSHArgs(record map[string]any, action string, wpArgs []string)
 		remoteCommand += " " + renderCommandArgs(normalized)
 	}
 	return append(sshArgs, remoteCommand), nil
-}
-
-func parseSiteEnvFlag(args []string, allowCommand bool) (siteID, env string, command []string, ok bool) {
-	if len(args) == 0 {
-		return "", "", nil, false
-	}
-	siteID = args[0]
-	env = "live"
-	seenEnv := ""
-	for i := 1; i < len(args); i++ {
-		arg := args[i]
-		switch arg {
-		case "--live", "--staging":
-			selected := strings.TrimPrefix(arg, "--")
-			if seenEnv != "" && seenEnv != selected {
-				fmt.Fprintln(os.Stderr, "Choose either --live or --staging, not both.")
-				return "", "", nil, false
-			}
-			seenEnv = selected
-			env = selected
-		case "--":
-			if allowCommand {
-				return siteID, env, args[i+1:], true
-			}
-			fmt.Fprintln(os.Stderr, "unexpected --")
-			return "", "", nil, false
-		default:
-			if allowCommand {
-				return siteID, env, args[i:], true
-			}
-			fmt.Fprintf(os.Stderr, "unknown site env flag: %s\n", arg)
-			return "", "", nil, false
-		}
-	}
-	return siteID, env, nil, true
 }
 
 func cmdShowServer(needle string) int {
@@ -6372,18 +6350,6 @@ func chooseSiteForPassword() (string, error) {
 	return chooseSite("show password for")
 }
 
-func chooseSiteForEnvList() (string, error) {
-	return chooseSite("list envs for")
-}
-
-func chooseSiteForEnvShow() (string, error) {
-	return chooseSite("show an env for")
-}
-
-func chooseSiteForEnvShell() (string, error) {
-	return chooseSite("shell into")
-}
-
 func chooseSite(action string) (string, error) {
 	bundle, err := state.LoadStateBundle()
 	if err != nil {
@@ -6403,6 +6369,45 @@ func chooseSite(action string) (string, error) {
 		return "", ProjectError{Msg: "No selectable sites found."}
 	}
 	return siteSelectFn(fmt.Sprintf("Choose a site to %s", action), options)
+}
+
+func chooseSiteEnv(action, siteID string) (string, error) {
+	bundle, err := state.LoadStateBundle()
+	if err != nil {
+		return "", err
+	}
+	options := []ui.SelectOption{}
+	seen := map[string]bool{}
+	for _, record := range bundle.Sites {
+		if !siteEnvMatchesSite(record, siteID) {
+			continue
+		}
+		envID := siteRecordEnvID(record)
+		if envID == "" || seen[envID] {
+			continue
+		}
+		seen[envID] = true
+		options = append(options, ui.SelectOption{Value: envID, Label: envID})
+	}
+	if len(options) == 0 {
+		if strings.TrimSpace(siteID) != "" {
+			return "", ProjectError{Msg: fmt.Sprintf("No selectable envs found for %q.", siteID)}
+		}
+		return "", ProjectError{Msg: "No selectable envs found."}
+	}
+	sort.SliceStable(options, func(i, j int) bool {
+		leftSite, leftEnv, _ := splitSiteEnvRef(options[i].Value)
+		rightSite, rightEnv, _ := splitSiteEnvRef(options[j].Value)
+		if leftSite != rightSite {
+			return leftSite < rightSite
+		}
+		li, ri := siteListEnvOrder(leftEnv), siteListEnvOrder(rightEnv)
+		if li != ri {
+			return li < ri
+		}
+		return leftEnv < rightEnv
+	})
+	return siteSelectFn(fmt.Sprintf("Choose a remote env to %s", action), options)
 }
 
 func parseSiteShowArgs(argv []string) (string, bool, error) {
@@ -6425,62 +6430,89 @@ func parseSiteShowArgs(argv []string) (string, bool, error) {
 	return needle, jsonOutput, nil
 }
 
-func parseSiteEnvShowArgs(args []string) (siteID, env string, jsonOutput bool, ok bool) {
-	env = "live"
-	seenEnv := ""
-	for _, arg := range args {
+func parseSiteListArgs(argv []string) (bool, string, error) {
+	envs := false
+	siteID := ""
+	for _, arg := range argv {
 		switch arg {
-		case "--json":
-			jsonOutput = true
-		case "--live", "--staging":
-			selected := strings.TrimPrefix(arg, "--")
-			if seenEnv != "" && seenEnv != selected {
-				fmt.Fprintln(os.Stderr, "Choose either --live or --staging, not both.")
-				return "", "", false, false
-			}
-			seenEnv = selected
-			env = selected
+		case "--envs":
+			envs = true
 		default:
 			if strings.HasPrefix(arg, "-") {
-				fmt.Fprintf(os.Stderr, "unknown site env show flag: %s\n", arg)
-				return "", "", false, false
+				return false, "", fmt.Errorf("unknown site list flag: %s", arg)
 			}
 			if siteID != "" {
-				fmt.Fprintln(os.Stderr, "site env show takes at most one site")
-				return "", "", false, false
+				return false, "", fmt.Errorf("site list --envs takes at most one site")
 			}
 			siteID = arg
 		}
 	}
-	return siteID, env, jsonOutput, true
+	if siteID != "" && !envs {
+		return false, "", fmt.Errorf("site list takes no arguments unless --envs is used")
+	}
+	return envs, siteID, nil
 }
 
-func parseSiteEnvShellArgs(args []string) (siteID, env string, ok bool) {
-	env = "live"
-	seenEnv := ""
-	for _, arg := range args {
-		switch arg {
-		case "--live", "--staging":
-			selected := strings.TrimPrefix(arg, "--")
-			if seenEnv != "" && seenEnv != selected {
-				fmt.Fprintln(os.Stderr, "Choose either --live or --staging, not both.")
-				return "", "", false
-			}
-			seenEnv = selected
-			env = selected
-		default:
-			if strings.HasPrefix(arg, "-") {
-				fmt.Fprintf(os.Stderr, "unknown site env shell flag: %s\n", arg)
-				return "", "", false
-			}
-			if siteID != "" {
-				fmt.Fprintln(os.Stderr, "site env shell takes at most one site")
-				return "", "", false
-			}
-			siteID = arg
+func resolveSiteCommandEnvRef(action, ref string) (string, bool) {
+	ref = strings.TrimSpace(ref)
+	if ref == "" {
+		if !siteIsInteractiveFn() {
+			fmt.Fprintf(os.Stderr, "site %s requires an env ref like site.target:env\n", action)
+			return "", false
+		}
+		selected, err := chooseSiteEnv(action, "")
+		if err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			return "", false
+		}
+		return selected, true
+	}
+	if _, _, ok := splitSiteEnvRef(ref); ok {
+		return ref, true
+	}
+	if !siteIsInteractiveFn() {
+		fmt.Fprintf(os.Stderr, "site %s requires an env ref like %s:live or %s:staging\n", action, ref, ref)
+		return "", false
+	}
+	selected, err := chooseSiteEnv(action, ref)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		return "", false
+	}
+	return selected, true
+}
+
+func parseSiteShellArgs(argv []string) (string, bool) {
+	if len(argv) > 1 {
+		fmt.Fprintln(os.Stderr, "site shell takes at most one env ref")
+		return "", false
+	}
+	ref := ""
+	if len(argv) == 1 {
+		ref = argv[0]
+		if strings.HasPrefix(ref, "-") {
+			fmt.Fprintf(os.Stderr, "unknown site shell flag: %s\n", ref)
+			return "", false
 		}
 	}
-	return siteID, env, true
+	return resolveSiteCommandEnvRef("shell", ref)
+}
+
+func parseSiteWPArgs(argv []string) (string, []string, bool) {
+	if len(argv) == 0 || strings.HasPrefix(argv[0], "-") {
+		fmt.Fprintln(os.Stderr, "site wp requires an env ref and wp-cli command")
+		return "", nil, false
+	}
+	envRef, ok := resolveSiteCommandEnvRef("wp", argv[0])
+	if !ok {
+		return "", nil, false
+	}
+	command := normalizePassthroughArgs(argv[1:])
+	if len(command) == 0 {
+		fmt.Fprintln(os.Stderr, "site wp requires an env ref and wp-cli command")
+		return "", nil, false
+	}
+	return envRef, command, true
 }
 
 func chooseTargetForShow() (string, error) {
@@ -7121,13 +7153,14 @@ func runRemoteHelp() int {
 
 func runSiteHelp() int {
 	printGroupHelp("site", []helpLine{
-		{"list, ls", "list sites"},
-		{"show [site] [--json]", "show a site"},
-		{"env", "manage remote envs"},
+		{"list, ls [--envs]", "list sites or remote envs"},
+		{"show [site|env] [--json]", "show a site or remote env"},
+		{"shell, ssh <env>", "shell into a remote env"},
+		{"wp <env> -- <args>", "run wp-cli against a remote env"},
 		{"password [site]", "show admin password only"},
 		{"refresh", "refresh local site cache"},
 		{"add <target> <site> [flags]", "create live and staging envs"},
-		{"remove, rm [site] [flags]", "remove a Linode site"},
+		{"remove, rm [site] [flags]", "remove a site and both envs"},
 	})
 	return 0
 }
@@ -7320,12 +7353,21 @@ func targetAddFlagCandidates() []string {
 
 func siteCompletionCandidates(args []string) []string {
 	if len(args) == 0 {
-		return []string{"list", "ls", "show", "env", "password", "refresh", "add", "remove", "rm", "help"}
+		return []string{"list", "ls", "show", "shell", "ssh", "wp", "password", "refresh", "add", "remove", "rm", "help"}
 	}
 	args[0] = cliCommandAlias(args[0])
 	switch args[0] {
+	case "list":
+		for _, arg := range args[1:] {
+			if arg == "--envs" {
+				return cachedSiteCompletionNames()
+			}
+		}
+		return []string{"--envs"}
 	case "show":
-		return cachedSiteCompletionNames()
+		return cachedSiteAndEnvCompletionNames()
+	case "shell", "wp":
+		return cachedSiteEnvCompletionNames()
 	case "password":
 		return cachedSiteCompletionNames()
 	case "remove":
@@ -7335,28 +7377,6 @@ func siteCompletionCandidates(args []string) []string {
 			return cachedTargetCompletionNames()
 		}
 		return []string{"--region", "--php", "--dry-run", "--execute", "--yes", "--non-interactive"}
-	case "env":
-		return siteEnvCompletionCandidates(args[1:])
-	default:
-		return nil
-	}
-}
-
-func siteEnvCompletionCandidates(args []string) []string {
-	if len(args) == 0 {
-		return []string{"list", "ls", "show", "shell", "ssh", "wp", "help"}
-	}
-	args[0] = cliCommandAlias(args[0])
-	sites := cachedSiteCompletionNames()
-	switch args[0] {
-	case "list":
-		return sites
-	case "show":
-		return sites
-	case "shell":
-		return sites
-	case "wp":
-		return sites
 	default:
 		return nil
 	}
@@ -7457,6 +7477,23 @@ func cachedSiteCompletionNames() []string {
 	for _, site := range sites {
 		values = append(values, siteRecordID(site))
 	}
+	return uniqueSortedStrings(values)
+}
+
+func cachedSiteEnvCompletionNames() []string {
+	sites, err := state.LoadStateRecords("sites")
+	if err != nil {
+		return nil
+	}
+	values := make([]string, 0, len(sites))
+	for _, site := range sites {
+		values = append(values, siteRecordEnvID(site))
+	}
+	return uniqueSortedStrings(values)
+}
+
+func cachedSiteAndEnvCompletionNames() []string {
+	values := append(cachedSiteCompletionNames(), cachedSiteEnvCompletionNames()...)
 	return uniqueSortedStrings(values)
 }
 
@@ -9475,20 +9512,27 @@ func runSite(argv []string) int {
 		}
 		return cmdSiteRefresh()
 	case "list":
-		fs := flag.NewFlagSet("site list", flag.ContinueOnError)
-		refresh := fs.Bool("refresh", false, "")
-		fs.SetOutput(os.Stderr)
-		if err := fs.Parse(argv[1:]); err != nil {
+		refresh := false
+		listArgs := []string{}
+		for _, arg := range argv[1:] {
+			if arg == "--refresh" {
+				refresh = true
+				continue
+			}
+			listArgs = append(listArgs, arg)
+		}
+		listEnvs, siteID, err := parseSiteListArgs(listArgs)
+		if err != nil {
+			fmt.Fprintln(os.Stderr, err)
 			return 1
 		}
-		if len(fs.Args()) != 0 {
-			fmt.Fprintln(os.Stderr, "site list takes no arguments")
-			return 1
-		}
-		if *refresh {
+		if refresh {
 			if code := cmdSiteRefresh(); code != 0 {
 				return code
 			}
+		}
+		if listEnvs {
+			return cmdListSiteEnvs(siteID)
 		}
 		return cmdList("sites")
 	case "show":
@@ -9505,7 +9549,19 @@ func runSite(argv []string) int {
 			}
 			needle = selected
 		}
-		return cmdShowSite(needle, jsonOutput)
+		return cmdShowSiteRef(needle, jsonOutput)
+	case "shell":
+		envRef, ok := parseSiteShellArgs(argv[1:])
+		if !ok {
+			return 1
+		}
+		return cmdSiteRemoteCommandPlan("shell", envRef, nil)
+	case "wp":
+		envRef, command, ok := parseSiteWPArgs(argv[1:])
+		if !ok {
+			return 1
+		}
+		return cmdSiteRemoteCommandPlan("wp", envRef, command)
 	case "password":
 		if len(argv) > 2 {
 			fmt.Fprintln(os.Stderr, "site password takes at most one site")
@@ -9522,6 +9578,10 @@ func runSite(argv []string) int {
 				return 1
 			}
 			needle = selected
+		}
+		if siteID, _, ok := splitSiteEnvRef(needle); ok {
+			fmt.Fprintf(os.Stderr, "site password takes a site, not an env; use %q.\n", siteID)
+			return 1
 		}
 		return cmdSitePassword(needle)
 	case "remove":
@@ -9542,9 +9602,11 @@ func runSite(argv []string) int {
 			}
 			needle = selected
 		}
+		if siteID, _, ok := splitSiteEnvRef(needle); ok {
+			fmt.Fprintf(os.Stderr, "Cannot remove one env; remove site %q to delete live and staging.\n", siteID)
+			return 1
+		}
 		return cmdSiteRemove(needle, opts.dryRun, opts.execute, opts.yes, opts.nonInteractive)
-	case "env":
-		return runSiteEnv(argv[1:])
 	default:
 		fmt.Fprintln(os.Stderr, "unsupported site command")
 		return 1
@@ -9622,83 +9684,6 @@ func runSiteAdd(argv []string) int {
 	args.target = positionals[0]
 	args.site = positionals[1]
 	return cmdSiteAdd(args)
-}
-
-func runSiteEnv(argv []string) int {
-	if len(argv) == 0 || argv[0] == "help" || argv[0] == "--help" || argv[0] == "-h" {
-		printGroupHelp("site env", []helpLine{
-			{"list, ls [site]", "list remote envs for a site"},
-			{"show [site] [--live|--staging] [--json]", "show one remote env"},
-			{"shell, ssh [site] [--live|--staging]", "shell into a remote env"},
-			{"wp <site> [--live|--staging] <cmd>", "run wp-cli against a remote env"},
-		})
-		return 0
-	}
-	argv[0] = cliCommandAlias(argv[0])
-	switch argv[0] {
-	case "list":
-		if len(argv) > 2 {
-			fmt.Fprintln(os.Stderr, "site env list takes at most one site")
-			return 1
-		}
-		siteID := ""
-		if len(argv) == 2 {
-			siteID = argv[1]
-		} else {
-			selected, err := chooseSiteForEnvList()
-			if err != nil {
-				fmt.Fprintln(os.Stderr, err)
-				return 1
-			}
-			siteID = selected
-		}
-		return cmdListSiteEnvs(siteID)
-	case "show":
-		siteID, env, jsonOutput, ok := parseSiteEnvShowArgs(argv[1:])
-		if !ok {
-			return 1
-		}
-		if siteID == "" {
-			selected, err := chooseSiteForEnvShow()
-			if err != nil {
-				fmt.Fprintln(os.Stderr, err)
-				return 1
-			}
-			siteID = selected
-		}
-		return cmdShowSiteEnv(siteID, env, jsonOutput)
-	case "shell":
-		siteID, env, ok := parseSiteEnvShellArgs(argv[1:])
-		if !ok {
-			return 1
-		}
-		if siteID == "" {
-			selected, err := chooseSiteForEnvShell()
-			if err != nil {
-				fmt.Fprintln(os.Stderr, err)
-				return 1
-			}
-			siteID = selected
-		}
-		return cmdSiteEnvRemoteCommandPlan("shell", siteID, env, nil)
-	case "wp":
-		if len(argv) == 1 || strings.HasPrefix(argv[1], "-") {
-			fmt.Fprintln(os.Stderr, "site env wp takes site and command")
-			return 1
-		}
-		siteID, env, command, ok := parseSiteEnvFlag(argv[1:], true)
-		if !ok {
-			return 1
-		}
-		if len(command) == 0 {
-			fmt.Fprintln(os.Stderr, "site env wp takes site and command")
-			return 1
-		}
-		return cmdSiteEnvRemoteCommandPlan("wp", siteID, env, command)
-	default:
-		fmt.Fprintln(os.Stderr, "unsupported site env command")
-		return 1
-	}
 }
 
 func runProvision(argv []string) int {

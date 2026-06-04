@@ -315,8 +315,29 @@ func TestRunCompleteSuggestsStaticAndCachedValues(t *testing.T) {
 	if !strings.Contains(siteOutput, "client-app1-linode\n") {
 		t.Fatalf("site completion missing cached site:\n%s", siteOutput)
 	}
+	if !strings.Contains(siteOutput, "client-app1-linode:live\n") {
+		t.Fatalf("site completion missing cached env:\n%s", siteOutput)
+	}
 	if strings.Contains(siteOutput, "--json") || strings.Contains(siteOutput, "app1-linode.nonfiction.dev") {
 		t.Fatalf("site completion included flags or aliases:\n%s", siteOutput)
+	}
+
+	siteShellOutput := captureStdout(t, func() {
+		if got := Run([]string{"__complete", "--", "site", "shell", "client"}); got != 0 {
+			t.Fatalf("Run(__complete site shell) = %d, want 0", got)
+		}
+	})
+	if strings.TrimSpace(siteShellOutput) != "client-app1-linode:live" {
+		t.Fatalf("site shell completion = %q, want env id only", siteShellOutput)
+	}
+
+	sitePasswordOutput := captureStdout(t, func() {
+		if got := Run([]string{"__complete", "--", "site", "password", "client"}); got != 0 {
+			t.Fatalf("Run(__complete site password) = %d, want 0", got)
+		}
+	})
+	if strings.TrimSpace(sitePasswordOutput) != "client-app1-linode" {
+		t.Fatalf("site password completion = %q, want site id only", sitePasswordOutput)
 	}
 }
 
@@ -2803,7 +2824,18 @@ func TestRunSiteRemoveWithoutArgUsesPicker(t *testing.T) {
 	}
 }
 
-func TestRunSiteEnvListAndShowUseCachedSites(t *testing.T) {
+func TestRunSiteRemoveRejectsEnvRef(t *testing.T) {
+	stderr := captureStderr(t, func() {
+		if got := Run([]string{"site", "remove", "foobar.app1-linode:staging", "--dry-run"}); got != 1 {
+			t.Fatalf("Run(site remove env) = %d, want 1", got)
+		}
+	})
+	if !strings.Contains(stderr, `Cannot remove one env; remove site "foobar.app1-linode" to delete live and staging.`) {
+		t.Fatalf("site remove env stderr = %q", stderr)
+	}
+}
+
+func TestRunSiteListEnvsAndShowEnvUseCachedSites(t *testing.T) {
 	stateDir := t.TempDir()
 	t.Setenv("NF_STATE_HOME", stateDir)
 	sites := map[string]any{"sites": map[string]any{
@@ -2819,49 +2851,49 @@ func TestRunSiteEnvListAndShowUseCachedSites(t *testing.T) {
 	}
 
 	listOutput := captureStdout(t, func() {
-		if got := Run([]string{"site", "env", "list", "client-kinsta"}); got != 0 {
-			t.Fatalf("Run(site env list) = %d, want 0", got)
+		if got := Run([]string{"site", "list", "--envs", "client-kinsta"}); got != 0 {
+			t.Fatalf("Run(site list --envs) = %d, want 0", got)
 		}
 	})
-	for _, want := range []string{"env", "site", "php", "url", "live", "staging", "client-kinsta", "8.3", "https://www.example.com/", "https://staging.example.com/"} {
+	for _, want := range []string{"env id", "site", "env", "php", "url", "client-kinsta:live", "client-kinsta:staging", "live", "staging", "client-kinsta", "8.3", "https://www.example.com/", "https://staging.example.com/"} {
 		if !strings.Contains(listOutput, want) {
-			t.Fatalf("site env list output missing %q:\n%s", want, listOutput)
+			t.Fatalf("site list --envs output missing %q:\n%s", want, listOutput)
 		}
 	}
 	for _, notWant := range []string{"target", "provider", "branch", "develop"} {
 		if strings.Contains(listOutput, notWant) {
-			t.Fatalf("site env list output contains %q:\n%s", notWant, listOutput)
+			t.Fatalf("site list --envs output contains %q:\n%s", notWant, listOutput)
 		}
 	}
 
 	showOutput := captureStdout(t, func() {
-		if got := Run([]string{"site", "env", "show", "client-kinsta", "--staging"}); got != 0 {
-			t.Fatalf("Run(site env show) = %d, want 0", got)
+		if got := Run([]string{"site", "show", "client-kinsta:staging"}); got != 0 {
+			t.Fatalf("Run(site show env) = %d, want 0", got)
 		}
 	})
 	for _, want := range []string{"client-kinsta:staging", "Site       client-kinsta", "Env        staging", "Provider   kinsta", "Target     kinsta", "URL        https://staging.example.com/", "PHP        8.3", "Provider IDs", "Kinsta env    kenv-staging", "Access", "SSH command   ssh clientstaging@203.0.113.11 -p 12346", "Branch     develop"} {
 		if !strings.Contains(showOutput, want) {
-			t.Fatalf("site env show output missing %q:\n%s", want, showOutput)
+			t.Fatalf("site show env output missing %q:\n%s", want, showOutput)
 		}
 	}
 	for _, notWant := range []string{"SSH host", "SSH port", "SSH user", "SSH address"} {
 		if strings.Contains(showOutput, notWant) {
-			t.Fatalf("site env show output contains %q:\n%s", notWant, showOutput)
+			t.Fatalf("site show env output contains %q:\n%s", notWant, showOutput)
 		}
 	}
 	jsonOutput := captureStdout(t, func() {
-		if got := Run([]string{"site", "env", "show", "client-kinsta", "--staging", "--json"}); got != 0 {
-			t.Fatalf("Run(site env show --json) = %d, want 0", got)
+		if got := Run([]string{"site", "show", "client-kinsta:staging", "--json"}); got != 0 {
+			t.Fatalf("Run(site show env --json) = %d, want 0", got)
 		}
 	})
 	for _, want := range []string{`"requested_site": "client-kinsta"`, `"requested_env": "staging"`, `"resolved_site": "client-kinsta"`, `"resolved_env": "staging"`, `"php_version": "8.3"`, `"ssh_host": "203.0.113.11"`, `"ssh_port": "12346"`, `"ssh_user": "clientstaging"`, `"kinsta_environment_id": "kenv-staging"`} {
 		if !strings.Contains(jsonOutput, want) {
-			t.Fatalf("site env show --json output missing %q:\n%s", want, jsonOutput)
+			t.Fatalf("site show env --json output missing %q:\n%s", want, jsonOutput)
 		}
 	}
 }
 
-func TestRunSiteEnvShowLinodeUsesCachedTargets(t *testing.T) {
+func TestRunSiteShowEnvLinodeUsesCachedTargets(t *testing.T) {
 	stateDir := t.TempDir()
 	t.Setenv("NF_STATE_HOME", stateDir)
 	t.Setenv("NF_PASSWORD_SALT", "test-salt")
@@ -2876,29 +2908,29 @@ func TestRunSiteEnvShowLinodeUsesCachedTargets(t *testing.T) {
 	}
 
 	showOutput := captureStdout(t, func() {
-		if got := Run([]string{"site", "env", "show", "happytents.app2-linode", "--staging"}); got != 0 {
-			t.Fatalf("Run(site env show) = %d, want 0", got)
+		if got := Run([]string{"site", "show", "happytents.app2-linode:staging"}); got != 0 {
+			t.Fatalf("Run(site show env) = %d, want 0", got)
 		}
 	})
 	adminPassword := passwords.DerivePassword("happytents", "wp-admin", "test-salt")
 	for _, want := range []string{"happytents.app2-linode:staging", "Site       happytents.app2-linode", "Env        staging", "Provider   linode", "Target     app2-linode", "URL        https://happytents-staging.app2-linode.nonfiction.dev", "PHP        8.3", "SSH command   ssh nonfiction@app2-linode.nonfiction.dev", "Admin user    admin", "Admin pass    " + adminPassword} {
 		if !strings.Contains(showOutput, want) {
-			t.Fatalf("site env show output missing %q:\n%s", want, showOutput)
+			t.Fatalf("site show env output missing %q:\n%s", want, showOutput)
 		}
 	}
 	for _, notWant := range []string{"Hostname:", "Target summary:", "SSH host", "SSH port", "SSH user", "SSH address"} {
 		if strings.Contains(showOutput, notWant) {
-			t.Fatalf("site env show output contains %q:\n%s", notWant, showOutput)
+			t.Fatalf("site show env output contains %q:\n%s", notWant, showOutput)
 		}
 	}
 	jsonOutput := captureStdout(t, func() {
-		if got := Run([]string{"site", "env", "show", "happytents.app2-linode", "--staging", "--json"}); got != 0 {
-			t.Fatalf("Run(site env show --json) = %d, want 0", got)
+		if got := Run([]string{"site", "show", "happytents.app2-linode:staging", "--json"}); got != 0 {
+			t.Fatalf("Run(site show env --json) = %d, want 0", got)
 		}
 	})
 	for _, want := range []string{`"resolved_site": "happytents.app2-linode"`, `"resolved_env": "staging"`, `"resolved_target": "app2-linode"`, `"php_version": "8.3"`, `"resolved_admin_user": "admin"`, `"resolved_admin_password": "` + adminPassword + `"`, `"resolved_target_summary": "app2-linode / linode / ssh nonfiction@app2-linode.nonfiction.dev"`} {
 		if !strings.Contains(jsonOutput, want) {
-			t.Fatalf("site env show --json output missing %q:\n%s", want, jsonOutput)
+			t.Fatalf("site show env --json output missing %q:\n%s", want, jsonOutput)
 		}
 	}
 }
@@ -2922,6 +2954,17 @@ func TestRunSitePasswordPrintsAdminPasswordOnly(t *testing.T) {
 	})
 	if output != want {
 		t.Fatalf("site password output = %q, want %q", output, want)
+	}
+}
+
+func TestRunSitePasswordRejectsEnvRef(t *testing.T) {
+	stderr := captureStderr(t, func() {
+		if got := Run([]string{"site", "password", "happytents.app2-linode:staging"}); got != 1 {
+			t.Fatalf("Run(site password env) = %d, want 1", got)
+		}
+	})
+	if !strings.Contains(stderr, `site password takes a site, not an env; use "happytents.app2-linode".`) {
+		t.Fatalf("site password env stderr = %q", stderr)
 	}
 }
 
@@ -2959,7 +3002,7 @@ func TestRunSitePasswordWithoutSitePromptsPicker(t *testing.T) {
 	}
 }
 
-func TestRunSiteEnvListWithoutSitePromptsPicker(t *testing.T) {
+func TestRunSiteListEnvsWithoutSiteListsAll(t *testing.T) {
 	stateDir := t.TempDir()
 	t.Setenv("NF_STATE_HOME", stateDir)
 	sites := map[string]any{"sites": map[string]any{
@@ -2973,86 +3016,67 @@ func TestRunSiteEnvListWithoutSitePromptsPicker(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(stateDir, "sites.json"), append(data, '\n'), 0o644); err != nil {
 		t.Fatalf("WriteFile(sites) error = %v", err)
 	}
-	oldSelect := siteSelectFn
-	var selectTitle string
-	var selectOptions []ui.SelectOption
-	siteSelectFn = func(title string, options []ui.SelectOption) (string, error) {
-		selectTitle = title
-		selectOptions = append([]ui.SelectOption(nil), options...)
-		return "client-kinsta", nil
-	}
-	t.Cleanup(func() { siteSelectFn = oldSelect })
-
 	output := captureStdout(t, func() {
-		if got := Run([]string{"site", "env", "list"}); got != 0 {
-			t.Fatalf("Run(site env list) = %d, want 0", got)
+		if got := Run([]string{"site", "list", "--envs"}); got != 0 {
+			t.Fatalf("Run(site list --envs) = %d, want 0", got)
 		}
 	})
-	if selectTitle != "Choose a site to list envs for" {
-		t.Fatalf("select title = %q", selectTitle)
-	}
-	if len(selectOptions) != 1 || selectOptions[0] != (ui.SelectOption{Value: "client-kinsta", Label: "client-kinsta"}) {
-		t.Fatalf("select options = %#v", selectOptions)
-	}
-	for _, want := range []string{"env", "site", "php", "url", "live", "staging", "client-kinsta", "https://www.example.com/", "https://staging.example.com/"} {
+	for _, want := range []string{"env id", "site", "env", "php", "url", "client-kinsta:live", "client-kinsta:staging", "live", "staging", "client-kinsta", "https://www.example.com/", "https://staging.example.com/"} {
 		if !strings.Contains(output, want) {
-			t.Fatalf("site env list output missing %q:\n%s", want, output)
+			t.Fatalf("site list --envs output missing %q:\n%s", want, output)
 		}
 	}
 	if strings.Contains(output, "target") {
-		t.Fatalf("site env list output contains target column:\n%s", output)
+		t.Fatalf("site list --envs output contains target column:\n%s", output)
 	}
 }
 
-func TestRunSiteEnvShowWithoutSitePromptsPicker(t *testing.T) {
+func TestRunSiteShellSiteRefPromptsEnvPicker(t *testing.T) {
 	stateDir := t.TempDir()
 	t.Setenv("NF_STATE_HOME", stateDir)
 	if err := state.SaveStateRecords("sites", []map[string]any{
-		{"provider": "kinsta", "site_id": "client-kinsta", "env": "live", "url": "https://www.example.com/", "kinsta": map[string]any{"site_id": "ksite123", "environment_id": "kenv-live"}},
-		{"provider": "kinsta", "site_id": "client-kinsta", "env": "staging", "url": "https://staging.example.com/", "kinsta": map[string]any{"site_id": "ksite123", "environment_id": "kenv-staging"}},
+		{"provider": "kinsta", "site_id": "client-kinsta", "env": "live", "url": "https://www.example.com/", "path": "/www/client/public", "ssh": map[string]any{"host": "203.0.113.10", "port": "12345", "user": "client"}},
+		{"provider": "kinsta", "site_id": "client-kinsta", "env": "staging", "url": "https://staging.example.com/", "path": "/www/clientstaging/public", "ssh": map[string]any{"host": "203.0.113.11", "port": "12346", "user": "clientstaging"}},
 	}); err != nil {
 		t.Fatalf("SaveStateRecords(sites) error = %v", err)
 	}
 	oldSelect := siteSelectFn
+	oldInteractive := siteIsInteractiveFn
+	oldRunSSHCommand := runSSHCommandFn
 	var selectTitle string
 	var selectOptions []ui.SelectOption
 	siteSelectFn = func(title string, options []ui.SelectOption) (string, error) {
 		selectTitle = title
 		selectOptions = append([]ui.SelectOption(nil), options...)
-		return "client-kinsta", nil
+		return "client-kinsta:staging", nil
 	}
-	t.Cleanup(func() { siteSelectFn = oldSelect })
+	siteIsInteractiveFn = func() bool { return true }
+	runSSHCommandFn = func(args []string) error { return nil }
+	t.Cleanup(func() {
+		siteSelectFn = oldSelect
+		siteIsInteractiveFn = oldInteractive
+		runSSHCommandFn = oldRunSSHCommand
+	})
 
 	output := captureStdout(t, func() {
-		if got := Run([]string{"site", "env", "show", "--staging"}); got != 0 {
-			t.Fatalf("Run(site env show) = %d, want 0", got)
+		if got := Run([]string{"site", "shell", "client-kinsta"}); got != 0 {
+			t.Fatalf("Run(site shell site ref) = %d, want 0", got)
 		}
 	})
-	if selectTitle != "Choose a site to show an env for" {
+	if selectTitle != "Choose a remote env to shell" {
 		t.Fatalf("select title = %q", selectTitle)
 	}
-	if len(selectOptions) != 1 || selectOptions[0] != (ui.SelectOption{Value: "client-kinsta", Label: "client-kinsta"}) {
+	if len(selectOptions) != 2 || selectOptions[0].Value != "client-kinsta:live" || selectOptions[1].Value != "client-kinsta:staging" {
 		t.Fatalf("select options = %#v", selectOptions)
 	}
-	for _, want := range []string{"client-kinsta:staging", "Site       client-kinsta", "Env        staging", "URL        https://staging.example.com/"} {
+	for _, want := range []string{"Site shell preflight:", "site:     client-kinsta", "env:      staging", "url:      https://staging.example.com/", "> ssh -t -p 12346 clientstaging@203.0.113.11"} {
 		if !strings.Contains(output, want) {
-			t.Fatalf("site env show output missing %q:\n%s", want, output)
-		}
-	}
-
-	jsonOutput := captureStdout(t, func() {
-		if got := Run([]string{"site", "env", "show", "--staging", "--json"}); got != 0 {
-			t.Fatalf("Run(site env show --json) = %d, want 0", got)
-		}
-	})
-	for _, want := range []string{`"resolved_site": "client-kinsta"`, `"resolved_env": "staging"`, `"kinsta_environment_id": "kenv-staging"`} {
-		if !strings.Contains(jsonOutput, want) {
-			t.Fatalf("site env show --json output missing %q:\n%s", want, jsonOutput)
+			t.Fatalf("site shell output missing %q:\n%s", want, output)
 		}
 	}
 }
 
-func TestRunSiteEnvShellAndWpRunSSHForKinsta(t *testing.T) {
+func TestRunSiteShellAndWpRunSSHForKinsta(t *testing.T) {
 	stateDir := t.TempDir()
 	t.Setenv("NF_STATE_HOME", stateDir)
 	sites := map[string]any{"sites": map[string]any{
@@ -3076,24 +3100,24 @@ func TestRunSiteEnvShellAndWpRunSSHForKinsta(t *testing.T) {
 	t.Cleanup(func() { runSSHCommandFn = oldRunSSHCommand })
 
 	shellOutput := captureStdout(t, func() {
-		if got := Run([]string{"site", "env", "shell", "client-kinsta"}); got != 0 {
-			t.Fatalf("Run(site env shell) = %d, want 0", got)
+		if got := Run([]string{"site", "shell", "client-kinsta:live"}); got != 0 {
+			t.Fatalf("Run(site shell) = %d, want 0", got)
 		}
 	})
-	for _, want := range []string{"Site env shell preflight:", "site:     client-kinsta", "env:      live", "provider: kinsta", "url:      https://www.example.com/", "> ssh -t -p 12345 client@203.0.113.10", "cd /www/client_123/public"} {
+	for _, want := range []string{"Site shell preflight:", "site:     client-kinsta", "env:      live", "provider: kinsta", "url:      https://www.example.com/", "> ssh -t -p 12345 client@203.0.113.10", "cd /www/client_123/public"} {
 		if !strings.Contains(shellOutput, want) {
-			t.Fatalf("site env shell stdout missing %q:\n%s", want, shellOutput)
+			t.Fatalf("site shell stdout missing %q:\n%s", want, shellOutput)
 		}
 	}
 
 	wpOutput := captureStdout(t, func() {
-		if got := Run([]string{"site", "env", "wp", "client-kinsta", "--staging", "plugin", "list"}); got != 0 {
-			t.Fatalf("Run(site env wp) = %d, want 0", got)
+		if got := Run([]string{"site", "wp", "client-kinsta:staging", "--", "plugin", "list"}); got != 0 {
+			t.Fatalf("Run(site wp) = %d, want 0", got)
 		}
 	})
-	for _, want := range []string{"Site env wp preflight:", "site:     client-kinsta", "env:      staging", "provider: kinsta", "wp args:  plugin list", "> ssh -p 12346 clientstaging@203.0.113.11", "wp --path=/www/clientstaging/public plugin list"} {
+	for _, want := range []string{"Site wp preflight:", "site:     client-kinsta", "env:      staging", "provider: kinsta", "wp args:  plugin list", "> ssh -p 12346 clientstaging@203.0.113.11", "wp --path=/www/clientstaging/public plugin list"} {
 		if !strings.Contains(wpOutput, want) {
-			t.Fatalf("site env wp stdout missing %q:\n%s", want, wpOutput)
+			t.Fatalf("site wp stdout missing %q:\n%s", want, wpOutput)
 		}
 	}
 	if len(commands) != 2 {
@@ -3101,61 +3125,66 @@ func TestRunSiteEnvShellAndWpRunSSHForKinsta(t *testing.T) {
 	}
 }
 
-func TestRunSiteEnvShellWithoutSitePromptsPicker(t *testing.T) {
+func TestRunSiteShellWithoutEnvPromptsPicker(t *testing.T) {
 	stateDir := t.TempDir()
 	t.Setenv("NF_STATE_HOME", stateDir)
 	if err := state.SaveStateRecords("sites", []map[string]any{{"provider": "kinsta", "site_id": "client-kinsta", "env": "live", "url": "https://www.example.com/", "path": "/www/client/public", "ssh": map[string]any{"host": "203.0.113.10", "port": "12345", "user": "client"}}}); err != nil {
 		t.Fatalf("SaveStateRecords(sites) error = %v", err)
 	}
 	oldSelect := siteSelectFn
+	oldInteractive := siteIsInteractiveFn
 	var selectTitle string
 	var selectOptions []ui.SelectOption
 	siteSelectFn = func(title string, options []ui.SelectOption) (string, error) {
 		selectTitle = title
 		selectOptions = append([]ui.SelectOption(nil), options...)
-		return "client-kinsta", nil
+		return "client-kinsta:live", nil
 	}
-	t.Cleanup(func() { siteSelectFn = oldSelect })
+	siteIsInteractiveFn = func() bool { return true }
+	t.Cleanup(func() {
+		siteSelectFn = oldSelect
+		siteIsInteractiveFn = oldInteractive
+	})
 
 	oldRunSSHCommand := runSSHCommandFn
 	runSSHCommandFn = func(args []string) error { return nil }
 	t.Cleanup(func() { runSSHCommandFn = oldRunSSHCommand })
 	stdout := captureStdout(t, func() {
-		if got := Run([]string{"site", "env", "shell"}); got != 0 {
-			t.Fatalf("Run(site env shell) = %d, want 0", got)
+		if got := Run([]string{"site", "shell"}); got != 0 {
+			t.Fatalf("Run(site shell) = %d, want 0", got)
 		}
 	})
-	for _, want := range []string{"Site env shell preflight:", "site:     client-kinsta", "env:      live", "provider: kinsta", "url:      https://www.example.com/", "> ssh -t -p 12345 client@203.0.113.10"} {
+	for _, want := range []string{"Site shell preflight:", "site:     client-kinsta", "env:      live", "provider: kinsta", "url:      https://www.example.com/", "> ssh -t -p 12345 client@203.0.113.10"} {
 		if !strings.Contains(stdout, want) {
-			t.Fatalf("site env shell stdout missing %q:\n%s", want, stdout)
+			t.Fatalf("site shell stdout missing %q:\n%s", want, stdout)
 		}
 	}
 
-	if selectTitle != "Choose a site to shell into" {
+	if selectTitle != "Choose a remote env to shell" {
 		t.Fatalf("select title = %q", selectTitle)
 	}
-	if len(selectOptions) != 1 || selectOptions[0] != (ui.SelectOption{Value: "client-kinsta", Label: "client-kinsta"}) {
+	if len(selectOptions) != 1 || selectOptions[0].Value != "client-kinsta:live" {
 		t.Fatalf("select options = %#v", selectOptions)
 	}
 }
 
-func TestRunSiteEnvWpWithoutArgsPrintsError(t *testing.T) {
+func TestRunSiteWpWithoutArgsPrintsError(t *testing.T) {
 	for _, argv := range [][]string{
-		{"site", "env", "wp"},
-		{"site", "env", "wp", "--staging", "plugin", "list"},
+		{"site", "wp"},
+		{"site", "wp", "--staging", "plugin", "list"},
 	} {
 		stderr := captureStderr(t, func() {
 			if got := Run(argv); got != 1 {
 				t.Fatalf("Run(%v) = %d, want 1", argv, got)
 			}
 		})
-		if !strings.Contains(stderr, "site env wp takes site and command") {
+		if !strings.Contains(stderr, "site wp requires an env ref and wp-cli command") {
 			t.Fatalf("Run(%v) stderr = %q", argv, stderr)
 		}
 	}
 }
 
-func TestRunSiteEnvShellAndWpRunSSHForLinode(t *testing.T) {
+func TestRunSiteShellAndWpRunSSHForLinode(t *testing.T) {
 	configDir := t.TempDir()
 	stateDir := t.TempDir()
 	t.Setenv("NF_CONFIG_HOME", configDir)
@@ -3181,13 +3210,13 @@ func TestRunSiteEnvShellAndWpRunSSHForLinode(t *testing.T) {
 	t.Cleanup(func() { runSSHCommandFn = oldRunSSHCommand })
 
 	shellOutput := captureStdout(t, func() {
-		if got := Run([]string{"site", "env", "shell", "foobar"}); got != 0 {
-			t.Fatalf("Run(site env shell) = %d, want 0", got)
+		if got := Run([]string{"site", "shell", "foobar.app1-linode:live"}); got != 0 {
+			t.Fatalf("Run(site shell) = %d, want 0", got)
 		}
 	})
-	for _, want := range []string{"Site env shell preflight:", "env:      live", "target:   app1-linode", "> ssh -t -p 22 nonfiction@app1-linode.nonfiction.dev", "cd /var/www/sites/foobar/public"} {
+	for _, want := range []string{"Site shell preflight:", "env:      live", "target:   app1-linode", "> ssh -t -p 22 nonfiction@app1-linode.nonfiction.dev", "cd /var/www/sites/foobar/public"} {
 		if !strings.Contains(shellOutput, want) {
-			t.Fatalf("site env shell output missing %q:\n%s", want, shellOutput)
+			t.Fatalf("site shell output missing %q:\n%s", want, shellOutput)
 		}
 	}
 	if len(commands) != 1 {
@@ -3201,13 +3230,13 @@ func TestRunSiteEnvShellAndWpRunSSHForLinode(t *testing.T) {
 	}
 
 	wpOutput := captureStdout(t, func() {
-		if got := Run([]string{"site", "env", "wp", "foobar", "--staging", "plugin", "list"}); got != 0 {
-			t.Fatalf("Run(site env wp) = %d, want 0", got)
+		if got := Run([]string{"site", "wp", "foobar.app1-linode:staging", "plugin", "list"}); got != 0 {
+			t.Fatalf("Run(site wp) = %d, want 0", got)
 		}
 	})
-	for _, want := range []string{"Site env wp preflight:", "env:      staging", "wp args:  plugin list", "> ssh -p 22 nonfiction@app1-linode.nonfiction.dev"} {
+	for _, want := range []string{"Site wp preflight:", "env:      staging", "wp args:  plugin list", "> ssh -p 22 nonfiction@app1-linode.nonfiction.dev"} {
 		if !strings.Contains(wpOutput, want) {
-			t.Fatalf("site env wp output missing %q:\n%s", want, wpOutput)
+			t.Fatalf("site wp output missing %q:\n%s", want, wpOutput)
 		}
 	}
 	if len(commands) != 2 {
