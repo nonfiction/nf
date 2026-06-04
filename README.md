@@ -74,37 +74,6 @@ source <(nf completion zsh)
 
 Persistent setup depends on your shell config. Save the generated script into a file loaded by your shell, such as a bash completion directory or a zsh `$fpath` completion file.
 
-During rapid development, avoid wrappers that run `nix run` for every completion query. In the dev shell, refresh a cached binary:
-
-```sh
-nix develop
-nf-dev-build
-```
-
-Then point completion queries at `.cache/nf` from your local wrapper:
-
-```sh
-#!/usr/bin/env sh
-
-DEV_NF=/home/jon/src/nonfiction/nf/.cache/nf
-
-case "$1" in
-  __complete|completion)
-    if [ -x "$DEV_NF" ]; then
-      exec "$DEV_NF" "$@"
-    fi
-    ;;
-esac
-
-exec nix run /home/jon/src/nonfiction/nf -- "$@"
-```
-
-Removed old public routes:
-
-* `nf server ...`
-* `nf instance ...`
-* top-level `nf up`, `nf down`, `nf logs`, `nf reset`, `nf info`, `nf shell`, `nf wp`
-
 ## Quick start
 
 Create repo metadata:
