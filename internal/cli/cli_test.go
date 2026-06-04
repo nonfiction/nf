@@ -357,6 +357,43 @@ func TestRunCompleteSuggestsStaticAndCachedValues(t *testing.T) {
 	if strings.TrimSpace(siteSnapshotOutput) != "client-app1-linode:live" {
 		t.Fatalf("site snapshot completion = %q, want env id only", siteSnapshotOutput)
 	}
+	siteSnapshotListOutput := captureStdout(t, func() {
+		if got := Run([]string{"__complete", "--", "site", "snapshot", "l"}); got != 0 {
+			t.Fatalf("Run(__complete site snapshot list) = %d, want 0", got)
+		}
+	})
+	if !strings.Contains(siteSnapshotListOutput, "list\n") {
+		t.Fatalf("site snapshot list completion = %q, want list", siteSnapshotListOutput)
+	}
+	dataHome := t.TempDir()
+	t.Setenv("NF_DATA_HOME", dataHome)
+	writeTestRemoteSnapshot(t, "client-kinsta.live-2026-06-04-120000", "client-kinsta:live", "2026-06-04T12:00:00Z", 10, 20)
+	siteSnapshotRemoveOutput := captureStdout(t, func() {
+		if got := Run([]string{"__complete", "--", "site", "snapshot", "remove", "client"}); got != 0 {
+			t.Fatalf("Run(__complete site snapshot remove) = %d, want 0", got)
+		}
+	})
+	if strings.TrimSpace(siteSnapshotRemoveOutput) != "client-kinsta.live-2026-06-04-120000" {
+		t.Fatalf("site snapshot remove completion = %q, want snapshot name", siteSnapshotRemoveOutput)
+	}
+	envSnapshotImportOutput := captureStdout(t, func() {
+		if got := Run([]string{"__complete", "--", "env", "snapshot", "import", "client"}); got != 0 {
+			t.Fatalf("Run(__complete env snapshot import) = %d, want 0", got)
+		}
+	})
+	if strings.TrimSpace(envSnapshotImportOutput) != "client-kinsta.live-2026-06-04-120000" {
+		t.Fatalf("env snapshot import completion = %q, want remote snapshot name", envSnapshotImportOutput)
+	}
+	siteSnapshotPruneOutput := captureStdout(t, func() {
+		if got := Run([]string{"__complete", "--", "site", "snapshot", "prune", "--"}); got != 0 {
+			t.Fatalf("Run(__complete site snapshot prune) = %d, want 0", got)
+		}
+	})
+	for _, want := range []string{"--keep\n", "--dry-run\n", "--yes\n"} {
+		if !strings.Contains(siteSnapshotPruneOutput, want) {
+			t.Fatalf("site snapshot prune completion missing %q:\n%s", want, siteSnapshotPruneOutput)
+		}
+	}
 
 	snapshotOutput := captureStdout(t, func() {
 		if got := Run([]string{"__complete", "--", "env", "snapshot", "pr"}); got != 0 {
@@ -3677,6 +3714,163 @@ func TestRunSiteSnapshotWithoutEnvPromptsPicker(t *testing.T) {
 	}
 }
 
+func TestRunSiteSnapshotListShowsRemoteSnapshots(t *testing.T) {
+	dataHome := t.TempDir()
+	t.Setenv("NF_DATA_HOME", dataHome)
+	writeTestRemoteSnapshot(t, "client-kinsta.live-2026-06-04-120000", "client-kinsta:live", "2026-06-04T12:00:00Z", 120, 240)
+	writeTestRemoteSnapshot(t, "client-kinsta.staging-2026-06-04-110000", "client-kinsta:staging", "2026-06-04T11:00:00Z", 60, 0)
+
+	stdout := captureStdout(t, func() {
+		if got := Run([]string{"site", "snapshot", "list"}); got != 0 {
+			t.Fatalf("Run(site snapshot list) = %d, want 0", got)
+		}
+	})
+	for _, want := range []string{"name", "created", "env", "database", "wp-content", "path", "client-kinsta.live-2026-06-04-120000", "client-kinsta:live", "120 B", "240 B", "client-kinsta.staging-2026-06-04-110000", "client-kinsta:staging", "60 B", "0 B"} {
+		if !strings.Contains(stdout, want) {
+			t.Fatalf("site snapshot list output missing %q:\n%s", want, stdout)
+		}
+	}
+	if strings.Index(stdout, "client-kinsta.live-2026-06-04-120000") > strings.Index(stdout, "client-kinsta.staging-2026-06-04-110000") {
+		t.Fatalf("site snapshot list not sorted newest first:\n%s", stdout)
+	}
+}
+
+func TestRunSiteSnapshotListEmpty(t *testing.T) {
+	t.Setenv("NF_DATA_HOME", t.TempDir())
+	stdout := captureStdout(t, func() {
+		if got := Run([]string{"site", "snapshot", "ls"}); got != 0 {
+			t.Fatalf("Run(site snapshot ls) = %d, want 0", got)
+		}
+	})
+	if strings.TrimSpace(stdout) != "No remote snapshots found." {
+		t.Fatalf("site snapshot ls output = %q", stdout)
+	}
+}
+
+func TestRunSiteSnapshotRemoveDeletesRemoteSnapshotWithYes(t *testing.T) {
+	t.Setenv("NF_DATA_HOME", t.TempDir())
+	name := "client-kinsta.live-2026-06-04-120000"
+	writeTestRemoteSnapshot(t, name, "client-kinsta:live", "2026-06-04T12:00:00Z", 120, 240)
+	path := config.RemoteSnapshotDir(name)
+
+	stdout := captureStdout(t, func() {
+		if got := Run([]string{"site", "snapshot", "remove", name, "--yes"}); got != 0 {
+			t.Fatalf("Run(site snapshot remove --yes) = %d, want 0", got)
+		}
+	})
+	for _, want := range []string{"Deleted remote snapshot.", "name: " + name, "env: client-kinsta:live", "path: " + path} {
+		if !strings.Contains(stdout, want) {
+			t.Fatalf("site snapshot remove output missing %q:\n%s", want, stdout)
+		}
+	}
+	if _, err := os.Stat(path); !os.IsNotExist(err) {
+		t.Fatalf("remote snapshot still exists: %v", err)
+	}
+}
+
+func TestRunSiteSnapshotRemoveRequiresYesWhenNonInteractive(t *testing.T) {
+	t.Setenv("NF_DATA_HOME", t.TempDir())
+	name := "client-kinsta.live-2026-06-04-120000"
+	writeTestRemoteSnapshot(t, name, "client-kinsta:live", "2026-06-04T12:00:00Z", 120, 240)
+	path := config.RemoteSnapshotDir(name)
+	oldInteractive := envSnapshotIsInteractive
+	envSnapshotIsInteractive = func() bool { return false }
+	t.Cleanup(func() { envSnapshotIsInteractive = oldInteractive })
+
+	stderr := captureStderr(t, func() {
+		if got := Run([]string{"site", "snapshot", "rm", name}); got != 1 {
+			t.Fatalf("Run(site snapshot rm) = %d, want 1", got)
+		}
+	})
+	if !strings.Contains(stderr, "site snapshot remove requires --yes when stdin is not interactive") {
+		t.Fatalf("site snapshot rm stderr = %q", stderr)
+	}
+	if _, err := os.Stat(path); err != nil {
+		t.Fatalf("remote snapshot was removed without --yes: %v", err)
+	}
+}
+
+func TestRunSiteSnapshotPruneDryRunKeepsNewestPerEnv(t *testing.T) {
+	t.Setenv("NF_DATA_HOME", t.TempDir())
+	writeTestRemoteSnapshot(t, "client-kinsta.live-2026-06-04-120000", "client-kinsta:live", "2026-06-04T12:00:00Z", 120, 0)
+	writeTestRemoteSnapshot(t, "client-kinsta.live-2026-06-04-110000", "client-kinsta:live", "2026-06-04T11:00:00Z", 110, 0)
+	writeTestRemoteSnapshot(t, "client-kinsta.live-2026-06-04-100000", "client-kinsta:live", "2026-06-04T10:00:00Z", 100, 0)
+	writeTestRemoteSnapshot(t, "client-kinsta.staging-2026-06-04-120000", "client-kinsta:staging", "2026-06-04T12:00:00Z", 220, 0)
+	writeTestRemoteSnapshot(t, "client-kinsta.staging-2026-06-04-110000", "client-kinsta:staging", "2026-06-04T11:00:00Z", 210, 0)
+
+	stdout := captureStdout(t, func() {
+		if got := Run([]string{"site", "snapshot", "prune", "--keep", "1", "--dry-run"}); got != 0 {
+			t.Fatalf("Run(site snapshot prune --dry-run) = %d, want 0", got)
+		}
+	})
+	for _, want := range []string{"Remote snapshot prune plan:", "keep newest per env: 1", "delete snapshots:    3", "reclaim about:       420 B", "client-kinsta.live-2026-06-04-110000", "client-kinsta.live-2026-06-04-100000", "client-kinsta.staging-2026-06-04-110000", "No remote snapshots were deleted"} {
+		if !strings.Contains(stdout, want) {
+			t.Fatalf("site snapshot prune output missing %q:\n%s", want, stdout)
+		}
+	}
+	for _, notWant := range []string{"client-kinsta.live-2026-06-04-120000", "client-kinsta.staging-2026-06-04-120000"} {
+		if strings.Contains(stdout, notWant) {
+			t.Fatalf("site snapshot prune output contains kept snapshot %q:\n%s", notWant, stdout)
+		}
+	}
+	if _, err := os.Stat(config.RemoteSnapshotDir("client-kinsta.live-2026-06-04-100000")); err != nil {
+		t.Fatalf("dry-run deleted snapshot: %v", err)
+	}
+}
+
+func TestRunSiteSnapshotPruneDeletesOldSnapshotsWithYes(t *testing.T) {
+	t.Setenv("NF_DATA_HOME", t.TempDir())
+	writeTestRemoteSnapshot(t, "client-kinsta.live-2026-06-04-120000", "client-kinsta:live", "2026-06-04T12:00:00Z", 120, 0)
+	writeTestRemoteSnapshot(t, "client-kinsta.live-2026-06-04-110000", "client-kinsta:live", "2026-06-04T11:00:00Z", 110, 0)
+	writeTestRemoteSnapshot(t, "client-kinsta.staging-2026-06-04-120000", "client-kinsta:staging", "2026-06-04T12:00:00Z", 220, 0)
+	writeTestRemoteSnapshot(t, "client-kinsta.staging-2026-06-04-110000", "client-kinsta:staging", "2026-06-04T11:00:00Z", 210, 0)
+
+	stdout := captureStdout(t, func() {
+		if got := Run([]string{"site", "snapshot", "prune", "--keep=1", "--yes"}); got != 0 {
+			t.Fatalf("Run(site snapshot prune --yes) = %d, want 0", got)
+		}
+	})
+	if !strings.Contains(stdout, "Deleted 2 remote snapshots") {
+		t.Fatalf("site snapshot prune output = %q", stdout)
+	}
+	for _, deleted := range []string{"client-kinsta.live-2026-06-04-110000", "client-kinsta.staging-2026-06-04-110000"} {
+		if _, err := os.Stat(config.RemoteSnapshotDir(deleted)); !os.IsNotExist(err) {
+			t.Fatalf("remote snapshot %q still exists: %v", deleted, err)
+		}
+	}
+	for _, kept := range []string{"client-kinsta.live-2026-06-04-120000", "client-kinsta.staging-2026-06-04-120000"} {
+		if _, err := os.Stat(config.RemoteSnapshotDir(kept)); err != nil {
+			t.Fatalf("remote snapshot %q missing: %v", kept, err)
+		}
+	}
+}
+
+func writeTestRemoteSnapshot(t *testing.T, name, envID, createdAt string, dbSize, contentSize int) {
+	t.Helper()
+	dir := config.RemoteSnapshotDir(name)
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatalf("MkdirAll(remote snapshot) error = %v", err)
+	}
+	siteID, env, ok := splitSiteEnvRef(envID)
+	if !ok {
+		t.Fatalf("invalid test envID %q", envID)
+	}
+	meta := remoteSnapshotMetadata{Schema: 1, Source: "remote", EnvID: envID, SiteID: siteID, Env: env, Provider: "kinsta", CreatedAt: createdAt, Path: dir, Contents: envSnapshotContents{Database: "database.sql.gz", WpContent: "wp-content.tar.gz", WpContentPaths: envSnapshotContentPaths()}}
+	data, err := json.MarshalIndent(meta, "", "  ")
+	if err != nil {
+		t.Fatalf("MarshalIndent(remote snapshot) error = %v", err)
+	}
+	if err := os.WriteFile(remoteSnapshotMetadataPath(dir), append(data, '\n'), 0o644); err != nil {
+		t.Fatalf("WriteFile(snapshot.json) error = %v", err)
+	}
+	if err := os.WriteFile(remoteSnapshotDatabaseArchive(dir), bytes.Repeat([]byte("d"), dbSize), 0o644); err != nil {
+		t.Fatalf("WriteFile(database.sql.gz) error = %v", err)
+	}
+	if err := os.WriteFile(remoteSnapshotWpContentArchive(dir), bytes.Repeat([]byte("w"), contentSize), 0o644); err != nil {
+		t.Fatalf("WriteFile(wp-content.tar.gz) error = %v", err)
+	}
+}
+
 func TestRunRemoteAddListRemoveWritesProjectMetadata(t *testing.T) {
 	stateDir := t.TempDir()
 	t.Setenv("NF_STATE_HOME", stateDir)
@@ -4062,7 +4256,7 @@ func TestRunEnvHelpShowsCommandsWithoutShortcuts(t *testing.T) {
 
 func TestRunEnvSnapshotHelpShowsDedicatedCommands(t *testing.T) {
 	output := captureStdout(t, func() { _ = runEnvSnapshot([]string{"help"}) })
-	for _, want := range []string{"env snapshot\n\nCommands:\n", "list, ls", "list env snapshots", "add [name]", "create an env snapshot", "use [name]", "restore an env snapshot", "remove, rm [name]", "delete an env snapshot", "prune [--keep N] [--dry-run] [--yes]"} {
+	for _, want := range []string{"env snapshot\n\nCommands:\n", "list, ls", "list env snapshots", "add [name]", "create an env snapshot", "import [remote] [--name name]", "import a remote snapshot", "use [name]", "restore an env snapshot", "remove, rm [name]", "delete an env snapshot", "prune [--keep N] [--dry-run] [--yes]"} {
 		if !strings.Contains(output, want) {
 			t.Fatalf("runEnvSnapshot(help) output missing %q:\n%s", want, output)
 		}
@@ -4205,6 +4399,82 @@ func TestRunEnvSnapshotListShowsSnapshots(t *testing.T) {
 		if !strings.Contains(output, want) {
 			t.Fatalf("Run() output missing %q:\n%s", want, output)
 		}
+	}
+}
+
+func TestRunEnvSnapshotImportCopiesRemoteSnapshot(t *testing.T) {
+	remoteName := "client-kinsta.live-2026-06-04-120000"
+	repoRoot, _ := writeTestEnvProject(t)
+	writeTestRemoteSnapshot(t, remoteName, "client-kinsta:live", "2026-06-04T12:00:00Z", 2, 7)
+	oldwd, err := os.Getwd()
+	if err != nil {
+		t.Fatalf("Getwd() error = %v", err)
+	}
+	if err := os.Chdir(repoRoot); err != nil {
+		t.Fatalf("Chdir() error = %v", err)
+	}
+	t.Cleanup(func() { _ = os.Chdir(oldwd) })
+
+	stdout := captureStdout(t, func() {
+		if got := Run([]string{"env", "snapshot", "import", remoteName, "--name", "imported-live"}); got != 0 {
+			t.Fatalf("Run(env snapshot import) = %d, want 0", got)
+		}
+	})
+	localDir := filepath.Join(config.DataHome(), "snapshots", "local", "client", "imported-live")
+	for _, want := range []string{"Remote snapshot imported.", "project: client", "name: imported-live", "remote: " + remoteName, "env: client-kinsta:live", "path: " + localDir, "Next: nf env snapshot use imported-live"} {
+		if !strings.Contains(stdout, want) {
+			t.Fatalf("env snapshot import output missing %q:\n%s", want, stdout)
+		}
+	}
+	dbData, err := os.ReadFile(filepath.Join(localDir, "database.sql.gz"))
+	if err != nil {
+		t.Fatalf("ReadFile(imported database) error = %v", err)
+	}
+	if string(dbData) != "dd" {
+		t.Fatalf("imported database = %q, want copied data", dbData)
+	}
+	contentData, err := os.ReadFile(filepath.Join(localDir, "wp-content.tar.gz"))
+	if err != nil {
+		t.Fatalf("ReadFile(imported wp-content) error = %v", err)
+	}
+	if string(contentData) != "wwwwwww" {
+		t.Fatalf("imported wp-content = %q, want copied data", contentData)
+	}
+	metaData, err := os.ReadFile(filepath.Join(localDir, "snapshot.json"))
+	if err != nil {
+		t.Fatalf("ReadFile(imported snapshot.json) error = %v", err)
+	}
+	for _, want := range []string{`"name": "imported-live"`, `"project_slug": "client"`, `"database": "database.sql.gz"`, `"wp_content": "wp-content.tar.gz"`} {
+		if !strings.Contains(string(metaData), want) {
+			t.Fatalf("imported metadata missing %q:\n%s", want, metaData)
+		}
+	}
+}
+
+func TestRunEnvSnapshotImportDefaultNameSanitizesRemoteSnapshotName(t *testing.T) {
+	remoteName := "client-kinsta.live-2026-06-04-120000"
+	repoRoot, _ := writeTestEnvProject(t)
+	writeTestRemoteSnapshot(t, remoteName, "client-kinsta:live", "2026-06-04T12:00:00Z", 2, 7)
+	oldwd, err := os.Getwd()
+	if err != nil {
+		t.Fatalf("Getwd() error = %v", err)
+	}
+	if err := os.Chdir(repoRoot); err != nil {
+		t.Fatalf("Chdir() error = %v", err)
+	}
+	t.Cleanup(func() { _ = os.Chdir(oldwd) })
+
+	stdout := captureStdout(t, func() {
+		if got := Run([]string{"env", "snapshot", "import", remoteName}); got != 0 {
+			t.Fatalf("Run(env snapshot import) = %d, want 0", got)
+		}
+	})
+	wantName := "remote-client-kinsta-live-2026-06-04-120000"
+	if !strings.Contains(stdout, "name: "+wantName) {
+		t.Fatalf("env snapshot import output = %q, want default name %q", stdout, wantName)
+	}
+	if _, err := os.Stat(filepath.Join(config.DataHome(), "snapshots", "local", "client", wantName, "snapshot.json")); err != nil {
+		t.Fatalf("default-named imported snapshot missing: %v", err)
 	}
 }
 
