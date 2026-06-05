@@ -3,8 +3,10 @@ package cli
 // WordPress plugin bootstrap commands backed by wordpress.plugins in nf.json.
 
 import (
+	"bytes"
 	"fmt"
 	"os"
+	"os/exec"
 	"path"
 	"path/filepath"
 	"strconv"
@@ -98,6 +100,73 @@ func cmdEnvPluginsList(metadata map[string]any) int {
 		return 0
 	}
 	fmt.Println(formatWordPressPluginTable(plugins))
+	return 0
+}
+
+func cmdEnvPluginsStatusWithOptions(root string, metadata map[string]any, remoteName string) int {
+	if strings.TrimSpace(remoteName) == "" {
+		cfg, ok := loadEnvConfig(root, metadata)
+		if !ok {
+			fmt.Fprintln(os.Stderr, "Missing env metadata in nf.json. Run nf env up first.")
+			return 1
+		}
+		return cmdEnvPluginsStatusLocal(cfg, metadata)
+	}
+	return cmdEnvPluginsStatusRemote(metadata, remoteName)
+}
+
+func cmdEnvPluginsStatusLocal(cfg envConfig, metadata map[string]any) int {
+	plugins, err := loadWordPressPluginSpecs(metadata)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		return 1
+	}
+	if len(plugins) == 0 {
+		fmt.Println("No WordPress plugins configured.")
+		return 0
+	}
+	checker := envPluginStatusChecker{cfg: cfg}
+	statuses, ready, err := checker.statuses(plugins)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		return 1
+	}
+	if !ready {
+		fmt.Fprintln(os.Stderr, "Local env is not ready. Run nf env up first.")
+		return 1
+	}
+	fmt.Println(formatWordPressPluginStatusTable(statuses))
+	return 0
+}
+
+func cmdEnvPluginsStatusRemote(metadata map[string]any, remoteName string) int {
+	plugins, err := loadWordPressPluginSpecs(metadata)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		return 1
+	}
+	if len(plugins) == 0 {
+		fmt.Println("No WordPress plugins configured.")
+		return 0
+	}
+	target, err := resolveEnvRemoteSyncTarget("plugins status", remoteName, metadata)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		return 1
+	}
+	output, err := runSSHOutputFn(remoteSSHArgs(target, remotePluginStatusScript(target, plugins)))
+	if err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		return 1
+	}
+	statuses := parseRemotePluginStatusOutput(plugins, string(output))
+	fmt.Println("Plugin status:")
+	fmt.Printf("  remote:   %s\n", target.RemoteName)
+	fmt.Printf("  site:     %s\n", target.SiteID)
+	fmt.Printf("  env:      %s\n", target.Env)
+	fmt.Printf("  provider: %s\n", target.Provider)
+	fmt.Println()
+	fmt.Println(formatWordPressPluginStatusTable(statuses))
 	return 0
 }
 
@@ -258,6 +327,13 @@ type remotePluginUpload struct {
 	RemotePath string
 }
 
+type wordpressPluginStatus struct {
+	Plugin     wordpressPluginSpec
+	Installed  bool
+	Active     bool
+	AutoUpdate bool
+}
+
 type envPluginInstaller struct {
 	cfg envConfig
 }
@@ -307,6 +383,38 @@ func (i envPluginInstaller) pluginAutoUpdatesEnabled(envDir, slug string) bool {
 		}
 	}
 	return false
+}
+
+type envPluginStatusChecker struct {
+	cfg envConfig
+}
+
+func (c envPluginStatusChecker) statuses(plugins []wordpressPluginSpec) ([]wordpressPluginStatus, bool, error) {
+	output, err := runCommandSpecOutputSilent(execSpec{Dir: localEnvDir(c.cfg), Args: envCliArgs(c.cfg, "sh", "-lc", localPluginStatusScript(plugins))})
+	if err != nil {
+		return nil, false, err
+	}
+	if strings.TrimSpace(output) == "__NF_NOT_READY__" {
+		return nil, false, nil
+	}
+	return parseRemotePluginStatusOutput(plugins, output), true, nil
+}
+
+func runCommandSpecOutputSilent(spec execSpec) (string, error) {
+	if len(spec.Args) == 0 {
+		return "", fmt.Errorf("unsupported repo command type")
+	}
+	cmd := exec.Command(spec.Args[0], spec.Args[1:]...)
+	cmd.Dir = spec.Dir
+	cmd.Env = append(os.Environ(), "COMPOSE_PROGRESS=quiet")
+	stderr := new(bytes.Buffer)
+	cmd.Stderr = stderr
+	cmd.Stdin = os.Stdin
+	output, err := cmd.Output()
+	if err != nil && stderr.Len() > 0 {
+		err = fmt.Errorf("%w\n%s", err, strings.TrimSpace(stderr.String()))
+	}
+	return string(output), err
 }
 
 func pluginInstallSource(plugin wordpressPluginSpec) string {
@@ -382,6 +490,21 @@ func formatWordPressPluginTable(plugins []wordpressPluginSpec) string {
 	return formatTable(rows)
 }
 
+func formatWordPressPluginStatusTable(statuses []wordpressPluginStatus) string {
+	rows := [][]string{{"plugin", "source", "installed", "active", "auto-update"}}
+	for _, status := range statuses {
+		rows = append(rows, []string{status.Plugin.Slug, status.Plugin.Source, yesNo(status.Installed), yesNo(status.Active), yesNo(status.AutoUpdate)})
+	}
+	return formatTable(rows)
+}
+
+func yesNo(value bool) string {
+	if value {
+		return "yes"
+	}
+	return "no"
+}
+
 func remotePluginInstallScript(target envRemoteSyncTarget, plugins []remotePluginInstallSpec) string {
 	var builder strings.Builder
 	builder.WriteString("set -eu\n")
@@ -427,6 +550,84 @@ func remotePluginInstallScript(target envRemoteSyncTarget, plugins []remotePlugi
 		}
 	}
 	return builder.String()
+}
+
+func localPluginStatusScript(plugins []wordpressPluginSpec) string {
+	var builder strings.Builder
+	builder.WriteString("set -eu\n")
+	builder.WriteString("if ! wp core is-installed --allow-root >/dev/null 2>&1; then printf '__NF_NOT_READY__\\n'; exit 0; fi\n")
+	for _, plugin := range plugins {
+		slug := shellQuoteArg(plugin.Slug)
+		builder.WriteString("installed=no active=no auto_update=no\n")
+		builder.WriteString("if wp plugin is-installed ")
+		builder.WriteString(slug)
+		builder.WriteString(" --allow-root >/dev/null 2>&1; then\n")
+		builder.WriteString("  installed=yes\n")
+		builder.WriteString("  if wp plugin is-active ")
+		builder.WriteString(slug)
+		builder.WriteString(" --allow-root >/dev/null 2>&1; then active=yes; fi\n")
+		builder.WriteString("  if wp plugin auto-updates status ")
+		builder.WriteString(slug)
+		builder.WriteString(" --enabled-only --field=name --allow-root 2>/dev/null | grep -qx ")
+		builder.WriteString(slug)
+		builder.WriteString("; then auto_update=yes; fi\n")
+		builder.WriteString("fi\n")
+		builder.WriteString("printf '%s\\t%s\\t%s\\t%s\\n' ")
+		builder.WriteString(slug)
+		builder.WriteString(" \"$installed\" \"$active\" \"$auto_update\"\n")
+	}
+	return builder.String()
+}
+
+func remotePluginStatusScript(target envRemoteSyncTarget, plugins []wordpressPluginSpec) string {
+	var builder strings.Builder
+	builder.WriteString("set -eu\n")
+	builder.WriteString("cd ")
+	builder.WriteString(shellQuoteArg(target.WordPressPath))
+	builder.WriteString("\nwp_cmd() { ")
+	builder.WriteString(target.WPCommand)
+	builder.WriteString(" --path=")
+	builder.WriteString(shellQuoteArg(target.WordPressPath))
+	builder.WriteString(" \"$@\"; }\n")
+	for _, plugin := range plugins {
+		slug := shellQuoteArg(plugin.Slug)
+		builder.WriteString("installed=no active=no auto_update=no\n")
+		builder.WriteString("if wp_cmd plugin is-installed ")
+		builder.WriteString(slug)
+		builder.WriteString(" >/dev/null 2>&1; then\n")
+		builder.WriteString("  installed=yes\n")
+		builder.WriteString("  if wp_cmd plugin is-active ")
+		builder.WriteString(slug)
+		builder.WriteString(" >/dev/null 2>&1; then active=yes; fi\n")
+		builder.WriteString("  if wp_cmd plugin auto-updates status ")
+		builder.WriteString(slug)
+		builder.WriteString(" --enabled-only --field=name 2>/dev/null | grep -qx ")
+		builder.WriteString(slug)
+		builder.WriteString("; then auto_update=yes; fi\n")
+		builder.WriteString("fi\n")
+		builder.WriteString("printf '%s\\t%s\\t%s\\t%s\\n' ")
+		builder.WriteString(slug)
+		builder.WriteString(" \"$installed\" \"$active\" \"$auto_update\"\n")
+	}
+	return builder.String()
+}
+
+func parseRemotePluginStatusOutput(plugins []wordpressPluginSpec, output string) []wordpressPluginStatus {
+	bySlug := map[string]wordpressPluginStatus{}
+	for _, line := range strings.Split(output, "\n") {
+		fields := strings.Split(strings.TrimSpace(line), "\t")
+		if len(fields) != 4 {
+			continue
+		}
+		bySlug[fields[0]] = wordpressPluginStatus{Installed: fields[1] == "yes", Active: fields[2] == "yes", AutoUpdate: fields[3] == "yes"}
+	}
+	statuses := make([]wordpressPluginStatus, 0, len(plugins))
+	for _, plugin := range plugins {
+		status := bySlug[plugin.Slug]
+		status.Plugin = plugin
+		statuses = append(statuses, status)
+	}
+	return statuses
 }
 
 func printRemotePluginInstallCommand(target envRemoteSyncTarget) {

@@ -241,11 +241,14 @@ func envCompletionCandidates(args []string) []string {
 
 func envPluginsCompletionCandidates(args []string) []string {
 	if len(args) == 0 {
-		return []string{"list", "ls", "install", "help"}
+		return []string{"list", "ls", "status", "install", "help"}
 	}
 	args[0] = cliCommandAlias(args[0])
 	if args[0] == "install" {
 		return append(projectRemoteCompletionNames(), "--dry-run", "--yes")
+	}
+	if args[0] == "status" {
+		return projectRemoteCompletionNames()
 	}
 	return nil
 }
