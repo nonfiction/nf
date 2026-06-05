@@ -6231,7 +6231,7 @@ func TestRunEnvPluginsInstallRemoteDryRunPrintsPlan(t *testing.T) {
 	if err := os.Mkdir(filepath.Join(repoRoot, ".git"), 0o755); err != nil {
 		t.Fatalf("Mkdir(.git) error = %v", err)
 	}
-	project := map[string]any{"version": 1, "project": map[string]any{"slug": "client"}, "wordpress": map[string]any{"plugins": []any{"stream", map[string]any{"slug": "query-monitor", "activate": false, "auto_update": false}}}, "remotes": map[string]any{"production": "client-kinsta:live"}}
+	project := map[string]any{"version": 1, "project": map[string]any{"slug": "client"}, "wordpress": map[string]any{"plugins": []any{"stream", map[string]any{"slug": "query-monitor", "activate": false, "auto_update": false}, map[string]any{"slug": "acf-pro", "source": "private/acf-pro.zip"}}}, "remotes": map[string]any{"production": "client-kinsta:live"}}
 	data, err := json.MarshalIndent(project, "", "  ")
 	if err != nil {
 		t.Fatalf("MarshalIndent(project) error = %v", err)
@@ -6256,10 +6256,94 @@ func TestRunEnvPluginsInstallRemoteDryRunPrintsPlan(t *testing.T) {
 			t.Fatalf("Run(env plugins install remote --dry-run) = %d, want 0", got)
 		}
 	})
-	for _, want := range []string{"Plugin install plan:", "remote:        production", "site:          client-kinsta", "env:           live", "provider:      kinsta", "url:           https://www.example.com/", "environment ssh: client@203.0.113.10", "mode:          dry-run", "stream", "query-monitor", "No remote plugins were changed."} {
+	for _, want := range []string{"Plugin install plan:", "remote:        production", "site:          client-kinsta", "env:           live", "provider:      kinsta", "url:           https://www.example.com/", "environment ssh: client@203.0.113.10", "mode:          dry-run", "uploads:       1 local plugin zip(s)", "stream", "query-monitor", "acf-pro", "private/acf-pro.zip", "Local plugin sources will be uploaded before install:", "acf-pro -> /tmp/nf-plugins-client-kinsta-live-", "No remote plugins were changed."} {
 		if !strings.Contains(stdout, want) {
 			t.Fatalf("remote plugin dry-run stdout missing %q:\n%s", want, stdout)
 		}
+	}
+}
+
+func TestRunEnvPluginsInstallRemoteUploadsLocalZipSource(t *testing.T) {
+	stateDir := t.TempDir()
+	t.Setenv("NF_STATE_HOME", stateDir)
+	if err := state.SaveStateRecords("sites", []map[string]any{{"provider": "kinsta", "site_id": "client-kinsta", "env": "live", "path": "/www/client/public", "ssh": map[string]any{"host": "203.0.113.10", "port": "12345", "user": "client"}}}); err != nil {
+		t.Fatalf("SaveStateRecords(sites) error = %v", err)
+	}
+	repoRoot := t.TempDir()
+	if err := os.Mkdir(filepath.Join(repoRoot, ".git"), 0o755); err != nil {
+		t.Fatalf("Mkdir(.git) error = %v", err)
+	}
+	if err := os.Mkdir(filepath.Join(repoRoot, "private"), 0o755); err != nil {
+		t.Fatalf("Mkdir(private) error = %v", err)
+	}
+	localZip := filepath.Join(repoRoot, "private", "acf-pro.zip")
+	if err := os.WriteFile(localZip, []byte("zip"), 0o644); err != nil {
+		t.Fatalf("WriteFile(local zip) error = %v", err)
+	}
+	project := map[string]any{"version": 1, "project": map[string]any{"slug": "client"}, "wordpress": map[string]any{"plugins": []any{map[string]any{"slug": "acf-pro", "source": "private/acf-pro.zip"}}}, "remotes": map[string]any{"production": "client-kinsta:live"}}
+	data, err := json.MarshalIndent(project, "", "  ")
+	if err != nil {
+		t.Fatalf("MarshalIndent(project) error = %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(repoRoot, "nf.json"), append(data, '\n'), 0o644); err != nil {
+		t.Fatalf("WriteFile(nf.json) error = %v", err)
+	}
+	oldwd, err := os.Getwd()
+	if err != nil {
+		t.Fatalf("Getwd() error = %v", err)
+	}
+	if err := os.Chdir(repoRoot); err != nil {
+		t.Fatalf("Chdir() error = %v", err)
+	}
+	t.Cleanup(func() { _ = os.Chdir(oldwd) })
+	oldRunSSH := runSSHCommandFn
+	var sshCommands [][]string
+	runSSHCommandFn = func(args []string) error {
+		sshCommands = append(sshCommands, append([]string(nil), args...))
+		return nil
+	}
+	t.Cleanup(func() { runSSHCommandFn = oldRunSSH })
+	oldRunRsync := runRsyncCommandFn
+	var rsyncCommands [][]string
+	runRsyncCommandFn = func(args []string) error {
+		rsyncCommands = append(rsyncCommands, append([]string(nil), args...))
+		return nil
+	}
+	t.Cleanup(func() { runRsyncCommandFn = oldRunRsync })
+
+	stdout := captureStdout(t, func() {
+		if got := Run([]string{"env", "plugins", "install", "production", "--yes"}); got != 0 {
+			t.Fatalf("Run(env plugins install remote local zip --yes) = %d, want 0", got)
+		}
+	})
+	for _, want := range []string{"uploads:       1 local plugin zip(s)", "Local plugin sources will be uploaded before install:", "acf-pro -> /tmp/nf-plugins-client-kinsta-live-", "> rsync -az -e 'ssh -p 12345' " + localZip + " client@203.0.113.10:/tmp/nf-plugins-client-kinsta-live-", "Remote WordPress plugins installed."} {
+		if !strings.Contains(stdout, want) {
+			t.Fatalf("remote plugin local zip stdout missing %q:\n%s", want, stdout)
+		}
+	}
+	if len(rsyncCommands) != 1 {
+		t.Fatalf("rsync commands len = %d, want 1: %#v", len(rsyncCommands), rsyncCommands)
+	}
+	if got, want := rsyncCommands[0][4], localZip; got != want {
+		t.Fatalf("rsync source = %q, want %q", got, want)
+	}
+	if !strings.Contains(rsyncCommands[0][5], "client@203.0.113.10:/tmp/nf-plugins-client-kinsta-live-") || !strings.HasSuffix(rsyncCommands[0][5], "/acf-pro.zip") {
+		t.Fatalf("rsync destination = %q", rsyncCommands[0][5])
+	}
+	if len(sshCommands) != 3 {
+		t.Fatalf("ssh commands len = %d, want mkdir/install/cleanup: %#v", len(sshCommands), sshCommands)
+	}
+	if !strings.Contains(sshCommands[0][len(sshCommands[0])-1], "mkdir -p /tmp/nf-plugins-client-kinsta-live-") {
+		t.Fatalf("mkdir ssh command = %#v", sshCommands[0])
+	}
+	script := sshCommands[1][len(sshCommands[1])-1]
+	for _, want := range []string{"wp_cmd plugin is-installed acf-pro", "wp_cmd plugin install /tmp/nf-plugins-client-kinsta-live-", "/acf-pro.zip --activate", "wp_cmd plugin auto-updates enable acf-pro"} {
+		if !strings.Contains(script, want) {
+			t.Fatalf("remote plugin local zip script missing %q:\n%s", want, script)
+		}
+	}
+	if !strings.Contains(sshCommands[2][len(sshCommands[2])-1], "rm -rf /tmp/nf-plugins-client-kinsta-live-") {
+		t.Fatalf("cleanup ssh command = %#v", sshCommands[2])
 	}
 }
 

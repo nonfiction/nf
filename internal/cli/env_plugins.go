@@ -5,7 +5,11 @@ package cli
 import (
 	"fmt"
 	"os"
+	"path"
+	"path/filepath"
+	"strconv"
 	"strings"
+	"time"
 )
 
 type wordpressPluginSpec struct {
@@ -157,6 +161,12 @@ func cmdEnvPluginsInstallRemote(metadata map[string]any, opts envPluginInstallOp
 		fmt.Fprintln(os.Stderr, err)
 		return 1
 	}
+	remoteTmp := remotePluginInstallTempDir(target)
+	remotePlugins, uploads, err := remotePluginInstallSpecs(plugins, remoteTmp, !opts.DryRun)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		return 1
+	}
 	fmt.Println("Plugin install plan:")
 	fmt.Printf("  remote:        %s\n", target.RemoteName)
 	fmt.Printf("  site:          %s\n", target.SiteID)
@@ -176,8 +186,18 @@ func cmdEnvPluginsInstallRemote(metadata map[string]any, opts envPluginInstallOp
 		mode = "dry-run"
 	}
 	fmt.Printf("  mode:          %s\n", mode)
+	if len(uploads) > 0 {
+		fmt.Printf("  uploads:       %d local plugin zip(s)\n", len(uploads))
+	}
 	fmt.Println()
 	fmt.Println(formatWordPressPluginTable(plugins))
+	if len(uploads) > 0 {
+		fmt.Println()
+		fmt.Println("Local plugin sources will be uploaded before install:")
+		for _, upload := range uploads {
+			fmt.Printf("  %s -> %s\n", upload.Plugin.Slug, upload.RemotePath)
+		}
+	}
 	if opts.DryRun {
 		fmt.Println("No remote plugins were changed.")
 		return 0
@@ -194,14 +214,48 @@ func cmdEnvPluginsInstallRemote(metadata map[string]any, opts envPluginInstallOp
 			return 1
 		}
 	}
-	script := remotePluginInstallScript(target, plugins)
+	if len(uploads) > 0 {
+		mkdirArgs := remoteSSHArgs(target, "rm -rf "+shellQuoteArg(remoteTmp)+" && mkdir -p "+shellQuoteArg(remoteTmp))
+		printCommandArgs(mkdirArgs)
+		if err := runSSHCommandFn(mkdirArgs); err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			return 1
+		}
+		for _, upload := range uploads {
+			uploadArgs := remotePluginUploadArgs(target, upload)
+			printCommandArgs(uploadArgs)
+			if err := runRsyncCommandFn(uploadArgs); err != nil {
+				fmt.Fprintln(os.Stderr, err)
+				_ = runSSHCommandFn(remoteSSHArgs(target, "rm -rf "+shellQuoteArg(remoteTmp)))
+				return 1
+			}
+		}
+	}
+	script := remotePluginInstallScript(target, remotePlugins)
 	printRemotePluginInstallCommand(target)
 	if err := runSSHCommandFn(remoteSSHArgs(target, script)); err != nil {
 		fmt.Fprintln(os.Stderr, err)
+		if len(uploads) > 0 {
+			_ = runSSHCommandFn(remoteSSHArgs(target, "rm -rf "+shellQuoteArg(remoteTmp)))
+		}
 		return 1
+	}
+	if len(uploads) > 0 {
+		_ = runSSHCommandFn(remoteSSHArgs(target, "rm -rf "+shellQuoteArg(remoteTmp)))
 	}
 	fmt.Println("Remote WordPress plugins installed.")
 	return 0
+}
+
+type remotePluginInstallSpec struct {
+	Plugin        wordpressPluginSpec
+	InstallSource string
+}
+
+type remotePluginUpload struct {
+	Plugin     wordpressPluginSpec
+	LocalPath  string
+	RemotePath string
 }
 
 type envPluginInstaller struct {
@@ -263,6 +317,55 @@ func pluginInstallSource(plugin wordpressPluginSpec) string {
 	return source
 }
 
+func remotePluginInstallSpecs(plugins []wordpressPluginSpec, remoteTmp string, requireFiles bool) ([]remotePluginInstallSpec, []remotePluginUpload, error) {
+	remotePlugins := make([]remotePluginInstallSpec, 0, len(plugins))
+	uploads := []remotePluginUpload{}
+	for _, plugin := range plugins {
+		installSource := pluginInstallSource(plugin)
+		if remotePluginSourceLooksLocal(plugin, installSource) {
+			localPath, err := filepath.Abs(installSource)
+			if err != nil {
+				return nil, nil, err
+			}
+			if requireFiles {
+				info, err := os.Stat(localPath)
+				if err != nil {
+					return nil, nil, ProjectError{Msg: fmt.Sprintf("remote plugin source for %s does not exist: %s", plugin.Slug, localPath)}
+				}
+				if info.IsDir() {
+					return nil, nil, ProjectError{Msg: fmt.Sprintf("remote plugin source for %s must be a zip file, got directory: %s", plugin.Slug, localPath)}
+				}
+			}
+			remotePath := path.Join(remoteTmp, filepath.Base(localPath))
+			upload := remotePluginUpload{Plugin: plugin, LocalPath: localPath, RemotePath: remotePath}
+			uploads = append(uploads, upload)
+			remotePlugins = append(remotePlugins, remotePluginInstallSpec{Plugin: plugin, InstallSource: remotePath})
+			continue
+		}
+		remotePlugins = append(remotePlugins, remotePluginInstallSpec{Plugin: plugin, InstallSource: installSource})
+	}
+	return remotePlugins, uploads, nil
+}
+
+func remotePluginSourceLooksLocal(plugin wordpressPluginSpec, installSource string) bool {
+	if installSource == "" || installSource == plugin.Slug || installSource == "wordpress.org" {
+		return false
+	}
+	lower := strings.ToLower(installSource)
+	if strings.HasPrefix(lower, "http://") || strings.HasPrefix(lower, "https://") || strings.Contains(lower, "://") {
+		return false
+	}
+	return filepath.IsAbs(installSource) || strings.HasPrefix(installSource, ".") || strings.ContainsAny(installSource, `/\\`) || strings.HasSuffix(lower, ".zip")
+}
+
+func remotePluginInstallTempDir(target envRemoteSyncTarget) string {
+	return path.Join("/tmp", "nf-plugins-"+cleanEnvSlug(target.SiteID+"-"+target.Env)+"-"+strconv.FormatInt(time.Now().Unix(), 10))
+}
+
+func remotePluginUploadArgs(target envRemoteSyncTarget, upload remotePluginUpload) []string {
+	return []string{"rsync", "-az", "-e", "ssh -p " + target.SSHPort, upload.LocalPath, target.SSHUser + "@" + target.SSHHost + ":" + upload.RemotePath}
+}
+
 func formatWordPressPluginTable(plugins []wordpressPluginSpec) string {
 	rows := [][]string{{"plugin", "source", "activate", "auto-update"}}
 	for _, plugin := range plugins {
@@ -279,7 +382,7 @@ func formatWordPressPluginTable(plugins []wordpressPluginSpec) string {
 	return formatTable(rows)
 }
 
-func remotePluginInstallScript(target envRemoteSyncTarget, plugins []wordpressPluginSpec) string {
+func remotePluginInstallScript(target envRemoteSyncTarget, plugins []remotePluginInstallSpec) string {
 	var builder strings.Builder
 	builder.WriteString("set -eu\n")
 	builder.WriteString("cd ")
@@ -289,9 +392,10 @@ func remotePluginInstallScript(target envRemoteSyncTarget, plugins []wordpressPl
 	builder.WriteString(" --path=")
 	builder.WriteString(shellQuoteArg(target.WordPressPath))
 	builder.WriteString(" \"$@\"; }\n")
-	for _, plugin := range plugins {
+	for _, remotePlugin := range plugins {
+		plugin := remotePlugin.Plugin
 		slug := shellQuoteArg(plugin.Slug)
-		source := shellQuoteArg(pluginInstallSource(plugin))
+		source := shellQuoteArg(remotePlugin.InstallSource)
 		builder.WriteString("if ! wp_cmd plugin is-installed ")
 		builder.WriteString(slug)
 		builder.WriteString("; then\n")
