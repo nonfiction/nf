@@ -6121,7 +6121,7 @@ func TestRunEnvPluginsInstallInstallsMissingAndActivatesInstalled(t *testing.T) 
 	}
 	dockerDir := t.TempDir()
 	logPath := filepath.Join(dockerDir, "docker-args.txt")
-	dockerScript := []byte("#!/bin/sh\nprintf '%s\n' \"$@\" >> \"$DOCKER_LOG\"\ncase \"$*\" in\n  *\"plugin is-installed stream\"*) exit 1 ;;\n  *\"plugin is-installed acf-pro\"*) exit 0 ;;\n  *\"wp core is-installed\"*) exit 0 ;;\n  *\"wp theme is-active\"*) exit 0 ;;\nesac\nexit 0\n")
+	dockerScript := []byte("#!/bin/sh\nprintf '%s\n' \"$@\" >> \"$DOCKER_LOG\"\ncase \"$*\" in\n  *\"sh -lc\"*) exit 0 ;;\n  *\"wp core is-installed\"*) exit 0 ;;\n  *\"wp theme is-active\"*) exit 0 ;;\nesac\nexit 0\n")
 	if err := os.WriteFile(filepath.Join(dockerDir, "docker"), dockerScript, 0o755); err != nil {
 		t.Fatalf("WriteFile(docker) error = %v", err)
 	}
@@ -6146,14 +6146,7 @@ func TestRunEnvPluginsInstallInstallsMissingAndActivatesInstalled(t *testing.T) 
 	for _, want := range []string{
 		"> docker compose run --rm cli wp core is-installed --allow-root",
 		"> docker compose run --rm cli wp theme is-active theme --allow-root",
-		"> docker compose run --rm cli wp plugin is-installed stream --allow-root",
-		"> docker compose run --rm cli wp plugin install stream --activate --allow-root",
-		"> docker compose run --rm cli wp plugin auto-updates status stream --enabled-only --field=name --allow-root",
-		"> docker compose run --rm cli wp plugin auto-updates enable stream --allow-root",
-		"> docker compose run --rm cli wp plugin is-installed acf-pro --allow-root",
-		"> docker compose run --rm cli wp plugin is-active acf-pro --allow-root",
-		"> docker compose run --rm cli wp plugin auto-updates status acf-pro --enabled-only --field=name --allow-root",
-		"> docker compose run --rm cli wp plugin auto-updates enable acf-pro --allow-root",
+		"> docker compose run --rm cli '<wp plugin bootstrap script>'",
 		"WordPress plugins installed.",
 	} {
 		if !strings.Contains(output, want) {
@@ -6165,14 +6158,10 @@ func TestRunEnvPluginsInstallInstallsMissingAndActivatesInstalled(t *testing.T) 
 		t.Fatalf("ReadFile(log) error = %v", err)
 	}
 	logText := string(logData)
-	if strings.Contains(logText, "https://plugins.example.test/acf-pro.zip") {
-		t.Fatalf("installed already-present acf-pro unexpectedly:\n%s", logText)
-	}
-	if strings.Contains(logText, "plugin\nactivate\nacf-pro") {
-		t.Fatalf("activated already-active acf-pro unexpectedly:\n%s", logText)
-	}
-	if !strings.Contains(logText, "plugin\ninstall\nstream\n--activate") || !strings.Contains(logText, "plugin\nauto-updates\nenable\nstream") || !strings.Contains(logText, "plugin\nis-active\nacf-pro") || !strings.Contains(logText, "plugin\nauto-updates\nenable\nacf-pro") {
-		t.Fatalf("plugin commands missing from docker log:\n%s", logText)
+	for _, want := range []string{"wp plugin install stream --activate --allow-root", "wp plugin auto-updates enable stream --allow-root", "wp plugin is-active acf-pro --allow-root", "wp plugin auto-updates enable acf-pro --allow-root", "https://plugins.example.test/acf-pro.zip"} {
+		if !strings.Contains(logText, want) {
+			t.Fatalf("plugin install script missing %q:\n%s", want, logText)
+		}
 	}
 }
 
@@ -6196,7 +6185,7 @@ func TestRunEnvPluginsInstallSkipsSatisfiedPlugins(t *testing.T) {
 	}
 	dockerDir := t.TempDir()
 	logPath := filepath.Join(dockerDir, "docker-args.txt")
-	dockerScript := []byte("#!/bin/sh\nprintf '%s\n' \"$@\" >> \"$DOCKER_LOG\"\ncase \"$*\" in\n  *\"plugin auto-updates status stream --enabled-only --field=name\"*) printf 'stream\\n' ;;\nesac\nexit 0\n")
+	dockerScript := []byte("#!/bin/sh\nprintf '%s\n' \"$@\" >> \"$DOCKER_LOG\"\nexit 0\n")
 	if err := os.WriteFile(filepath.Join(dockerDir, "docker"), dockerScript, 0o755); err != nil {
 		t.Fatalf("WriteFile(docker) error = %v", err)
 	}
@@ -6218,9 +6207,7 @@ func TestRunEnvPluginsInstallSkipsSatisfiedPlugins(t *testing.T) {
 		}
 	})
 	for _, want := range []string{
-		"> docker compose run --rm cli wp plugin is-installed stream --allow-root",
-		"> docker compose run --rm cli wp plugin is-active stream --allow-root",
-		"> docker compose run --rm cli wp plugin auto-updates status stream --enabled-only --field=name --allow-root",
+		"> docker compose run --rm cli '<wp plugin bootstrap script>'",
 		"WordPress plugins installed.",
 	} {
 		if !strings.Contains(output, want) {
@@ -6232,9 +6219,9 @@ func TestRunEnvPluginsInstallSkipsSatisfiedPlugins(t *testing.T) {
 		t.Fatalf("ReadFile(log) error = %v", err)
 	}
 	logText := string(logData)
-	for _, unwanted := range []string{"plugin\ninstall\nstream", "plugin\nactivate\nstream", "plugin\nauto-updates\nenable\nstream"} {
-		if strings.Contains(logText, unwanted) {
-			t.Fatalf("idempotent install ran %q unexpectedly:\n%s", unwanted, logText)
+	for _, want := range []string{"wp plugin is-installed stream --allow-root", "wp plugin is-active stream --allow-root", "wp plugin auto-updates status stream --enabled-only --field=name --allow-root", "wp plugin auto-updates enable stream --allow-root"} {
+		if !strings.Contains(logText, want) {
+			t.Fatalf("plugin install script missing %q:\n%s", want, logText)
 		}
 	}
 }

@@ -405,49 +405,9 @@ type envPluginInstaller struct {
 
 func (i envPluginInstaller) Install(plugins []wordpressPluginSpec) error {
 	envDir := localEnvDir(i.cfg)
-	for _, plugin := range plugins {
-		installed := i.pluginInstalled(envDir, plugin.Slug)
-		if !installed {
-			args := []string{"plugin", "install", pluginInstallSource(plugin)}
-			if plugin.Activate {
-				args = append(args, "--activate")
-			}
-			if err := runCommandSpec(execSpec{Dir: envDir, Args: envWpArgs(i.cfg, args...)}); err != nil {
-				return err
-			}
-		} else if plugin.Activate && !i.pluginActive(envDir, plugin.Slug) {
-			if err := runCommandSpec(execSpec{Dir: envDir, Args: envWpArgs(i.cfg, "plugin", "activate", plugin.Slug)}); err != nil {
-				return err
-			}
-		}
-		if plugin.AutoUpdate && !i.pluginAutoUpdatesEnabled(envDir, plugin.Slug) {
-			if err := runCommandSpec(execSpec{Dir: envDir, Args: envWpArgs(i.cfg, "plugin", "auto-updates", "enable", plugin.Slug)}); err != nil {
-				return err
-			}
-		}
-	}
-	return nil
-}
-
-func (i envPluginInstaller) pluginInstalled(envDir, slug string) bool {
-	return runCommandSpecQuiet(execSpec{Dir: envDir, Args: envWpArgs(i.cfg, "plugin", "is-installed", slug)}) == nil
-}
-
-func (i envPluginInstaller) pluginActive(envDir, slug string) bool {
-	return runCommandSpecQuiet(execSpec{Dir: envDir, Args: envWpArgs(i.cfg, "plugin", "is-active", slug)}) == nil
-}
-
-func (i envPluginInstaller) pluginAutoUpdatesEnabled(envDir, slug string) bool {
-	output, err := runCommandSpecOutputQuiet(execSpec{Dir: envDir, Args: envWpArgs(i.cfg, "plugin", "auto-updates", "status", slug, "--enabled-only", "--field=name")})
-	if err != nil {
-		return false
-	}
-	for _, line := range strings.Split(output, "\n") {
-		if strings.TrimSpace(line) == slug {
-			return true
-		}
-	}
-	return false
+	args := envCliArgs(i.cfg, "sh", "-lc", localPluginInstallScript(plugins))
+	preview := envCliArgs(i.cfg, "<wp plugin bootstrap script>")
+	return runCommandSpecWithPreview(execSpec{Dir: envDir, Args: args}, preview)
 }
 
 type envPluginStatusChecker struct {
@@ -480,6 +440,20 @@ func runCommandSpecOutputSilent(spec execSpec) (string, error) {
 		err = fmt.Errorf("%w\n%s", err, strings.TrimSpace(stderr.String()))
 	}
 	return string(output), err
+}
+
+func runCommandSpecWithPreview(spec execSpec, preview []string) error {
+	if len(spec.Args) == 0 {
+		return fmt.Errorf("unsupported repo command type")
+	}
+	printCommandArgs(preview)
+	cmd := exec.Command(spec.Args[0], spec.Args[1:]...)
+	cmd.Dir = spec.Dir
+	cmd.Env = append(os.Environ(), "COMPOSE_PROGRESS=quiet")
+	cmd.Stdout = os.Stdout
+	cmd.Stderr = os.Stderr
+	cmd.Stdin = os.Stdin
+	return cmd.Run()
 }
 
 func pluginInstallSource(plugin wordpressPluginSpec) string {
@@ -713,6 +687,45 @@ func localPluginStatusScript(plugins []wordpressPluginSpec) string {
 		builder.WriteString("printf '%s\\t%s\\t%s\\t%s\\n' ")
 		builder.WriteString(slug)
 		builder.WriteString(" \"$installed\" \"$active\" \"$auto_update\"\n")
+	}
+	return builder.String()
+}
+
+func localPluginInstallScript(plugins []wordpressPluginSpec) string {
+	var builder strings.Builder
+	builder.WriteString("set -eu\n")
+	for _, plugin := range plugins {
+		slug := shellQuoteArg(plugin.Slug)
+		source := shellQuoteArg(pluginInstallSource(plugin))
+		builder.WriteString("if ! wp plugin is-installed ")
+		builder.WriteString(slug)
+		builder.WriteString(" --allow-root; then\n")
+		builder.WriteString("  wp plugin install ")
+		builder.WriteString(source)
+		if plugin.Activate {
+			builder.WriteString(" --activate")
+		}
+		builder.WriteString(" --allow-root\n")
+		if plugin.Activate {
+			builder.WriteString("elif ! wp plugin is-active ")
+			builder.WriteString(slug)
+			builder.WriteString(" --allow-root; then\n")
+			builder.WriteString("  wp plugin activate ")
+			builder.WriteString(slug)
+			builder.WriteString(" --allow-root\n")
+		}
+		builder.WriteString("fi\n")
+		if plugin.AutoUpdate {
+			builder.WriteString("if ! wp plugin auto-updates status ")
+			builder.WriteString(slug)
+			builder.WriteString(" --enabled-only --field=name --allow-root 2>/dev/null | grep -qx ")
+			builder.WriteString(slug)
+			builder.WriteString("; then\n")
+			builder.WriteString("  wp plugin auto-updates enable ")
+			builder.WriteString(slug)
+			builder.WriteString(" --allow-root\n")
+			builder.WriteString("fi\n")
+		}
 	}
 	return builder.String()
 }
