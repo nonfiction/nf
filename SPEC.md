@@ -150,7 +150,7 @@ KINSTA_API_KEY=
 * write company/API-key metadata to `providers.json`
 * write one target named `kinsta`
 
-Kinsta records should use Kinsta IDs from API state. Kinsta must not assume Linode-specific SSH fields, `nfweb.dev` hostnames, or Linode provisioning/delete paths.
+Kinsta records should use Kinsta IDs from API state. Kinsta must not assume Linode-specific SSH fields, `nonfiction.dev` hostnames, or Linode provisioning/delete paths.
 
 ### Linode
 

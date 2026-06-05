@@ -157,9 +157,9 @@ Use neutral fictional examples:
 * project slug: `client`
 * project name: `Client`
 * target: `app1-linode`
-* target hostname: `app1.nfweb.dev`
+* target hostname: `app1.nonfiction.dev`
 * Linode site ID: `client-app1-linode`
-* Linode site URL: `https://client.app1.nfweb.dev/`
+* Linode site URL: `https://client.app1.nonfiction.dev/`
 * Kinsta site ID: `client-kinsta`
 * Kinsta placeholder URL: `https://www.example.com/`
 
