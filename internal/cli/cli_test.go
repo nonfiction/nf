@@ -68,11 +68,11 @@ func TestIsLinodeNotFoundError(t *testing.T) {
 }
 
 func TestRecordPickerHelpers(t *testing.T) {
-	server := map[string]any{"id": float64(98222343), "name": "test1", "provider": "linode", "hostname": "test1.nfweb.dev"}
+	server := map[string]any{"id": float64(98222343), "name": "test1", "provider": "linode", "hostname": "test1.nonfiction.dev"}
 	if got := recordPickerValue("server", server); got != "test1" {
 		t.Fatalf("recordPickerValue(server) = %q, want test1", got)
 	}
-	if got := recordPickerLabel("server", server); !strings.Contains(got, "id 98222343") || !strings.Contains(got, "test1.nfweb.dev") {
+	if got := recordPickerLabel("server", server); !strings.Contains(got, "id 98222343") || !strings.Contains(got, "test1.nonfiction.dev") {
 		t.Fatalf("recordPickerLabel(server) = %q, want id and hostname", got)
 	}
 
@@ -1489,11 +1489,11 @@ func TestRunTargetRemoveLinodeDeletesRemoteDNSAndState(t *testing.T) {
 			"id":       "98222343",
 			"name":     "app1-linode",
 			"provider": "linode",
-			"hostname": "app1-linode.nfweb.dev",
+			"hostname": "app1-linode.nonfiction.dev",
 			"dns": map[string]any{
 				"provider":   "dnsimple",
 				"account_id": "14",
-				"zone":       "nfweb.dev",
+				"zone":       "nonfiction.dev",
 				"hostname_record": map[string]any{
 					"name": "app1-linode",
 				},
@@ -1539,7 +1539,7 @@ func TestRunTargetRemoveLinodeDeletesRemoteDNSAndState(t *testing.T) {
 			t.Fatalf("Run(target remove) = %d, want 0", got)
 		}
 	})
-	for _, want := range []string{"Remove target plan:", "Linode API delete instance 98222343", "delete dnsimple app1-linode.nfweb.dev", "delete dnsimple *.app1-linode.nfweb.dev", "delete dnsimple TXT _acme-challenge.app1-linode.nfweb.dev", "mode: execute"} {
+	for _, want := range []string{"Remove target plan:", "Linode API delete instance 98222343", "delete dnsimple app1-linode.nonfiction.dev", "delete dnsimple *.app1-linode.nonfiction.dev", "delete dnsimple TXT _acme-challenge.app1-linode.nonfiction.dev", "mode: execute"} {
 		if !strings.Contains(output, want) {
 			t.Fatalf("target remove output missing %q:\n%s", want, output)
 		}
@@ -1547,10 +1547,10 @@ func TestRunTargetRemoveLinodeDeletesRemoteDNSAndState(t *testing.T) {
 	if got, want := strings.Join(deletedLinodes, ","), "98222343"; got != want {
 		t.Fatalf("deleted linodes = %q, want %q", got, want)
 	}
-	if got, want := strings.Join(deletedDNS, ","), "token|14|nfweb.dev|app1-linode,token|14|nfweb.dev|*.app1-linode"; got != want {
+	if got, want := strings.Join(deletedDNS, ","), "token|14|nonfiction.dev|app1-linode,token|14|nonfiction.dev|*.app1-linode"; got != want {
 		t.Fatalf("deleted DNS = %q, want %q", got, want)
 	}
-	if got, want := strings.Join(deletedTXT, ","), "token|14|nfweb.dev|_acme-challenge.app1-linode"; got != want {
+	if got, want := strings.Join(deletedTXT, ","), "token|14|nonfiction.dev|_acme-challenge.app1-linode"; got != want {
 		t.Fatalf("deleted TXT = %q, want %q", got, want)
 	}
 	records, err := state.LoadStateRecords("providers")
@@ -1799,9 +1799,9 @@ func TestRunTargetRemoveLinodeRemovesRelatedSitesFromCache(t *testing.T) {
 		t.Fatalf("SaveStateRecords(providers) error = %v", err)
 	}
 	if err := state.SaveStateRecords("sites", []map[string]any{
-		{"site_id": "client", "name": "client", "provider": "linode", "env": "live", "target": "app1-linode", "hostname": "client.app1-linode.nfweb.dev"},
-		{"site_id": "client", "name": "client", "provider": "linode", "env": "staging", "target": "app1-linode", "hostname": "client-staging.app1-linode.nfweb.dev"},
-		{"site_id": "other", "name": "other", "provider": "linode", "env": "live", "target": "app2-linode", "hostname": "other.app2-linode.nfweb.dev"},
+		{"site_id": "client", "name": "client", "provider": "linode", "env": "live", "target": "app1-linode", "hostname": "client.app1-linode.nonfiction.dev"},
+		{"site_id": "client", "name": "client", "provider": "linode", "env": "staging", "target": "app1-linode", "hostname": "client-staging.app1-linode.nonfiction.dev"},
+		{"site_id": "other", "name": "other", "provider": "linode", "env": "live", "target": "app2-linode", "hostname": "other.app2-linode.nonfiction.dev"},
 	}); err != nil {
 		t.Fatalf("SaveStateRecords(sites) error = %v", err)
 	}
@@ -1838,7 +1838,7 @@ func TestRunTargetRemoveLinodeRemovesRelatedSitesFromCache(t *testing.T) {
 func TestRunTargetListFallsBackToLegacyServersCache(t *testing.T) {
 	stateDir := t.TempDir()
 	t.Setenv("NF_STATE_HOME", stateDir)
-	servers := map[string]any{"servers": map[string]any{"app1-linode": map[string]any{"id": 98222343, "name": "app1-linode", "provider": "linode", "hostname": "app1.nfweb.dev", "status": "active"}}}
+	servers := map[string]any{"servers": map[string]any{"app1-linode": map[string]any{"id": 98222343, "name": "app1-linode", "provider": "linode", "hostname": "app1.nonfiction.dev", "status": "active"}}}
 	data, err := json.MarshalIndent(servers, "", "  ")
 	if err != nil {
 		t.Fatalf("MarshalIndent() error = %v", err)
@@ -1855,7 +1855,7 @@ func TestRunTargetListFallsBackToLegacyServersCache(t *testing.T) {
 			t.Fatalf("Run(target list) = %d, want 0", got)
 		}
 	})
-	for _, want := range []string{"target", "app1-linode", "linode", "app1.nfweb.dev", "ssh unavailable"} {
+	for _, want := range []string{"target", "app1-linode", "linode", "app1.nonfiction.dev", "ssh unavailable"} {
 		if !strings.Contains(output, want) {
 			t.Fatalf("target list output missing %q:\n%s", want, output)
 		}
@@ -2342,11 +2342,11 @@ func TestRunSiteAddKinstaDryRunPlansLiveAndStaging(t *testing.T) {
 	t.Cleanup(func() { kinstaProvisionSiteFn = oldProvision })
 
 	output := captureStdout(t, func() {
-		if got := Run([]string{"site", "add", "kinsta", "sanjel", "--dry-run", "--non-interactive"}); got != 0 {
+		if got := Run([]string{"site", "add", "kinsta", "foobar", "--dry-run", "--non-interactive"}); got != 0 {
 			t.Fatalf("Run(site add kinsta) = %d, want 0", got)
 		}
 	})
-	for _, want := range []string{"Add site plan:", "target: kinsta", "provider: kinsta", "company id: company-123", "site: sanjel", "site id: sanjel.kinsta", "region: us-central1", "php: 8.3", "admin email: web@nonfiction.ca", "admin password: derived from sanjel", "domain: sanjel.kinsta.nonfiction.dev", "domain: sanjel-staging.kinsta.nonfiction.dev", "dns: dnsimple zone nonfiction.dev account 14", "mode: dry-run"} {
+	for _, want := range []string{"Add site plan:", "target: kinsta", "provider: kinsta", "company id: company-123", "site: foobar", "site id: foobar.kinsta", "region: us-central1", "php: 8.3", "admin email: web@nonfiction.ca", "admin password: derived from foobar", "domain: foobar.kinsta.nonfiction.dev", "domain: foobar-staging.kinsta.nonfiction.dev", "dns: dnsimple zone nonfiction.dev account 14", "mode: dry-run"} {
 		if !strings.Contains(output, want) {
 			t.Fatalf("site add kinsta dry-run output missing %q:\n%s", want, output)
 		}
@@ -2373,21 +2373,21 @@ func TestRunSiteAddKinstaExecuteCachesEnvs(t *testing.T) {
 	kinstaProvisionSiteFn = func(plan kinstaSiteAddPlan) (kinstaProvisionResult, error) {
 		capturedPlan = plan
 		return kinstaProvisionResult{SiteID: "ksite123", Envs: []kinstaSiteAddEnvPlan{
-			{Env: "live", Domain: "sanjel.kinsta.nonfiction.dev", URL: "https://sanjel.kinsta.nonfiction.dev", Branch: "main", EnvID: "kenv-live", DomainID: "kdom-live", Path: "/www/sanjel/public", Database: "sanjel", SSHHost: "203.0.113.10", SSHPort: "12345", SSHUser: "sanjel", SSHCmd: "ssh sanjel@203.0.113.10 -p 12345"},
-			{Env: "staging", Domain: "sanjel-staging.kinsta.nonfiction.dev", URL: "https://sanjel-staging.kinsta.nonfiction.dev", Branch: "develop", EnvID: "kenv-staging", DomainID: "kdom-staging", Path: "/www/sanjelstaging/public", Database: "sanjelstaging", SSHHost: "203.0.113.11", SSHPort: "12346", SSHUser: "sanjelstaging", SSHCmd: "ssh sanjelstaging@203.0.113.11 -p 12346"},
+			{Env: "live", Domain: "foobar.kinsta.nonfiction.dev", URL: "https://foobar.kinsta.nonfiction.dev", Branch: "main", EnvID: "kenv-live", DomainID: "kdom-live", Path: "/www/foobar/public", Database: "foobar", SSHHost: "203.0.113.10", SSHPort: "12345", SSHUser: "foobar", SSHCmd: "ssh foobar@203.0.113.10 -p 12345"},
+			{Env: "staging", Domain: "foobar-staging.kinsta.nonfiction.dev", URL: "https://foobar-staging.kinsta.nonfiction.dev", Branch: "develop", EnvID: "kenv-staging", DomainID: "kdom-staging", Path: "/www/foobarstaging/public", Database: "foobarstaging", SSHHost: "203.0.113.11", SSHPort: "12346", SSHUser: "foobarstaging", SSHCmd: "ssh foobarstaging@203.0.113.11 -p 12346"},
 		}}, nil
 	}
 	t.Cleanup(func() { kinstaProvisionSiteFn = oldProvision })
 
 	output := captureStdout(t, func() {
-		if got := Run([]string{"site", "add", "kinsta", "sanjel", "--region", "ca-toronto-1", "--php", "8.2", "--execute", "--yes", "--non-interactive"}); got != 0 {
+		if got := Run([]string{"site", "add", "kinsta", "foobar", "--region", "ca-toronto-1", "--php", "8.2", "--execute", "--yes", "--non-interactive"}); got != 0 {
 			t.Fatalf("Run(site add kinsta execute) = %d, want 0", got)
 		}
 	})
 	if !strings.Contains(output, "Site added.") || !strings.Contains(output, "mode: execute") {
 		t.Fatalf("site add kinsta execute output = %q, want success", output)
 	}
-	if capturedPlan.Region != "ca-toronto-1" || capturedPlan.SiteID != "sanjel.kinsta" || capturedPlan.PHPVersion != "8.2" {
+	if capturedPlan.Region != "ca-toronto-1" || capturedPlan.SiteID != "foobar.kinsta" || capturedPlan.PHPVersion != "8.2" {
 		t.Fatalf("captured plan = %#v, want region and site id", capturedPlan)
 	}
 	sites, err := state.LoadStateRecords("sites")
@@ -2398,8 +2398,8 @@ func TestRunSiteAddKinstaExecuteCachesEnvs(t *testing.T) {
 		t.Fatalf("sites len = %d, want 2: %#v", len(sites), sites)
 	}
 	for _, want := range []struct{ env, domain, branch, envID, domainID, path, database, sshHost, sshPort, sshUser string }{
-		{"live", "sanjel.kinsta.nonfiction.dev", "main", "kenv-live", "kdom-live", "/www/sanjel/public", "sanjel", "203.0.113.10", "12345", "sanjel"},
-		{"staging", "sanjel-staging.kinsta.nonfiction.dev", "develop", "kenv-staging", "kdom-staging", "/www/sanjelstaging/public", "sanjelstaging", "203.0.113.11", "12346", "sanjelstaging"},
+		{"live", "foobar.kinsta.nonfiction.dev", "main", "kenv-live", "kdom-live", "/www/foobar/public", "foobar", "203.0.113.10", "12345", "foobar"},
+		{"staging", "foobar-staging.kinsta.nonfiction.dev", "develop", "kenv-staging", "kdom-staging", "/www/foobarstaging/public", "foobarstaging", "203.0.113.11", "12346", "foobarstaging"},
 	} {
 		var record map[string]any
 		for _, candidate := range sites {
@@ -2411,11 +2411,11 @@ func TestRunSiteAddKinstaExecuteCachesEnvs(t *testing.T) {
 		if record == nil {
 			t.Fatalf("missing %s record in %#v", want.env, sites)
 		}
-		if got := recordValueString(record["site_id"]); got != "sanjel.kinsta" {
-			t.Fatalf("%s site_id = %q, want sanjel.kinsta", want.env, got)
+		if got := recordValueString(record["site_id"]); got != "foobar.kinsta" {
+			t.Fatalf("%s site_id = %q, want foobar.kinsta", want.env, got)
 		}
-		if got := recordValueString(record["env_id"]); got != "sanjel.kinsta:"+want.env {
-			t.Fatalf("%s env_id = %q, want sanjel.kinsta:%s", want.env, got, want.env)
+		if got := recordValueString(record["env_id"]); got != "foobar.kinsta:"+want.env {
+			t.Fatalf("%s env_id = %q, want foobar.kinsta:%s", want.env, got, want.env)
 		}
 		if got := recordValueString(record["target"]); got != "kinsta" {
 			t.Fatalf("%s target = %q, want kinsta", want.env, got)
@@ -2463,16 +2463,16 @@ func TestRunSiteAddKinstaExecuteCachesEnvs(t *testing.T) {
 		}
 	}
 	showOutput := captureStdout(t, func() {
-		if got := Run([]string{"site", "show", "sanjel.kinsta"}); got != 0 {
+		if got := Run([]string{"site", "show", "foobar.kinsta"}); got != 0 {
 			t.Fatalf("Run(site show kinsta) = %d, want 0", got)
 		}
 	})
-	for _, want := range []string{"sanjel.kinsta", "Site       sanjel.kinsta", "Name       sanjel", "Provider   kinsta", "Target     kinsta", "Environments:", "env", "php", "url", "live     8.2", "staging  8.2", "https://sanjel.kinsta.nonfiction.dev", "https://sanjel-staging.kinsta.nonfiction.dev"} {
+	for _, want := range []string{"foobar.kinsta", "Site       foobar.kinsta", "Name       foobar", "Provider   kinsta", "Target     kinsta", "Environments:", "env", "php", "url", "live     8.2", "staging  8.2", "https://foobar.kinsta.nonfiction.dev", "https://foobar-staging.kinsta.nonfiction.dev"} {
 		if !strings.Contains(showOutput, want) {
 			t.Fatalf("site show kinsta output missing %q:\n%s", want, showOutput)
 		}
 	}
-	for _, notWant := range []string{"path", "database", "ssh", "/www/sanjel/public", "sanjel@203.0.113.10:12345", "/www/sanjelstaging/public", "sanjelstaging@203.0.113.11:12346"} {
+	for _, notWant := range []string{"path", "database", "ssh", "/www/foobar/public", "foobar@203.0.113.10:12345", "/www/foobarstaging/public", "foobarstaging@203.0.113.11:12346"} {
 		if strings.Contains(showOutput, notWant) {
 			t.Fatalf("site show kinsta output contains %q:\n%s", notWant, showOutput)
 		}
@@ -2497,7 +2497,7 @@ func TestProvisionKinstaSiteCreatesStagingDomainsDNSAndPrimaryDomains(t *testing
 		switch r.Method + " " + r.URL.Path {
 		case "GET /sites":
 			if createdSite {
-				_ = json.NewEncoder(w).Encode(map[string]any{"company": map[string]any{"sites": []map[string]any{{"id": "ksite123", "name": "sanjel", "display_name": "sanjel"}}}})
+				_ = json.NewEncoder(w).Encode(map[string]any{"company": map[string]any{"sites": []map[string]any{{"id": "ksite123", "name": "foobar", "display_name": "foobar"}}}})
 				return
 			}
 			_ = json.NewEncoder(w).Encode(map[string]any{"company": map[string]any{"sites": []map[string]any{}}})
@@ -2511,9 +2511,9 @@ func TestProvisionKinstaSiteCreatesStagingDomainsDNSAndPrimaryDomains(t *testing
 			if modifiedPHP["kenv-live"] {
 				livePHP = "8.3"
 			}
-			envs := []map[string]any{{"id": "kenv-live", "name": "sanjel", "display_name": "sanjel", "php_version": livePHP, "web_root": "/"}}
+			envs := []map[string]any{{"id": "kenv-live", "name": "foobar", "display_name": "foobar", "php_version": livePHP, "web_root": "/"}}
 			if createdStaging {
-				envs = append(envs, map[string]any{"id": "kenv-staging", "name": "sanjel-staging", "display_name": "sanjel-staging", "php_version": livePHP, "web_root": "/"})
+				envs = append(envs, map[string]any{"id": "kenv-staging", "name": "foobar-staging", "display_name": "foobar-staging", "php_version": livePHP, "web_root": "/"})
 			}
 			_ = json.NewEncoder(w).Encode(map[string]any{"site": map[string]any{"environments": envs}})
 		case "PUT /sites/tools/modify-php-version":
@@ -2527,9 +2527,9 @@ func TestProvisionKinstaSiteCreatesStagingDomainsDNSAndPrimaryDomains(t *testing
 			modifiedPHP["kenv-live"] = true
 			_ = json.NewEncoder(w).Encode(map[string]any{"operation_id": "op-modify-live-php"})
 		case "GET /sites/ksite123/environments/kenv-live/ssh/config":
-			_ = json.NewEncoder(w).Encode(map[string]any{"host": "203.0.113.10", "port": "12345", "user": "sanjel", "ssh_command": "ssh sanjel@203.0.113.10 -p 12345"})
+			_ = json.NewEncoder(w).Encode(map[string]any{"host": "203.0.113.10", "port": "12345", "user": "foobar", "ssh_command": "ssh foobar@203.0.113.10 -p 12345"})
 		case "GET /sites/ksite123/environments/kenv-staging/ssh/config":
-			_ = json.NewEncoder(w).Encode(map[string]any{"host": "203.0.113.11", "port": "12346", "user": "sanjelstaging", "ssh_command": "ssh sanjelstaging@203.0.113.11 -p 12346"})
+			_ = json.NewEncoder(w).Encode(map[string]any{"host": "203.0.113.11", "port": "12346", "user": "foobarstaging", "ssh_command": "ssh foobarstaging@203.0.113.11 -p 12346"})
 		case "POST /sites/ksite123/environments/clone":
 			var payload map[string]any
 			if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
@@ -2542,7 +2542,7 @@ func TestProvisionKinstaSiteCreatesStagingDomainsDNSAndPrimaryDomains(t *testing
 			_ = json.NewEncoder(w).Encode(map[string]any{"operation_id": "op-clone-staging"})
 		case "GET /sites/environments/kenv-live/domains":
 			if domains["live"] {
-				_ = json.NewEncoder(w).Encode(map[string]any{"environment": map[string]any{"site_domains": []map[string]any{{"id": "kdom-live", "name": "sanjel.kinsta.nonfiction.dev", "is_primary": changedPrimary["live"]}}}})
+				_ = json.NewEncoder(w).Encode(map[string]any{"environment": map[string]any{"site_domains": []map[string]any{{"id": "kdom-live", "name": "foobar.kinsta.nonfiction.dev", "is_primary": changedPrimary["live"]}}}})
 				return
 			}
 			_ = json.NewEncoder(w).Encode(map[string]any{"environment": map[string]any{"site_domains": []map[string]any{}}})
@@ -2551,7 +2551,7 @@ func TestProvisionKinstaSiteCreatesStagingDomainsDNSAndPrimaryDomains(t *testing
 			_ = json.NewEncoder(w).Encode(map[string]any{"operation_id": "op-add-live-domain"})
 		case "GET /sites/environments/kenv-staging/domains":
 			if domains["staging"] {
-				_ = json.NewEncoder(w).Encode(map[string]any{"environment": map[string]any{"site_domains": []map[string]any{{"id": "kdom-staging", "name": "sanjel-staging.kinsta.nonfiction.dev", "is_primary": changedPrimary["staging"]}}}})
+				_ = json.NewEncoder(w).Encode(map[string]any{"environment": map[string]any{"site_domains": []map[string]any{{"id": "kdom-staging", "name": "foobar-staging.kinsta.nonfiction.dev", "is_primary": changedPrimary["staging"]}}}})
 				return
 			}
 			_ = json.NewEncoder(w).Encode(map[string]any{"environment": map[string]any{"site_domains": []map[string]any{}}})
@@ -2559,9 +2559,9 @@ func TestProvisionKinstaSiteCreatesStagingDomainsDNSAndPrimaryDomains(t *testing
 			domains["staging"] = true
 			_ = json.NewEncoder(w).Encode(map[string]any{"operation_id": "op-add-staging-domain"})
 		case "GET /sites/environments/domains/kdom-live/verification-records":
-			_ = json.NewEncoder(w).Encode(map[string]any{"site_domain": map[string]any{"verification_records": []map[string]any{{"name": "_acme-challenge.sanjel.kinsta.nonfiction.dev", "type": "TXT", "content": "live-token"}}, "pointing_records": []map[string]any{{"name": "sanjel.kinsta.nonfiction.dev", "type": "A", "content": "203.0.113.10", "ttl": 300}, {"name": "www", "type": "CNAME", "content": "sanjel.kinsta.nonfiction.dev"}}}})
+			_ = json.NewEncoder(w).Encode(map[string]any{"site_domain": map[string]any{"verification_records": []map[string]any{{"name": "_acme-challenge.foobar.kinsta.nonfiction.dev", "type": "TXT", "content": "live-token"}}, "pointing_records": []map[string]any{{"name": "foobar.kinsta.nonfiction.dev", "type": "A", "content": "203.0.113.10", "ttl": 300}, {"name": "www", "type": "CNAME", "content": "foobar.kinsta.nonfiction.dev"}}}})
 		case "GET /sites/environments/domains/kdom-staging/verification-records":
-			_ = json.NewEncoder(w).Encode(map[string]any{"site_domain": map[string]any{"verification_records": []map[string]any{{"name": "_acme-challenge.sanjel-staging.kinsta.nonfiction.dev", "type": "TXT", "content": "staging-token"}}, "pointing_records": []map[string]any{{"name": "sanjel-staging.kinsta.nonfiction.dev", "type": "CNAME", "content": "hosting.kinsta.cloud", "ttl": 300}}}})
+			_ = json.NewEncoder(w).Encode(map[string]any{"site_domain": map[string]any{"verification_records": []map[string]any{{"name": "_acme-challenge.foobar-staging.kinsta.nonfiction.dev", "type": "TXT", "content": "staging-token"}}, "pointing_records": []map[string]any{{"name": "foobar-staging.kinsta.nonfiction.dev", "type": "CNAME", "content": "hosting.kinsta.cloud", "ttl": 300}}}})
 		case "PUT /sites/environments/kenv-live/change-primary-domain":
 			changedPrimary["live"] = true
 			_ = json.NewEncoder(w).Encode(map[string]any{"operation_id": "op-primary-live"})
@@ -2589,8 +2589,8 @@ func TestProvisionKinstaSiteCreatesStagingDomainsDNSAndPrimaryDomains(t *testing
 
 	result, err := provisionKinstaSite(kinstaSiteAddPlan{
 		CompanyID:     "company-123",
-		Site:          "sanjel",
-		SiteID:        "sanjel.kinsta",
+		Site:          "foobar",
+		SiteID:        "foobar.kinsta",
 		Region:        "ca-toronto-1",
 		AdminUser:     "admin",
 		AdminEmail:    "web@nonfiction.ca",
@@ -2599,8 +2599,8 @@ func TestProvisionKinstaSiteCreatesStagingDomainsDNSAndPrimaryDomains(t *testing
 		DNSZone:       "nonfiction.dev",
 		DNSAccountID:  "14",
 		Envs: []kinstaSiteAddEnvPlan{
-			{Env: "live", Domain: "sanjel.kinsta.nonfiction.dev", URL: "https://sanjel.kinsta.nonfiction.dev", Branch: "main"},
-			{Env: "staging", Domain: "sanjel-staging.kinsta.nonfiction.dev", URL: "https://sanjel-staging.kinsta.nonfiction.dev", Branch: "develop"},
+			{Env: "live", Domain: "foobar.kinsta.nonfiction.dev", URL: "https://foobar.kinsta.nonfiction.dev", Branch: "main"},
+			{Env: "staging", Domain: "foobar-staging.kinsta.nonfiction.dev", URL: "https://foobar-staging.kinsta.nonfiction.dev", Branch: "develop"},
 		},
 	})
 	if err != nil {
@@ -2610,8 +2610,8 @@ func TestProvisionKinstaSiteCreatesStagingDomainsDNSAndPrimaryDomains(t *testing
 		t.Fatalf("result = %#v, want company/site/envs", result)
 	}
 	for _, want := range []struct{ env, path, database, sshHost, sshPort, sshUser string }{
-		{"live", "/www/sanjel/public", "sanjel", "203.0.113.10", "12345", "sanjel"},
-		{"staging", "/www/sanjelstaging/public", "sanjelstaging", "203.0.113.11", "12346", "sanjelstaging"},
+		{"live", "/www/foobar/public", "foobar", "203.0.113.10", "12345", "foobar"},
+		{"staging", "/www/foobarstaging/public", "foobarstaging", "203.0.113.11", "12346", "foobarstaging"},
 	} {
 		found := false
 		for _, got := range result.Envs {
@@ -2631,10 +2631,10 @@ func TestProvisionKinstaSiteCreatesStagingDomainsDNSAndPrimaryDomains(t *testing
 		t.Fatalf("flow flags: createdSite=%v createdStaging=%v modifiedPHP=%#v changedPrimary=%#v", createdSite, createdStaging, modifiedPHP, changedPrimary)
 	}
 	for _, want := range []dnsCall{
-		{"_acme-challenge.sanjel.kinsta", "TXT", "live-token"},
-		{"sanjel.kinsta", "A", "203.0.113.10"},
-		{"_acme-challenge.sanjel-staging.kinsta", "TXT", "staging-token"},
-		{"sanjel-staging.kinsta", "CNAME", "hosting.kinsta.cloud"},
+		{"_acme-challenge.foobar.kinsta", "TXT", "live-token"},
+		{"foobar.kinsta", "A", "203.0.113.10"},
+		{"_acme-challenge.foobar-staging.kinsta", "TXT", "staging-token"},
+		{"foobar-staging.kinsta", "CNAME", "hosting.kinsta.cloud"},
 	} {
 		found := false
 		for _, got := range dnsCalls {
@@ -2798,8 +2798,8 @@ func TestRunSiteRemoveKinstaDryRunPlansEnvAndSiteDeletion(t *testing.T) {
 		t.Fatalf("SaveStateRecords(providers) error = %v", err)
 	}
 	if err := state.SaveStateRecords("sites", []map[string]any{
-		{"provider": "kinsta", "site_id": "sanjel.kinsta", "name": "sanjel", "env": "live", "target": "kinsta", "hostname": "sanjel.kinsta.nonfiction.dev", "kinsta": map[string]any{"site_id": "ksite123", "environment_id": "kenv-live", "domain_id": "kdom-live"}},
-		{"provider": "kinsta", "site_id": "sanjel.kinsta", "name": "sanjel", "env": "staging", "target": "kinsta", "hostname": "sanjel-staging.kinsta.nonfiction.dev", "kinsta": map[string]any{"site_id": "ksite123", "environment_id": "kenv-staging", "domain_id": "kdom-staging"}},
+		{"provider": "kinsta", "site_id": "foobar.kinsta", "name": "foobar", "env": "live", "target": "kinsta", "hostname": "foobar.kinsta.nonfiction.dev", "kinsta": map[string]any{"site_id": "ksite123", "environment_id": "kenv-live", "domain_id": "kdom-live"}},
+		{"provider": "kinsta", "site_id": "foobar.kinsta", "name": "foobar", "env": "staging", "target": "kinsta", "hostname": "foobar-staging.kinsta.nonfiction.dev", "kinsta": map[string]any{"site_id": "ksite123", "environment_id": "kenv-staging", "domain_id": "kdom-staging"}},
 	}); err != nil {
 		t.Fatalf("SaveStateRecords(sites) error = %v", err)
 	}
@@ -2811,11 +2811,11 @@ func TestRunSiteRemoveKinstaDryRunPlansEnvAndSiteDeletion(t *testing.T) {
 	t.Cleanup(func() { kinstaRemoveSiteFn = oldRemove })
 
 	output := captureStdout(t, func() {
-		if got := Run([]string{"site", "remove", "sanjel.kinsta", "--dry-run", "--non-interactive"}); got != 0 {
+		if got := Run([]string{"site", "remove", "foobar.kinsta", "--dry-run", "--non-interactive"}); got != 0 {
 			t.Fatalf("Run(site remove kinsta dry-run) = %d, want 0", got)
 		}
 	})
-	for _, want := range []string{"Remove site plan:", "site id: sanjel.kinsta", "target: kinsta", "provider: kinsta", "kinsta site id: ksite123", "dns: dnsimple zone nonfiction.dev account 14", "dns delete: A sanjel.kinsta.nonfiction.dev", "dns delete: TXT _acme-challenge.sanjel.kinsta.nonfiction.dev", "dns delete: A sanjel-staging.kinsta.nonfiction.dev", "dns delete: TXT _acme-challenge.sanjel-staging.kinsta.nonfiction.dev", "env live:", "kinsta environment id: kenv-live", "env staging:", "kinsta environment id: kenv-staging", "remote actions: delete Kinsta environments, delete Kinsta site", "mode: dry-run"} {
+	for _, want := range []string{"Remove site plan:", "site id: foobar.kinsta", "target: kinsta", "provider: kinsta", "kinsta site id: ksite123", "dns: dnsimple zone nonfiction.dev account 14", "dns delete: A foobar.kinsta.nonfiction.dev", "dns delete: TXT _acme-challenge.foobar.kinsta.nonfiction.dev", "dns delete: A foobar-staging.kinsta.nonfiction.dev", "dns delete: TXT _acme-challenge.foobar-staging.kinsta.nonfiction.dev", "env live:", "kinsta environment id: kenv-live", "env staging:", "kinsta environment id: kenv-staging", "remote actions: delete Kinsta environments, delete Kinsta site", "mode: dry-run"} {
 		if !strings.Contains(output, want) {
 			t.Fatalf("site remove kinsta dry-run output missing %q:\n%s", want, output)
 		}
@@ -2833,8 +2833,8 @@ func TestRunSiteRemoveKinstaExecuteDeletesRemoteAndCache(t *testing.T) {
 		t.Fatalf("saveGlobalConfig() error = %v", err)
 	}
 	if err := state.SaveStateRecords("sites", []map[string]any{
-		{"provider": "kinsta", "site_id": "sanjel.kinsta", "name": "sanjel", "env": "live", "target": "kinsta", "hostname": "sanjel.kinsta.nonfiction.dev", "kinsta": map[string]any{"site_id": "ksite123", "environment_id": "kenv-live", "domain_id": "kdom-live"}},
-		{"provider": "kinsta", "site_id": "sanjel.kinsta", "name": "sanjel", "env": "staging", "target": "kinsta", "hostname": "sanjel-staging.kinsta.nonfiction.dev", "kinsta": map[string]any{"site_id": "ksite123", "environment_id": "kenv-staging", "domain_id": "kdom-staging"}},
+		{"provider": "kinsta", "site_id": "foobar.kinsta", "name": "foobar", "env": "live", "target": "kinsta", "hostname": "foobar.kinsta.nonfiction.dev", "kinsta": map[string]any{"site_id": "ksite123", "environment_id": "kenv-live", "domain_id": "kdom-live"}},
+		{"provider": "kinsta", "site_id": "foobar.kinsta", "name": "foobar", "env": "staging", "target": "kinsta", "hostname": "foobar-staging.kinsta.nonfiction.dev", "kinsta": map[string]any{"site_id": "ksite123", "environment_id": "kenv-staging", "domain_id": "kdom-staging"}},
 		{"provider": "kinsta", "site_id": "other.kinsta", "name": "other", "env": "live", "target": "kinsta", "kinsta": map[string]any{"site_id": "ksite-other", "environment_id": "kenv-other"}},
 	}); err != nil {
 		t.Fatalf("SaveStateRecords(sites) error = %v", err)
@@ -2848,9 +2848,9 @@ func TestRunSiteRemoveKinstaExecuteDeletesRemoteAndCache(t *testing.T) {
 		w.Header().Set("Content-Type", "application/json")
 		switch r.Method + " " + r.URL.Path {
 		case "GET /sites/environments/domains/kdom-live/verification-records":
-			_ = json.NewEncoder(w).Encode(map[string]any{"site_domain": map[string]any{"pointing_records": []map[string]any{{"name": "sanjel.kinsta.nonfiction.dev", "type": "A", "content": "203.0.113.10"}}, "verification_records": []map[string]any{{"name": "_acme-challenge.sanjel.kinsta.nonfiction.dev", "type": "TXT", "content": "token"}, {"name": "_kinsta.sanjel.kinsta.nonfiction.dev", "type": "TXT", "content": "token"}}}})
+			_ = json.NewEncoder(w).Encode(map[string]any{"site_domain": map[string]any{"pointing_records": []map[string]any{{"name": "foobar.kinsta.nonfiction.dev", "type": "A", "content": "203.0.113.10"}}, "verification_records": []map[string]any{{"name": "_acme-challenge.foobar.kinsta.nonfiction.dev", "type": "TXT", "content": "token"}, {"name": "_kinsta.foobar.kinsta.nonfiction.dev", "type": "TXT", "content": "token"}}}})
 		case "GET /sites/environments/domains/kdom-staging/verification-records":
-			_ = json.NewEncoder(w).Encode(map[string]any{"site_domain": map[string]any{"pointing_records": []map[string]any{{"name": "sanjel-staging.kinsta.nonfiction.dev", "type": "A", "content": "203.0.113.11"}}, "verification_records": []map[string]any{{"name": "_acme-challenge.sanjel-staging.kinsta.nonfiction.dev", "type": "TXT", "content": "token"}}}})
+			_ = json.NewEncoder(w).Encode(map[string]any{"site_domain": map[string]any{"pointing_records": []map[string]any{{"name": "foobar-staging.kinsta.nonfiction.dev", "type": "A", "content": "203.0.113.11"}}, "verification_records": []map[string]any{{"name": "_acme-challenge.foobar-staging.kinsta.nonfiction.dev", "type": "TXT", "content": "token"}}}})
 		case "DELETE /sites/environments/kenv-live":
 			w.WriteHeader(http.StatusAccepted)
 			_ = json.NewEncoder(w).Encode(map[string]any{"operation_id": "op-delete-live", "status": 202})
@@ -2886,7 +2886,7 @@ func TestRunSiteRemoveKinstaExecuteDeletesRemoteAndCache(t *testing.T) {
 	})
 
 	output := captureStdout(t, func() {
-		if got := Run([]string{"site", "remove", "sanjel.kinsta", "--execute", "--yes", "--non-interactive"}); got != 0 {
+		if got := Run([]string{"site", "remove", "foobar.kinsta", "--execute", "--yes", "--non-interactive"}); got != 0 {
 			t.Fatalf("Run(site remove kinsta execute) = %d, want 0", got)
 		}
 	})
@@ -2894,11 +2894,11 @@ func TestRunSiteRemoveKinstaExecuteDeletesRemoteAndCache(t *testing.T) {
 		t.Fatalf("site remove kinsta execute output = %q, want success", output)
 	}
 	for _, want := range []dnsCall{
-		{kind: "A", token: "dns-token", accountID: "14", zone: "nonfiction.dev", name: "sanjel.kinsta"},
-		{kind: "TXT", token: "dns-token", accountID: "14", zone: "nonfiction.dev", name: "_acme-challenge.sanjel.kinsta"},
-		{kind: "TXT", token: "dns-token", accountID: "14", zone: "nonfiction.dev", name: "_kinsta.sanjel.kinsta"},
-		{kind: "A", token: "dns-token", accountID: "14", zone: "nonfiction.dev", name: "sanjel-staging.kinsta"},
-		{kind: "TXT", token: "dns-token", accountID: "14", zone: "nonfiction.dev", name: "_acme-challenge.sanjel-staging.kinsta"},
+		{kind: "A", token: "dns-token", accountID: "14", zone: "nonfiction.dev", name: "foobar.kinsta"},
+		{kind: "TXT", token: "dns-token", accountID: "14", zone: "nonfiction.dev", name: "_acme-challenge.foobar.kinsta"},
+		{kind: "TXT", token: "dns-token", accountID: "14", zone: "nonfiction.dev", name: "_kinsta.foobar.kinsta"},
+		{kind: "A", token: "dns-token", accountID: "14", zone: "nonfiction.dev", name: "foobar-staging.kinsta"},
+		{kind: "TXT", token: "dns-token", accountID: "14", zone: "nonfiction.dev", name: "_acme-challenge.foobar-staging.kinsta"},
 	} {
 		found := false
 		for _, got := range dnsCalls {
@@ -3479,12 +3479,12 @@ func TestRunEnvPullPreflightResolvesLinodeTargetFromProvidersCache(t *testing.T)
 	}
 	sites := []map[string]any{{
 		"provider": "linode",
-		"site_id":  "sanjel.app4-linode",
+		"site_id":  "foobar.app4-linode",
 		"env":      "live",
 		"target":   "app4-linode",
-		"hostname": "sanjel.app4-linode.nonfiction.dev",
-		"url":      "https://sanjel.app4-linode.nonfiction.dev",
-		"path":     "/var/www/sites/sanjel_live/public",
+		"hostname": "foobar.app4-linode.nonfiction.dev",
+		"url":      "https://foobar.app4-linode.nonfiction.dev",
+		"path":     "/var/www/sites/foobar_live/public",
 	}}
 	if err := state.SaveStateRecords("sites", sites); err != nil {
 		t.Fatalf("SaveStateRecords(sites) error = %v", err)
@@ -3498,10 +3498,10 @@ func TestRunEnvPullPreflightResolvesLinodeTargetFromProvidersCache(t *testing.T)
 	}
 	project := map[string]any{
 		"schema":    1,
-		"project":   map[string]any{"slug": "sanjel", "name": "Sanjel"},
+		"project":   map[string]any{"slug": "foobar", "name": "FooBar"},
 		"wordpress": map[string]any{"theme_path": "theme", "theme_slug": "theme"},
 		"env":       map[string]any{"compose": "docker compose", "wordpress_service": "wordpress", "cli_service": "cli", "theme_mount_slug": "theme", "uploads_path": "uploads"},
-		"deploy":    map[string]any{"remotes": map[string]any{"live": map[string]any{"site_id": "sanjel.app4-linode", "env": "live"}}},
+		"deploy":    map[string]any{"remotes": map[string]any{"live": map[string]any{"site_id": "foobar.app4-linode", "env": "live"}}},
 	}
 	projectData, err := json.MarshalIndent(project, "", "  ")
 	if err != nil {
@@ -3525,7 +3525,7 @@ func TestRunEnvPullPreflightResolvesLinodeTargetFromProvidersCache(t *testing.T)
 				t.Fatalf("Run(env pull) = %d, want 0 for preflight", got)
 			}
 		})
-		for _, want := range []string{"Env pull preflight:", "local project: sanjel", "remote:        live", "site:          sanjel.app4-linode", "provider:      linode", "target:        app4-linode", "target record: app4-linode", "mode:          dry-run", "No data was changed."} {
+		for _, want := range []string{"Env pull preflight:", "local project: foobar", "remote:        live", "site:          foobar.app4-linode", "provider:      linode", "target:        app4-linode", "target record: app4-linode", "mode:          dry-run", "No data was changed."} {
 			if !strings.Contains(stdout, want) {
 				t.Fatalf("env pull stdout missing %q:\n%s", want, stdout)
 			}
@@ -4118,7 +4118,7 @@ func writeTestRemoteSnapshot(t *testing.T, name, envID, createdAt string, dbSize
 func TestRunRemoteAddListRemoveWritesProjectMetadata(t *testing.T) {
 	stateDir := t.TempDir()
 	t.Setenv("NF_STATE_HOME", stateDir)
-	sites := map[string]any{"sites": map[string]any{"live-client-app1-linode": map[string]any{"provider": "linode", "site_id": "client-app1-linode", "env": "live", "url": "https://client.app1.nfweb.dev/", "server": "app1-linode"}}}
+	sites := map[string]any{"sites": map[string]any{"live-client-app1-linode": map[string]any{"provider": "linode", "site_id": "client-app1-linode", "env": "live", "url": "https://client.app1.nonfiction.dev/", "server": "app1-linode"}}}
 	stateData, err := json.MarshalIndent(sites, "", "  ")
 	if err != nil {
 		t.Fatalf("MarshalIndent(sites) error = %v", err)
@@ -4126,7 +4126,7 @@ func TestRunRemoteAddListRemoveWritesProjectMetadata(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(stateDir, "sites.json"), append(stateData, '\n'), 0o644); err != nil {
 		t.Fatalf("WriteFile(sites) error = %v", err)
 	}
-	servers := map[string]any{"servers": map[string]any{"app1-linode": map[string]any{"name": "app1-linode", "provider": "linode", "hostname": "app1.nfweb.dev"}}}
+	servers := map[string]any{"servers": map[string]any{"app1-linode": map[string]any{"name": "app1-linode", "provider": "linode", "hostname": "app1.nonfiction.dev"}}}
 	serverData, err := json.MarshalIndent(servers, "", "  ")
 	if err != nil {
 		t.Fatalf("MarshalIndent(servers) error = %v", err)
@@ -4190,7 +4190,7 @@ func TestRunRemoteAddListRemoveWritesProjectMetadata(t *testing.T) {
 			t.Fatalf("Run(remote show) = %d, want 0", got)
 		}
 	})
-	for _, want := range []string{"Remote: production", "Env: client-app1-linode:live", "Provider: linode", "Target: app1-linode", "URL: https://client.app1.nfweb.dev/"} {
+	for _, want := range []string{"Remote: production", "Env: client-app1-linode:live", "Provider: linode", "Target: app1-linode", "URL: https://client.app1.nonfiction.dev/"} {
 		if !strings.Contains(showOutput, want) {
 			t.Fatalf("remote show output missing %q:\n%s", want, showOutput)
 		}
@@ -5195,7 +5195,7 @@ func TestRunSiteShowResolvesAliasAndIncludesServerSummary(t *testing.T) {
 	}
 	servers := map[string]any{
 		"servers": map[string]any{
-			"app1": map[string]any{"id": 98222343, "name": "app1", "provider": "linode", "hostname": "app1.nfweb.dev", "ssh": map[string]any{"user": "nonfiction", "host": "app1.nfweb.dev"}},
+			"app1": map[string]any{"id": 98222343, "name": "app1", "provider": "linode", "hostname": "app1.nonfiction.dev", "ssh": map[string]any{"user": "nonfiction", "host": "app1.nonfiction.dev"}},
 		},
 	}
 	serverData, err := json.MarshalIndent(servers, "", "  ")
@@ -5207,7 +5207,7 @@ func TestRunSiteShowResolvesAliasAndIncludesServerSummary(t *testing.T) {
 	}
 	sites := map[string]any{
 		"sites": map[string]any{
-			"client-app1-production": map[string]any{"provider": "linode", "server": "app1", "hostname": "client.app1.nfweb.dev", "url": "https://client.app1.nfweb.dev/", "branch": "main", "environment": "production"},
+			"client-app1-production": map[string]any{"provider": "linode", "server": "app1", "hostname": "client.app1.nonfiction.dev", "url": "https://client.app1.nonfiction.dev/", "branch": "main", "environment": "production"},
 		},
 	}
 	siteData, err := json.MarshalIndent(sites, "", "  ")
@@ -5267,7 +5267,7 @@ func TestRunSiteShowResolvesAliasAndIncludesServerSummary(t *testing.T) {
 			t.Fatalf("Run() = %d, want 0", got)
 		}
 	})
-	for _, wanted := range []string{`"requested_target": "app1"`, `"resolved_target": "client-app1-production"`, `"resolved_target_summary": "app1 / id 98222343 / linode / ssh nonfiction@app1.nfweb.dev"`, `"url": "https://client.app1.nfweb.dev/"`} {
+	for _, wanted := range []string{`"requested_target": "app1"`, `"resolved_target": "client-app1-production"`, `"resolved_target_summary": "app1 / id 98222343 / linode / ssh nonfiction@app1.nonfiction.dev"`, `"url": "https://client.app1.nonfiction.dev/"`} {
 		if !strings.Contains(output, wanted) {
 			t.Fatalf("Run() output missing %q:\n%s", wanted, output)
 		}
@@ -5280,7 +5280,7 @@ func TestRunSiteShowUsesDirectTargetWithoutAlias(t *testing.T) {
 	if err := os.MkdirAll(stateDir, 0o755); err != nil {
 		t.Fatalf("MkdirAll() error = %v", err)
 	}
-	servers := map[string]any{"servers": map[string]any{"app1": map[string]any{"id": 98222343, "name": "app1", "provider": "linode", "ssh": map[string]any{"user": "nonfiction", "host": "app1.nfweb.dev"}}}}
+	servers := map[string]any{"servers": map[string]any{"app1": map[string]any{"id": 98222343, "name": "app1", "provider": "linode", "ssh": map[string]any{"user": "nonfiction", "host": "app1.nonfiction.dev"}}}}
 	serverData, err := json.MarshalIndent(servers, "", "  ")
 	if err != nil {
 		t.Fatalf("MarshalIndent() error = %v", err)
@@ -5288,7 +5288,7 @@ func TestRunSiteShowUsesDirectTargetWithoutAlias(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(stateDir, "servers.json"), append(serverData, '\n'), 0o644); err != nil {
 		t.Fatalf("WriteFile() error = %v", err)
 	}
-	sites := map[string]any{"sites": map[string]any{"client-app1-production": map[string]any{"provider": "linode", "server": "app1", "hostname": "client.app1.nfweb.dev", "branch": "main"}}}
+	sites := map[string]any{"sites": map[string]any{"client-app1-production": map[string]any{"provider": "linode", "server": "app1", "hostname": "client.app1.nonfiction.dev", "branch": "main"}}}
 	siteData, err := json.MarshalIndent(sites, "", "  ")
 	if err != nil {
 		t.Fatalf("MarshalIndent() error = %v", err)
@@ -5979,7 +5979,7 @@ func TestEnvConfigWithAdminCredentialsUsesGlobalDefaultsAndProjectSlug(t *testin
 	if err := saveGlobalConfig(map[string]string{"default_wp_email": "web@nonfiction.ca", "default_wp_user": "owner"}); err != nil {
 		t.Fatalf("saveGlobalConfig() error = %v", err)
 	}
-	cfg, err := envConfigWithAdminCredentials(envConfig{ProjectSlug: "sanjel", ProjectName: "Sanjel"})
+	cfg, err := envConfigWithAdminCredentials(envConfig{ProjectSlug: "foobar", ProjectName: "FooBar"})
 	if err != nil {
 		t.Fatalf("envConfigWithAdminCredentials() error = %v", err)
 	}
@@ -5989,7 +5989,7 @@ func TestEnvConfigWithAdminCredentialsUsesGlobalDefaultsAndProjectSlug(t *testin
 	if got, want := cfg.AdminEmail, "web@nonfiction.ca"; got != want {
 		t.Fatalf("AdminEmail = %q, want %q", got, want)
 	}
-	if got, want := cfg.AdminPassword, passwords.DerivePassword("sanjel", "wp-admin", "test-salt"); got != want {
+	if got, want := cfg.AdminPassword, passwords.DerivePassword("foobar", "wp-admin", "test-salt"); got != want {
 		t.Fatalf("AdminPassword = %q, want %q", got, want)
 	}
 }
@@ -6007,7 +6007,7 @@ func TestRunEnvPasswordPrintsCurrentProjectAdminPassword(t *testing.T) {
 	}
 	project := map[string]any{
 		"schema":    1,
-		"project":   map[string]any{"slug": "sanjel", "name": "Sanjel"},
+		"project":   map[string]any{"slug": "foobar", "name": "FooBar"},
 		"wordpress": map[string]any{"theme_path": "theme", "theme_slug": "theme"},
 		"env":       map[string]any{"compose": "docker compose", "wordpress_service": "wordpress", "cli_service": "cli", "theme_mount_slug": "theme", "uploads_path": "uploads"},
 	}
@@ -6032,7 +6032,7 @@ func TestRunEnvPasswordPrintsCurrentProjectAdminPassword(t *testing.T) {
 			t.Fatalf("Run(env password) = %d, want 0", got)
 		}
 	})
-	want := passwords.DerivePassword("sanjel", "wp-admin", "test-salt") + "\n"
+	want := passwords.DerivePassword("foobar", "wp-admin", "test-salt") + "\n"
 	if output != want {
 		t.Fatalf("Run(env password) output = %q, want %q", output, want)
 	}
@@ -6056,7 +6056,7 @@ func TestRunEnvPasswordRejectsArgs(t *testing.T) {
 	t.Cleanup(func() { _ = os.Chdir(oldwd) })
 
 	stderr := captureStderr(t, func() {
-		if got := Run([]string{"env", "password", "sanjel"}); got != 1 {
+		if got := Run([]string{"env", "password", "foobar"}); got != 1 {
 			t.Fatalf("Run(env password arg) = %d, want 1", got)
 		}
 	})

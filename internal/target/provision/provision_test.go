@@ -52,10 +52,10 @@ func TestSlugToTitle(t *testing.T) {
 
 func TestRelativeRecordName(t *testing.T) {
 	tests := map[string]string{
-		relativeRecordName("app1.nfweb.dev", "nfweb.dev"):   "app1",
-		relativeRecordName("*.app1.nfweb.dev", "nfweb.dev"): "*.app1",
-		relativeRecordName("nfweb.dev", "nfweb.dev"):        "",
-		relativeRecordName("example.org", "nfweb.dev"):      "example.org",
+		relativeRecordName("app1.nonfiction.dev", "nonfiction.dev"):   "app1",
+		relativeRecordName("*.app1.nonfiction.dev", "nonfiction.dev"): "*.app1",
+		relativeRecordName("nonfiction.dev", "nonfiction.dev"):        "",
+		relativeRecordName("example.org", "nonfiction.dev"):           "example.org",
 	}
 
 	for got, want := range tests {
@@ -67,9 +67,9 @@ func TestRelativeRecordName(t *testing.T) {
 
 func TestShortHostname(t *testing.T) {
 	tests := map[string]string{
-		"app1.nfweb.dev": "app1",
-		"app1":           "app1",
-		"":               "",
+		"app1.nonfiction.dev": "app1",
+		"app1":                "app1",
+		"":                    "",
 	}
 	for input, want := range tests {
 		if got := shortHostname(input); got != want {
@@ -171,10 +171,10 @@ func TestBuildPlanDefaults(t *testing.T) {
 	if got, want := plan.DnsProvider, "dnsimple"; got != want {
 		t.Fatalf("DnsProvider = %q, want %q", got, want)
 	}
-	if got, want := plan.DnsZone, "nfweb.dev"; got != want {
+	if got, want := plan.DnsZone, "nonfiction.dev"; got != want {
 		t.Fatalf("DnsZone = %q, want %q", got, want)
 	}
-	if got, want := plan.Domain, "nfweb.dev"; got != want {
+	if got, want := plan.Domain, "nonfiction.dev"; got != want {
 		t.Fatalf("Domain = %q, want %q", got, want)
 	}
 	if got, want := plan.UbuntuVersion, "24.04"; got != want {
@@ -186,16 +186,16 @@ func TestBuildPlanDefaults(t *testing.T) {
 	if got, want := plan.Name, "app1"; got != want {
 		t.Fatalf("Name = %q, want %q", got, want)
 	}
-	if got, want := plan.Hostname, "app1.nfweb.dev"; got != want {
+	if got, want := plan.Hostname, "app1.nonfiction.dev"; got != want {
 		t.Fatalf("Hostname = %q, want %q", got, want)
 	}
 	if got, want := plan.Label, "app1"; got != want {
 		t.Fatalf("Label = %q, want %q", got, want)
 	}
-	if got, want := plan.WildcardHostname, "*.app1.nfweb.dev"; got != want {
+	if got, want := plan.WildcardHostname, "*.app1.nonfiction.dev"; got != want {
 		t.Fatalf("WildcardHostname = %q, want %q", got, want)
 	}
-	if got, want := plan.HealthURL, "https://app1.nfweb.dev"; got != want {
+	if got, want := plan.HealthURL, "https://app1.nonfiction.dev"; got != want {
 		t.Fatalf("HealthURL = %q, want %q", got, want)
 	}
 	if got, want := plan.Region, "ca-central"; got != want {
@@ -315,7 +315,7 @@ func TestBuildPlanInteractiveUsesSelectForUbuntuPHPStack(t *testing.T) {
 		DnsProvider:       "dnsimple",
 		DnsZone:           "example.test",
 		Name:              "app1",
-		Hostname:          "app1.nfweb.dev",
+		Hostname:          "app1.nonfiction.dev",
 		Label:             "app1",
 		Region:            "ca-central",
 		Type:              "g6-standard-1",
@@ -371,7 +371,7 @@ func TestBuildPlanInteractiveFileSSHSourcePromptsForKeyPath(t *testing.T) {
 		DnsProvider:       "dnsimple",
 		DnsZone:           "example.test",
 		Name:              "app1",
-		Hostname:          "app1.nfweb.dev",
+		Hostname:          "app1.nonfiction.dev",
 		Label:             "app1",
 		Region:            "ca-central",
 		Type:              "g6-standard-1",
@@ -407,12 +407,12 @@ func TestBuildPlanInteractiveResumeUsesSavedProvisioningRecord(t *testing.T) {
 	configHome := t.TempDir()
 	t.Setenv("NF_CONFIG_HOME", configHome)
 	t.Setenv("NF_STATE_HOME", filepath.Join(configHome, "state"))
-	t.Setenv("NF_SERVER_DOMAIN", "nfweb.dev")
+	t.Setenv("NF_SERVER_DOMAIN", "nonfiction.dev")
 	record := map[string]any{
 		"provider":    "linode",
 		"provider_id": "98375388",
 		"name":        "prod3",
-		"hostname":    "prod3.nfweb.dev",
+		"hostname":    "prod3.nonfiction.dev",
 		"label":       "prod3",
 		"status":      "provisioning",
 		"phase":       "linode_created",
@@ -426,7 +426,7 @@ func TestBuildPlanInteractiveResumeUsesSavedProvisioningRecord(t *testing.T) {
 				map[string]any{"source": "linode-profile", "id": "77496734", "label": "jon", "fingerprint": "fp-jon"},
 			},
 		},
-		"dns":      map[string]any{"provider": "dnsimple", "account_id": "14", "zone": "nfweb.dev"},
+		"dns":      map[string]any{"provider": "dnsimple", "account_id": "14", "zone": "nonfiction.dev"},
 		"os":       map[string]any{"ubuntu_version": "24.04", "version": "24.04", "image": "linode/ubuntu24.04"},
 		"firewall": map[string]any{"mode": "managed", "id": "27516345"},
 	}
@@ -548,7 +548,7 @@ func TestPreparePlanInteractiveExecutePromptsForKeysBeforeConfirmAndReusesThem(t
 	runLinodeCLICommand = func(args []string) (map[string]any, error) {
 		return map[string]any{"id": "12345", "ipv4": "198.51.100.10"}, nil
 	}
-	dnsimpleZoneLookup = func(plan Plan, token string) (string, error) { return "nfweb.dev", nil }
+	dnsimpleZoneLookup = func(plan Plan, token string) (string, error) { return "nonfiction.dev", nil }
 	dnsimpleUpsertARecordRun = func(token, accountID, zone, name, ip string) error { return nil }
 	secretSaltFn = func() (string, error) { return "test-salt", nil }
 	currentTime = func() time.Time { return time.Date(2026, 5, 29, 12, 0, 0, 0, time.UTC) }
@@ -636,7 +636,7 @@ func TestPreparePlanInteractiveDefaultPromptsForKeysBeforeConfirmAndReusesThem(t
 	runLinodeCLICommand = func(args []string) (map[string]any, error) {
 		return map[string]any{"id": "12345", "ipv4": "198.51.100.10"}, nil
 	}
-	dnsimpleZoneLookup = func(plan Plan, token string) (string, error) { return "nfweb.dev", nil }
+	dnsimpleZoneLookup = func(plan Plan, token string) (string, error) { return "nonfiction.dev", nil }
 	dnsimpleUpsertARecordRun = func(token, accountID, zone, name, ip string) error { return nil }
 	secretSaltFn = func() (string, error) { return "test-salt", nil }
 	currentTime = func() time.Time { return time.Date(2026, 5, 29, 12, 0, 0, 0, time.UTC) }
@@ -857,14 +857,14 @@ func TestCloudInitTemplateIsServerOnly(t *testing.T) {
 	if err != nil {
 		t.Fatalf("phpReleaseForUbuntu() error = %v", err)
 	}
-	plan := Plan{Name: "app1", SshUser: "ubuntu", Hostname: "app1.nfweb.dev", DnsimpleAccountID: "14", OS: osPlan, PHP: phpPlan}
+	plan := Plan{Name: "app1", SshUser: "ubuntu", Hostname: "app1.nonfiction.dev", DnsimpleAccountID: "14", OS: osPlan, PHP: phpPlan}
 	rendered, err := renderCloudInit(plan, false, "", nil)
 	if err != nil {
 		t.Fatalf("renderCloudInit() error = %v", err)
 	}
 	for _, want := range []string{
 		"hostname: app1",
-		"fqdn: app1.nfweb.dev",
+		"fqdn: app1.nonfiction.dev",
 		"preserve_hostname: false",
 		"manage_etc_hosts: true",
 		"timezone: UTC",
@@ -879,10 +879,10 @@ func TestCloudInitTemplateIsServerOnly(t *testing.T) {
 		"/etc/nginx/snippets/nf-security-headers.conf",
 		"/etc/nginx/snippets/nf-wildcard-cert.conf",
 		"/etc/nginx/sites-available/nf-server",
-		"server_name app1.nfweb.dev;",
+		"server_name app1.nonfiction.dev;",
 		"location = /healthz",
 		"default_type application/json;",
-		"{\"server\":\"app1\",\"hostname\":\"app1.nfweb.dev\",\"status\":\"ready\"}",
+		"{\"server\":\"app1\",\"hostname\":\"app1.nonfiction.dev\",\"status\":\"ready\"}",
 		"/usr/local/bin/nf-write-server-health-page",
 		"/var/www/nf/index.html",
 		"cat >/var/www/nf/index.html <<'EOF'",
@@ -902,7 +902,7 @@ func TestCloudInitTemplateIsServerOnly(t *testing.T) {
 		"<main>",
 		"<div class=\"pill\">ready</div>",
 		"<h1>app1</h1>",
-		"<span class=\"label\">health:</span> https://app1.nfweb.dev/healthz",
+		"<span class=\"label\">health:</span> https://app1.nonfiction.dev/healthz",
 		"/etc/letsencrypt/renewal-hooks/deploy/reload-nginx",
 		"/usr/local/bin/nf-enable-wildcard-tls",
 		"/etc/systemd/system/nf-wildcard-tls.service",
@@ -934,11 +934,11 @@ func TestCloudInitTemplateIsServerOnly(t *testing.T) {
 		"unattended-upgrades",
 		"fail2ban",
 		"install -d -o ubuntu -g www-data -m 2775 /var/www /var/www/nf /var/www/sites /var/www/shared /var/log/nginx/sites",
-		"hostnamectl set-hostname app1.nfweb.dev",
+		"hostnamectl set-hostname app1.nonfiction.dev",
 		"mkdir -p /etc/nf",
 		"Managed by nf",
 		"Sites root: /var/www/sites",
-		"certbot certonly --non-interactive --agree-tos --dns-dnsimple --dns-dnsimple-credentials /root/.secrets/certbot/dnsimple.ini -m web@nonfiction.ca -d app1.nfweb.dev -d \"*.app1.nfweb.dev\"",
+		"certbot certonly --non-interactive --agree-tos --dns-dnsimple --dns-dnsimple-credentials /root/.secrets/certbot/dnsimple.ini -m web@nonfiction.ca -d app1.nonfiction.dev -d \"*.app1.nonfiction.dev\"",
 		"listen 443 ssl http2;",
 		"include /etc/nginx/snippets/nf-wildcard-cert.conf;",
 	} {
@@ -972,8 +972,8 @@ func TestCloudInitTemplateIsServerOnly(t *testing.T) {
 		"CREATE DATABASE",
 		"wp config create",
 		"xdebug",
-		"client.app1.nfweb.dev",
-		"server_name *.app1.nfweb.dev",
+		"client.app1.nonfiction.dev",
+		"server_name *.app1.nonfiction.dev",
 		"CREATE USER",
 		"GRANT ALL PRIVILEGES",
 		"composer install",
@@ -1000,7 +1000,7 @@ func TestRenderCloudInitCopiesLinodeRootSSHKeysToSSHUser(t *testing.T) {
 	if err != nil {
 		t.Fatalf("phpReleaseForUbuntu() error = %v", err)
 	}
-	plan := Plan{SshUser: "ubuntu", Hostname: "app1.nfweb.dev", DnsimpleAccountID: "14", OS: osPlan, PHP: phpPlan}
+	plan := Plan{SshUser: "ubuntu", Hostname: "app1.nonfiction.dev", DnsimpleAccountID: "14", OS: osPlan, PHP: phpPlan}
 	rendered, err := renderCloudInit(plan, true, "dns-token", []string{"ssh-rsa AAAA team-a", "ssh-ed25519 BBBB team-b"})
 	if err != nil {
 		t.Fatalf("renderCloudInit() error = %v", err)
@@ -1026,7 +1026,7 @@ func TestRenderCloudInitRedactsDnsimpleTokenInPreview(t *testing.T) {
 	if err != nil {
 		t.Fatalf("phpReleaseForUbuntu() error = %v", err)
 	}
-	plan := Plan{SshUser: "ubuntu", Hostname: "app1.nfweb.dev", DnsimpleAccountID: "14", OS: osPlan, PHP: phpPlan}
+	plan := Plan{SshUser: "ubuntu", Hostname: "app1.nonfiction.dev", DnsimpleAccountID: "14", OS: osPlan, PHP: phpPlan}
 	rendered, err := renderCloudInit(plan, false, "dns-token-secret", nil)
 	if err != nil {
 		t.Fatalf("renderCloudInit() error = %v", err)
@@ -1094,11 +1094,11 @@ func TestServerStateRecordShapeDoesNotContainSecrets(t *testing.T) {
 	if err != nil {
 		t.Fatalf("phpReleaseForUbuntu() error = %v", err)
 	}
-	plan := Plan{Provider: "linode", DnsProvider: "dnsimple", Name: "app1", Hostname: "app1.nfweb.dev", Label: "app1", Domain: "nfweb.dev", WildcardHostname: "*.app1.nfweb.dev", HealthURL: "https://app1.nfweb.dev", Region: "us-east", LinodeType: "g6-standard-1", Image: osPlan.Image, SshUser: "ubuntu", DnsimpleAccountID: "14", OS: osPlan, PHP: phpPlan, Firewall: managedFirewallPlan("fw-123")}
+	plan := Plan{Provider: "linode", DnsProvider: "dnsimple", Name: "app1", Hostname: "app1.nonfiction.dev", Label: "app1", Domain: "nonfiction.dev", WildcardHostname: "*.app1.nonfiction.dev", HealthURL: "https://app1.nonfiction.dev", Region: "us-east", LinodeType: "g6-standard-1", Image: osPlan.Image, SshUser: "ubuntu", DnsimpleAccountID: "14", OS: osPlan, PHP: phpPlan, Firewall: managedFirewallPlan("fw-123")}
 	plan.AuthorizedKeys = []SSHAuthorizedKey{{Source: "linode-profile", ID: "77496734", Label: "team-a", Fingerprint: "fp-a", PublicKey: "ssh-rsa AAAAtest"}, {Source: "file", Path: "/tmp/id.pub", Label: "id.pub", PublicKey: "ssh-ed25519 BBBBtest"}}
 	plan.Firewall.DeviceID = "12345"
 	created := CreatedServer{Provider: "linode", ProviderID: "12345", Name: plan.Name, Hostname: plan.Hostname, IPv4: "198.51.100.10"}
-	dns := dnsStateRecord(plan, "nfweb.dev", DNSRecord{ID: "77496734", Name: "app1", Type: "A", Content: created.IPv4, TTL: 60}, DNSRecord{ID: "77496735", Name: "*.app1", Type: "A", Content: created.IPv4, TTL: 60})
+	dns := dnsStateRecord(plan, "nonfiction.dev", DNSRecord{ID: "77496734", Name: "app1", Type: "A", Content: created.IPv4, TTL: 60}, DNSRecord{ID: "77496735", Name: "*.app1", Type: "A", Content: created.IPv4, TTL: 60})
 	tls := tlsStateRecord(plan)
 	record := serverStateRecord(plan, created, dns, tls, "2026-05-29T12:00:00Z")
 
@@ -1113,20 +1113,20 @@ func TestServerStateRecordShapeDoesNotContainSecrets(t *testing.T) {
 	if linode, ok := record["linode"].(map[string]any); !ok || linode["instance_id"] != "12345" {
 		t.Fatalf("linode block = %#v, want instance_id 12345", record["linode"])
 	}
-	if dnsBlock, ok := record["dns"].(map[string]any); !ok || dnsBlock["provider"] != "dnsimple" || dnsBlock["zone"] != "nfweb.dev" {
+	if dnsBlock, ok := record["dns"].(map[string]any); !ok || dnsBlock["provider"] != "dnsimple" || dnsBlock["zone"] != "nonfiction.dev" {
 		t.Fatalf("dns block = %#v, want dnsimple provider", record["dns"])
 	} else if hostname, ok := dnsBlock["hostname_record"].(DNSRecord); !ok || hostname.ID != "77496734" || hostname.Name != "app1" {
 		t.Fatalf("dns hostname record = %#v, want decimal id", dnsBlock["hostname_record"])
 	} else if wildcard, ok := dnsBlock["wildcard_record"].(DNSRecord); !ok || wildcard.ID != "77496735" || wildcard.Name != "*.app1" {
 		t.Fatalf("dns wildcard record = %#v, want decimal id", dnsBlock["wildcard_record"])
 	}
-	if got, want := record["domain"], "nfweb.dev"; got != want {
+	if got, want := record["domain"], "nonfiction.dev"; got != want {
 		t.Fatalf("domain = %#v, want %q", got, want)
 	}
-	if got, want := record["wildcard_hostname"], "*.app1.nfweb.dev"; got != want {
+	if got, want := record["wildcard_hostname"], "*.app1.nonfiction.dev"; got != want {
 		t.Fatalf("wildcard_hostname = %#v, want %q", got, want)
 	}
-	if got, want := record["health_url"], "https://app1.nfweb.dev"; got != want {
+	if got, want := record["health_url"], "https://app1.nonfiction.dev"; got != want {
 		t.Fatalf("health_url = %#v, want %q", got, want)
 	}
 	if tlsBlock, ok := record["tls"].(map[string]any); !ok || tlsBlock["provider"] != "certbot-dnsimple" {
@@ -1146,7 +1146,7 @@ func TestServerStateRecordShapeDoesNotContainSecrets(t *testing.T) {
 	}
 	if credentials, ok := record["credentials"].(map[string]any); !ok {
 		t.Fatalf("credentials block missing: %#v", record["credentials"])
-	} else if root, ok := credentials["root"].(map[string]any); !ok || root["derived"] != true || root["identity"] != "app1.nfweb.dev" || root["purpose"] != "linode-root" || root["stored"] != false {
+	} else if root, ok := credentials["root"].(map[string]any); !ok || root["derived"] != true || root["identity"] != "app1.nonfiction.dev" || root["purpose"] != "linode-root" || root["stored"] != false {
 		t.Fatalf("credentials.root = %#v, want derived metadata", credentials["root"])
 	} else if _, ok := root["password"]; ok {
 		t.Fatalf("credentials.root unexpectedly stored a password: %#v", root)
@@ -1167,9 +1167,9 @@ func TestRenderPlanShowsDnsZoneAndRecords(t *testing.T) {
 	if err != nil {
 		t.Fatalf("phpReleaseForUbuntu() error = %v", err)
 	}
-	plan := Plan{Provider: "linode", DnsProvider: "dnsimple", Name: "app1", Hostname: "app1.nfweb.dev", Label: "app1", Domain: "nfweb.dev", WildcardHostname: "*.app1.nfweb.dev", HealthURL: "https://app1.nfweb.dev", Region: "ca-central", LinodeType: "g6-standard-1", Image: osPlan.Image, SshUser: "nonfiction", SshKeySource: "file", SshPublicKeyFile: "/tmp/id.pub", OS: osPlan, PHP: phpPlan, Firewall: managedFirewallPlan("")}
+	plan := Plan{Provider: "linode", DnsProvider: "dnsimple", Name: "app1", Hostname: "app1.nonfiction.dev", Label: "app1", Domain: "nonfiction.dev", WildcardHostname: "*.app1.nonfiction.dev", HealthURL: "https://app1.nonfiction.dev", Region: "ca-central", LinodeType: "g6-standard-1", Image: osPlan.Image, SshUser: "nonfiction", SshKeySource: "file", SshPublicKeyFile: "/tmp/id.pub", OS: osPlan, PHP: phpPlan, Firewall: managedFirewallPlan("")}
 	output := renderPlan(plan, "/tmp/cloud-init.yaml", "")
-	for _, want := range []string{"Server provision dry-run plan", "Server", "  provider: linode", "  name: app1", "  hostname: app1.nfweb.dev", "  label: app1", "  wildcard hostname: *.app1.nfweb.dev", "  health url: https://app1.nfweb.dev", "Config", "  server domain: nfweb.dev", "  dns provider: dnsimple", "  dnsimple account id: 14", "Availability", "  local state: not checked (dry-run)", "  linode label: not checked (dry-run)", "  dns records: not checked (dry-run)", "Access", "  ssh user: nonfiction", "  auth: SSH keys only", "  sudo: passwordless", "  key source: file", "  authorized keys: /tmp/id.pub", "  root password: derived from hostname + purpose linode-root", "  root stored in state: no", "  root reveal: nf server root-password app1", "Ubuntu firewall", "  ufw default: deny incoming", "  ufw outbound: allow", "  allow: 22/tcp, 80/tcp, 443/tcp", "Linode firewall", "  provider: linode", "  mode: managed", "  managed label: nf-web", "  inbound: 22/tcp, 80/tcp, 443/tcp", "  inbound policy: DROP", "  outbound policy: ACCEPT", "PHP baseline", "  timezone: UTC", "  swap: 2G", "  stack: Ubuntu 24.04 LTS / PHP 8.3", "  ubuntu: 24.04 LTS", "  image: linode/ubuntu24.04", "  php version: 8.3", "  php service: php8.3-fpm", "  php socket: /run/php/php8.3-fpm.sock", "  package source: ubuntu-native", "  base packages: nginx, mariadb-server", "  packages: php8.3-fpm, php8.3-cli", "DNS", "  provider: dnsimple", "  zone: nfweb.dev", "  hostname A: app1 -> <created after server IP is known>", "  wildcard A: *.app1 -> <created after server IP is known>", "TLS", "  provider: certbot-dnsimple", "  domains: app1.nfweb.dev, *.app1.nfweb.dev", "  certificate: /etc/letsencrypt/live/app1.nfweb.dev/fullchain.pem", "  key: /etc/letsencrypt/live/app1.nfweb.dev/privkey.pem", "Paths", "  cloud-init preview: /tmp/cloud-init.yaml", "  marker: /etc/nf/server.json", "  motd: /etc/update-motd.d/99-nf", "  sites root: /var/www/sites", "  shared root: /var/www/shared", "  nginx site logs: /var/log/nginx/sites", "Mode", "  dry-run: true"} {
+	for _, want := range []string{"Server provision dry-run plan", "Server", "  provider: linode", "  name: app1", "  hostname: app1.nonfiction.dev", "  label: app1", "  wildcard hostname: *.app1.nonfiction.dev", "  health url: https://app1.nonfiction.dev", "Config", "  server domain: nonfiction.dev", "  dns provider: dnsimple", "  dnsimple account id: 14", "Availability", "  local state: not checked (dry-run)", "  linode label: not checked (dry-run)", "  dns records: not checked (dry-run)", "Access", "  ssh user: nonfiction", "  auth: SSH keys only", "  sudo: passwordless", "  key source: file", "  authorized keys: /tmp/id.pub", "  root password: derived from hostname + purpose linode-root", "  root stored in state: no", "  root reveal: nf server root-password app1", "Ubuntu firewall", "  ufw default: deny incoming", "  ufw outbound: allow", "  allow: 22/tcp, 80/tcp, 443/tcp", "Linode firewall", "  provider: linode", "  mode: managed", "  managed label: nf-web", "  inbound: 22/tcp, 80/tcp, 443/tcp", "  inbound policy: DROP", "  outbound policy: ACCEPT", "PHP baseline", "  timezone: UTC", "  swap: 2G", "  stack: Ubuntu 24.04 LTS / PHP 8.3", "  ubuntu: 24.04 LTS", "  image: linode/ubuntu24.04", "  php version: 8.3", "  php service: php8.3-fpm", "  php socket: /run/php/php8.3-fpm.sock", "  package source: ubuntu-native", "  base packages: nginx, mariadb-server", "  packages: php8.3-fpm, php8.3-cli", "DNS", "  provider: dnsimple", "  zone: nonfiction.dev", "  hostname A: app1 -> <created after server IP is known>", "  wildcard A: *.app1 -> <created after server IP is known>", "TLS", "  provider: certbot-dnsimple", "  domains: app1.nonfiction.dev, *.app1.nonfiction.dev", "  certificate: /etc/letsencrypt/live/app1.nonfiction.dev/fullchain.pem", "  key: /etc/letsencrypt/live/app1.nonfiction.dev/privkey.pem", "Paths", "  cloud-init preview: /tmp/cloud-init.yaml", "  marker: /etc/nf/server.json", "  motd: /etc/update-motd.d/99-nf", "  sites root: /var/www/sites", "  shared root: /var/www/shared", "  nginx site logs: /var/log/nginx/sites", "Mode", "  dry-run: true"} {
 		if !strings.Contains(output, want) {
 			t.Fatalf("renderPlan() output missing %q:\n%s", want, output)
 		}
@@ -1203,16 +1203,16 @@ func TestRenderProvisionSuccessShowsNextSteps(t *testing.T) {
 	if err != nil {
 		t.Fatalf("phpReleaseForUbuntu() error = %v", err)
 	}
-	plan := Plan{Provider: "linode", DnsProvider: "dnsimple", Name: "app1", Hostname: "app1.nfweb.dev", Label: "app1", Domain: "nfweb.dev", WildcardHostname: "*.app1.nfweb.dev", HealthURL: "https://app1.nfweb.dev", SshUser: "nonfiction", SshPublicKeyFile: "/tmp/id.pub", OS: osPlan, PHP: phpPlan, Firewall: managedFirewallPlan("")}
+	plan := Plan{Provider: "linode", DnsProvider: "dnsimple", Name: "app1", Hostname: "app1.nonfiction.dev", Label: "app1", Domain: "nonfiction.dev", WildcardHostname: "*.app1.nonfiction.dev", HealthURL: "https://app1.nonfiction.dev", SshUser: "nonfiction", SshPublicKeyFile: "/tmp/id.pub", OS: osPlan, PHP: phpPlan, Firewall: managedFirewallPlan("")}
 	created := CreatedServer{ProviderID: "12345", IPv4: "198.51.100.10"}
-	dns := DNSState{Provider: "dnsimple", Zone: "nfweb.dev", HostnameRecord: DNSRecord{Name: "app1", Type: "A", Content: "198.51.100.10"}, WildcardRecord: DNSRecord{Name: "*.app1", Type: "A", Content: "198.51.100.10"}}
-	tls := TLSState{Provider: "certbot-dnsimple", Domains: []string{"app1.nfweb.dev", "*.app1.nfweb.dev"}, Certificate: "/etc/letsencrypt/live/app1.nfweb.dev/fullchain.pem", Key: "/etc/letsencrypt/live/app1.nfweb.dev/privkey.pem"}
+	dns := DNSState{Provider: "dnsimple", Zone: "nonfiction.dev", HostnameRecord: DNSRecord{Name: "app1", Type: "A", Content: "198.51.100.10"}, WildcardRecord: DNSRecord{Name: "*.app1", Type: "A", Content: "198.51.100.10"}}
+	tls := TLSState{Provider: "certbot-dnsimple", Domains: []string{"app1.nonfiction.dev", "*.app1.nonfiction.dev"}, Certificate: "/etc/letsencrypt/live/app1.nonfiction.dev/fullchain.pem", Key: "/etc/letsencrypt/live/app1.nonfiction.dev/privkey.pem"}
 	sshKeys := []SSHAuthorizedKey{{Source: "linode-profile", ID: "1", Label: "team-a"}, {Source: "linode-profile", ID: "2", Label: "team-b"}}
 	plan.AuthorizedKeys = sshKeys
 	plan.Firewall.ID = "fw-123"
 	plan.Firewall.DeviceID = created.ProviderID
 	output := renderProvisionSuccess(plan, created, dns, tls, "/tmp/state/servers.json", "/tmp/cloud-init.yaml", sshKeys)
-	for _, want := range []string{"Server provisioned.", "Server", "  provider: linode", "  name: app1", "  hostname: app1.nfweb.dev", "  label: app1", "  wildcard hostname: *.app1.nfweb.dev", "  health url: https://app1.nfweb.dev", "  ipv4: 198.51.100.10", "  linode instance id: 12345", "  health check: https://app1.nfweb.dev/healthz", "  status: ready", "Access", "  ssh user: nonfiction", "  auth: SSH keys only", "  sudo: passwordless", "  root password: derived from hostname + purpose linode-root", "  root stored in state: no", "  root reveal: nf server root-password app1", "Ubuntu firewall", "  ufw default: deny incoming", "  ufw outbound: allow", "  allow: 22/tcp, 80/tcp, 443/tcp", "Linode firewall", "  provider: linode", "  mode: managed", "  managed label: nf-web", "  firewall id: fw-123", "PHP baseline", "  timezone: UTC", "  swap: 2G", "DNS", "  provider: dnsimple", "  zone: nfweb.dev", "TLS", "  provider: certbot-dnsimple", "  domains: app1.nfweb.dev, *.app1.nfweb.dev", "Paths", "  state: /tmp/state/servers.json", "  cloud-init: /tmp/cloud-init.yaml", "  marker: /etc/nf/server.json", "  sites root: /var/www/sites", "  shared root: /var/www/shared", "  nginx site logs: /var/log/nginx/sites", "stack: Ubuntu 24.04 LTS / PHP 8.3", "php service: php8.3-fpm", "php socket: /run/php/php8.3-fpm.sock", "authorized keys: team-a, team-b", "hostname A: app1 -> 198.51.100.10", "wildcard A: *.app1 -> 198.51.100.10"} {
+	for _, want := range []string{"Server provisioned.", "Server", "  provider: linode", "  name: app1", "  hostname: app1.nonfiction.dev", "  label: app1", "  wildcard hostname: *.app1.nonfiction.dev", "  health url: https://app1.nonfiction.dev", "  ipv4: 198.51.100.10", "  linode instance id: 12345", "  health check: https://app1.nonfiction.dev/healthz", "  status: ready", "Access", "  ssh user: nonfiction", "  auth: SSH keys only", "  sudo: passwordless", "  root password: derived from hostname + purpose linode-root", "  root stored in state: no", "  root reveal: nf server root-password app1", "Ubuntu firewall", "  ufw default: deny incoming", "  ufw outbound: allow", "  allow: 22/tcp, 80/tcp, 443/tcp", "Linode firewall", "  provider: linode", "  mode: managed", "  managed label: nf-web", "  firewall id: fw-123", "PHP baseline", "  timezone: UTC", "  swap: 2G", "DNS", "  provider: dnsimple", "  zone: nonfiction.dev", "TLS", "  provider: certbot-dnsimple", "  domains: app1.nonfiction.dev, *.app1.nonfiction.dev", "Paths", "  state: /tmp/state/servers.json", "  cloud-init: /tmp/cloud-init.yaml", "  marker: /etc/nf/server.json", "  sites root: /var/www/sites", "  shared root: /var/www/shared", "  nginx site logs: /var/log/nginx/sites", "stack: Ubuntu 24.04 LTS / PHP 8.3", "php service: php8.3-fpm", "php socket: /run/php/php8.3-fpm.sock", "authorized keys: team-a, team-b", "hostname A: app1 -> 198.51.100.10", "wildcard A: *.app1 -> 198.51.100.10"} {
 		if !strings.Contains(output, want) {
 			t.Fatalf("renderProvisionSuccess() output missing %q:\n%s", want, output)
 		}
@@ -1278,10 +1278,10 @@ func TestProvisionServerWritesOnlyServersJSON(t *testing.T) {
 		return map[string]any{"id": "12345", "ipv4": "198.51.100.10"}, nil
 	}
 	dnsimpleZoneLookup = func(plan Plan, token string) (string, error) {
-		if plan.Hostname != "app1.nfweb.dev" {
+		if plan.Hostname != "app1.nonfiction.dev" {
 			t.Fatalf("unexpected hostname passed to zone lookup: %s", plan.Hostname)
 		}
-		return "nfweb.dev", nil
+		return "nonfiction.dev", nil
 	}
 	dnsimpleUpsertARecordRun = func(token, accountID, zone, name, ip string) error {
 		recordedNames = append(recordedNames, name)
@@ -1309,7 +1309,7 @@ func TestProvisionServerWritesOnlyServersJSON(t *testing.T) {
 	secretSaltFn = func() (string, error) { return "test-salt", nil }
 	currentTime = func() time.Time { return time.Date(2026, 5, 29, 12, 0, 0, 0, time.UTC) }
 
-	plan, err := BuildPlan(Args{NonInteractive: true, Execute: true, Yes: true, Firewall: "none", Name: "app1", Hostname: "app1.nfweb.dev"})
+	plan, err := BuildPlan(Args{NonInteractive: true, Execute: true, Yes: true, Firewall: "none", Name: "app1", Hostname: "app1.nonfiction.dev"})
 	if err != nil {
 		t.Fatalf("BuildPlan() error = %v", err)
 	}
@@ -1359,7 +1359,7 @@ func TestProvisionServerWritesOnlyServersJSON(t *testing.T) {
 	if got, want := record["provider_id"], "12345"; got != want {
 		t.Fatalf("provider_id = %#v, want %q", got, want)
 	}
-	if ssh, ok := record["ssh"].(map[string]any); !ok || ssh["user"] != "nonfiction" || ssh["host"] != "app1.nfweb.dev" || valueString(ssh["port"]) != "22" || ssh["source"] != "linode-profile" {
+	if ssh, ok := record["ssh"].(map[string]any); !ok || ssh["user"] != "nonfiction" || ssh["host"] != "app1.nonfiction.dev" || valueString(ssh["port"]) != "22" || ssh["source"] != "linode-profile" {
 		t.Fatalf("ssh block = %#v, want metadata", record["ssh"])
 	} else {
 		keys, ok := ssh["authorized_keys"].([]any)
@@ -1376,10 +1376,10 @@ func TestProvisionServerWritesOnlyServersJSON(t *testing.T) {
 			}
 		}
 	}
-	if got, want := record["hostname"], "app1.nfweb.dev"; got != want {
+	if got, want := record["hostname"], "app1.nonfiction.dev"; got != want {
 		t.Fatalf("hostname = %#v, want %q", got, want)
 	}
-	rootPass := passwords.DerivePassword("app1.nfweb.dev", "linode-root", "test-salt")
+	rootPass := passwords.DerivePassword("app1.nonfiction.dev", "linode-root", "test-salt")
 	for i := 0; i < len(createArgs); i++ {
 		if createArgs[i] == "--root_pass" {
 			if i+1 >= len(createArgs) {
@@ -1514,16 +1514,16 @@ func TestProvisionServerManagedFirewallCreatesRulesAndAttachesDevice(t *testing.
 		}
 	}
 	dnsimpleZoneLookup = func(plan Plan, token string) (string, error) {
-		if plan.Hostname != "app1.nfweb.dev" {
+		if plan.Hostname != "app1.nonfiction.dev" {
 			t.Fatalf("unexpected hostname passed to zone lookup: %s", plan.Hostname)
 		}
-		return "nfweb.dev", nil
+		return "nonfiction.dev", nil
 	}
 	dnsimpleUpsertARecordRun = func(token, accountID, zone, name, ip string) error { return nil }
 	secretSaltFn = func() (string, error) { return "test-salt", nil }
 	currentTime = func() time.Time { return time.Date(2026, 5, 29, 12, 0, 0, 0, time.UTC) }
 
-	plan, err := BuildPlan(Args{NonInteractive: true, Execute: true, Yes: true, NoWait: true, Name: "app1", Hostname: "app1.nfweb.dev"})
+	plan, err := BuildPlan(Args{NonInteractive: true, Execute: true, Yes: true, NoWait: true, Name: "app1", Hostname: "app1.nonfiction.dev"})
 	if err != nil {
 		t.Fatalf("BuildPlan() error = %v", err)
 	}
@@ -1622,12 +1622,12 @@ func TestProvisionServerManagedFirewallReusesExistingFirewallByLabel(t *testing.
 			return nil, nil
 		}
 	}
-	dnsimpleZoneLookup = func(plan Plan, token string) (string, error) { return "nfweb.dev", nil }
+	dnsimpleZoneLookup = func(plan Plan, token string) (string, error) { return "nonfiction.dev", nil }
 	dnsimpleUpsertARecordRun = func(token, accountID, zone, name, ip string) error { return nil }
 	secretSaltFn = func() (string, error) { return "test-salt", nil }
 	currentTime = func() time.Time { return time.Date(2026, 5, 29, 12, 0, 0, 0, time.UTC) }
 
-	plan, err := BuildPlan(Args{NonInteractive: true, Execute: true, Yes: true, NoWait: true, Name: "app1", Hostname: "app1.nfweb.dev"})
+	plan, err := BuildPlan(Args{NonInteractive: true, Execute: true, Yes: true, NoWait: true, Name: "app1", Hostname: "app1.nonfiction.dev"})
 	if err != nil {
 		t.Fatalf("BuildPlan() error = %v", err)
 	}
@@ -1716,7 +1716,7 @@ func TestProvisionServerFirewallFailureKeepsPartialStateAndExplainsRecovery(t *t
 			return nil, nil
 		}
 	}
-	dnsimpleZoneLookup = func(plan Plan, token string) (string, error) { return "nfweb.dev", nil }
+	dnsimpleZoneLookup = func(plan Plan, token string) (string, error) { return "nonfiction.dev", nil }
 	dnsimpleUpsertARecordRun = func(token, accountID, zone, name, ip string) error {
 		t.Fatal("dns upsert should not run after firewall failure")
 		return nil
@@ -1724,7 +1724,7 @@ func TestProvisionServerFirewallFailureKeepsPartialStateAndExplainsRecovery(t *t
 	secretSaltFn = func() (string, error) { return "test-salt", nil }
 	currentTime = func() time.Time { return time.Date(2026, 5, 29, 12, 0, 0, 0, time.UTC) }
 
-	plan, err := BuildPlan(Args{NonInteractive: true, Execute: true, Yes: true, NoWait: true, Name: "app1", Hostname: "app1.nfweb.dev"})
+	plan, err := BuildPlan(Args{NonInteractive: true, Execute: true, Yes: true, NoWait: true, Name: "app1", Hostname: "app1.nonfiction.dev"})
 	if err != nil {
 		t.Fatalf("BuildPlan() error = %v", err)
 	}
@@ -1788,7 +1788,7 @@ func TestProvisionServerWritesPartialStateOnDNSFailure(t *testing.T) {
 	runLinodeCLICommand = func(args []string) (map[string]any, error) {
 		return map[string]any{"id": float64(12345), "ipv4": "198.51.100.10"}, nil
 	}
-	dnsimpleZoneLookup = func(plan Plan, token string) (string, error) { return "nfweb.dev", nil }
+	dnsimpleZoneLookup = func(plan Plan, token string) (string, error) { return "nonfiction.dev", nil }
 	callCount := 0
 	dnsimpleUpsertARecordRun = func(token, accountID, zone, name, ip string) error {
 		callCount++
@@ -1797,7 +1797,7 @@ func TestProvisionServerWritesPartialStateOnDNSFailure(t *testing.T) {
 	secretSaltFn = func() (string, error) { return "test-salt", nil }
 	currentTime = func() time.Time { return time.Date(2026, 5, 29, 12, 0, 0, 0, time.UTC) }
 
-	plan, err := BuildPlan(Args{NonInteractive: true, Execute: true, Yes: true, NoWait: true, Firewall: "none", Name: "app1", Hostname: "app1.nfweb.dev"})
+	plan, err := BuildPlan(Args{NonInteractive: true, Execute: true, Yes: true, NoWait: true, Firewall: "none", Name: "app1", Hostname: "app1.nonfiction.dev"})
 	if err != nil {
 		t.Fatalf("BuildPlan() error = %v", err)
 	}
@@ -1899,7 +1899,7 @@ func TestProvisionServerHealthFailureExplainsRecovery(t *testing.T) {
 			return nil, nil
 		}
 	}
-	dnsimpleZoneLookup = func(plan Plan, token string) (string, error) { return "nfweb.dev", nil }
+	dnsimpleZoneLookup = func(plan Plan, token string) (string, error) { return "nonfiction.dev", nil }
 	dnsimpleListARecordsFn = func(token, accountID, zone string) ([]DNSRecord, error) { return []DNSRecord{}, nil }
 	dnsimpleUpsertARecordRun = func(token, accountID, zone, name, ip string) error { return nil }
 	dnsimpleWaitForRecordDistributionFn = func(token, accountID, zone, name string, timeout time.Duration) error { return nil }
@@ -1922,12 +1922,12 @@ func TestProvisionServerHealthFailureExplainsRecovery(t *testing.T) {
 	secretSaltFn = func() (string, error) { return "test-salt", nil }
 	currentTime = func() time.Time { return time.Date(2026, 5, 29, 12, 0, 0, 0, time.UTC) }
 
-	plan, err := BuildPlan(Args{NonInteractive: true, Execute: true, Yes: true, Firewall: "none", Name: "app1", Hostname: "app1.nfweb.dev"})
+	plan, err := BuildPlan(Args{NonInteractive: true, Execute: true, Yes: true, Firewall: "none", Name: "app1", Hostname: "app1.nonfiction.dev"})
 	if err != nil {
 		t.Fatalf("BuildPlan() error = %v", err)
 	}
 	_, err = ProvisionServer(plan)
-	if err == nil || !strings.Contains(err.Error(), "Health error") || !strings.Contains(err.Error(), "ssh nonfiction@app1.nfweb.dev \"sudo nginx -t && sudo systemctl status nginx\"") || !strings.Contains(err.Error(), "curl -I https://app1.nfweb.dev") {
+	if err == nil || !strings.Contains(err.Error(), "Health error") || !strings.Contains(err.Error(), "ssh nonfiction@app1.nonfiction.dev \"sudo nginx -t && sudo systemctl status nginx\"") || !strings.Contains(err.Error(), "curl -I https://app1.nonfiction.dev") {
 		t.Fatalf("ProvisionServer() error = %v, want health recovery message", err)
 	}
 	data, err := os.ReadFile(filepath.Join(os.Getenv("NF_STATE_HOME"), "servers.json"))
@@ -1958,7 +1958,7 @@ func TestProvisionServerResumesProvisioningRecordWithoutCreatingNewLinode(t *tes
 		"provider":    "linode",
 		"provider_id": "12345",
 		"name":        "app1",
-		"hostname":    "app1.nfweb.dev",
+		"hostname":    "app1.nonfiction.dev",
 		"label":       "app1",
 		"status":      "provisioning",
 		"phase":       "linode_created",
@@ -1968,7 +1968,7 @@ func TestProvisionServerResumesProvisioningRecordWithoutCreatingNewLinode(t *tes
 		"image":       "linode/ubuntu24.04",
 		"created_at":  "2026-05-29T12:00:00Z",
 		"updated_at":  "2026-05-29T12:00:00Z",
-		"ssh":         map[string]any{"user": "nonfiction", "host": "app1.nfweb.dev", "port": 22, "source": "linode-profile", "authorized_keys": []map[string]any{{"source": "linode-profile", "id": "77496734", "label": "team-a", "fingerprint": "fp-a"}}},
+		"ssh":         map[string]any{"user": "nonfiction", "host": "app1.nonfiction.dev", "port": 22, "source": "linode-profile", "authorized_keys": []map[string]any{{"source": "linode-profile", "id": "77496734", "label": "team-a", "fingerprint": "fp-a"}}},
 	}
 	if err := saveStatePayload(filepath.Join(os.Getenv("NF_STATE_HOME"), "servers.json"), []map[string]any{record}); err != nil {
 		t.Fatalf("saveStatePayload() error = %v", err)
@@ -2004,7 +2004,7 @@ func TestProvisionServerResumesProvisioningRecordWithoutCreatingNewLinode(t *tes
 		createCalled = true
 		return nil, fmt.Errorf("should not create a second Linode")
 	}
-	dnsimpleZoneLookup = func(plan Plan, token string) (string, error) { return "nfweb.dev", nil }
+	dnsimpleZoneLookup = func(plan Plan, token string) (string, error) { return "nonfiction.dev", nil }
 	dnsimpleListARecordsFn = func(token, accountID, zone string) ([]DNSRecord, error) { return []DNSRecord{}, nil }
 	dnsimpleUpsertARecordRun = func(token, accountID, zone, name, ip string) error { return nil }
 	dnsimpleWaitForRecordDistributionFn = func(token, accountID, zone, name string, timeout time.Duration) error { return nil }
@@ -2014,7 +2014,7 @@ func TestProvisionServerResumesProvisioningRecordWithoutCreatingNewLinode(t *tes
 	secretSaltFn = func() (string, error) { return "test-salt", nil }
 	currentTime = func() time.Time { return time.Date(2026, 5, 29, 12, 0, 0, 0, time.UTC) }
 
-	plan, err := BuildPlan(Args{NonInteractive: true, Execute: true, Yes: true, Firewall: "none", Name: "app1", Hostname: "app1.nfweb.dev"})
+	plan, err := BuildPlan(Args{NonInteractive: true, Execute: true, Yes: true, Firewall: "none", Name: "app1", Hostname: "app1.nonfiction.dev"})
 	if err != nil {
 		t.Fatalf("BuildPlan() error = %v", err)
 	}
@@ -2051,7 +2051,7 @@ func TestProvisionServerStopsWhenAlreadyProvisioned(t *testing.T) {
 	t.Setenv("NF_PASSWORD_SALT", "test-salt")
 	t.Setenv("DNSIMPLE_TOKEN", "dns-token")
 	t.Setenv("LINODE_CLI_TOKEN", "linode-token")
-	record := map[string]any{"provider": "linode", "provider_id": "12345", "name": "app1", "hostname": "app1.nfweb.dev", "label": "app1", "status": "provisioned", "phase": "complete", "ipv4": "198.51.100.10"}
+	record := map[string]any{"provider": "linode", "provider_id": "12345", "name": "app1", "hostname": "app1.nonfiction.dev", "label": "app1", "status": "provisioned", "phase": "complete", "ipv4": "198.51.100.10"}
 	if err := saveStatePayload(filepath.Join(os.Getenv("NF_STATE_HOME"), "servers.json"), []map[string]any{record}); err != nil {
 		t.Fatalf("saveStatePayload() error = %v", err)
 	}
@@ -2084,7 +2084,7 @@ func TestProvisionServerStopsWhenAlreadyProvisioned(t *testing.T) {
 		return nil
 	}
 
-	plan, err := BuildPlan(Args{NonInteractive: true, Execute: true, Yes: true, Firewall: "none", NoWait: true, Name: "app1", Hostname: "app1.nfweb.dev"})
+	plan, err := BuildPlan(Args{NonInteractive: true, Execute: true, Yes: true, Firewall: "none", NoWait: true, Name: "app1", Hostname: "app1.nonfiction.dev"})
 	if err != nil {
 		t.Fatalf("BuildPlan() error = %v", err)
 	}
@@ -2104,11 +2104,11 @@ func TestCheckHTTPSHealthRequiresReadyIdentityAndStatus(t *testing.T) {
 	t.Run("success", func(t *testing.T) {
 		srv := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			w.WriteHeader(http.StatusOK)
-			_, _ = io.WriteString(w, `{"server":"app1","hostname":"app1.nfweb.dev","status":"ready"}`)
+			_, _ = io.WriteString(w, `{"server":"app1","hostname":"app1.nonfiction.dev","status":"ready"}`)
 		}))
 		defer srv.Close()
 		healthHTTPClientFn = srv.Client
-		if err := checkHTTPSHealth(srv.URL, "app1", "app1.nfweb.dev", time.Second); err != nil {
+		if err := checkHTTPSHealth(srv.URL, "app1", "app1.nonfiction.dev", time.Second); err != nil {
 			t.Fatalf("checkHTTPSHealth() error = %v", err)
 		}
 	})
@@ -2120,7 +2120,7 @@ func TestCheckHTTPSHealthRequiresReadyIdentityAndStatus(t *testing.T) {
 		}))
 		defer srv.Close()
 		healthHTTPClientFn = srv.Client
-		if err := checkHTTPSHealth(srv.URL, "app1", "app1.nfweb.dev", time.Nanosecond); err == nil || !strings.Contains(err.Error(), "unexpected health response") {
+		if err := checkHTTPSHealth(srv.URL, "app1", "app1.nonfiction.dev", time.Nanosecond); err == nil || !strings.Contains(err.Error(), "unexpected health response") {
 			t.Fatalf("checkHTTPSHealth() error = %v, want unexpected health response", err)
 		}
 	})
@@ -2128,11 +2128,11 @@ func TestCheckHTTPSHealthRequiresReadyIdentityAndStatus(t *testing.T) {
 	t.Run("bad status fails", func(t *testing.T) {
 		srv := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			w.WriteHeader(http.StatusServiceUnavailable)
-			_, _ = io.WriteString(w, `{"server":"app1","hostname":"app1.nfweb.dev","status":"ready"}`)
+			_, _ = io.WriteString(w, `{"server":"app1","hostname":"app1.nonfiction.dev","status":"ready"}`)
 		}))
 		defer srv.Close()
 		healthHTTPClientFn = srv.Client
-		if err := checkHTTPSHealth(srv.URL, "app1", "app1.nfweb.dev", time.Nanosecond); err == nil || !strings.Contains(err.Error(), "unexpected health response") {
+		if err := checkHTTPSHealth(srv.URL, "app1", "app1.nonfiction.dev", time.Nanosecond); err == nil || !strings.Contains(err.Error(), "unexpected health response") {
 			t.Fatalf("checkHTTPSHealth() error = %v, want unexpected health response", err)
 		}
 	})
@@ -2181,7 +2181,7 @@ func TestProvisionServerNoWaitLeavesDnsConfiguredAndPrintsManualSteps(t *testing
 	runLinodeCLICommand = func(args []string) (map[string]any, error) {
 		return map[string]any{"id": "12345", "ipv4": "198.51.100.10"}, nil
 	}
-	dnsimpleZoneLookup = func(plan Plan, token string) (string, error) { return "nfweb.dev", nil }
+	dnsimpleZoneLookup = func(plan Plan, token string) (string, error) { return "nonfiction.dev", nil }
 	dnsimpleUpsertARecordRun = func(token, accountID, zone, name, ip string) error { return nil }
 	waitForTCPPortFn = func(host string, port int, timeout time.Duration) error {
 		t.Fatal("waitForTCPPortFn should not run in --no-wait mode")
@@ -2198,7 +2198,7 @@ func TestProvisionServerNoWaitLeavesDnsConfiguredAndPrintsManualSteps(t *testing
 	secretSaltFn = func() (string, error) { return "test-salt", nil }
 	currentTime = func() time.Time { return time.Date(2026, 5, 29, 12, 0, 0, 0, time.UTC) }
 
-	plan, err := BuildPlan(Args{NonInteractive: true, Execute: true, Yes: true, NoWait: true, Firewall: "none", Name: "app1", Hostname: "app1.nfweb.dev"})
+	plan, err := BuildPlan(Args{NonInteractive: true, Execute: true, Yes: true, NoWait: true, Firewall: "none", Name: "app1", Hostname: "app1.nonfiction.dev"})
 	if err != nil {
 		t.Fatalf("BuildPlan() error = %v", err)
 	}
@@ -2207,7 +2207,7 @@ func TestProvisionServerNoWaitLeavesDnsConfiguredAndPrintsManualSteps(t *testing
 			t.Fatalf("ProvisionServer() error = %v", err)
 		}
 	})
-	for _, want := range []string{"Server provisioning paused.", "phase: dns_configured", "ssh -o BatchMode=yes nonfiction@app1.nfweb.dev \"cloud-init status --wait\"", "ssh nonfiction@app1.nfweb.dev \"sudo /usr/local/bin/nf-enable-wildcard-tls\"", "curl -fsS https://app1.nfweb.dev/healthz"} {
+	for _, want := range []string{"Server provisioning paused.", "phase: dns_configured", "ssh -o BatchMode=yes nonfiction@app1.nonfiction.dev \"cloud-init status --wait\"", "ssh nonfiction@app1.nonfiction.dev \"sudo /usr/local/bin/nf-enable-wildcard-tls\"", "curl -fsS https://app1.nonfiction.dev/healthz"} {
 		if !strings.Contains(output, want) {
 			t.Fatalf("output missing %q:\n%s", want, output)
 		}
@@ -2229,9 +2229,9 @@ func TestProvisionServerNoWaitLeavesDnsConfiguredAndPrintsManualSteps(t *testing
 }
 
 func TestRenderTargetProvisionPausedShowsTLSHandoff(t *testing.T) {
-	plan := normalizePlan(Plan{Name: "app1-linode", Hostname: "app1-linode.nfweb.dev", SshUser: "nonfiction", HealthURL: "https://app1-linode.nfweb.dev", TargetMode: true})
+	plan := normalizePlan(Plan{Name: "app1-linode", Hostname: "app1-linode.nonfiction.dev", SshUser: "nonfiction", HealthURL: "https://app1-linode.nonfiction.dev", TargetMode: true})
 	created := CreatedServer{Name: "app1-linode", Provider: "linode", ProviderID: "12345", IPv4: "198.51.100.10"}
-	dns := DNSState{Provider: "dnsimple", Zone: "nfweb.dev", HostnameRecord: DNSRecord{Name: "app1-linode", Content: "198.51.100.10"}, WildcardRecord: DNSRecord{Name: "*.app1-linode", Content: "198.51.100.10"}}
+	dns := DNSState{Provider: "dnsimple", Zone: "nonfiction.dev", HostnameRecord: DNSRecord{Name: "app1-linode", Content: "198.51.100.10"}, WildcardRecord: DNSRecord{Name: "*.app1-linode", Content: "198.51.100.10"}}
 
 	output := renderProvisionPaused(plan, created, dns, "/tmp/providers.json", "dns_configured", nil)
 	for _, want := range []string{
@@ -2240,7 +2240,7 @@ func TestRenderTargetProvisionPausedShowsTLSHandoff(t *testing.T) {
 		"status: queued on target by nf-wildcard-tls.timer",
 		"no rerun required; cloud-init starts TLS retry on the target.",
 		"sudo systemctl status nf-wildcard-tls.timer nf-wildcard-tls.service",
-		"curl -fsS https://app1-linode.nfweb.dev/healthz",
+		"curl -fsS https://app1-linode.nonfiction.dev/healthz",
 	} {
 		if !strings.Contains(output, want) {
 			t.Fatalf("output missing %q:\n%s", want, output)
@@ -2258,7 +2258,7 @@ func TestProvisionServerResumesFromDnsConfigured(t *testing.T) {
 	t.Setenv("NF_PASSWORD_SALT", "test-salt")
 	t.Setenv("DNSIMPLE_TOKEN", "dns-token")
 	t.Setenv("LINODE_CLI_TOKEN", "linode-token")
-	record := map[string]any{"provider": "linode", "provider_id": "12345", "name": "app1", "hostname": "app1.nfweb.dev", "label": "app1", "status": "provisioning", "phase": "dns_configured", "ipv4": "198.51.100.10", "dns": map[string]any{"provider": "dnsimple", "zone": "nfweb.dev", "hostname_record": map[string]any{"name": "app1", "type": "A", "content": "198.51.100.10"}, "wildcard_record": map[string]any{"name": "*.app1", "type": "A", "content": "198.51.100.10"}}}
+	record := map[string]any{"provider": "linode", "provider_id": "12345", "name": "app1", "hostname": "app1.nonfiction.dev", "label": "app1", "status": "provisioning", "phase": "dns_configured", "ipv4": "198.51.100.10", "dns": map[string]any{"provider": "dnsimple", "zone": "nonfiction.dev", "hostname_record": map[string]any{"name": "app1", "type": "A", "content": "198.51.100.10"}, "wildcard_record": map[string]any{"name": "*.app1", "type": "A", "content": "198.51.100.10"}}}
 	if err := saveStatePayload(filepath.Join(os.Getenv("NF_STATE_HOME"), "servers.json"), []map[string]any{record}); err != nil {
 		t.Fatalf("saveStatePayload() error = %v", err)
 	}
@@ -2328,7 +2328,7 @@ func TestProvisionServerResumesFromDnsConfigured(t *testing.T) {
 	secretSaltFn = func() (string, error) { return "test-salt", nil }
 	currentTime = func() time.Time { return time.Date(2026, 5, 29, 12, 0, 0, 0, time.UTC) }
 
-	plan, err := BuildPlan(Args{NonInteractive: true, Execute: true, Yes: true, Firewall: "none", Name: "app1", Hostname: "app1.nfweb.dev"})
+	plan, err := BuildPlan(Args{NonInteractive: true, Execute: true, Yes: true, Firewall: "none", Name: "app1", Hostname: "app1.nonfiction.dev"})
 	if err != nil {
 		t.Fatalf("BuildPlan() error = %v", err)
 	}
@@ -2368,7 +2368,7 @@ func TestProvisionServerResumesFromTLSConfigured(t *testing.T) {
 	t.Setenv("NF_PASSWORD_SALT", "test-salt")
 	t.Setenv("DNSIMPLE_TOKEN", "dns-token")
 	t.Setenv("LINODE_CLI_TOKEN", "linode-token")
-	record := map[string]any{"provider": "linode", "provider_id": "12345", "name": "app1", "hostname": "app1.nfweb.dev", "label": "app1", "status": "provisioning", "phase": "tls_configured", "ipv4": "198.51.100.10", "dns": map[string]any{"provider": "dnsimple", "zone": "nfweb.dev", "hostname_record": map[string]any{"name": "app1", "type": "A", "content": "198.51.100.10"}, "wildcard_record": map[string]any{"name": "*.app1", "type": "A", "content": "198.51.100.10"}}, "tls": map[string]any{"provider": "certbot-dnsimple", "domains": []any{"app1.nfweb.dev", "*.app1.nfweb.dev"}, "certificate": "/etc/letsencrypt/live/app1.nfweb.dev/fullchain.pem", "key": "/etc/letsencrypt/live/app1.nfweb.dev/privkey.pem"}}
+	record := map[string]any{"provider": "linode", "provider_id": "12345", "name": "app1", "hostname": "app1.nonfiction.dev", "label": "app1", "status": "provisioning", "phase": "tls_configured", "ipv4": "198.51.100.10", "dns": map[string]any{"provider": "dnsimple", "zone": "nonfiction.dev", "hostname_record": map[string]any{"name": "app1", "type": "A", "content": "198.51.100.10"}, "wildcard_record": map[string]any{"name": "*.app1", "type": "A", "content": "198.51.100.10"}}, "tls": map[string]any{"provider": "certbot-dnsimple", "domains": []any{"app1.nonfiction.dev", "*.app1.nonfiction.dev"}, "certificate": "/etc/letsencrypt/live/app1.nonfiction.dev/fullchain.pem", "key": "/etc/letsencrypt/live/app1.nonfiction.dev/privkey.pem"}}
 	if err := saveStatePayload(filepath.Join(os.Getenv("NF_STATE_HOME"), "servers.json"), []map[string]any{record}); err != nil {
 		t.Fatalf("saveStatePayload() error = %v", err)
 	}
@@ -2439,7 +2439,7 @@ func TestProvisionServerResumesFromTLSConfigured(t *testing.T) {
 	secretSaltFn = func() (string, error) { return "test-salt", nil }
 	currentTime = func() time.Time { return time.Date(2026, 5, 29, 12, 0, 0, 0, time.UTC) }
 
-	plan, err := BuildPlan(Args{NonInteractive: true, Execute: true, Yes: true, Firewall: "none", Name: "app1", Hostname: "app1.nfweb.dev"})
+	plan, err := BuildPlan(Args{NonInteractive: true, Execute: true, Yes: true, Firewall: "none", Name: "app1", Hostname: "app1.nonfiction.dev"})
 	if err != nil {
 		t.Fatalf("BuildPlan() error = %v", err)
 	}
@@ -2494,19 +2494,19 @@ func TestFindProvisionStateRecordMatchesExactServer(t *testing.T) {
 	configHome := t.TempDir()
 	t.Setenv("NF_CONFIG_HOME", configHome)
 	t.Setenv("NF_STATE_HOME", filepath.Join(configHome, "state"))
-	record := map[string]any{"provider": "linode", "provider_id": "98323103", "linode_id": "98323103", "id": "98323103", "name": "prod2", "hostname": "prod2.nfweb.dev", "label": "prod2", "status": "provisioned", "phase": "complete"}
+	record := map[string]any{"provider": "linode", "provider_id": "98323103", "linode_id": "98323103", "id": "98323103", "name": "prod2", "hostname": "prod2.nonfiction.dev", "label": "prod2", "status": "provisioned", "phase": "complete"}
 	if err := saveStatePayload(filepath.Join(os.Getenv("NF_STATE_HOME"), "servers.json"), []map[string]any{record}); err != nil {
 		t.Fatalf("saveStatePayload() error = %v", err)
 	}
 
-	got, idx, err := findProvisionStateRecord(Plan{Provider: "linode", Name: "prod2", Hostname: "prod2.nfweb.dev", Label: "prod2"})
+	got, idx, err := findProvisionStateRecord(Plan{Provider: "linode", Name: "prod2", Hostname: "prod2.nonfiction.dev", Label: "prod2"})
 	if err != nil {
 		t.Fatalf("findProvisionStateRecord() error = %v", err)
 	}
 	if idx != 0 {
 		t.Fatalf("findProvisionStateRecord() index = %d, want 0", idx)
 	}
-	if got == nil || valueString(got["hostname"]) != "prod2.nfweb.dev" || valueString(got["name"]) != "prod2" {
+	if got == nil || valueString(got["hostname"]) != "prod2.nonfiction.dev" || valueString(got["name"]) != "prod2" {
 		t.Fatalf("findProvisionStateRecord() = %#v, want prod2 record", got)
 	}
 }
@@ -2515,12 +2515,12 @@ func TestFindProvisionStateRecordRejectsDifferentServer(t *testing.T) {
 	configHome := t.TempDir()
 	t.Setenv("NF_CONFIG_HOME", configHome)
 	t.Setenv("NF_STATE_HOME", filepath.Join(configHome, "state"))
-	record := map[string]any{"provider": "linode", "provider_id": "98323103", "linode_id": "98323103", "id": "98323103", "name": "prod2", "hostname": "prod2.nfweb.dev", "label": "prod2", "status": "provisioned", "phase": "complete"}
+	record := map[string]any{"provider": "linode", "provider_id": "98323103", "linode_id": "98323103", "id": "98323103", "name": "prod2", "hostname": "prod2.nonfiction.dev", "label": "prod2", "status": "provisioned", "phase": "complete"}
 	if err := saveStatePayload(filepath.Join(os.Getenv("NF_STATE_HOME"), "servers.json"), []map[string]any{record}); err != nil {
 		t.Fatalf("saveStatePayload() error = %v", err)
 	}
 
-	got, idx, err := findProvisionStateRecord(Plan{Provider: "linode", Name: "prod3", Hostname: "prod3.nfweb.dev", Label: "prod3"})
+	got, idx, err := findProvisionStateRecord(Plan{Provider: "linode", Name: "prod3", Hostname: "prod3.nonfiction.dev", Label: "prod3"})
 	if err != nil {
 		t.Fatalf("findProvisionStateRecord() error = %v", err)
 	}
@@ -2533,8 +2533,8 @@ func TestUpsertStateRecordDoesNotReplaceDifferentServerWithEmptyLabel(t *testing
 	configHome := t.TempDir()
 	t.Setenv("NF_CONFIG_HOME", configHome)
 	t.Setenv("NF_STATE_HOME", filepath.Join(configHome, "state"))
-	existing := map[string]any{"provider": "linode", "provider_id": "98323103", "linode_id": "98323103", "id": "98323103", "name": "prod2", "hostname": "prod2.nfweb.dev", "label": "", "status": "provisioned", "phase": "complete"}
-	candidate := map[string]any{"provider": "linode", "provider_id": "98323104", "linode_id": "98323104", "id": "98323104", "name": "prod3", "hostname": "prod3.nfweb.dev", "label": "", "status": "provisioning", "phase": "linode_created"}
+	existing := map[string]any{"provider": "linode", "provider_id": "98323103", "linode_id": "98323103", "id": "98323103", "name": "prod2", "hostname": "prod2.nonfiction.dev", "label": "", "status": "provisioned", "phase": "complete"}
+	candidate := map[string]any{"provider": "linode", "provider_id": "98323104", "linode_id": "98323104", "id": "98323104", "name": "prod3", "hostname": "prod3.nonfiction.dev", "label": "", "status": "provisioning", "phase": "linode_created"}
 	path := filepath.Join(os.Getenv("NF_STATE_HOME"), "servers.json")
 	if err := saveStatePayload(path, []map[string]any{existing}); err != nil {
 		t.Fatalf("saveStatePayload() error = %v", err)
@@ -2553,7 +2553,7 @@ func TestUpsertStateRecordDoesNotReplaceDifferentServerWithEmptyLabel(t *testing
 	if len(records) != 2 {
 		t.Fatalf("upsertStateRecord() record count = %d, want 2", len(records))
 	}
-	if valueString(records[0]["hostname"]) != "prod2.nfweb.dev" || valueString(records[1]["hostname"]) != "prod3.nfweb.dev" {
+	if valueString(records[0]["hostname"]) != "prod2.nonfiction.dev" || valueString(records[1]["hostname"]) != "prod3.nonfiction.dev" {
 		t.Fatalf("upsertStateRecord() records = %#v, want prod2 and prod3", records)
 	}
 }

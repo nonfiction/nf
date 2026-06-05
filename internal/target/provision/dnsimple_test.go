@@ -180,9 +180,9 @@ func TestDefaultDNSimpleUpsertARecordPrintsFQDNs(t *testing.T) {
 		finalResp   map[string]any
 		expect      string
 	}{
-		{name: "created", recordName: "prod2", listResp: map[string]any{"data": []any{}}, finalMethod: http.MethodPost, finalPath: "/v2/14/zones/nfweb.dev/records", finalResp: map[string]any{"data": map[string]any{"id": 1, "name": "prod2", "type": "A", "content": "203.0.113.10", "ttl": 60}}, expect: "Created DNS prod2.nfweb.dev -> 203.0.113.10\n"},
-		{name: "updated", recordName: "*.prod2", listResp: map[string]any{"data": []any{map[string]any{"id": 1, "name": "*.prod2", "type": "A", "content": "203.0.113.20", "ttl": 30}}}, finalMethod: http.MethodPatch, finalPath: "/v2/14/zones/nfweb.dev/records/1", finalResp: map[string]any{"data": map[string]any{"id": 1, "name": "*.prod2", "type": "A", "content": "203.0.113.10", "ttl": 60}}, expect: "Updated DNS *.prod2.nfweb.dev -> 203.0.113.10\n"},
-		{name: "already points", recordName: "prod2", listResp: map[string]any{"data": []any{map[string]any{"id": 1, "name": "prod2", "type": "A", "content": "203.0.113.10", "ttl": 60}}}, expect: "DNS prod2.nfweb.dev already points to 203.0.113.10\n"},
+		{name: "created", recordName: "prod2", listResp: map[string]any{"data": []any{}}, finalMethod: http.MethodPost, finalPath: "/v2/14/zones/nonfiction.dev/records", finalResp: map[string]any{"data": map[string]any{"id": 1, "name": "prod2", "type": "A", "content": "203.0.113.10", "ttl": 60}}, expect: "Created DNS prod2.nonfiction.dev -> 203.0.113.10\n"},
+		{name: "updated", recordName: "*.prod2", listResp: map[string]any{"data": []any{map[string]any{"id": 1, "name": "*.prod2", "type": "A", "content": "203.0.113.20", "ttl": 30}}}, finalMethod: http.MethodPatch, finalPath: "/v2/14/zones/nonfiction.dev/records/1", finalResp: map[string]any{"data": map[string]any{"id": 1, "name": "*.prod2", "type": "A", "content": "203.0.113.10", "ttl": 60}}, expect: "Updated DNS *.prod2.nonfiction.dev -> 203.0.113.10\n"},
+		{name: "already points", recordName: "prod2", listResp: map[string]any{"data": []any{map[string]any{"id": 1, "name": "prod2", "type": "A", "content": "203.0.113.10", "ttl": 60}}}, expect: "DNS prod2.nonfiction.dev already points to 203.0.113.10\n"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -190,7 +190,7 @@ func TestDefaultDNSimpleUpsertARecordPrintsFQDNs(t *testing.T) {
 			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 				calls++
 				if calls == 1 {
-					if r.Method != http.MethodGet || r.URL.Path != "/v2/14/zones/nfweb.dev/records" {
+					if r.Method != http.MethodGet || r.URL.Path != "/v2/14/zones/nonfiction.dev/records" {
 						t.Fatalf("unexpected list request: %s %s", r.Method, r.URL.Path)
 					}
 					_ = json.NewEncoder(w).Encode(tt.listResp)
@@ -214,7 +214,7 @@ func TestDefaultDNSimpleUpsertARecordPrintsFQDNs(t *testing.T) {
 			}
 			t.Cleanup(func() { dnsimpleProviderFactory = oldFactory })
 			output := captureStdout(t, func() {
-				if err := defaultDNSimpleUpsertARecord("secret-token", "14", "nfweb.dev", tt.recordName, "203.0.113.10"); err != nil {
+				if err := defaultDNSimpleUpsertARecord("secret-token", "14", "nonfiction.dev", tt.recordName, "203.0.113.10"); err != nil {
 					t.Fatalf("defaultDNSimpleUpsertARecord() error = %v", err)
 				}
 			})
@@ -298,8 +298,8 @@ func TestDefaultDNSimpleDeleteARecordPrintsFQDNs(t *testing.T) {
 		status int
 		expect string
 	}{
-		{name: "deleted", list: map[string]any{"data": []any{map[string]any{"id": 1, "name": "prod2", "type": "A", "content": "203.0.113.10", "ttl": 60}}}, status: http.StatusNoContent, expect: "Deleted DNS prod2.nfweb.dev\n"},
-		{name: "already absent", list: map[string]any{"data": []any{}}, expect: "DNS prod2.nfweb.dev already absent\n"},
+		{name: "deleted", list: map[string]any{"data": []any{map[string]any{"id": 1, "name": "prod2", "type": "A", "content": "203.0.113.10", "ttl": 60}}}, status: http.StatusNoContent, expect: "Deleted DNS prod2.nonfiction.dev\n"},
+		{name: "already absent", list: map[string]any{"data": []any{}}, expect: "DNS prod2.nonfiction.dev already absent\n"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -307,13 +307,13 @@ func TestDefaultDNSimpleDeleteARecordPrintsFQDNs(t *testing.T) {
 			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 				calls++
 				if calls == 1 {
-					if r.Method != http.MethodGet || r.URL.Path != "/v2/14/zones/nfweb.dev/records" {
+					if r.Method != http.MethodGet || r.URL.Path != "/v2/14/zones/nonfiction.dev/records" {
 						t.Fatalf("unexpected list request: %s %s", r.Method, r.URL.Path)
 					}
 					_ = json.NewEncoder(w).Encode(tt.list)
 					return
 				}
-				if r.Method != http.MethodDelete || r.URL.Path != "/v2/14/zones/nfweb.dev/records/1" {
+				if r.Method != http.MethodDelete || r.URL.Path != "/v2/14/zones/nonfiction.dev/records/1" {
 					t.Fatalf("unexpected delete request: %s %s", r.Method, r.URL.Path)
 				}
 				w.WriteHeader(tt.status)
@@ -332,7 +332,7 @@ func TestDefaultDNSimpleDeleteARecordPrintsFQDNs(t *testing.T) {
 			t.Cleanup(func() { dnsimpleProviderFactory = oldFactory })
 
 			output := captureStdout(t, func() {
-				if err := defaultDNSimpleDeleteARecord("secret-token", "14", "nfweb.dev", "prod2"); err != nil {
+				if err := defaultDNSimpleDeleteARecord("secret-token", "14", "nonfiction.dev", "prod2"); err != nil {
 					t.Fatalf("defaultDNSimpleDeleteARecord() error = %v", err)
 				}
 			})

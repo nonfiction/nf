@@ -74,7 +74,7 @@ func TestLoadStateRecordsSupportsWrappedObjectShapes(t *testing.T) {
 
 	servers := map[string]any{
 		"servers": map[string]any{
-			"app1": map[string]any{"id": 1, "hostname": "app1.nfweb.dev", "provider": "linode", "ssh": map[string]any{"host": "10.0.0.10"}},
+			"app1": map[string]any{"id": 1, "hostname": "app1.nonfiction.dev", "provider": "linode", "ssh": map[string]any{"host": "10.0.0.10"}},
 		},
 	}
 	serverData, err := json.MarshalIndent(servers, "", "  ")
@@ -89,7 +89,7 @@ func TestLoadStateRecordsSupportsWrappedObjectShapes(t *testing.T) {
 	}
 	sites := map[string]any{
 		"sites": map[string]any{
-			"client-app1-production": map[string]any{"provider": "linode", "server": "app1", "hostname": "client.app1.nfweb.dev"},
+			"client-app1-production": map[string]any{"provider": "linode", "server": "app1", "hostname": "client.app1.nonfiction.dev"},
 		},
 	}
 	siteData, err := json.MarshalIndent(sites, "", "  ")

@@ -24,13 +24,13 @@ func TestClientSiteEnvironmentDomainFlow(t *testing.T) {
 			if got := r.URL.Query().Get("company"); got != "company-123" {
 				t.Fatalf("company query = %q, want company-123", got)
 			}
-			_ = json.NewEncoder(w).Encode(map[string]any{"company": map[string]any{"sites": []map[string]any{{"id": "ksite123", "name": "sanjel", "display_name": "sanjel"}}}})
+			_ = json.NewEncoder(w).Encode(map[string]any{"company": map[string]any{"sites": []map[string]any{{"id": "ksite123", "name": "foobar", "display_name": "foobar"}}}})
 		case "GET /sites/ksite123/environments":
 			_ = json.NewEncoder(w).Encode(map[string]any{"site": map[string]any{"environments": []map[string]any{{"id": "kenv-live", "name": "live", "container_info": map[string]any{"php_engine_version": "php8.3"}}, {"id": "kenv-staging", "display_name": "staging", "container_info": map[string]any{"php_engine_version": "php8.3"}}}}})
 		case "GET /sites/environments/kenv-live/domains":
-			_ = json.NewEncoder(w).Encode(map[string]any{"environment": map[string]any{"site_domains": []map[string]any{{"id": "kdom-live", "name": "sanjel.kinsta.nonfiction.dev", "is_primary": true}}}})
+			_ = json.NewEncoder(w).Encode(map[string]any{"environment": map[string]any{"site_domains": []map[string]any{{"id": "kdom-live", "name": "foobar.kinsta.nonfiction.dev", "is_primary": true}}}})
 		case "GET /sites/environments/domains/kdom-live/verification-records":
-			_ = json.NewEncoder(w).Encode(map[string]any{"site_domain": map[string]any{"verification_records": []map[string]any{{"name": "_acme-challenge.sanjel.kinsta.nonfiction.dev", "type": "TXT", "content": "token"}}, "pointing_records": []map[string]any{{"name": "sanjel.kinsta.nonfiction.dev", "type": "A", "content": "203.0.113.10", "ttl": 300}}}})
+			_ = json.NewEncoder(w).Encode(map[string]any{"site_domain": map[string]any{"verification_records": []map[string]any{{"name": "_acme-challenge.foobar.kinsta.nonfiction.dev", "type": "TXT", "content": "token"}}, "pointing_records": []map[string]any{{"name": "foobar.kinsta.nonfiction.dev", "type": "A", "content": "203.0.113.10", "ttl": 300}}}})
 		case "GET /operations/op123":
 			_ = json.NewEncoder(w).Encode(map[string]any{"operation": map[string]any{"id": "op123", "status": "complete"}})
 		case "PUT /sites/tools/modify-php-version":
@@ -67,7 +67,7 @@ func TestClientSiteEnvironmentDomainFlow(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ListSites() error = %v", err)
 	}
-	if site, ok := FindSite(sites, "sanjel"); !ok || site.ID != "ksite123" {
+	if site, ok := FindSite(sites, "foobar"); !ok || site.ID != "ksite123" {
 		t.Fatalf("FindSite() = %#v, %v; want ksite123", site, ok)
 	}
 	envs, err := client.ListEnvironments(ctx, "ksite123")
@@ -84,7 +84,7 @@ func TestClientSiteEnvironmentDomainFlow(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ListDomains() error = %v", err)
 	}
-	if domain, ok := FindDomain(domains, "sanjel.kinsta.nonfiction.dev"); !ok || domain.ID != "kdom-live" || !domain.IsPrimary {
+	if domain, ok := FindDomain(domains, "foobar.kinsta.nonfiction.dev"); !ok || domain.ID != "kdom-live" || !domain.IsPrimary {
 		t.Fatalf("FindDomain() = %#v, %v; want primary kdom-live", domain, ok)
 	}
 	records, err := client.DomainRecords(ctx, "kdom-live")
