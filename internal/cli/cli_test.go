@@ -540,6 +540,17 @@ func TestRunCompleteSuggestsProjectValues(t *testing.T) {
 			t.Fatalf("env plugins command completion missing %q:\n%s", want, envPluginsCommandOutput)
 		}
 	}
+
+	envPluginsInstallOutput := captureStdout(t, func() {
+		if got := Run([]string{"__complete", "--", "env", "plugins", "install", ""}); got != 0 {
+			t.Fatalf("Run(__complete env plugins install) = %d, want 0", got)
+		}
+	})
+	for _, want := range []string{"production\n", "--dry-run\n", "--yes\n"} {
+		if !strings.Contains(envPluginsInstallOutput, want) {
+			t.Fatalf("env plugins install completion missing %q:\n%s", want, envPluginsInstallOutput)
+		}
+	}
 }
 
 func TestRunProviderListShowsProviders(t *testing.T) {
@@ -6207,6 +6218,167 @@ func TestRunEnvPluginsInstallSkipsSatisfiedPlugins(t *testing.T) {
 		if strings.Contains(logText, unwanted) {
 			t.Fatalf("idempotent install ran %q unexpectedly:\n%s", unwanted, logText)
 		}
+	}
+}
+
+func TestRunEnvPluginsInstallRemoteDryRunPrintsPlan(t *testing.T) {
+	stateDir := t.TempDir()
+	t.Setenv("NF_STATE_HOME", stateDir)
+	if err := state.SaveStateRecords("sites", []map[string]any{{"provider": "kinsta", "site_id": "client-kinsta", "env": "live", "url": "https://www.example.com/", "path": "/www/client/public", "ssh": map[string]any{"host": "203.0.113.10", "port": "12345", "user": "client"}}}); err != nil {
+		t.Fatalf("SaveStateRecords(sites) error = %v", err)
+	}
+	repoRoot := t.TempDir()
+	if err := os.Mkdir(filepath.Join(repoRoot, ".git"), 0o755); err != nil {
+		t.Fatalf("Mkdir(.git) error = %v", err)
+	}
+	project := map[string]any{"version": 1, "project": map[string]any{"slug": "client"}, "wordpress": map[string]any{"plugins": []any{"stream", map[string]any{"slug": "query-monitor", "activate": false, "auto_update": false}}}, "remotes": map[string]any{"production": "client-kinsta:live"}}
+	data, err := json.MarshalIndent(project, "", "  ")
+	if err != nil {
+		t.Fatalf("MarshalIndent(project) error = %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(repoRoot, "nf.json"), append(data, '\n'), 0o644); err != nil {
+		t.Fatalf("WriteFile(nf.json) error = %v", err)
+	}
+	oldwd, err := os.Getwd()
+	if err != nil {
+		t.Fatalf("Getwd() error = %v", err)
+	}
+	if err := os.Chdir(repoRoot); err != nil {
+		t.Fatalf("Chdir() error = %v", err)
+	}
+	t.Cleanup(func() { _ = os.Chdir(oldwd) })
+	oldRunSSH := runSSHCommandFn
+	runSSHCommandFn = func(args []string) error { t.Fatalf("runSSHCommandFn called during dry-run: %#v", args); return nil }
+	t.Cleanup(func() { runSSHCommandFn = oldRunSSH })
+
+	stdout := captureStdout(t, func() {
+		if got := Run([]string{"env", "plugins", "install", "production", "--dry-run"}); got != 0 {
+			t.Fatalf("Run(env plugins install remote --dry-run) = %d, want 0", got)
+		}
+	})
+	for _, want := range []string{"Plugin install plan:", "remote:        production", "site:          client-kinsta", "env:           live", "provider:      kinsta", "url:           https://www.example.com/", "environment ssh: client@203.0.113.10", "mode:          dry-run", "stream", "query-monitor", "No remote plugins were changed."} {
+		if !strings.Contains(stdout, want) {
+			t.Fatalf("remote plugin dry-run stdout missing %q:\n%s", want, stdout)
+		}
+	}
+}
+
+func TestRunEnvPluginsInstallRemoteExecutesBootstrapScriptWithYes(t *testing.T) {
+	stateDir := t.TempDir()
+	t.Setenv("NF_STATE_HOME", stateDir)
+	t.Setenv("NF_CONFIG_HOME", t.TempDir())
+	t.Setenv("NF_PLUGIN_STREAM_ZIP", "https://plugins.example.test/stream.zip")
+	if err := state.SaveStateRecords("providers", []map[string]any{{"provider": "linode", "targets": []map[string]any{{"name": "app1-linode", "provider": "linode", "hostname": "app1-linode.nonfiction.dev", "ssh": map[string]any{"user": "nonfiction", "host": "app1-linode.nonfiction.dev", "port": "22"}}}}}); err != nil {
+		t.Fatalf("SaveStateRecords(providers) error = %v", err)
+	}
+	if err := state.SaveStateRecords("sites", []map[string]any{{"provider": "linode", "site_id": "client.app1-linode", "env": "live", "target": "app1-linode", "url": "https://client.app1.nonfiction.dev/", "path": "/var/www/sites/client/public", "ssh": map[string]any{"user": "nonfiction", "host": "app1-linode.nonfiction.dev", "port": "22"}}}); err != nil {
+		t.Fatalf("SaveStateRecords(sites) error = %v", err)
+	}
+	repoRoot := t.TempDir()
+	if err := os.Mkdir(filepath.Join(repoRoot, ".git"), 0o755); err != nil {
+		t.Fatalf("Mkdir(.git) error = %v", err)
+	}
+	project := map[string]any{"version": 1, "project": map[string]any{"slug": "client"}, "wordpress": map[string]any{"plugins": []any{map[string]any{"slug": "stream", "source": "$NF_PLUGIN_STREAM_ZIP"}}}, "remotes": map[string]any{"production": "client.app1-linode:live"}}
+	data, err := json.MarshalIndent(project, "", "  ")
+	if err != nil {
+		t.Fatalf("MarshalIndent(project) error = %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(repoRoot, "nf.json"), append(data, '\n'), 0o644); err != nil {
+		t.Fatalf("WriteFile(nf.json) error = %v", err)
+	}
+	oldwd, err := os.Getwd()
+	if err != nil {
+		t.Fatalf("Getwd() error = %v", err)
+	}
+	if err := os.Chdir(repoRoot); err != nil {
+		t.Fatalf("Chdir() error = %v", err)
+	}
+	t.Cleanup(func() { _ = os.Chdir(oldwd) })
+	oldRunSSH := runSSHCommandFn
+	var sshCommands [][]string
+	runSSHCommandFn = func(args []string) error {
+		sshCommands = append(sshCommands, append([]string(nil), args...))
+		return nil
+	}
+	t.Cleanup(func() { runSSHCommandFn = oldRunSSH })
+
+	stdout := captureStdout(t, func() {
+		if got := Run([]string{"env", "plugins", "install", "production", "--yes"}); got != 0 {
+			t.Fatalf("Run(env plugins install remote --yes) = %d, want 0", got)
+		}
+	})
+	for _, want := range []string{"Plugin install plan:", "provider:      linode", "> ssh -p 22 nonfiction@app1-linode.nonfiction.dev '<wp plugin bootstrap script>'", "Remote WordPress plugins installed."} {
+		if !strings.Contains(stdout, want) {
+			t.Fatalf("remote plugin install stdout missing %q:\n%s", want, stdout)
+		}
+	}
+	if strings.Contains(stdout, "https://plugins.example.test/stream.zip") {
+		t.Fatalf("remote plugin install stdout leaked expanded source URL:\n%s", stdout)
+	}
+	if len(sshCommands) != 1 {
+		t.Fatalf("ssh commands len = %d, want 1: %#v", len(sshCommands), sshCommands)
+	}
+	if got, want := sshCommands[0][:4], []string{"ssh", "-p", "22", "nonfiction@app1-linode.nonfiction.dev"}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("ssh command prefix = %#v, want %#v", got, want)
+	}
+	script := sshCommands[0][len(sshCommands[0])-1]
+	for _, want := range []string{"set -eu", "cd /var/www/sites/client/public", "wp_cmd() { sudo -u www-data wp --path=/var/www/sites/client/public \"$@\"; }", "wp_cmd plugin is-installed stream", "wp_cmd plugin install https://plugins.example.test/stream.zip --activate", "wp_cmd plugin auto-updates status stream --enabled-only --field=name | grep -qx stream", "wp_cmd plugin auto-updates enable stream"} {
+		if !strings.Contains(script, want) {
+			t.Fatalf("remote plugin script missing %q:\n%s", want, script)
+		}
+	}
+}
+
+func TestRunEnvPluginsInstallRemotePromptsBeforeExecution(t *testing.T) {
+	stateDir := t.TempDir()
+	t.Setenv("NF_STATE_HOME", stateDir)
+	if err := state.SaveStateRecords("sites", []map[string]any{{"provider": "kinsta", "site_id": "client-kinsta", "env": "live", "path": "/www/client/public", "ssh": map[string]any{"host": "203.0.113.10", "port": "12345", "user": "client"}}}); err != nil {
+		t.Fatalf("SaveStateRecords(sites) error = %v", err)
+	}
+	repoRoot := t.TempDir()
+	if err := os.Mkdir(filepath.Join(repoRoot, ".git"), 0o755); err != nil {
+		t.Fatalf("Mkdir(.git) error = %v", err)
+	}
+	project := map[string]any{"version": 1, "project": map[string]any{"slug": "client"}, "wordpress": map[string]any{"plugins": []any{"stream"}}, "remotes": map[string]any{"production": "client-kinsta:live"}}
+	data, err := json.MarshalIndent(project, "", "  ")
+	if err != nil {
+		t.Fatalf("MarshalIndent(project) error = %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(repoRoot, "nf.json"), append(data, '\n'), 0o644); err != nil {
+		t.Fatalf("WriteFile(nf.json) error = %v", err)
+	}
+	oldwd, err := os.Getwd()
+	if err != nil {
+		t.Fatalf("Getwd() error = %v", err)
+	}
+	if err := os.Chdir(repoRoot); err != nil {
+		t.Fatalf("Chdir() error = %v", err)
+	}
+	t.Cleanup(func() { _ = os.Chdir(oldwd) })
+	oldConfirm := envRemoteSyncConfirm
+	var message string
+	envRemoteSyncConfirm = func(prompt string, def bool) (bool, error) {
+		message = prompt
+		return false, nil
+	}
+	t.Cleanup(func() { envRemoteSyncConfirm = oldConfirm })
+	oldRunSSH := runSSHCommandFn
+	runSSHCommandFn = func(args []string) error {
+		t.Fatalf("runSSHCommandFn called after denied confirmation: %#v", args)
+		return nil
+	}
+	t.Cleanup(func() { runSSHCommandFn = oldRunSSH })
+
+	stderr := captureStderr(t, func() {
+		if got := Run([]string{"env", "plugins", "install", "production"}); got != 1 {
+			t.Fatalf("Run(env plugins install remote denied) = %d, want 1", got)
+		}
+	})
+	if !strings.Contains(message, "Install configured WordPress plugins on client-kinsta:live (production)?") {
+		t.Fatalf("confirm message = %q", message)
+	}
+	if !strings.Contains(stderr, "Aborted.") {
+		t.Fatalf("stderr = %q, want abort", stderr)
 	}
 }
 

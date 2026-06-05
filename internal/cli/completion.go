@@ -243,6 +243,10 @@ func envPluginsCompletionCandidates(args []string) []string {
 	if len(args) == 0 {
 		return []string{"list", "ls", "install", "help"}
 	}
+	args[0] = cliCommandAlias(args[0])
+	if args[0] == "install" {
+		return append(projectRemoteCompletionNames(), "--dry-run", "--yes")
+	}
 	return nil
 }
 

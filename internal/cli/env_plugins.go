@@ -1,6 +1,6 @@
 package cli
 
-// Local WordPress plugin bootstrap commands backed by wordpress.plugins in nf.json.
+// WordPress plugin bootstrap commands backed by wordpress.plugins in nf.json.
 
 import (
 	"fmt"
@@ -93,19 +93,7 @@ func cmdEnvPluginsList(metadata map[string]any) int {
 		fmt.Println("No WordPress plugins configured.")
 		return 0
 	}
-	rows := [][]string{{"plugin", "source", "activate", "auto-update"}}
-	for _, plugin := range plugins {
-		activate := "no"
-		if plugin.Activate {
-			activate = "yes"
-		}
-		autoUpdate := "no"
-		if plugin.AutoUpdate {
-			autoUpdate = "yes"
-		}
-		rows = append(rows, []string{plugin.Slug, plugin.Source, activate, autoUpdate})
-	}
-	fmt.Println(formatTable(rows))
+	fmt.Println(formatWordPressPluginTable(plugins))
 	return 0
 }
 
@@ -129,6 +117,90 @@ func cmdEnvPluginsInstall(cfg envConfig, metadata map[string]any) int {
 		return 1
 	}
 	fmt.Println("WordPress plugins installed.")
+	return 0
+}
+
+type envPluginInstallOptions struct {
+	RemoteName string
+	DryRun     bool
+	Yes        bool
+}
+
+func cmdEnvPluginsInstallWithOptions(root string, metadata map[string]any, opts envPluginInstallOptions) int {
+	if strings.TrimSpace(opts.RemoteName) == "" {
+		if opts.DryRun {
+			fmt.Fprintln(os.Stderr, "env plugins install --dry-run requires a remote")
+			return 1
+		}
+		cfg, ok := loadEnvConfig(root, metadata)
+		if !ok {
+			fmt.Fprintln(os.Stderr, "Missing env metadata in nf.json. Run nf env up first.")
+			return 1
+		}
+		return cmdEnvPluginsInstall(cfg, metadata)
+	}
+	return cmdEnvPluginsInstallRemote(metadata, opts)
+}
+
+func cmdEnvPluginsInstallRemote(metadata map[string]any, opts envPluginInstallOptions) int {
+	plugins, err := loadWordPressPluginSpecs(metadata)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		return 1
+	}
+	if len(plugins) == 0 {
+		fmt.Println("No WordPress plugins configured.")
+		return 0
+	}
+	target, err := resolveEnvRemoteSyncTarget("plugins install", opts.RemoteName, metadata)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		return 1
+	}
+	fmt.Println("Plugin install plan:")
+	fmt.Printf("  remote:        %s\n", target.RemoteName)
+	fmt.Printf("  site:          %s\n", target.SiteID)
+	fmt.Printf("  env:           %s\n", target.Env)
+	fmt.Printf("  provider:      %s\n", target.Provider)
+	if target.TargetLabel != "" && target.TargetRef != "" {
+		fmt.Printf("  %s:        %s\n", target.TargetLabel, target.TargetRef)
+	}
+	if target.URL != "" {
+		fmt.Printf("  url:           %s\n", target.URL)
+	}
+	if target.AccessSummary != "" {
+		fmt.Printf("  %s: %s\n", target.AccessLabel, target.AccessSummary)
+	}
+	mode := "execute"
+	if opts.DryRun {
+		mode = "dry-run"
+	}
+	fmt.Printf("  mode:          %s\n", mode)
+	fmt.Println()
+	fmt.Println(formatWordPressPluginTable(plugins))
+	if opts.DryRun {
+		fmt.Println("No remote plugins were changed.")
+		return 0
+	}
+	if !opts.Yes {
+		message := fmt.Sprintf("Install configured WordPress plugins on %s:%s (%s)?", target.SiteID, target.Env, target.RemoteName)
+		confirmed, err := envRemoteSyncConfirm(message, false)
+		if err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			return 1
+		}
+		if !confirmed {
+			fmt.Fprintln(os.Stderr, "Aborted.")
+			return 1
+		}
+	}
+	script := remotePluginInstallScript(target, plugins)
+	printRemotePluginInstallCommand(target)
+	if err := runSSHCommandFn(remoteSSHArgs(target, script)); err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		return 1
+	}
+	fmt.Println("Remote WordPress plugins installed.")
 	return 0
 }
 
@@ -189,4 +261,71 @@ func pluginInstallSource(plugin wordpressPluginSpec) string {
 		return plugin.Slug
 	}
 	return source
+}
+
+func formatWordPressPluginTable(plugins []wordpressPluginSpec) string {
+	rows := [][]string{{"plugin", "source", "activate", "auto-update"}}
+	for _, plugin := range plugins {
+		activate := "no"
+		if plugin.Activate {
+			activate = "yes"
+		}
+		autoUpdate := "no"
+		if plugin.AutoUpdate {
+			autoUpdate = "yes"
+		}
+		rows = append(rows, []string{plugin.Slug, plugin.Source, activate, autoUpdate})
+	}
+	return formatTable(rows)
+}
+
+func remotePluginInstallScript(target envRemoteSyncTarget, plugins []wordpressPluginSpec) string {
+	var builder strings.Builder
+	builder.WriteString("set -eu\n")
+	builder.WriteString("cd ")
+	builder.WriteString(shellQuoteArg(target.WordPressPath))
+	builder.WriteString("\nwp_cmd() { ")
+	builder.WriteString(target.WPCommand)
+	builder.WriteString(" --path=")
+	builder.WriteString(shellQuoteArg(target.WordPressPath))
+	builder.WriteString(" \"$@\"; }\n")
+	for _, plugin := range plugins {
+		slug := shellQuoteArg(plugin.Slug)
+		source := shellQuoteArg(pluginInstallSource(plugin))
+		builder.WriteString("if ! wp_cmd plugin is-installed ")
+		builder.WriteString(slug)
+		builder.WriteString("; then\n")
+		builder.WriteString("  wp_cmd plugin install ")
+		builder.WriteString(source)
+		if plugin.Activate {
+			builder.WriteString(" --activate")
+		}
+		builder.WriteString("\n")
+		if plugin.Activate {
+			builder.WriteString("elif ! wp_cmd plugin is-active ")
+			builder.WriteString(slug)
+			builder.WriteString("; then\n")
+			builder.WriteString("  wp_cmd plugin activate ")
+			builder.WriteString(slug)
+			builder.WriteString("\n")
+		}
+		builder.WriteString("fi\n")
+		if plugin.AutoUpdate {
+			builder.WriteString("if ! wp_cmd plugin auto-updates status ")
+			builder.WriteString(slug)
+			builder.WriteString(" --enabled-only --field=name | grep -qx ")
+			builder.WriteString(slug)
+			builder.WriteString("; then\n")
+			builder.WriteString("  wp_cmd plugin auto-updates enable ")
+			builder.WriteString(slug)
+			builder.WriteString("\n")
+			builder.WriteString("fi\n")
+		}
+	}
+	return builder.String()
+}
+
+func printRemotePluginInstallCommand(target envRemoteSyncTarget) {
+	args := []string{"ssh", "-p", target.SSHPort, target.SSHUser + "@" + target.SSHHost, "<wp plugin bootstrap script>"}
+	printCommandArgs(args)
 }

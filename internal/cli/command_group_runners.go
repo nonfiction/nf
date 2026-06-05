@@ -360,16 +360,23 @@ func runEnvPlugins(argv []string) int {
 	if len(argv) == 0 || argv[0] == "help" {
 		printGroupHelp("env plugins", []helpLine{
 			{"list, ls", "list configured WordPress plugins"},
-			{"install", "install and activate configured WordPress plugins"},
+			{"install [remote] [--dry-run] [--yes]", "install and activate configured WordPress plugins"},
 		})
 		return 0
 	}
 	cmd := cliCommandAlias(argv[0])
 	args := argv[1:]
+	var installOpts envPluginInstallOptions
 	switch cmd {
-	case "list", "install":
+	case "list":
 		if len(args) != 0 {
 			fmt.Fprintf(os.Stderr, "env plugins %s takes no arguments\n", cmd)
+			return 1
+		}
+	case "install":
+		var ok bool
+		installOpts, ok = parseEnvPluginInstallArgs(args)
+		if !ok {
 			return 1
 		}
 	default:
@@ -393,12 +400,34 @@ func runEnvPlugins(argv []string) int {
 	if cmd == "list" {
 		return cmdEnvPluginsList(metadata)
 	}
-	cfg, ok := loadEnvConfig(root, metadata)
-	if !ok {
-		fmt.Fprintln(os.Stderr, "Missing env metadata in nf.json. Run nf env up first.")
-		return 1
+	return cmdEnvPluginsInstallWithOptions(root, metadata, installOpts)
+}
+
+func parseEnvPluginInstallArgs(args []string) (envPluginInstallOptions, bool) {
+	var opts envPluginInstallOptions
+	positionals := make([]string, 0, 1)
+	for _, arg := range args {
+		switch arg {
+		case "--dry-run":
+			opts.DryRun = true
+		case "--yes":
+			opts.Yes = true
+		default:
+			if strings.HasPrefix(arg, "-") {
+				fmt.Fprintf(os.Stderr, "unknown env plugins install flag: %s\n", arg)
+				return opts, false
+			}
+			positionals = append(positionals, arg)
+		}
 	}
-	return cmdEnvPluginsInstall(cfg, metadata)
+	if len(positionals) > 1 {
+		fmt.Fprintln(os.Stderr, "env plugins install takes at most one remote")
+		return opts, false
+	}
+	if len(positionals) == 1 {
+		opts.RemoteName = positionals[0]
+	}
+	return opts, true
 }
 
 func runEnvSnapshot(argv []string) int {

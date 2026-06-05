@@ -92,6 +92,7 @@ nf env show
 nf env wp -- plugin list
 nf env plugins list
 nf env plugins install
+nf env plugins install production --dry-run
 ```
 
 List theme tasks and run one:
@@ -211,7 +212,9 @@ Configured WordPress plugins live in `nf.json` under `wordpress.plugins`:
 
 String entries install from wordpress.org, activate, and enable auto-updates by default. Object entries require `slug`, may set `source` to a zip URL/path or env var, and may set `activate` or `auto_update` to `false`. Keep private plugin URLs and license data in environment variables, not `nf.json`.
 
-`nf env plugins install` is idempotent: it installs only missing plugins, activates only inactive plugins when `activate` is true, and enables native WordPress auto-updates only when not already enabled. It does not update, remove, pin, disable auto-updates, or manage plugin licenses.
+`nf env plugins install` with no remote targets the local env. `nf env plugins install <remote>` targets a configured repo remote, prints a remote plan, and asks for yes/no confirmation before changing the remote unless `--yes` is passed. Use `--dry-run` to preview only. Remote installs run WP-CLI on the remote host, so custom `source` URLs/paths must be reachable from that host.
+
+Plugin install is idempotent: it installs only missing plugins, activates only inactive plugins when `activate` is true, and enables native WordPress auto-updates only when not already enabled. It does not update, remove, pin, disable auto-updates, or manage plugin licenses.
 
 Generated env data lives under:
 

@@ -288,7 +288,7 @@ Do not add old compatibility routes unless explicitly requested.
 * [x] `nf env shell`
 * [x] `nf env wp -- <args>`
 * [x] `nf env plugins list`
-* [x] `nf env plugins install`
+* [x] `nf env plugins install [remote] [--dry-run] [--yes]`
 * [x] `nf env snapshot add [name]`
 * [x] `nf env snapshot list`
 * [x] `nf env snapshot import [remote] [--name name]`
@@ -319,6 +319,7 @@ These commands are implemented, but intentionally guarded because they touch rem
 
 * [x] `nf site shell <env-id>`: validates cache, previews SSH, then executes the remote shell command
 * [x] `nf site wp <env-id> -- <cmd>`: validates cache, previews SSH/wp-cli, then executes remote wp-cli
+* [x] `nf env plugins install <remote>`: validates repo remote/cache, prints a reviewable plugin plan, and asks for confirmation unless `--yes` is passed
 * [x] `nf env push <remote>`: validates repo remote/cache, prints a reviewable plan, and syncs with execute/confirmation gates
 * [x] `nf env pull <remote>`: validates repo remote/cache, prints a reviewable plan, and syncs with execute/confirmation gates
 
@@ -492,7 +493,7 @@ Current built-ins:
 * `shell`
 * `wp`
 * `plugins list`
-* `plugins install`
+* `plugins install [remote] [--dry-run] [--yes]`
 
 Rules:
 
@@ -506,7 +507,11 @@ Rules:
 * string plugin entries install from wordpress.org, activate, and enable auto-updates by default
 * object plugin entries require `slug`, support `source`, support `auto_update`, and default `activate` and `auto_update` to true
 * plugin `source` may be a wp.org marker, zip URL/path, or env-var-backed value such as `$NF_PLUGIN_ACF_PRO_ZIP`
-* `nf env plugins install` is idempotent: it installs only missing plugins, activates only inactive plugins when requested, and enables native WordPress auto-updates only when not already enabled; it does not update, remove, pin, disable auto-updates, or manage licenses
+* `nf env plugins install` with no remote targets the local env
+* `nf env plugins install <remote>` validates the repo remote/cache, prints a remote plugin plan, and asks for yes/no confirmation unless `--yes` is passed
+* `nf env plugins install <remote> --dry-run` previews only and does not run SSH
+* remote plugin installs run WP-CLI on the remote host, so custom plugin sources must be reachable from that host
+* plugin install is idempotent: it installs only missing plugins, activates only inactive plugins when requested, and enables native WordPress auto-updates only when not already enabled; it does not update, remove, pin, disable auto-updates, or manage licenses
 * secrets, license keys, and private signed URLs must not be stored directly in `nf.json`
 * generated env scaffolding stays under `NF_DATA_HOME`, not in project repos
 
