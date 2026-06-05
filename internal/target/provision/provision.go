@@ -935,7 +935,7 @@ func requiredEnv(name string) (string, error) {
 }
 
 func serverDomain() string {
-	return firstNonEmpty(baseDomainConfigValue(), envwizard.Value("NF_SERVER_DOMAIN"), envwizard.Value("DNSIMPLE_ZONE_NAME"), "nfweb.dev")
+	return firstNonEmpty(baseDomainConfigValue(), envwizard.Value("NF_SERVER_DOMAIN"), envwizard.Value("DNSIMPLE_ZONE_NAME"), "nonfiction.dev")
 }
 
 func baseDomainConfigValue() string {
