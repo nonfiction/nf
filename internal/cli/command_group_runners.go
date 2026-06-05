@@ -361,6 +361,7 @@ func runEnvPlugins(argv []string) int {
 		printGroupHelp("env plugins", []helpLine{
 			{"list, ls", "list configured WordPress plugins"},
 			{"status [remote]", "show configured WordPress plugin status"},
+			{"diff [remote]", "show configured WordPress plugin drift"},
 			{"install [remote] [--dry-run] [--yes]", "install and activate configured WordPress plugins"},
 		})
 		return 0
@@ -375,14 +376,14 @@ func runEnvPlugins(argv []string) int {
 			fmt.Fprintf(os.Stderr, "env plugins %s takes no arguments\n", cmd)
 			return 1
 		}
-	case "status":
+	case "status", "diff":
 		if len(args) > 1 {
-			fmt.Fprintln(os.Stderr, "env plugins status takes at most one remote")
+			fmt.Fprintf(os.Stderr, "env plugins %s takes at most one remote\n", cmd)
 			return 1
 		}
 		if len(args) == 1 {
 			if strings.HasPrefix(args[0], "-") {
-				fmt.Fprintf(os.Stderr, "unknown env plugins status flag: %s\n", args[0])
+				fmt.Fprintf(os.Stderr, "unknown env plugins %s flag: %s\n", cmd, args[0])
 				return 1
 			}
 			remoteName = args[0]
@@ -416,6 +417,9 @@ func runEnvPlugins(argv []string) int {
 	}
 	if cmd == "status" {
 		return cmdEnvPluginsStatusWithOptions(root, metadata, remoteName)
+	}
+	if cmd == "diff" {
+		return cmdEnvPluginsDiffWithOptions(root, metadata, remoteName)
 	}
 	return cmdEnvPluginsInstallWithOptions(root, metadata, installOpts)
 }

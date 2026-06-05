@@ -115,6 +115,18 @@ func cmdEnvPluginsStatusWithOptions(root string, metadata map[string]any, remote
 	return cmdEnvPluginsStatusRemote(metadata, remoteName)
 }
 
+func cmdEnvPluginsDiffWithOptions(root string, metadata map[string]any, remoteName string) int {
+	if strings.TrimSpace(remoteName) == "" {
+		cfg, ok := loadEnvConfig(root, metadata)
+		if !ok {
+			fmt.Fprintln(os.Stderr, "Missing env metadata in nf.json. Run nf env up first.")
+			return 1
+		}
+		return cmdEnvPluginsDiffLocal(cfg, metadata)
+	}
+	return cmdEnvPluginsDiffRemote(metadata, remoteName)
+}
+
 func cmdEnvPluginsStatusLocal(cfg envConfig, metadata map[string]any) int {
 	plugins, err := loadWordPressPluginSpecs(metadata)
 	if err != nil {
@@ -137,6 +149,29 @@ func cmdEnvPluginsStatusLocal(cfg envConfig, metadata map[string]any) int {
 	}
 	fmt.Println(formatWordPressPluginStatusTable(statuses))
 	return 0
+}
+
+func cmdEnvPluginsDiffLocal(cfg envConfig, metadata map[string]any) int {
+	plugins, err := loadWordPressPluginSpecs(metadata)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		return 1
+	}
+	if len(plugins) == 0 {
+		fmt.Println("No WordPress plugins configured.")
+		return 0
+	}
+	checker := envPluginStatusChecker{cfg: cfg}
+	statuses, ready, err := checker.statuses(plugins)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		return 1
+	}
+	if !ready {
+		fmt.Fprintln(os.Stderr, "Local env is not ready. Run nf env up first.")
+		return 1
+	}
+	return printWordPressPluginDiff("Plugin diff:", nil, statuses)
 }
 
 func cmdEnvPluginsStatusRemote(metadata map[string]any, remoteName string) int {
@@ -168,6 +203,30 @@ func cmdEnvPluginsStatusRemote(metadata map[string]any, remoteName string) int {
 	fmt.Println()
 	fmt.Println(formatWordPressPluginStatusTable(statuses))
 	return 0
+}
+
+func cmdEnvPluginsDiffRemote(metadata map[string]any, remoteName string) int {
+	plugins, err := loadWordPressPluginSpecs(metadata)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		return 1
+	}
+	if len(plugins) == 0 {
+		fmt.Println("No WordPress plugins configured.")
+		return 0
+	}
+	target, err := resolveEnvRemoteSyncTarget("plugins diff", remoteName, metadata)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		return 1
+	}
+	output, err := runSSHOutputFn(remoteSSHArgs(target, remotePluginStatusScript(target, plugins)))
+	if err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		return 1
+	}
+	statuses := parseRemotePluginStatusOutput(plugins, string(output))
+	return printWordPressPluginDiff("Plugin diff:", &target, statuses)
 }
 
 func cmdEnvPluginsInstall(cfg envConfig, metadata map[string]any) int {
@@ -334,6 +393,12 @@ type wordpressPluginStatus struct {
 	AutoUpdate bool
 }
 
+type wordpressPluginDiff struct {
+	Plugin wordpressPluginSpec
+	Change string
+	Drift  bool
+}
+
 type envPluginInstaller struct {
 	cfg envConfig
 }
@@ -496,6 +561,79 @@ func formatWordPressPluginStatusTable(statuses []wordpressPluginStatus) string {
 		rows = append(rows, []string{status.Plugin.Slug, status.Plugin.Source, yesNo(status.Installed), yesNo(status.Active), yesNo(status.AutoUpdate)})
 	}
 	return formatTable(rows)
+}
+
+func formatWordPressPluginDiffTable(diffs []wordpressPluginDiff) string {
+	rows := [][]string{{"plugin", "change"}}
+	for _, diff := range diffs {
+		rows = append(rows, []string{diff.Plugin.Slug, diff.Change})
+	}
+	return formatTable(rows)
+}
+
+func wordpressPluginDiffs(statuses []wordpressPluginStatus) ([]wordpressPluginDiff, bool) {
+	diffs := make([]wordpressPluginDiff, 0, len(statuses))
+	drift := false
+	for _, status := range statuses {
+		changes := []string{}
+		if !status.Installed {
+			if pluginLocalSourceMissing(status.Plugin) {
+				changes = append(changes, "source unavailable locally")
+			} else {
+				changes = append(changes, "install")
+				if status.Plugin.Activate {
+					changes = append(changes, "activate")
+				}
+				if status.Plugin.AutoUpdate {
+					changes = append(changes, "enable auto-update")
+				}
+			}
+		} else {
+			if status.Plugin.Activate && !status.Active {
+				changes = append(changes, "activate")
+			}
+			if status.Plugin.AutoUpdate && !status.AutoUpdate {
+				changes = append(changes, "enable auto-update")
+			}
+		}
+		change := "ok"
+		if len(changes) > 0 {
+			change = strings.Join(changes, ", ")
+			drift = true
+		}
+		diffs = append(diffs, wordpressPluginDiff{Plugin: status.Plugin, Change: change, Drift: len(changes) > 0})
+	}
+	return diffs, drift
+}
+
+func pluginLocalSourceMissing(plugin wordpressPluginSpec) bool {
+	installSource := pluginInstallSource(plugin)
+	if !remotePluginSourceLooksLocal(plugin, installSource) {
+		return false
+	}
+	localPath, err := filepath.Abs(installSource)
+	if err != nil {
+		return true
+	}
+	info, err := os.Stat(localPath)
+	return err != nil || info.IsDir()
+}
+
+func printWordPressPluginDiff(title string, target *envRemoteSyncTarget, statuses []wordpressPluginStatus) int {
+	diffs, drift := wordpressPluginDiffs(statuses)
+	fmt.Println(title)
+	if target != nil {
+		fmt.Printf("  remote:   %s\n", target.RemoteName)
+		fmt.Printf("  site:     %s\n", target.SiteID)
+		fmt.Printf("  env:      %s\n", target.Env)
+		fmt.Printf("  provider: %s\n", target.Provider)
+	}
+	fmt.Println()
+	fmt.Println(formatWordPressPluginDiffTable(diffs))
+	if drift {
+		return 2
+	}
+	return 0
 }
 
 func yesNo(value bool) string {

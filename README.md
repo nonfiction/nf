@@ -92,6 +92,7 @@ nf env show
 nf env wp -- plugin list
 nf env plugins list
 nf env plugins status
+nf env plugins diff
 nf env plugins install
 nf env plugins install production --dry-run
 ```
@@ -183,6 +184,7 @@ nf env wp -- plugin list
 nf env plugins list
 nf env plugins status
 nf env plugins status production
+nf env plugins diff production
 nf env plugins install
 nf env down
 ```
@@ -218,6 +220,8 @@ String entries install from wordpress.org, activate, and enable auto-updates by 
 `nf env plugins install` with no remote targets the local env. `nf env plugins install <remote>` targets a configured repo remote, prints a remote plan, and asks for yes/no confirmation before changing the remote unless `--yes` is passed. Use `--dry-run` to preview only. Remote installs run WP-CLI on the remote host. URL sources must be reachable from that host; local zip sources are uploaded to a temporary remote directory before install and cleaned up afterward.
 
 `nf env plugins status [remote]` compares `nf.json` against the local env or configured remote and reports whether each plugin is installed, active, and auto-update enabled.
+
+`nf env plugins diff [remote]` reports the install/activate/auto-update changes needed to make the local env or remote match `nf.json`. It does not mutate anything. It exits `0` when all configured plugins match and `2` when drift exists.
 
 Plugin install is idempotent: it installs only missing plugins, activates only inactive plugins when `activate` is true, and enables native WordPress auto-updates only when not already enabled. It does not update, remove, pin, disable auto-updates, or manage plugin licenses.
 
