@@ -418,7 +418,7 @@ Example shape:
   },
   "wordpress": {
     "deploy_unit": "theme",
-    "theme_slug": "theme",
+    "theme_slug": "client",
     "theme_path": "theme",
     "plugins": [
       "stream",
@@ -462,6 +462,7 @@ Packaging rules:
 
 * `nf theme package` zips existing theme files only
 * it does not run Composer, npm, or asset builds first
+* package archives use `wordpress.theme_slug` as the zip root directory, even when source files live in `wordpress.theme_path`
 * deploy artifacts must include built files when needed, such as `vendor/` or `assets/dist/`
 * `artifact.path` may contain `{version}`
 * `{version}` resolves from `theme/style.css` `Version:` first, then `theme/package.json` `version`

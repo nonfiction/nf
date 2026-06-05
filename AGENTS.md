@@ -114,13 +114,10 @@ Local state is disposable. Provider truth is canonical remotely.
 * `nf.json` should store project metadata, local env intent, theme tasks, artifact recipe, and repo remotes only.
 * Never store secrets, generated caches, or global provider inventory in `nf.json`.
 * Default WordPress theme convention is `theme/`.
-* Generated project metadata should default these to `theme` unless explicitly overridden:
-  * `wordpress.theme_path`
-  * `wordpress.theme_slug`
-  * `env.theme_mount_slug`
+* Generated project metadata should default `wordpress.theme_path` and `env.theme_mount_slug` to `theme`, but `wordpress.theme_slug` to the project slug unless explicitly overridden.
 * Theme string tasks run through `sh -lc`; array tasks execute directly; passthrough args follow `--`.
 * Print the underlying command preview before running theme/env commands.
-* `nf theme package` only zips existing theme files. It does not run Composer, npm, or asset builds first.
+* `nf theme package` only zips existing theme files. It does not run Composer, npm, or asset builds first. The zip root directory is `wordpress.theme_slug`, not necessarily the local `wordpress.theme_path` basename.
 * `nf theme deploy <remote> [--dry-run]` is a packaged release deploy. It remains one command, does not require manual WP admin upload, and supersedes direct in-place rsync of the source theme.
 * Theme deploy releases live under `wp-content/themes/.nf-releases/<theme-slug>/`; metadata lives in `releases.json` there for rollback/history.
 * Theme deploy keeps the last 5 distinct releases and matching uploaded artifacts; older release dirs/zips and stale temp dirs are pruned after successful deploy.
