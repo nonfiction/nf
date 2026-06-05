@@ -270,7 +270,7 @@ Do not add old compatibility routes unless explicitly requested.
 * [x] `nf target add linode <name>` create/ensure target scaffold
 * [x] `nf target remove <target>` remove an empty Linode target
 * [x] `nf site add <target> <site>` create live and staging env scaffolds on a target
-* [x] `nf site refresh` target-based scaffold
+* [x] `nf site refresh` discovers remote site/env records from cached Kinsta and Linode targets
 * [x] `nf site list [--refresh] [--envs]`
 * [x] `nf site show <site-id-or-alias-or-env-id>`
 * [x] `nf site shell <env-id>`
@@ -315,13 +315,14 @@ Do not add old compatibility routes unless explicitly requested.
 * [x] `nf password show-salt`
 * [x] `nf password derive <scope> <value...>`
 
-### Preflight-only / scaffolded
+### Guarded / destructive
 
-* [ ] `nf site refresh`: currently lists cached targets; remote target site discovery not implemented yet
-* [ ] `nf site shell <env-id>`: validates cache, does not execute remote shell yet
-* [ ] `nf site wp <env-id> -- <cmd>`: validates cache, does not run remote wp-cli yet
-* [ ] `nf env push <remote>`: validates repo remote/cache, does not sync yet
-* [ ] `nf env pull <remote>`: validates repo remote/cache, does not sync yet
+These commands are implemented, but intentionally guarded because they touch remote hosts or sync mutable WordPress data:
+
+* [x] `nf site shell <env-id>`: validates cache, previews SSH, then executes the remote shell command
+* [x] `nf site wp <env-id> -- <cmd>`: validates cache, previews SSH/wp-cli, then executes remote wp-cli
+* [x] `nf env push <remote>`: validates repo remote/cache, prints a reviewable plan, and syncs with execute/confirmation gates
+* [x] `nf env pull <remote>`: validates repo remote/cache, prints a reviewable plan, and syncs with execute/confirmation gates
 
 ## Provider inventory flow
 
@@ -367,8 +368,8 @@ Current readers:
 * `nf site show <site:env>`
 * `nf remote add`
 * `nf remote show`
-* `nf env push/pull` guarded sync with dry-run/preflight mode
-* `nf site shell/wp` preflight
+* `nf env push/pull` guarded sync with dry-run/execute mode
+* `nf site shell/wp` remote command execution
 
 Desired refresh behavior:
 
@@ -573,12 +574,13 @@ Goal: discover remote site/env records from targets.
 
 Status:
 
-* [x] `nf site refresh` target-based scaffold
+* [x] `nf site refresh` fans out from cached targets
 * [x] cached site/env readers
 * [x] repo remote validation against cache
-* [ ] Linode target SSH reader for `/var/lib/nf/sites.json`
-* [ ] Kinsta site/env API reader
-* [ ] normalized `sites.json` writer from discovered records
+* [x] Linode target SSH reader for `/var/lib/nf/sites.json`
+* [x] Kinsta site/env API reader
+* [x] normalized `sites.json` writer from discovered records
+* [x] stale Linode site/env pruning when a target disappears
 * [ ] conflict/error reporting for stale or invalid target cache
 
 ### Phase 5: Remote execution
@@ -587,11 +589,12 @@ Goal: safely run remote shell and wp-cli through provider-aware env records.
 
 Status:
 
-* [x] preflight-only `nf site shell`
-* [x] preflight-only `nf site wp`
-* [ ] Linode SSH execution adapter
-* [ ] Kinsta execution adapter or explicit unsupported behavior
-* [ ] audit output and command previews
+* [x] `nf site shell`
+* [x] `nf site wp`
+* [x] Linode SSH execution adapter
+* [x] Kinsta SSH/wp-cli execution adapter
+* [x] command previews
+* [ ] richer audit output
 
 ### Phase 6: Theme artifact deployment
 
@@ -628,11 +631,12 @@ Goal: make `nf` comfortable for team-wide daily use.
 
 Status:
 
-* [ ] shared state sync or team cache workflow
 * [ ] improved interactive selectors
 * [ ] richer diagnostics for missing config/cache
 * [ ] release/update workflow
 * [ ] onboarding docs
+
+No separate shared state sync is planned. Shared truth comes from provider APIs, Kinsta API, each Linode target's `/var/lib/nf/sites.json`, and deterministic password derivation from the agreed `NF_PASSWORD_SALT`.
 
 ## Non-goals for now
 
