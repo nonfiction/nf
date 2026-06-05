@@ -1,6 +1,6 @@
 package cli
 
-// Repository command runners execute commands defined in .nf/project.json.
+// Repository command runners execute commands defined in nf.json.
 //
 // String tasks run through the shell for human-authored shortcuts. Array tasks
 // run directly so callers can avoid shell parsing when they need exact argv.

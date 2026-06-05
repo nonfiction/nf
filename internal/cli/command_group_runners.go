@@ -20,7 +20,7 @@ func runInitHelp() int {
 		"--theme-slug string     mounted theme slug",
 		"--theme-source string   theme source directory",
 		"--type string           project type (default wordpress-theme)",
-		"--force                 overwrite .nf/project.json",
+		"--force                 overwrite nf.json",
 	} {
 		fmt.Printf("  %s\n", line)
 	}
@@ -289,7 +289,7 @@ func runEnv(argv []string) int {
 	}
 	cfg, ok := loadEnvConfig(root, metadata)
 	if !ok {
-		fmt.Fprintln(os.Stderr, "Missing env metadata in .nf/project.json. Run nf env up first.")
+		fmt.Fprintln(os.Stderr, "Missing env metadata in nf.json. Run nf env up first.")
 		return 1
 	}
 	if name == "show" {
@@ -400,7 +400,7 @@ func runEnvSnapshot(argv []string) int {
 	}
 	cfg, ok := loadEnvConfig(root, metadata)
 	if !ok {
-		fmt.Fprintln(os.Stderr, "Missing env metadata in .nf/project.json. Run nf env up first.")
+		fmt.Fprintln(os.Stderr, "Missing env metadata in nf.json. Run nf env up first.")
 		return 1
 	}
 	switch cmd {

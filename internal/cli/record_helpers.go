@@ -90,7 +90,7 @@ func projectContextAvailable() bool {
 
 func requireProjectContext(command string) error {
 	if _, ok := currentNFProjectRoot(); !ok {
-		return ProjectError{Msg: fmt.Sprintf("%s requires an nf project with .nf next to .git", command)}
+		return ProjectError{Msg: fmt.Sprintf("%s requires an nf project with nf.json next to .git", command)}
 	}
 	return nil
 }
@@ -100,8 +100,8 @@ func currentNFProjectRoot() (string, bool) {
 	if !ok {
 		return "", false
 	}
-	info, err := os.Stat(filepath.Join(root, ".nf"))
-	if err != nil || !info.IsDir() {
+	info, err := os.Stat(config.ProjectFile(root))
+	if err != nil || info.IsDir() {
 		return "", false
 	}
 	return root, true

@@ -8,7 +8,7 @@ Use this file for repo shortcuts and learned implementation gotchas. Put durable
 * Executable entrypoint: `cmd/nf/main.go`.
 * CLI dispatcher: `internal/cli.Run`.
 * Primary always-visible command groups: `init`, `provider`, `target`, `site`, `config`, `password`.
-* Project-only command groups: `remote`, `theme`, `env`. They appear only when the current repo has `.nf/` next to `.git`.
+* Project-only command groups: `remote`, `theme`, `env`. They appear only when the current repo has `nf.json` next to `.git`.
 * Remote env operations live under `site` (`site list --envs`, `site show <site:env>`, `site shell`, `site wp`, `site snapshot`), not as a separate `site env` group.
 * Do not re-add public `nf server ...`, `nf instance ...`, or top-level local env aliases (`nf up/down/logs/reset/info/shell/wp`) unless explicitly requested.
 
@@ -28,7 +28,7 @@ go run ./cmd/nf site list
 go run ./cmd/nf site list --envs
 ```
 
-Project-context smoke checks need an `nf` project repo with `.nf/project.json` next to `.git`:
+Project-context smoke checks need an `nf` project repo with `nf.json` next to `.git`:
 
 ```sh
 go run ./cmd/nf theme help
@@ -102,7 +102,7 @@ Local state is disposable. Provider truth is canonical remotely.
 * `nf site remove [site]` removes a Linode site and deletes its env data.
 * Remote target site discovery is not implemented yet.
 * Linode-hosted site/env truth is intended to live on each target at `/var/lib/nf/sites.json`, read over SSH as the standard user.
-* `nf remote add` validates the requested site/env exists in local cache before writing `.nf/project.json`.
+* `nf remote add` validates the requested site/env exists in local cache before writing `nf.json`.
 * `nf site shell/wp` are preflight-only today; they must not mutate remote state yet.
 * `nf env push/pull [remote]` defaults to an interactive confirmation before executing remote sync. Use `--dry-run` or `--non-interactive` without `--execute` for preflight-only output. Non-interactive execution requires `--execute --yes`.
 
@@ -110,8 +110,8 @@ Local state is disposable. Provider truth is canonical remotely.
 
 * `nf env ...`, `nf init`, `nf theme ...`, and `nf remote ...` are repo/local commands.
 * Project-context commands should be hidden or rejected outside a `.git` repo when they require repo metadata.
-* `.nf/project.json` should store project metadata, local env intent, theme tasks, artifact recipe, and repo remotes only.
-* Never store secrets, generated caches, or global provider inventory in `.nf/project.json`.
+* `nf.json` should store project metadata, local env intent, theme tasks, artifact recipe, and repo remotes only.
+* Never store secrets, generated caches, or global provider inventory in `nf.json`.
 * Default WordPress theme convention is `theme/`.
 * Generated project metadata should default these to `theme` unless explicitly overridden:
   * `wordpress.theme_path`

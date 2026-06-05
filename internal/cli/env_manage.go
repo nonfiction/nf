@@ -131,7 +131,7 @@ func envPortCollisionMessage(cfg envConfig, occupied []int) string {
 	ports := append([]int(nil), occupied...)
 	sort.Ints(ports)
 	projectLabel := firstNonEmpty(cfg.ProjectSlug, "project")
-	block := fmt.Sprintf("The %s env wants:\n  WordPress: http://localhost:%d\n  Mailpit:   http://localhost:%d\n\nSet env.ports.wordpress and env.ports.mailpit in .nf/project.json to override.", projectLabel, cfg.WordpressPort, cfg.MailpitPort)
+	block := fmt.Sprintf("The %s env wants:\n  WordPress: http://localhost:%d\n  Mailpit:   http://localhost:%d\n\nSet env.ports.wordpress and env.ports.mailpit in nf.json to override.", projectLabel, cfg.WordpressPort, cfg.MailpitPort)
 	if len(ports) == 1 {
 		return fmt.Sprintf("Port %d is already in use.\n\n%s", ports[0], block)
 	}

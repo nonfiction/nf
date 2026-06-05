@@ -69,7 +69,7 @@ Repo/local context models the current project repository.
 
 It includes:
 
-* `.nf/project.json`
+* `nf.json`
 * local WordPress dev env
 * theme tasks
 * theme packaging/artifact recipe
@@ -221,7 +221,7 @@ Rules:
 * State cache is disposable.
 * Provider truth is canonical remotely.
 * Project repos track repo-local metadata only.
-* Secrets must not be written to `.nf/project.json`, state cache, generated env metadata, docs, or tests.
+* Secrets must not be written to `nf.json`, state cache, generated env metadata, docs, or tests.
 
 ## Command surface
 
@@ -236,7 +236,7 @@ nf config ...
 nf password ...
 ```
 
-Project-only command groups are available when the current repo has `.nf/` next to `.git`:
+Project-only command groups are available when the current repo has `nf.json` next to `.git`:
 
 ```text
 nf remote ...
@@ -283,7 +283,7 @@ Do not add old compatibility routes unless explicitly requested.
 * [x] `nf remote list`
 * [x] `nf theme tasks`
 * [x] `nf theme package`
-* [x] direct theme tasks from `.nf/project.json`
+* [x] direct theme tasks from `nf.json`
 * [x] `nf env up`
 * [x] `nf env down`
 * [x] `nf env logs`
@@ -389,16 +389,16 @@ Provider-specific desired discovery:
 Project metadata lives in:
 
 ```text
-.nf/project.json
+nf.json
 ```
 
 Tracked fields include:
 
-* schema version
+* manifest version
 * project slug/name/type
 * WordPress/theme structure
 * local env intent
-* build/artifact recipe
+* artifact recipe
 * repo remotes
 * theme tasks
 
@@ -406,7 +406,7 @@ Example shape:
 
 ```json
 {
-  "schema": 1,
+  "version": 1,
   "project": {
     "slug": "client",
     "name": "Client",
@@ -424,8 +424,11 @@ Example shape:
     "theme_mount_slug": "theme",
     "uploads_path": "uploads"
   },
-  "deploy": {
-    "remotes": {}
+  "artifact": {
+    "path": "dist/client-v{version}.zip"
+  },
+  "remotes": {
+    "production": "client.app1-linode:live"
   },
   "tasks": {}
 }
@@ -435,7 +438,7 @@ Example shape:
 
 Theme task rules:
 
-* tasks come from `.nf/project.json` `tasks`
+* tasks come from `nf.json` `tasks`
 * string tasks run through `sh -lc`
 * array tasks execute directly
 * passthrough args follow `--`
@@ -468,7 +471,7 @@ Deploy rules:
 
 ## Local env model
 
-Built-in env commands come from `env` metadata in `.nf/project.json`.
+Built-in env commands come from `env` metadata in `nf.json`.
 
 Current built-ins:
 

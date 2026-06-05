@@ -78,12 +78,11 @@ func ensureEnvProjectMetadata() error {
 
 func projectInitMetadata(args projectInitArgs) map[string]any {
 	themePath := firstNonEmpty(args.themeSource, "theme")
-	themePathArg := shellQuoteArg(themePath)
 	themeSlug := firstNonEmpty(args.themeSlug, "theme")
 	projectName := firstNonEmpty(args.projectName, slugToTitle(args.projectSlug))
 	projectSlug := args.projectSlug
 	metadata := map[string]any{
-		"schema": 1,
+		"version": 1,
 		"project": map[string]any{
 			"slug": projectSlug,
 			"name": projectName,
@@ -101,18 +100,11 @@ func projectInitMetadata(args projectInitArgs) map[string]any {
 			"theme_mount_slug":  "theme",
 			"uploads_path":      "uploads",
 		},
-		"build": map[string]any{
-			"steps": []any{"composer --working-dir=" + themePathArg + " install", "npm --prefix " + themePathArg + " run build"},
-		},
 		"artifact": map[string]any{
-			"path":    filepath.ToSlash(filepath.Join("dist", projectSlug+"-v{version}.zip")),
-			"include": []any{"vendor/", "assets/dist/"},
-			"exclude": []any{"node_modules/", ".git/"},
+			"path": filepath.ToSlash(filepath.Join("dist", projectSlug+"-v{version}.zip")),
 		},
-		"deploy": map[string]any{
-			"targets": map[string]any{},
-		},
-		"tasks": defaultProjectTasks(),
+		"remotes": map[string]any{},
+		"tasks":   defaultProjectTasks(),
 	}
 	return metadata
 }
@@ -127,8 +119,63 @@ type projectInitArgs struct {
 }
 
 func projectInitJSON(metadata map[string]any) string {
-	data, _ := json.MarshalIndent(metadata, "", "  ")
+	data, _ := json.MarshalIndent(orderedProjectMetadata(metadata), "", "  ")
 	return string(append(data, '\n'))
+}
+
+func orderedProjectMetadata(metadata map[string]any) orderedObject {
+	order := []string{"version", "project", "wordpress", "env", "artifact", "remotes", "tasks"}
+	seen := map[string]struct{}{}
+	pairs := make([]orderedPair, 0, len(metadata))
+	for _, key := range order {
+		if value, ok := metadata[key]; ok {
+			pairs = append(pairs, orderedPair{Key: key, Value: value})
+			seen[key] = struct{}{}
+		}
+	}
+	keys := make([]string, 0, len(metadata))
+	for key := range metadata {
+		if _, ok := seen[key]; !ok {
+			keys = append(keys, key)
+		}
+	}
+	sort.Strings(keys)
+	for _, key := range keys {
+		pairs = append(pairs, orderedPair{Key: key, Value: metadata[key]})
+	}
+	return orderedObject{Pairs: pairs}
+}
+
+type orderedObject struct {
+	Pairs []orderedPair
+}
+
+type orderedPair struct {
+	Key   string
+	Value any
+}
+
+func (o orderedObject) MarshalJSON() ([]byte, error) {
+	var b strings.Builder
+	b.WriteByte('{')
+	for i, pair := range o.Pairs {
+		if i > 0 {
+			b.WriteByte(',')
+		}
+		key, err := json.Marshal(pair.Key)
+		if err != nil {
+			return nil, err
+		}
+		value, err := json.Marshal(pair.Value)
+		if err != nil {
+			return nil, err
+		}
+		b.Write(key)
+		b.WriteByte(':')
+		b.Write(value)
+	}
+	b.WriteByte('}')
+	return []byte(b.String()), nil
 }
 
 func renderEnvCompose(cfg envConfig) string {
@@ -386,16 +433,11 @@ func projectRemoteSelectOptions(action string) ([]ui.SelectOption, error) {
 	sort.Strings(names)
 	options := make([]ui.SelectOption, 0, len(names))
 	for _, name := range names {
-		remote, _ := remotes[name].(map[string]any)
 		label := name
-		if remote != nil {
-			if siteID := strings.TrimSpace(recordValueString(remote["site_id"])); siteID != "" {
-				if env := strings.TrimSpace(recordValueString(remote["env"])); env != "" {
-					label += " -> " + siteID + ":" + env
-				} else {
-					label += " -> " + siteID
-				}
-			}
+		if _, _, ok, err := projectRemoteAlias(metadata, name); err != nil {
+			return nil, err
+		} else if ok {
+			label += " -> " + strings.TrimSpace(recordValueString(remotes[name]))
 		}
 		options = append(options, ui.SelectOption{Value: name, Label: label})
 	}

@@ -1,6 +1,6 @@
 package cli
 
-// Project remote commands backed by .nf/project.json.
+// Project remote commands backed by nf.json.
 
 import (
 	"fmt"
@@ -48,7 +48,7 @@ func cmdRemoteAdd(name, envRef string) int {
 		fmt.Fprintln(os.Stderr, err)
 		return 1
 	}
-	remotes[name] = map[string]any{"site_id": siteID, "env": env}
+	remotes[name] = canonicalEnvID(siteID, env)
 	if err := saveProjectMetadata(root, metadata); err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		return 1
@@ -117,7 +117,7 @@ func cmdRemoteShow(name string) int {
 		return 1
 	}
 	if !ok {
-		fmt.Fprintf(os.Stderr, "No remote named %q in .nf/project.json deploy.remotes.\n", name)
+		fmt.Fprintf(os.Stderr, "No remote named %q in nf.json remotes.\n", name)
 		return 1
 	}
 	envID := canonicalEnvID(siteID, remoteEnv)
@@ -189,15 +189,13 @@ func cmdRemoteList() int {
 	sort.Strings(names)
 	rows := [][]string{{"remote", "env"}}
 	for _, name := range names {
-		remote, ok := remotes[name].(map[string]any)
-		if !ok || remote == nil {
-			fmt.Fprintf(os.Stderr, ".nf/project.json deploy.remotes.%s must be an object\n", name)
+		siteID, env, ok, err := projectRemoteAlias(metadata, name)
+		if err != nil {
+			fmt.Fprintln(os.Stderr, err)
 			return 1
 		}
-		siteID := strings.TrimSpace(recordValueString(remote["site_id"]))
-		env := strings.TrimSpace(recordValueString(remote["env"]))
-		if siteID == "" || env == "" {
-			fmt.Fprintf(os.Stderr, ".nf/project.json deploy.remotes.%s must include site_id and env\n", name)
+		if !ok {
+			fmt.Fprintf(os.Stderr, "No remote named %q in nf.json remotes.\n", name)
 			return 1
 		}
 		rows = append(rows, []string{name, canonicalEnvID(siteID, env)})

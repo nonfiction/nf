@@ -2,7 +2,7 @@ package cli
 
 // Project metadata, task loading, and default local env commands.
 //
-// Project-local commands read .nf/project.json only from a git worktree and keep
+// Project-local commands read nf.json only from a git worktree and keep
 // generated files/secrets outside that metadata file.
 
 import (
@@ -37,7 +37,7 @@ func parseProjectTask(name string, value any) (string, string, repoCommandRunner
 		for _, item := range typed {
 			s, ok := item.(string)
 			if !ok {
-				return "", "", nil, ProjectError{Msg: fmt.Sprintf(".nf/project.json tasks.%s.run must be a string or array of strings", name)}
+				return "", "", nil, ProjectError{Msg: fmt.Sprintf("nf.json tasks.%s.run must be a string or array of strings", name)}
 			}
 			parts = append(parts, s)
 		}
@@ -45,7 +45,7 @@ func parseProjectTask(name string, value any) (string, string, repoCommandRunner
 	case map[string]any:
 		desc, _ := typed["description"].(string)
 		if strings.TrimSpace(desc) == "" {
-			return "", "", nil, ProjectError{Msg: fmt.Sprintf(".nf/project.json tasks.%s must include a description string", name)}
+			return "", "", nil, ProjectError{Msg: fmt.Sprintf("nf.json tasks.%s must include a description string", name)}
 		}
 		run := typed["run"]
 		switch rr := run.(type) {
@@ -56,16 +56,16 @@ func parseProjectTask(name string, value any) (string, string, repoCommandRunner
 			for _, item := range rr {
 				s, ok := item.(string)
 				if !ok {
-					return "", "", nil, ProjectError{Msg: fmt.Sprintf(".nf/project.json tasks.%s.run must be a string or array of strings", name)}
+					return "", "", nil, ProjectError{Msg: fmt.Sprintf("nf.json tasks.%s.run must be a string or array of strings", name)}
 				}
 				parts = append(parts, s)
 			}
 			return name, desc, argvCommandRunner(parts), nil
 		default:
-			return "", "", nil, ProjectError{Msg: fmt.Sprintf(".nf/project.json tasks.%s.run must be a string or array of strings", name)}
+			return "", "", nil, ProjectError{Msg: fmt.Sprintf("nf.json tasks.%s.run must be a string or array of strings", name)}
 		}
 	default:
-		return "", "", nil, ProjectError{Msg: fmt.Sprintf(".nf/project.json tasks.%s must be a string, array, or object", name)}
+		return "", "", nil, ProjectError{Msg: fmt.Sprintf("nf.json tasks.%s must be a string, array, or object", name)}
 	}
 }
 
@@ -85,26 +85,18 @@ func saveProjectMetadata(root string, metadata map[string]any) error {
 }
 
 func projectRemotes(metadata map[string]any, create bool) (map[string]any, error) {
-	deploy := mapMapAtPath(metadata, "deploy")
-	if deploy == nil {
-		if !create {
-			return nil, nil
-		}
-		deploy = map[string]any{}
-		metadata["deploy"] = deploy
-	}
-	value, ok := deploy["remotes"]
+	value, ok := metadata["remotes"]
 	if !ok {
 		if !create {
 			return nil, nil
 		}
 		remotes := map[string]any{}
-		deploy["remotes"] = remotes
+		metadata["remotes"] = remotes
 		return remotes, nil
 	}
 	remotes, ok := value.(map[string]any)
 	if !ok || remotes == nil {
-		return nil, ProjectError{Msg: ".nf/project.json deploy.remotes must be an object"}
+		return nil, ProjectError{Msg: "nf.json remotes must be an object"}
 	}
 	return remotes, nil
 }
@@ -146,7 +138,7 @@ func bootstrapThemeForEnv(root string, cfg envConfig) error {
 	for _, step := range steps {
 		task, ok := tasks[step]
 		if !ok {
-			return ProjectError{Msg: fmt.Sprintf("theme bootstrap needs task %q in .nf/project.json", step)}
+			return ProjectError{Msg: fmt.Sprintf("theme bootstrap needs task %q in nf.json", step)}
 		}
 		fmt.Printf("Theme bootstrap: running nf theme %s\n", step)
 		if err := task.Run.Execute(root, nil); err != nil {
@@ -358,7 +350,7 @@ func discoverProjectRootOrError() (string, error) {
 	if root, ok := config.DiscoverProjectRoot(""); ok {
 		return root, nil
 	}
-	return "", ProjectError{Msg: "No project metadata found above the current directory. Add .nf/project.json with env metadata or tasks.<name>."}
+	return "", ProjectError{Msg: "No project metadata found above the current directory. Add nf.json with env metadata or tasks.<name>."}
 }
 
 func cmdThemeTasks() int {
@@ -377,7 +369,7 @@ func cmdThemeTasks() int {
 		return 1
 	}
 	if len(tasks) == 0 {
-		fmt.Fprintln(os.Stderr, "No local theme tasks configured. Add .nf/project.json tasks.<name>.")
+		fmt.Fprintln(os.Stderr, "No local theme tasks configured. Add nf.json tasks.<name>.")
 		return 1
 	}
 	fmt.Println("Theme tasks:")

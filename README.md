@@ -45,7 +45,7 @@ Commands:
   help        show help
 ```
 
-Inside an `nf` project repo with `.nf/` next to `.git`, help also shows:
+Inside an `nf` project repo with `nf.json` next to `.git`, help also shows:
 
 ```text
   remote      manage repo remotes
@@ -117,7 +117,7 @@ nf theme rollback production [--dry-run]
 Project repositories use:
 
 ```text
-.nf/project.json
+nf.json
 ```
 
 This file is safe to commit. It must not contain API tokens, SSH keys, live database passwords, provider secrets, or mutable provider inventory.
@@ -144,7 +144,7 @@ nf theme rollback <remote> [--dry-run]
 nf theme <task> [-- args]
 ```
 
-`nf theme tasks` lists project tasks from `.nf/project.json`.
+`nf theme tasks` lists project tasks from `nf.json`.
 
 String tasks run through `sh -lc` from the project root. Array tasks execute directly. The underlying command is printed before execution.
 
@@ -357,7 +357,7 @@ Current behavior:
 * `nf site list --envs`, `nf site show`, `nf site shell`, `nf site wp`, and `nf site snapshot` read the local disposable site cache for now.
 * `nf site password [site]` shows the derived admin password only.
 * `nf site remove [site]` removes a Linode site and deletes its env data.
-* `nf remote add` validates an env ID against the cache, then repo remotes are stored in `.nf/project.json` under `deploy.remotes`.
+* `nf remote add` validates an env ID against the cache, then repo remotes are stored in `nf.json` under `remotes` as `<site>.<target>:<env>` refs.
 * `nf site shell/wp ...` currently preflights against the cache, then stops without running remote commands.
 * `nf env push/pull [remote]` syncs database and mutable `wp-content` after an interactive confirmation. Omit `remote` to pick from configured repo remotes. Add `--dry-run` for a non-mutating plan, or use `--non-interactive` without `--execute` for preflight-only output.
 

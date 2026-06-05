@@ -103,7 +103,7 @@ func ProjectFile(root string) string {
 	if root == "" {
 		root = "."
 	}
-	return filepath.Join(root, ".nf", "project.json")
+	return filepath.Join(root, "nf.json")
 }
 
 func DiscoverProjectRoot(start string) (string, bool) {

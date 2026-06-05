@@ -212,7 +212,7 @@ func resolveThemeDeployTarget(remoteName, themeSlug string, metadata map[string]
 		return themeDeployTarget{}, err
 	}
 	if !ok {
-		return themeDeployTarget{}, ProjectError{Msg: fmt.Sprintf("No remote named %q in .nf/project.json deploy.remotes.", remoteName)}
+		return themeDeployTarget{}, ProjectError{Msg: fmt.Sprintf("No remote named %q in nf.json remotes.", remoteName)}
 	}
 	record, _, err := cachedSiteEnv(siteID, remoteEnv)
 	if err != nil {

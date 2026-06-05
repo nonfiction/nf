@@ -56,14 +56,7 @@ func cmdShowSite(needle string, jsonOutput bool) int {
 	}
 	records := siteRecordsByID(bundle.Sites, resolved)
 	if len(records) == 0 {
-		if targetAliasUsed {
-			fmt.Fprintf(os.Stderr, "deploy.targets.%s resolves to %q, but no site target matched that name.\n", needle, resolved)
-			return 1
-		}
-		if projectFileExists {
-			fmt.Fprintf(os.Stderr, "No site matched %q. Add deploy.targets.%s in .nf/project.json or create a site target with that name.\n", needle, needle)
-			return 1
-		}
+		_, _ = projectFileExists, targetAliasUsed
 		fmt.Fprintf(os.Stderr, "No site matched %q.\n", needle)
 		return 1
 	}
@@ -93,14 +86,7 @@ func cmdSitePassword(needle string) int {
 	}
 	records := siteRecordsByID(bundle.Sites, resolved)
 	if len(records) == 0 {
-		if targetAliasUsed {
-			fmt.Fprintf(os.Stderr, "deploy.targets.%s resolves to %q, but no site target matched that name.\n", needle, resolved)
-			return 1
-		}
-		if projectFileExists {
-			fmt.Fprintf(os.Stderr, "No site matched %q. Add deploy.targets.%s in .nf/project.json or create a site target with that name.\n", needle, needle)
-			return 1
-		}
+		_, _ = projectFileExists, targetAliasUsed
 		fmt.Fprintf(os.Stderr, "No site matched %q.\n", needle)
 		return 1
 	}

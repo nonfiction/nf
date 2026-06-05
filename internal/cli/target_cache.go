@@ -16,32 +16,8 @@ import (
 	"github.com/nonfiction/nf/internal/state"
 )
 
-func projectDeployTargetAlias(metadata map[string]any, targetAlias string) (string, bool, error) {
-	deploy := mapMapAtPath(metadata, "deploy")
-	if deploy == nil {
-		return "", false, nil
-	}
-	targets := mapMapAtPath(deploy, "targets")
-	if targets == nil {
-		return "", false, nil
-	}
-	value, ok := targets[targetAlias]
-	if !ok {
-		return "", false, nil
-	}
-	resolved, ok := value.(string)
-	if !ok || strings.TrimSpace(resolved) == "" {
-		return "", false, ProjectError{Msg: fmt.Sprintf(".nf/project.json deploy.targets.%s must be a string target alias", targetAlias)}
-	}
-	return strings.TrimSpace(resolved), true, nil
-}
-
 func projectRemoteAlias(metadata map[string]any, name string) (string, string, bool, error) {
-	deploy := mapMapAtPath(metadata, "deploy")
-	if deploy == nil {
-		return "", "", false, nil
-	}
-	remotes := mapMapAtPath(deploy, "remotes")
+	remotes := mapMapAtPath(metadata, "remotes")
 	if remotes == nil {
 		return "", "", false, nil
 	}
@@ -49,14 +25,10 @@ func projectRemoteAlias(metadata map[string]any, name string) (string, string, b
 	if !ok {
 		return "", "", false, nil
 	}
-	remote, ok := value.(map[string]any)
-	if !ok || remote == nil {
-		return "", "", false, ProjectError{Msg: fmt.Sprintf(".nf/project.json deploy.remotes.%s must be an object", name)}
-	}
-	siteID := strings.TrimSpace(recordValueString(remote["site_id"]))
-	env := strings.TrimSpace(recordValueString(remote["env"]))
-	if siteID == "" || env == "" {
-		return "", "", false, ProjectError{Msg: fmt.Sprintf(".nf/project.json deploy.remotes.%s must include site_id and env", name)}
+	remoteRef := strings.TrimSpace(recordValueString(value))
+	siteID, env, ok := splitSiteEnvRef(remoteRef)
+	if !ok || siteID == "" || env == "" {
+		return "", "", false, ProjectError{Msg: fmt.Sprintf("nf.json remotes.%s must be an env ref like site.target:env", name)}
 	}
 	return siteID, env, true, nil
 }
@@ -78,11 +50,6 @@ func resolveSiteTarget(requested string) (string, map[string]any, bool, bool, er
 	metadata, err := loadProjectMetadataOrError(root)
 	if err != nil {
 		return "", nil, false, false, err
-	}
-	if targetAlias, targetAliasFound, err := projectDeployTargetAlias(metadata, resolved); err != nil {
-		return "", nil, false, false, err
-	} else if targetAliasFound {
-		return targetAlias, metadata, projectFileExists, true, nil
 	}
 	if remoteSiteID, remoteEnv, remoteFound, err := projectRemoteAlias(metadata, resolved); err != nil {
 		return "", nil, false, false, err

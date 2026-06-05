@@ -28,7 +28,7 @@ func resolveEnvRemoteSyncTarget(action, remoteName string, metadata map[string]a
 		return envRemoteSyncTarget{}, err
 	}
 	if !ok {
-		return envRemoteSyncTarget{}, ProjectError{Msg: fmt.Sprintf("No remote named %q in .nf/project.json deploy.remotes.", remoteName)}
+		return envRemoteSyncTarget{}, ProjectError{Msg: fmt.Sprintf("No remote named %q in nf.json remotes.", remoteName)}
 	}
 	record, _, err := cachedSiteEnv(siteID, remoteEnv)
 	if err != nil {

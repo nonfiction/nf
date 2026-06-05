@@ -180,10 +180,13 @@ func TestRunHelpHidesProjectCommandsInsideGitWithoutNFDir(t *testing.T) {
 
 func TestRunHelpShowsProjectCommandsInsideNFProject(t *testing.T) {
 	workdir := t.TempDir()
-	for _, dir := range []string{".git", ".nf"} {
+	for _, dir := range []string{".git"} {
 		if err := os.Mkdir(filepath.Join(workdir, dir), 0o755); err != nil {
 			t.Fatalf("Mkdir(%s) error = %v", dir, err)
 		}
+	}
+	if err := os.WriteFile(filepath.Join(workdir, "nf.json"), []byte("{\n  \"version\": 1\n}\n"), 0o644); err != nil {
+		t.Fatalf("WriteFile(nf.json) error = %v", err)
 	}
 	oldwd, err := os.Getwd()
 	if err != nil {
@@ -437,22 +440,22 @@ func TestRunCompleteSuggestsStaticAndCachedValues(t *testing.T) {
 
 func TestRunCompleteSuggestsProjectValues(t *testing.T) {
 	workdir := t.TempDir()
-	for _, dir := range []string{".git", ".nf"} {
+	for _, dir := range []string{".git"} {
 		if err := os.Mkdir(filepath.Join(workdir, dir), 0o755); err != nil {
 			t.Fatalf("Mkdir(%s) error = %v", dir, err)
 		}
 	}
 	project := map[string]any{
-		"schema":  1,
+		"version": 1,
 		"project": map[string]any{"slug": "client"},
-		"deploy":  map[string]any{"remotes": map[string]any{"production": map[string]any{"site_id": "client-app1-linode", "env": "live"}}},
+		"remotes": map[string]any{"production": "client-app1-linode:live"},
 		"tasks":   map[string]any{"build": map[string]any{"description": "Build assets", "run": "npm run build"}},
 	}
 	projectData, err := json.MarshalIndent(project, "", "  ")
 	if err != nil {
 		t.Fatalf("MarshalIndent(project) error = %v", err)
 	}
-	if err := os.WriteFile(filepath.Join(workdir, ".nf", "project.json"), append(projectData, '\n'), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(workdir, "nf.json"), append(projectData, '\n'), 0o644); err != nil {
 		t.Fatalf("WriteFile(project) error = %v", err)
 	}
 	oldwd, err := os.Getwd()
@@ -3415,21 +3418,21 @@ func TestRunEnvPushPreflightsRepoRemoteWithoutSyncing(t *testing.T) {
 	if err := os.Mkdir(filepath.Join(repoRoot, ".git"), 0o755); err != nil {
 		t.Fatalf("Mkdir(.git) error = %v", err)
 	}
-	if err := os.MkdirAll(filepath.Join(repoRoot, ".nf"), 0o755); err != nil {
-		t.Fatalf("MkdirAll(.nf) error = %v", err)
+	if err := os.WriteFile(filepath.Join(repoRoot, "nf.json"), []byte("{\n  \"version\": 1\n}\n"), 0o644); err != nil {
+		t.Fatalf("WriteFile(nf.json) error = %v", err)
 	}
 	project := map[string]any{
-		"schema":    1,
+		"version":   1,
 		"project":   map[string]any{"slug": "client", "name": "Client"},
 		"wordpress": map[string]any{"theme_path": "theme", "theme_slug": "theme"},
 		"env":       map[string]any{"compose": "docker compose", "wordpress_service": "wordpress", "cli_service": "cli", "theme_mount_slug": "theme", "uploads_path": "uploads"},
-		"deploy":    map[string]any{"remotes": map[string]any{"production": map[string]any{"site_id": "client-kinsta", "env": "live"}}},
+		"remotes":   map[string]any{"production": "client-kinsta:live"},
 	}
 	projectData, err := json.MarshalIndent(project, "", "  ")
 	if err != nil {
 		t.Fatalf("MarshalIndent(project) error = %v", err)
 	}
-	if err := os.WriteFile(filepath.Join(repoRoot, ".nf", "project.json"), append(projectData, '\n'), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(repoRoot, "nf.json"), append(projectData, '\n'), 0o644); err != nil {
 		t.Fatalf("WriteFile(project) error = %v", err)
 	}
 	oldwd, err := os.Getwd()
@@ -3491,23 +3494,23 @@ func TestRunEnvPullPreflightResolvesLinodeTargetFromProvidersCache(t *testing.T)
 	}
 
 	repoRoot := t.TempDir()
-	for _, dir := range []string{".git", ".nf"} {
+	for _, dir := range []string{".git"} {
 		if err := os.MkdirAll(filepath.Join(repoRoot, dir), 0o755); err != nil {
 			t.Fatalf("MkdirAll(%s) error = %v", dir, err)
 		}
 	}
 	project := map[string]any{
-		"schema":    1,
+		"version":   1,
 		"project":   map[string]any{"slug": "foobar", "name": "FooBar"},
 		"wordpress": map[string]any{"theme_path": "theme", "theme_slug": "theme"},
 		"env":       map[string]any{"compose": "docker compose", "wordpress_service": "wordpress", "cli_service": "cli", "theme_mount_slug": "theme", "uploads_path": "uploads"},
-		"deploy":    map[string]any{"remotes": map[string]any{"live": map[string]any{"site_id": "foobar.app4-linode", "env": "live"}}},
+		"remotes":   map[string]any{"live": "foobar.app4-linode:live"},
 	}
 	projectData, err := json.MarshalIndent(project, "", "  ")
 	if err != nil {
 		t.Fatalf("MarshalIndent(project) error = %v", err)
 	}
-	if err := os.WriteFile(filepath.Join(repoRoot, ".nf", "project.json"), append(projectData, '\n'), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(repoRoot, "nf.json"), append(projectData, '\n'), 0o644); err != nil {
 		t.Fatalf("WriteFile(project) error = %v", err)
 	}
 	oldwd, err := os.Getwd()
@@ -3563,7 +3566,7 @@ func TestRunThemeDeployDryRunPlansPackagedReleaseToConfiguredRemote(t *testing.T
 	}
 
 	repoRoot := t.TempDir()
-	for _, dir := range []string{".git", ".nf", "build/theme"} {
+	for _, dir := range []string{".git", "build/theme"} {
 		if err := os.MkdirAll(filepath.Join(repoRoot, dir), 0o755); err != nil {
 			t.Fatalf("MkdirAll(%s) error = %v", dir, err)
 		}
@@ -3572,16 +3575,16 @@ func TestRunThemeDeployDryRunPlansPackagedReleaseToConfiguredRemote(t *testing.T
 		t.Fatalf("WriteFile(style.css) error = %v", err)
 	}
 	project := map[string]any{
-		"schema":    1,
+		"version":   1,
 		"project":   map[string]any{"slug": "client", "name": "Client"},
 		"wordpress": map[string]any{"theme_path": "build/theme", "theme_slug": "theme"},
-		"deploy":    map[string]any{"remotes": map[string]any{"production": map[string]any{"site_id": "client-kinsta", "env": "live"}}},
+		"remotes":   map[string]any{"production": "client-kinsta:live"},
 	}
 	projectData, err := json.MarshalIndent(project, "", "  ")
 	if err != nil {
 		t.Fatalf("MarshalIndent(project) error = %v", err)
 	}
-	if err := os.WriteFile(filepath.Join(repoRoot, ".nf", "project.json"), append(projectData, '\n'), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(repoRoot, "nf.json"), append(projectData, '\n'), 0o644); err != nil {
 		t.Fatalf("WriteFile(project) error = %v", err)
 	}
 	oldwd, err := os.Getwd()
@@ -3635,7 +3638,7 @@ func TestRunThemeDeployDryRunPlansLinodePackagedRelease(t *testing.T) {
 	}
 
 	repoRoot := t.TempDir()
-	for _, dir := range []string{".git", ".nf", "theme"} {
+	for _, dir := range []string{".git", "theme"} {
 		if err := os.MkdirAll(filepath.Join(repoRoot, dir), 0o755); err != nil {
 			t.Fatalf("MkdirAll(%s) error = %v", dir, err)
 		}
@@ -3643,12 +3646,12 @@ func TestRunThemeDeployDryRunPlansLinodePackagedRelease(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(repoRoot, "theme", "style.css"), []byte("/*\nTheme Name: Theme\nVersion: 2.0.0\n*/\n"), 0o644); err != nil {
 		t.Fatalf("WriteFile(style.css) error = %v", err)
 	}
-	project := map[string]any{"schema": 1, "project": map[string]any{"slug": "client"}, "wordpress": map[string]any{"theme_path": "theme", "theme_slug": "client-theme"}, "deploy": map[string]any{"remotes": map[string]any{"staging": map[string]any{"site_id": "client.app1-linode", "env": "staging"}}}}
+	project := map[string]any{"version": 1, "project": map[string]any{"slug": "client"}, "wordpress": map[string]any{"theme_path": "theme", "theme_slug": "client-theme"}, "remotes": map[string]any{"staging": "client.app1-linode:staging"}}
 	projectData, err := json.MarshalIndent(project, "", "  ")
 	if err != nil {
 		t.Fatalf("MarshalIndent(project) error = %v", err)
 	}
-	if err := os.WriteFile(filepath.Join(repoRoot, ".nf", "project.json"), append(projectData, '\n'), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(repoRoot, "nf.json"), append(projectData, '\n'), 0o644); err != nil {
 		t.Fatalf("WriteFile(project) error = %v", err)
 	}
 	oldwd, err := os.Getwd()
@@ -3687,7 +3690,7 @@ func TestRunThemeDeployWithoutRemotePromptsPicker(t *testing.T) {
 	}
 
 	repoRoot := t.TempDir()
-	for _, dir := range []string{".git", ".nf", "theme"} {
+	for _, dir := range []string{".git", "theme"} {
 		if err := os.MkdirAll(filepath.Join(repoRoot, dir), 0o755); err != nil {
 			t.Fatalf("MkdirAll(%s) error = %v", dir, err)
 		}
@@ -3696,16 +3699,16 @@ func TestRunThemeDeployWithoutRemotePromptsPicker(t *testing.T) {
 		t.Fatalf("WriteFile(style.css) error = %v", err)
 	}
 	project := map[string]any{
-		"schema":    1,
+		"version":   1,
 		"project":   map[string]any{"slug": "client"},
 		"wordpress": map[string]any{"theme_path": "theme", "theme_slug": "theme"},
-		"deploy":    map[string]any{"remotes": map[string]any{"production": map[string]any{"site_id": "client-kinsta", "env": "live"}}},
+		"remotes":   map[string]any{"production": "client-kinsta:live"},
 	}
 	projectData, err := json.MarshalIndent(project, "", "  ")
 	if err != nil {
 		t.Fatalf("MarshalIndent(project) error = %v", err)
 	}
-	if err := os.WriteFile(filepath.Join(repoRoot, ".nf", "project.json"), append(projectData, '\n'), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(repoRoot, "nf.json"), append(projectData, '\n'), 0o644); err != nil {
 		t.Fatalf("WriteFile(project) error = %v", err)
 	}
 	oldwd, err := os.Getwd()
@@ -3759,17 +3762,17 @@ func TestRunThemeRollbackDryRunPlansPreviousKinstaRelease(t *testing.T) {
 		t.Fatalf("SaveStateRecords(sites) error = %v", err)
 	}
 	repoRoot := t.TempDir()
-	for _, dir := range []string{".git", ".nf", "theme"} {
+	for _, dir := range []string{".git", "theme"} {
 		if err := os.MkdirAll(filepath.Join(repoRoot, dir), 0o755); err != nil {
 			t.Fatalf("MkdirAll(%s) error = %v", dir, err)
 		}
 	}
-	project := map[string]any{"schema": 1, "project": map[string]any{"slug": "client"}, "wordpress": map[string]any{"theme_path": "theme", "theme_slug": "theme"}, "deploy": map[string]any{"remotes": map[string]any{"production": map[string]any{"site_id": "client-kinsta", "env": "live"}}}}
+	project := map[string]any{"version": 1, "project": map[string]any{"slug": "client"}, "wordpress": map[string]any{"theme_path": "theme", "theme_slug": "theme"}, "remotes": map[string]any{"production": "client-kinsta:live"}}
 	projectData, err := json.MarshalIndent(project, "", "  ")
 	if err != nil {
 		t.Fatalf("MarshalIndent(project) error = %v", err)
 	}
-	if err := os.WriteFile(filepath.Join(repoRoot, ".nf", "project.json"), append(projectData, '\n'), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(repoRoot, "nf.json"), append(projectData, '\n'), 0o644); err != nil {
 		t.Fatalf("WriteFile(project) error = %v", err)
 	}
 	oldwd, err := os.Getwd()
@@ -3812,17 +3815,17 @@ func TestRunThemeRollbackExecuteRunsLinodeRollbackScript(t *testing.T) {
 		t.Fatalf("SaveStateRecords(sites) error = %v", err)
 	}
 	repoRoot := t.TempDir()
-	for _, dir := range []string{".git", ".nf", "theme"} {
+	for _, dir := range []string{".git", "theme"} {
 		if err := os.MkdirAll(filepath.Join(repoRoot, dir), 0o755); err != nil {
 			t.Fatalf("MkdirAll(%s) error = %v", dir, err)
 		}
 	}
-	project := map[string]any{"schema": 1, "project": map[string]any{"slug": "client"}, "wordpress": map[string]any{"theme_path": "theme", "theme_slug": "client-theme"}, "deploy": map[string]any{"remotes": map[string]any{"production": map[string]any{"site_id": "client.app1-linode", "env": "live"}}}}
+	project := map[string]any{"version": 1, "project": map[string]any{"slug": "client"}, "wordpress": map[string]any{"theme_path": "theme", "theme_slug": "client-theme"}, "remotes": map[string]any{"production": "client.app1-linode:live"}}
 	projectData, err := json.MarshalIndent(project, "", "  ")
 	if err != nil {
 		t.Fatalf("MarshalIndent(project) error = %v", err)
 	}
-	if err := os.WriteFile(filepath.Join(repoRoot, ".nf", "project.json"), append(projectData, '\n'), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(repoRoot, "nf.json"), append(projectData, '\n'), 0o644); err != nil {
 		t.Fatalf("WriteFile(project) error = %v", err)
 	}
 	oldwd, err := os.Getwd()
@@ -4139,15 +4142,12 @@ func TestRunRemoteAddListRemoveWritesProjectMetadata(t *testing.T) {
 	if err := os.Mkdir(filepath.Join(repoRoot, ".git"), 0o755); err != nil {
 		t.Fatalf("Mkdir(.git) error = %v", err)
 	}
-	if err := os.MkdirAll(filepath.Join(repoRoot, ".nf"), 0o755); err != nil {
-		t.Fatalf("MkdirAll(.nf) error = %v", err)
-	}
-	project := map[string]any{"schema": 1, "project": map[string]any{"slug": "client"}, "deploy": map[string]any{"targets": map[string]any{}}}
+	project := map[string]any{"version": 1, "project": map[string]any{"slug": "client"}, "remotes": map[string]any{}}
 	data, err := json.MarshalIndent(project, "", "  ")
 	if err != nil {
 		t.Fatalf("MarshalIndent() error = %v", err)
 	}
-	projectPath := filepath.Join(repoRoot, ".nf", "project.json")
+	projectPath := filepath.Join(repoRoot, "nf.json")
 	if err := os.WriteFile(projectPath, append(data, '\n'), 0o644); err != nil {
 		t.Fatalf("WriteFile(project) error = %v", err)
 	}
@@ -4226,9 +4226,9 @@ func TestRunRemoteAddListRemoveWritesProjectMetadata(t *testing.T) {
 	if err := json.Unmarshal(projectData, &metadata); err != nil {
 		t.Fatalf("Unmarshal(project) error = %v", err)
 	}
-	remote, ok := mapMapAtPath(metadata, "deploy", "remotes", "production")["site_id"].(string)
-	if !ok || remote != "client-app1-linode" {
-		t.Fatalf("deploy.remotes.production.site_id = %#v, want client-app1-linode", mapMapAtPath(metadata, "deploy", "remotes", "production"))
+	remote, ok := metadata["remotes"].(map[string]any)["production"].(string)
+	if !ok || remote != "client-app1-linode:live" {
+		t.Fatalf("remotes.production = %#v, want client-app1-linode:live", metadata["remotes"])
 	}
 
 	var removeSelectTitle string
@@ -4270,15 +4270,12 @@ func TestRunRemoteAddRequiresCachedSiteEnv(t *testing.T) {
 	if err := os.Mkdir(filepath.Join(repoRoot, ".git"), 0o755); err != nil {
 		t.Fatalf("Mkdir(.git) error = %v", err)
 	}
-	if err := os.MkdirAll(filepath.Join(repoRoot, ".nf"), 0o755); err != nil {
-		t.Fatalf("MkdirAll(.nf) error = %v", err)
-	}
-	project := map[string]any{"schema": 1, "project": map[string]any{"slug": "client"}, "deploy": map[string]any{"remotes": map[string]any{}}}
+	project := map[string]any{"version": 1, "project": map[string]any{"slug": "client"}, "remotes": map[string]any{}}
 	data, err := json.MarshalIndent(project, "", "  ")
 	if err != nil {
 		t.Fatalf("MarshalIndent(project) error = %v", err)
 	}
-	projectPath := filepath.Join(repoRoot, ".nf", "project.json")
+	projectPath := filepath.Join(repoRoot, "nf.json")
 	if err := os.WriteFile(projectPath, append(data, '\n'), 0o644); err != nil {
 		t.Fatalf("WriteFile(project) error = %v", err)
 	}
@@ -4307,8 +4304,8 @@ func TestRunRemoteAddRequiresCachedSiteEnv(t *testing.T) {
 	if err := json.Unmarshal(projectData, &metadata); err != nil {
 		t.Fatalf("Unmarshal(project) error = %v", err)
 	}
-	if len(mapMapAtPath(metadata, "deploy", "remotes")) != 0 {
-		t.Fatalf("remote add wrote metadata despite missing cache: %#v", mapMapAtPath(metadata, "deploy", "remotes"))
+	if len(mapMapAtPath(metadata, "remotes")) != 0 {
+		t.Fatalf("remote add wrote metadata despite missing cache: %#v", mapMapAtPath(metadata, "remotes"))
 	}
 }
 
@@ -4317,15 +4314,12 @@ func TestRunRemoteAddRequiresEnvRef(t *testing.T) {
 	if err := os.Mkdir(filepath.Join(repoRoot, ".git"), 0o755); err != nil {
 		t.Fatalf("Mkdir(.git) error = %v", err)
 	}
-	if err := os.MkdirAll(filepath.Join(repoRoot, ".nf"), 0o755); err != nil {
-		t.Fatalf("MkdirAll(.nf) error = %v", err)
-	}
-	project := map[string]any{"schema": 1, "project": map[string]any{"slug": "client"}, "deploy": map[string]any{"remotes": map[string]any{}}}
+	project := map[string]any{"version": 1, "project": map[string]any{"slug": "client"}, "remotes": map[string]any{}}
 	data, err := json.MarshalIndent(project, "", "  ")
 	if err != nil {
 		t.Fatalf("MarshalIndent(project) error = %v", err)
 	}
-	if err := os.WriteFile(filepath.Join(repoRoot, ".nf", "project.json"), append(data, '\n'), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(repoRoot, "nf.json"), append(data, '\n'), 0o644); err != nil {
 		t.Fatalf("WriteFile(project) error = %v", err)
 	}
 	oldwd, err := os.Getwd()
@@ -4450,15 +4444,12 @@ func writeTestProject(t *testing.T) (string, string) {
 	if err := os.Mkdir(filepath.Join(repoRoot, ".git"), 0o755); err != nil {
 		t.Fatalf("Mkdir(.git) error = %v", err)
 	}
-	if err := os.MkdirAll(filepath.Join(repoRoot, ".nf"), 0o755); err != nil {
-		t.Fatalf("MkdirAll(.nf) error = %v", err)
-	}
-	project := map[string]any{"schema": 1, "project": map[string]any{"slug": "client"}, "deploy": map[string]any{"remotes": map[string]any{}}}
+	project := map[string]any{"version": 1, "project": map[string]any{"slug": "client"}, "remotes": map[string]any{}}
 	data, err := json.MarshalIndent(project, "", "  ")
 	if err != nil {
 		t.Fatalf("MarshalIndent(project) error = %v", err)
 	}
-	projectPath := filepath.Join(repoRoot, ".nf", "project.json")
+	projectPath := filepath.Join(repoRoot, "nf.json")
 	if err := os.WriteFile(projectPath, append(data, '\n'), 0o644); err != nil {
 		t.Fatalf("WriteFile(project) error = %v", err)
 	}
@@ -4475,12 +4466,9 @@ func assertProjectRemote(t *testing.T, projectPath, remoteName, wantSiteID, want
 	if err := json.Unmarshal(projectData, &metadata); err != nil {
 		t.Fatalf("Unmarshal(project) error = %v", err)
 	}
-	remote := mapMapAtPath(metadata, "deploy", "remotes", remoteName)
-	if got := recordValueString(remote["site_id"]); got != wantSiteID {
-		t.Fatalf("deploy.remotes.%s.site_id = %q, want %q", remoteName, got, wantSiteID)
-	}
-	if got := recordValueString(remote["env"]); got != wantEnv {
-		t.Fatalf("deploy.remotes.%s.env = %q, want %q", remoteName, got, wantEnv)
+	remote := recordValueString(metadata["remotes"].(map[string]any)[remoteName])
+	if got, want := remote, canonicalEnvID(wantSiteID, wantEnv); got != want {
+		t.Fatalf("remotes.%s = %q, want %q", remoteName, got, want)
 	}
 }
 
@@ -4518,21 +4506,18 @@ func TestRunEnvSnapshotAddSkipsComposeUpWhenReady(t *testing.T) {
 	if err := os.Mkdir(filepath.Join(repoRoot, ".git"), 0o755); err != nil {
 		t.Fatalf("Mkdir() error = %v", err)
 	}
-	if err := os.MkdirAll(filepath.Join(repoRoot, ".nf"), 0o755); err != nil {
-		t.Fatalf("MkdirAll() error = %v", err)
-	}
 	if err := os.MkdirAll(filepath.Join(repoRoot, "theme"), 0o755); err != nil {
 		t.Fatalf("MkdirAll(theme) error = %v", err)
 	}
 	if err := os.WriteFile(filepath.Join(repoRoot, "theme", "style.css"), []byte("/* demo */\n"), 0o644); err != nil {
 		t.Fatalf("WriteFile(style.css) error = %v", err)
 	}
-	project := map[string]any{"schema": 1, "project": map[string]any{"slug": "client", "name": "Client"}, "wordpress": map[string]any{"theme_path": "theme", "theme_slug": "theme"}, "env": map[string]any{"compose": "docker compose", "wordpress_service": "wordpress", "cli_service": "cli", "theme_mount_slug": "theme", "uploads_path": "uploads"}}
+	project := map[string]any{"version": 1, "project": map[string]any{"slug": "client", "name": "Client"}, "wordpress": map[string]any{"theme_path": "theme", "theme_slug": "theme"}, "env": map[string]any{"compose": "docker compose", "wordpress_service": "wordpress", "cli_service": "cli", "theme_mount_slug": "theme", "uploads_path": "uploads"}}
 	data, err := json.MarshalIndent(project, "", "  ")
 	if err != nil {
 		t.Fatalf("MarshalIndent() error = %v", err)
 	}
-	if err := os.WriteFile(filepath.Join(repoRoot, ".nf", "project.json"), append(data, '\n'), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(repoRoot, "nf.json"), append(data, '\n'), 0o644); err != nil {
 		t.Fatalf("WriteFile() error = %v", err)
 	}
 	snapshotDir := filepath.Join(config.DataHome(), "snapshots", "local", "client", "demo-snapshot")
@@ -4581,15 +4566,12 @@ func TestRunEnvSnapshotListShowsSnapshots(t *testing.T) {
 	if err := os.Mkdir(filepath.Join(repoRoot, ".git"), 0o755); err != nil {
 		t.Fatalf("Mkdir() error = %v", err)
 	}
-	if err := os.MkdirAll(filepath.Join(repoRoot, ".nf"), 0o755); err != nil {
-		t.Fatalf("MkdirAll() error = %v", err)
-	}
-	project := map[string]any{"schema": 1, "project": map[string]any{"slug": "client", "name": "Client"}, "wordpress": map[string]any{"theme_path": "theme", "theme_slug": "theme"}, "env": map[string]any{"compose": "docker compose", "wordpress_service": "wordpress", "cli_service": "cli", "theme_mount_slug": "theme", "uploads_path": "uploads"}}
+	project := map[string]any{"version": 1, "project": map[string]any{"slug": "client", "name": "Client"}, "wordpress": map[string]any{"theme_path": "theme", "theme_slug": "theme"}, "env": map[string]any{"compose": "docker compose", "wordpress_service": "wordpress", "cli_service": "cli", "theme_mount_slug": "theme", "uploads_path": "uploads"}}
 	data, err := json.MarshalIndent(project, "", "  ")
 	if err != nil {
 		t.Fatalf("MarshalIndent() error = %v", err)
 	}
-	if err := os.WriteFile(filepath.Join(repoRoot, ".nf", "project.json"), append(data, '\n'), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(repoRoot, "nf.json"), append(data, '\n'), 0o644); err != nil {
 		t.Fatalf("WriteFile() error = %v", err)
 	}
 	if err := os.MkdirAll(filepath.Join(repoRoot, "theme"), 0o755); err != nil {
@@ -4730,22 +4712,19 @@ func TestRunEnvSnapshotUseSkipsComposeUpWhenReady(t *testing.T) {
 	if err := os.Mkdir(filepath.Join(repoRoot, ".git"), 0o755); err != nil {
 		t.Fatalf("Mkdir() error = %v", err)
 	}
-	if err := os.MkdirAll(filepath.Join(repoRoot, ".nf"), 0o755); err != nil {
-		t.Fatalf("MkdirAll() error = %v", err)
-	}
 	if err := os.MkdirAll(filepath.Join(repoRoot, "theme"), 0o755); err != nil {
 		t.Fatalf("MkdirAll(theme) error = %v", err)
 	}
 	if err := os.WriteFile(filepath.Join(repoRoot, "theme", "style.css"), []byte("/* demo */\n"), 0o644); err != nil {
 		t.Fatalf("WriteFile(style.css) error = %v", err)
 	}
-	project := map[string]any{"schema": 1, "project": map[string]any{"slug": "client", "name": "Client"}, "wordpress": map[string]any{"theme_path": "theme", "theme_slug": "theme"}, "env": map[string]any{"compose": "docker compose", "wordpress_service": "wordpress", "cli_service": "cli", "theme_mount_slug": "theme", "uploads_path": "uploads"}}
+	project := map[string]any{"version": 1, "project": map[string]any{"slug": "client", "name": "Client"}, "wordpress": map[string]any{"theme_path": "theme", "theme_slug": "theme"}, "env": map[string]any{"compose": "docker compose", "wordpress_service": "wordpress", "cli_service": "cli", "theme_mount_slug": "theme", "uploads_path": "uploads"}}
 	projectData, err := json.MarshalIndent(project, "", "  ")
 	if err != nil {
 		t.Fatalf("MarshalIndent() error = %v", err)
 	}
-	if err := os.WriteFile(filepath.Join(repoRoot, ".nf", "project.json"), append(projectData, '\n'), 0o644); err != nil {
-		t.Fatalf("WriteFile(project.json) error = %v", err)
+	if err := os.WriteFile(filepath.Join(repoRoot, "nf.json"), append(projectData, '\n'), 0o644); err != nil {
+		t.Fatalf("WriteFile(nf.json) error = %v", err)
 	}
 	sourceSnapshotDir := filepath.Join(config.DataHome(), "snapshots", "local", "client", "restore-source")
 	if err := os.MkdirAll(sourceSnapshotDir, 0o755); err != nil {
@@ -4930,16 +4909,13 @@ func TestRunEnvSnapshotRemoveRemovesSnapshotAfterConfirmation(t *testing.T) {
 	if err := os.Mkdir(filepath.Join(repoRoot, ".git"), 0o755); err != nil {
 		t.Fatalf("Mkdir() error = %v", err)
 	}
-	if err := os.MkdirAll(filepath.Join(repoRoot, ".nf"), 0o755); err != nil {
-		t.Fatalf("MkdirAll() error = %v", err)
-	}
-	project := map[string]any{"schema": 1, "project": map[string]any{"slug": "client", "name": "Client"}, "wordpress": map[string]any{"theme_path": "theme", "theme_slug": "theme"}, "env": map[string]any{"compose": "docker compose", "wordpress_service": "wordpress", "cli_service": "cli", "theme_mount_slug": "theme", "uploads_path": "uploads"}}
+	project := map[string]any{"version": 1, "project": map[string]any{"slug": "client", "name": "Client"}, "wordpress": map[string]any{"theme_path": "theme", "theme_slug": "theme"}, "env": map[string]any{"compose": "docker compose", "wordpress_service": "wordpress", "cli_service": "cli", "theme_mount_slug": "theme", "uploads_path": "uploads"}}
 	projectData, err := json.MarshalIndent(project, "", "  ")
 	if err != nil {
 		t.Fatalf("MarshalIndent() error = %v", err)
 	}
-	if err := os.WriteFile(filepath.Join(repoRoot, ".nf", "project.json"), append(projectData, '\n'), 0o644); err != nil {
-		t.Fatalf("WriteFile(project.json) error = %v", err)
+	if err := os.WriteFile(filepath.Join(repoRoot, "nf.json"), append(projectData, '\n'), 0o644); err != nil {
+		t.Fatalf("WriteFile(nf.json) error = %v", err)
 	}
 	snapshotDir := filepath.Join(config.DataHome(), "snapshots", "local", "client", "delete-me")
 	if err := os.MkdirAll(snapshotDir, 0o755); err != nil {
@@ -5090,19 +5066,16 @@ func writeTestEnvProject(t *testing.T) (string, envConfig) {
 	if err := os.Mkdir(filepath.Join(repoRoot, ".git"), 0o755); err != nil {
 		t.Fatalf("Mkdir(.git) error = %v", err)
 	}
-	if err := os.MkdirAll(filepath.Join(repoRoot, ".nf"), 0o755); err != nil {
-		t.Fatalf("MkdirAll(.nf) error = %v", err)
-	}
 	if err := os.MkdirAll(filepath.Join(repoRoot, "theme"), 0o755); err != nil {
 		t.Fatalf("MkdirAll(theme) error = %v", err)
 	}
-	project := map[string]any{"schema": 1, "project": map[string]any{"slug": "client", "name": "Client"}, "wordpress": map[string]any{"theme_path": "theme", "theme_slug": "theme"}, "env": map[string]any{"compose": "docker compose", "wordpress_service": "wordpress", "cli_service": "cli", "theme_mount_slug": "theme", "uploads_path": "uploads"}}
+	project := map[string]any{"version": 1, "project": map[string]any{"slug": "client", "name": "Client"}, "wordpress": map[string]any{"theme_path": "theme", "theme_slug": "theme"}, "env": map[string]any{"compose": "docker compose", "wordpress_service": "wordpress", "cli_service": "cli", "theme_mount_slug": "theme", "uploads_path": "uploads"}}
 	data, err := json.MarshalIndent(project, "", "  ")
 	if err != nil {
 		t.Fatalf("MarshalIndent(project) error = %v", err)
 	}
-	if err := os.WriteFile(filepath.Join(repoRoot, ".nf", "project.json"), append(data, '\n'), 0o644); err != nil {
-		t.Fatalf("WriteFile(project.json) error = %v", err)
+	if err := os.WriteFile(filepath.Join(repoRoot, "nf.json"), append(data, '\n'), 0o644); err != nil {
+		t.Fatalf("WriteFile(nf.json) error = %v", err)
 	}
 	cfg := envConfig{ProjectSlug: "client", ProjectName: "Client", RepoRoot: repoRoot, ThemePath: "theme", EnvDir: config.EnvDir("client"), WordpressPort: 18432, MailpitPort: 18433, Compose: "docker compose", WordpressService: "wordpress", CliService: "cli", ThemeMountSlug: "theme", UploadsPath: "uploads", ThemeSlug: "theme"}
 	return repoRoot, cfg
@@ -5135,15 +5108,12 @@ func TestRunThemeHelpShowsThemeCommandsInsideGit(t *testing.T) {
 	if err := os.Mkdir(filepath.Join(workdir, ".git"), 0o755); err != nil {
 		t.Fatalf("Mkdir() error = %v", err)
 	}
-	if err := os.MkdirAll(filepath.Join(workdir, ".nf"), 0o755); err != nil {
-		t.Fatalf("MkdirAll() error = %v", err)
-	}
-	project := map[string]any{"schema": 1, "project": map[string]any{"slug": "client"}, "tasks": map[string]any{"build": map[string]any{"description": "Build the theme assets", "run": "npm run build"}}}
+	project := map[string]any{"version": 1, "project": map[string]any{"slug": "client"}, "tasks": map[string]any{"build": map[string]any{"description": "Build the theme assets", "run": "npm run build"}}}
 	projectData, err := json.MarshalIndent(project, "", "  ")
 	if err != nil {
 		t.Fatalf("MarshalIndent() error = %v", err)
 	}
-	if err := os.WriteFile(filepath.Join(workdir, ".nf", "project.json"), append(projectData, '\n'), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(workdir, "nf.json"), append(projectData, '\n'), 0o644); err != nil {
 		t.Fatalf("WriteFile() error = %v", err)
 	}
 	oldwd, err := os.Getwd()
@@ -5223,21 +5193,17 @@ func TestRunSiteShowResolvesAliasAndIncludesServerSummary(t *testing.T) {
 		t.Fatalf("Mkdir() error = %v", err)
 	}
 	project := map[string]any{
-		"schema":    1,
+		"version":   1,
 		"project":   map[string]any{"slug": "client", "name": "Client", "type": "wordpress-theme"},
 		"wordpress": map[string]any{"deploy_unit": "theme", "theme_slug": "theme", "theme_path": "theme"},
-		"build":     map[string]any{"steps": []any{"composer install", "npm run build"}},
-		"artifact":  map[string]any{"include": []any{"vendor/", "assets/dist/"}, "exclude": []any{"node_modules/", ".git/"}},
-		"deploy":    map[string]any{"targets": map[string]any{"app1": "client-app1-production", "production": "client-app1-production", "staging": "client-app1-staging"}},
+		"artifact":  map[string]any{"path": "dist/client-v{version}.zip"},
+		"remotes":   map[string]any{},
 	}
 	projectData, err := json.MarshalIndent(project, "", "  ")
 	if err != nil {
 		t.Fatalf("MarshalIndent() error = %v", err)
 	}
-	if err := os.MkdirAll(filepath.Join(workdir, ".nf"), 0o755); err != nil {
-		t.Fatalf("MkdirAll() error = %v", err)
-	}
-	if err := os.WriteFile(filepath.Join(workdir, ".nf", "project.json"), append(projectData, '\n'), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(workdir, "nf.json"), append(projectData, '\n'), 0o644); err != nil {
 		t.Fatalf("WriteFile() error = %v", err)
 	}
 
@@ -5263,11 +5229,11 @@ func TestRunSiteShowResolvesAliasAndIncludesServerSummary(t *testing.T) {
 	})
 
 	output := captureStdout(t, func() {
-		if got := Run([]string{"site", "show", "app1", "--json"}); got != 0 {
+		if got := Run([]string{"site", "show", "client-app1-production", "--json"}); got != 0 {
 			t.Fatalf("Run() = %d, want 0", got)
 		}
 	})
-	for _, wanted := range []string{`"requested_target": "app1"`, `"resolved_target": "client-app1-production"`, `"resolved_target_summary": "app1 / id 98222343 / linode / ssh nonfiction@app1.nonfiction.dev"`, `"url": "https://client.app1.nonfiction.dev/"`} {
+	for _, wanted := range []string{`"requested_target": "client-app1-production"`, `"resolved_target": "client-app1-production"`, `"resolved_target_summary": "app1 / id 98222343 / linode / ssh nonfiction@app1.nonfiction.dev"`, `"url": "https://client.app1.nonfiction.dev/"`} {
 		if !strings.Contains(output, wanted) {
 			t.Fatalf("Run() output missing %q:\n%s", wanted, output)
 		}
@@ -5301,15 +5267,12 @@ func TestRunSiteShowUsesDirectTargetWithoutAlias(t *testing.T) {
 	if err := os.Mkdir(filepath.Join(workdir, ".git"), 0o755); err != nil {
 		t.Fatalf("Mkdir() error = %v", err)
 	}
-	project := map[string]any{"schema": 1, "project": map[string]any{"slug": "client"}, "deploy": map[string]any{"targets": map[string]any{"app1": "client-app1-production"}}}
+	project := map[string]any{"version": 1, "project": map[string]any{"slug": "client"}, "remotes": map[string]any{}}
 	projectData, err := json.MarshalIndent(project, "", "  ")
 	if err != nil {
 		t.Fatalf("MarshalIndent() error = %v", err)
 	}
-	if err := os.MkdirAll(filepath.Join(workdir, ".nf"), 0o755); err != nil {
-		t.Fatalf("MkdirAll() error = %v", err)
-	}
-	if err := os.WriteFile(filepath.Join(workdir, ".nf", "project.json"), append(projectData, '\n'), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(workdir, "nf.json"), append(projectData, '\n'), 0o644); err != nil {
 		t.Fatalf("WriteFile() error = %v", err)
 	}
 
@@ -5414,15 +5377,12 @@ func TestRunSiteShowResolvesRepoRemoteAlias(t *testing.T) {
 	if err := os.Mkdir(filepath.Join(repoRoot, ".git"), 0o755); err != nil {
 		t.Fatalf("Mkdir(.git) error = %v", err)
 	}
-	if err := os.MkdirAll(filepath.Join(repoRoot, ".nf"), 0o755); err != nil {
-		t.Fatalf("MkdirAll(.nf) error = %v", err)
-	}
-	project := map[string]any{"schema": 1, "project": map[string]any{"slug": "client"}, "deploy": map[string]any{"remotes": map[string]any{"production": map[string]any{"site_id": "client-kinsta", "env": "live"}}}}
+	project := map[string]any{"version": 1, "project": map[string]any{"slug": "client"}, "remotes": map[string]any{"production": "client-kinsta:live"}}
 	projectData, err := json.MarshalIndent(project, "", "  ")
 	if err != nil {
 		t.Fatalf("MarshalIndent(project) error = %v", err)
 	}
-	if err := os.WriteFile(filepath.Join(repoRoot, ".nf", "project.json"), append(projectData, '\n'), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(repoRoot, "nf.json"), append(projectData, '\n'), 0o644); err != nil {
 		t.Fatalf("WriteFile(project) error = %v", err)
 	}
 	oldwd, err := os.Getwd()
@@ -5460,7 +5420,7 @@ func TestRunInitWritesPortableMetadataShape(t *testing.T) {
 	if got := Run([]string{"init", "--project-slug", "client", "--force"}); got != 0 {
 		t.Fatalf("Run() = %d, want 0", got)
 	}
-	data, err := os.ReadFile(filepath.Join(workdir, ".nf", "project.json"))
+	data, err := os.ReadFile(filepath.Join(workdir, "nf.json"))
 	if err != nil {
 		t.Fatalf("ReadFile() error = %v", err)
 	}
@@ -5468,8 +5428,11 @@ func TestRunInitWritesPortableMetadataShape(t *testing.T) {
 	if err := json.Unmarshal(data, &metadata); err != nil {
 		t.Fatalf("Unmarshal() error = %v", err)
 	}
-	if metadata["schema"] != float64(1) {
-		t.Fatalf("schema = %v, want 1", metadata["schema"])
+	if metadata["version"] != float64(1) {
+		t.Fatalf("version = %v, want 1", metadata["version"])
+	}
+	if got := strings.Index(string(data), "\"version\""); got < 0 || got > strings.Index(string(data), "\"project\"") {
+		t.Fatalf("nf.json top-level order = %s, want version before project", data)
 	}
 	if project, ok := metadata["project"].(map[string]any); !ok || project["slug"] != "client" {
 		t.Fatalf("project block = %#v, want slug client", metadata["project"])
@@ -5492,22 +5455,11 @@ func TestRunInitWritesPortableMetadataShape(t *testing.T) {
 			t.Fatalf("env.path unexpectedly present: %#v", env)
 		}
 	}
-	if build, ok := metadata["build"].(map[string]any); !ok {
-		t.Fatalf("build block = %#v, want steps list", metadata["build"])
-	} else if steps, ok := build["steps"].([]any); !ok || len(steps) != 2 {
-		t.Fatalf("build.steps = %#v, want two steps", build["steps"])
-	}
 	if artifact, ok := metadata["artifact"].(map[string]any); !ok || artifact["path"] != "dist/client-v{version}.zip" {
 		t.Fatalf("artifact block = %#v, want dist/client-v{version}.zip", metadata["artifact"])
-	} else if include, ok := artifact["include"].([]any); !ok || len(include) != 2 {
-		t.Fatalf("artifact.include = %#v, want include paths", artifact["include"])
-	} else if exclude, ok := artifact["exclude"].([]any); !ok || len(exclude) != 2 {
-		t.Fatalf("artifact.exclude = %#v, want exclude paths", artifact["exclude"])
 	}
-	if deploy, ok := metadata["deploy"].(map[string]any); !ok {
-		t.Fatalf("deploy block = %#v, want targets map", metadata["deploy"])
-	} else if targets, ok := deploy["targets"].(map[string]any); !ok || len(targets) != 0 {
-		t.Fatalf("deploy.targets = %#v, want empty map", deploy["targets"])
+	if remotes, ok := metadata["remotes"].(map[string]any); !ok || len(remotes) != 0 {
+		t.Fatalf("remotes = %#v, want empty map", metadata["remotes"])
 	}
 	if tasks, ok := metadata["tasks"].(map[string]any); !ok {
 		t.Fatalf("tasks block = %#v, want task map", metadata["tasks"])
@@ -5532,12 +5484,9 @@ func TestRunInitWritesPortableMetadataShape(t *testing.T) {
 	if wordpress, ok := metadata["wordpress"].(map[string]any); !ok || wordpress["deploy_unit"] != "theme" {
 		t.Fatalf("wordpress block = %#v, want deploy_unit theme", metadata["wordpress"])
 	}
-	if build, ok := metadata["build"].(map[string]any); ok {
-		if _, exists := build["commands"]; exists {
-			t.Fatalf("build.commands unexpectedly present: %#v", metadata["build"])
-		}
-		if _, exists := build["source"]; exists {
-			t.Fatalf("build.source unexpectedly present: %#v", metadata["build"])
+	for _, dropped := range []string{"build", "deploy"} {
+		if _, exists := metadata[dropped]; exists {
+			t.Fatalf("%s unexpectedly present: %#v", dropped, metadata[dropped])
 		}
 	}
 	if _, err := os.Stat(filepath.Join(workdir, "instance")); !os.IsNotExist(err) {
@@ -5570,7 +5519,7 @@ func TestRunInitDefaultsProjectSlugFromGitRoot(t *testing.T) {
 	if got := Run([]string{"init"}); got != 0 {
 		t.Fatalf("Run() = %d, want 0", got)
 	}
-	data, err := os.ReadFile(filepath.Join(repoRoot, ".nf", "project.json"))
+	data, err := os.ReadFile(filepath.Join(repoRoot, "nf.json"))
 	if err != nil {
 		t.Fatalf("ReadFile() error = %v", err)
 	}
@@ -5620,7 +5569,7 @@ func TestRunInitHonorsExplicitThemeSlug(t *testing.T) {
 	if got := Run([]string{"init", "--project-slug", "client", "--theme-slug", "custom-theme", "--force"}); got != 0 {
 		t.Fatalf("Run() = %d, want 0", got)
 	}
-	data, err := os.ReadFile(filepath.Join(workdir, ".nf", "project.json"))
+	data, err := os.ReadFile(filepath.Join(workdir, "nf.json"))
 	if err != nil {
 		t.Fatalf("ReadFile() error = %v", err)
 	}
@@ -5635,10 +5584,7 @@ func TestRunInitHonorsExplicitThemeSlug(t *testing.T) {
 
 func TestRunInitWithoutForceRejectsExistingProjectJson(t *testing.T) {
 	workdir := t.TempDir()
-	if err := os.MkdirAll(filepath.Join(workdir, ".nf"), 0o755); err != nil {
-		t.Fatalf("MkdirAll() error = %v", err)
-	}
-	projectPath := filepath.Join(workdir, ".nf", "project.json")
+	projectPath := filepath.Join(workdir, "nf.json")
 	if err := os.WriteFile(projectPath, []byte("{\n}\n"), 0o644); err != nil {
 		t.Fatalf("WriteFile() error = %v", err)
 	}
@@ -5665,7 +5611,7 @@ func TestRunInitWithoutForceRejectsExistingProjectJson(t *testing.T) {
 		t.Fatalf("ReadFile() error = %v", err)
 	}
 	if string(data) != "{\n}\n" {
-		t.Fatalf("project.json changed unexpectedly: %q", string(data))
+		t.Fatalf("nf.json changed unexpectedly: %q", string(data))
 	}
 }
 
@@ -5783,7 +5729,7 @@ func TestRunEnvUpAutoInitializesProjectMetadata(t *testing.T) {
 	}
 	t.Cleanup(func() { _ = os.Chdir(oldwd) })
 
-	projectPath := filepath.Join(repoRoot, ".nf", "project.json")
+	projectPath := filepath.Join(repoRoot, "nf.json")
 	output := captureStdout(t, func() {
 		if got := Run([]string{"env", "up"}); got != 0 {
 			t.Fatalf("Run() = %d, want 0", got)
@@ -5801,7 +5747,7 @@ func TestRunEnvUpAutoInitializesProjectMetadata(t *testing.T) {
 	}
 	data, err := os.ReadFile(projectPath)
 	if err != nil {
-		t.Fatalf("ReadFile(project.json) error = %v", err)
+		t.Fatalf("ReadFile(nf.json) error = %v", err)
 	}
 	var metadata map[string]any
 	if err := json.Unmarshal(data, &metadata); err != nil {
@@ -5883,14 +5829,11 @@ func TestRunThemeTaskPreservesPassthroughSeparator(t *testing.T) {
 	if err := os.Mkdir(filepath.Join(workdir, ".git"), 0o755); err != nil {
 		t.Fatalf("Mkdir() error = %v", err)
 	}
-	if err := os.MkdirAll(filepath.Join(workdir, ".nf"), 0o755); err != nil {
-		t.Fatalf("MkdirAll() error = %v", err)
-	}
 	if err := os.MkdirAll(filepath.Join(workdir, "theme"), 0o755); err != nil {
 		t.Fatalf("MkdirAll(theme) error = %v", err)
 	}
 	project := map[string]any{
-		"schema":    1,
+		"version":   1,
 		"project":   map[string]any{"slug": "client", "name": "Client", "type": "wordpress-theme"},
 		"wordpress": map[string]any{"deploy_unit": "theme", "theme_slug": "theme", "theme_path": "theme"},
 		"env":       map[string]any{"compose": "docker compose", "wordpress_service": "wordpress", "cli_service": "cli", "theme_mount_slug": "theme", "uploads_path": "uploads"},
@@ -5902,7 +5845,7 @@ func TestRunThemeTaskPreservesPassthroughSeparator(t *testing.T) {
 	if err != nil {
 		t.Fatalf("MarshalIndent() error = %v", err)
 	}
-	if err := os.WriteFile(filepath.Join(workdir, ".nf", "project.json"), append(projectData, '\n'), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(workdir, "nf.json"), append(projectData, '\n'), 0o644); err != nil {
 		t.Fatalf("WriteFile() error = %v", err)
 	}
 	capturePath := filepath.Join(t.TempDir(), "capture.txt")
@@ -6002,11 +5945,8 @@ func TestRunEnvPasswordPrintsCurrentProjectAdminPassword(t *testing.T) {
 	if err := os.Mkdir(filepath.Join(repoRoot, ".git"), 0o755); err != nil {
 		t.Fatalf("Mkdir(.git) error = %v", err)
 	}
-	if err := os.MkdirAll(filepath.Join(repoRoot, ".nf"), 0o755); err != nil {
-		t.Fatalf("MkdirAll(.nf) error = %v", err)
-	}
 	project := map[string]any{
-		"schema":    1,
+		"version":   1,
 		"project":   map[string]any{"slug": "foobar", "name": "FooBar"},
 		"wordpress": map[string]any{"theme_path": "theme", "theme_slug": "theme"},
 		"env":       map[string]any{"compose": "docker compose", "wordpress_service": "wordpress", "cli_service": "cli", "theme_mount_slug": "theme", "uploads_path": "uploads"},
@@ -6015,8 +5955,8 @@ func TestRunEnvPasswordPrintsCurrentProjectAdminPassword(t *testing.T) {
 	if err != nil {
 		t.Fatalf("MarshalIndent() error = %v", err)
 	}
-	if err := os.WriteFile(filepath.Join(repoRoot, ".nf", "project.json"), append(data, '\n'), 0o644); err != nil {
-		t.Fatalf("WriteFile(project.json) error = %v", err)
+	if err := os.WriteFile(filepath.Join(repoRoot, "nf.json"), append(data, '\n'), 0o644); err != nil {
+		t.Fatalf("WriteFile(nf.json) error = %v", err)
 	}
 	oldwd, err := os.Getwd()
 	if err != nil {
@@ -6043,8 +5983,8 @@ func TestRunEnvPasswordRejectsArgs(t *testing.T) {
 	if err := os.Mkdir(filepath.Join(repoRoot, ".git"), 0o755); err != nil {
 		t.Fatalf("Mkdir(.git) error = %v", err)
 	}
-	if err := os.MkdirAll(filepath.Join(repoRoot, ".nf"), 0o755); err != nil {
-		t.Fatalf("MkdirAll(.nf) error = %v", err)
+	if err := os.WriteFile(filepath.Join(repoRoot, "nf.json"), []byte("{\n  \"version\": 1\n}\n"), 0o644); err != nil {
+		t.Fatalf("WriteFile(nf.json) error = %v", err)
 	}
 	oldwd, err := os.Getwd()
 	if err != nil {
@@ -6361,9 +6301,6 @@ func TestRunEnvUpPrintsUnderlyingCommands(t *testing.T) {
 	if err := os.MkdirAll(filepath.Join(repoRoot, ".git"), 0o755); err != nil {
 		t.Fatalf("MkdirAll() error = %v", err)
 	}
-	if err := os.MkdirAll(filepath.Join(repoRoot, ".nf"), 0o755); err != nil {
-		t.Fatalf("MkdirAll() error = %v", err)
-	}
 	if err := os.MkdirAll(filepath.Join(repoRoot, "theme"), 0o755); err != nil {
 		t.Fatalf("MkdirAll() error = %v", err)
 	}
@@ -6371,7 +6308,7 @@ func TestRunEnvUpPrintsUnderlyingCommands(t *testing.T) {
 		t.Fatalf("WriteFile() error = %v", err)
 	}
 	project := map[string]any{
-		"schema":    1,
+		"version":   1,
 		"project":   map[string]any{"slug": "client-site", "name": "Client Site", "type": "wordpress-theme"},
 		"wordpress": map[string]any{"deploy_unit": "theme", "theme_slug": "theme", "theme_path": "theme"},
 		"env":       map[string]any{"compose": "docker compose", "wordpress_service": "wordpress", "cli_service": "cli", "theme_mount_slug": "theme", "uploads_path": "uploads"},
@@ -6380,7 +6317,7 @@ func TestRunEnvUpPrintsUnderlyingCommands(t *testing.T) {
 	if err != nil {
 		t.Fatalf("MarshalIndent() error = %v", err)
 	}
-	if err := os.WriteFile(filepath.Join(repoRoot, ".nf", "project.json"), append(data, '\n'), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(repoRoot, "nf.json"), append(data, '\n'), 0o644); err != nil {
 		t.Fatalf("WriteFile() error = %v", err)
 	}
 
@@ -6430,9 +6367,6 @@ func TestRunEnvUpActivatesThemeWhenAlreadyInstalled(t *testing.T) {
 	if err := os.MkdirAll(filepath.Join(repoRoot, ".git"), 0o755); err != nil {
 		t.Fatalf("MkdirAll() error = %v", err)
 	}
-	if err := os.MkdirAll(filepath.Join(repoRoot, ".nf"), 0o755); err != nil {
-		t.Fatalf("MkdirAll() error = %v", err)
-	}
 	if err := os.MkdirAll(filepath.Join(repoRoot, "theme"), 0o755); err != nil {
 		t.Fatalf("MkdirAll() error = %v", err)
 	}
@@ -6440,7 +6374,7 @@ func TestRunEnvUpActivatesThemeWhenAlreadyInstalled(t *testing.T) {
 		t.Fatalf("WriteFile() error = %v", err)
 	}
 	project := map[string]any{
-		"schema":    1,
+		"version":   1,
 		"project":   map[string]any{"slug": "client-site", "name": "Client Site", "type": "wordpress-theme"},
 		"wordpress": map[string]any{"deploy_unit": "theme", "theme_slug": "theme", "theme_path": "theme"},
 		"env":       map[string]any{"compose": "docker compose", "wordpress_service": "wordpress", "cli_service": "cli", "theme_mount_slug": "theme", "uploads_path": "uploads"},
@@ -6449,7 +6383,7 @@ func TestRunEnvUpActivatesThemeWhenAlreadyInstalled(t *testing.T) {
 	if err != nil {
 		t.Fatalf("MarshalIndent() error = %v", err)
 	}
-	if err := os.WriteFile(filepath.Join(repoRoot, ".nf", "project.json"), append(data, '\n'), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(repoRoot, "nf.json"), append(data, '\n'), 0o644); err != nil {
 		t.Fatalf("WriteFile() error = %v", err)
 	}
 
@@ -6503,9 +6437,6 @@ func TestRunEnvUpBootstrapsMissingThemeDependencies(t *testing.T) {
 	if err := os.MkdirAll(filepath.Join(repoRoot, ".git"), 0o755); err != nil {
 		t.Fatalf("MkdirAll(.git) error = %v", err)
 	}
-	if err := os.MkdirAll(filepath.Join(repoRoot, ".nf"), 0o755); err != nil {
-		t.Fatalf("MkdirAll(.nf) error = %v", err)
-	}
 	if err := os.MkdirAll(filepath.Join(repoRoot, "theme"), 0o755); err != nil {
 		t.Fatalf("MkdirAll(theme) error = %v", err)
 	}
@@ -6516,7 +6447,7 @@ func TestRunEnvUpBootstrapsMissingThemeDependencies(t *testing.T) {
 		t.Fatalf("WriteFile(package.json) error = %v", err)
 	}
 	project := map[string]any{
-		"schema":    1,
+		"version":   1,
 		"project":   map[string]any{"slug": "client-site", "name": "Client Site", "type": "wordpress-theme"},
 		"wordpress": map[string]any{"deploy_unit": "theme", "theme_slug": "theme", "theme_path": "theme"},
 		"env":       map[string]any{"compose": "docker compose", "wordpress_service": "wordpress", "cli_service": "cli", "theme_mount_slug": "theme", "uploads_path": "uploads"},
@@ -6530,8 +6461,8 @@ func TestRunEnvUpBootstrapsMissingThemeDependencies(t *testing.T) {
 	if err != nil {
 		t.Fatalf("MarshalIndent() error = %v", err)
 	}
-	if err := os.WriteFile(filepath.Join(repoRoot, ".nf", "project.json"), append(data, '\n'), 0o644); err != nil {
-		t.Fatalf("WriteFile(project.json) error = %v", err)
+	if err := os.WriteFile(filepath.Join(repoRoot, "nf.json"), append(data, '\n'), 0o644); err != nil {
+		t.Fatalf("WriteFile(nf.json) error = %v", err)
 	}
 
 	dockerDir := t.TempDir()
@@ -6576,9 +6507,6 @@ func TestRunEnvResetPrintsUnderlyingCommands(t *testing.T) {
 	if err := os.MkdirAll(filepath.Join(repoRoot, ".git"), 0o755); err != nil {
 		t.Fatalf("MkdirAll() error = %v", err)
 	}
-	if err := os.MkdirAll(filepath.Join(repoRoot, ".nf"), 0o755); err != nil {
-		t.Fatalf("MkdirAll() error = %v", err)
-	}
 	if err := os.MkdirAll(filepath.Join(repoRoot, "theme"), 0o755); err != nil {
 		t.Fatalf("MkdirAll() error = %v", err)
 	}
@@ -6586,7 +6514,7 @@ func TestRunEnvResetPrintsUnderlyingCommands(t *testing.T) {
 		t.Fatalf("WriteFile() error = %v", err)
 	}
 	project := map[string]any{
-		"schema":    1,
+		"version":   1,
 		"project":   map[string]any{"slug": "client-site", "name": "Client Site", "type": "wordpress-theme"},
 		"wordpress": map[string]any{"deploy_unit": "theme", "theme_slug": "theme", "theme_path": "theme"},
 		"env":       map[string]any{"compose": "docker compose", "wordpress_service": "wordpress", "cli_service": "cli", "theme_mount_slug": "theme", "uploads_path": "uploads"},
@@ -6595,7 +6523,7 @@ func TestRunEnvResetPrintsUnderlyingCommands(t *testing.T) {
 	if err != nil {
 		t.Fatalf("MarshalIndent() error = %v", err)
 	}
-	if err := os.WriteFile(filepath.Join(repoRoot, ".nf", "project.json"), append(data, '\n'), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(repoRoot, "nf.json"), append(data, '\n'), 0o644); err != nil {
 		t.Fatalf("WriteFile() error = %v", err)
 	}
 
@@ -6674,16 +6602,12 @@ func TestRunThemePackageUsesThemeStyleVersionWhenPresent(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(workdir, "theme", "package.json"), []byte("{\n  \"version\": \"1.2.3\"\n}\n"), 0o644); err != nil {
 		t.Fatalf("WriteFile() error = %v", err)
 	}
-	if err := os.MkdirAll(filepath.Join(workdir, ".nf"), 0o755); err != nil {
-		t.Fatalf("MkdirAll() error = %v", err)
-	}
 	project := map[string]any{
-		"schema":       1,
-		"project":      map[string]any{"slug": "client", "name": "Client", "type": "wordpress-theme"},
-		"wordpress":    map[string]any{"deploy_unit": "theme", "theme_slug": "theme", "theme_path": "theme"},
-		"build":        map[string]any{"steps": []any{"composer install", "npm run build"}},
-		"artifact":     map[string]any{"path": "release/client-v{version}.zip", "include": []any{"vendor/", "assets/dist/"}, "exclude": []any{"node_modules/", ".git/"}},
-		"deploy":       map[string]any{"targets": map[string]any{}},
+		"version":   1,
+		"project":   map[string]any{"slug": "client", "name": "Client", "type": "wordpress-theme"},
+		"wordpress": map[string]any{"deploy_unit": "theme", "theme_slug": "theme", "theme_path": "theme"},
+		"artifact":  map[string]any{"path": "release/client-v{version}.zip"},
+
 		"project_slug": "legacy-project",
 		"project_name": "Legacy Project",
 		"theme_slug":   "legacy-theme",
@@ -6693,7 +6617,7 @@ func TestRunThemePackageUsesThemeStyleVersionWhenPresent(t *testing.T) {
 	if err != nil {
 		t.Fatalf("MarshalIndent() error = %v", err)
 	}
-	if err := os.WriteFile(filepath.Join(workdir, ".nf", "project.json"), append(projectData, '\n'), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(workdir, "nf.json"), append(projectData, '\n'), 0o644); err != nil {
 		t.Fatalf("WriteFile() error = %v", err)
 	}
 
@@ -6732,20 +6656,17 @@ func TestRunThemePackageFallsBackToPackageVersionWhenStyleVersionMissing(t *test
 	if err := os.WriteFile(filepath.Join(workdir, "theme", "package.json"), []byte("{\n  \"version\": \"1.2.3\"\n}\n"), 0o644); err != nil {
 		t.Fatalf("WriteFile() error = %v", err)
 	}
-	if err := os.MkdirAll(filepath.Join(workdir, ".nf"), 0o755); err != nil {
-		t.Fatalf("MkdirAll() error = %v", err)
-	}
 	project := map[string]any{
-		"schema":    1,
+		"version":   1,
 		"project":   map[string]any{"slug": "client", "name": "Client", "type": "wordpress-theme"},
 		"wordpress": map[string]any{"deploy_unit": "theme", "theme_slug": "theme", "theme_path": "theme"},
-		"artifact":  map[string]any{"path": "dist/client-v{version}.zip", "include": []any{"vendor/", "assets/dist/"}, "exclude": []any{"node_modules/", ".git/"}},
+		"artifact":  map[string]any{"path": "dist/client-v{version}.zip"},
 	}
 	projectData, err := json.MarshalIndent(project, "", "  ")
 	if err != nil {
 		t.Fatalf("MarshalIndent() error = %v", err)
 	}
-	if err := os.WriteFile(filepath.Join(workdir, ".nf", "project.json"), append(projectData, '\n'), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(workdir, "nf.json"), append(projectData, '\n'), 0o644); err != nil {
 		t.Fatalf("WriteFile() error = %v", err)
 	}
 
@@ -6782,20 +6703,17 @@ func TestRunThemePackageFailsWhenThemeVersionMissingFromStyleAndPackage(t *testi
 	if err := os.WriteFile(filepath.Join(workdir, "theme", "style.css"), []byte("/* demo */\n"), 0o644); err != nil {
 		t.Fatalf("WriteFile() error = %v", err)
 	}
-	if err := os.MkdirAll(filepath.Join(workdir, ".nf"), 0o755); err != nil {
-		t.Fatalf("MkdirAll() error = %v", err)
-	}
 	project := map[string]any{
-		"schema":    1,
+		"version":   1,
 		"project":   map[string]any{"slug": "client", "name": "Client", "type": "wordpress-theme"},
 		"wordpress": map[string]any{"deploy_unit": "theme", "theme_slug": "theme", "theme_path": "theme"},
-		"artifact":  map[string]any{"path": "dist/client-v{version}.zip", "include": []any{"vendor/", "assets/dist/"}, "exclude": []any{"node_modules/", ".git/"}},
+		"artifact":  map[string]any{"path": "dist/client-v{version}.zip"},
 	}
 	projectData, err := json.MarshalIndent(project, "", "  ")
 	if err != nil {
 		t.Fatalf("MarshalIndent() error = %v", err)
 	}
-	if err := os.WriteFile(filepath.Join(workdir, ".nf", "project.json"), append(projectData, '\n'), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(workdir, "nf.json"), append(projectData, '\n'), 0o644); err != nil {
 		t.Fatalf("WriteFile() error = %v", err)
 	}
 
@@ -6895,15 +6813,12 @@ func TestRunEnvShowPrintsEnvInfo(t *testing.T) {
 	if err := os.Mkdir(filepath.Join(workdir, ".git"), 0o755); err != nil {
 		t.Fatalf("Mkdir() error = %v", err)
 	}
-	if err := os.MkdirAll(filepath.Join(workdir, ".nf"), 0o755); err != nil {
-		t.Fatalf("MkdirAll() error = %v", err)
-	}
-	project := map[string]any{"schema": 1, "project": map[string]any{"slug": "client", "name": "Client"}, "env": map[string]any{"compose": "docker compose", "wordpress_service": "wordpress", "cli_service": "cli", "theme_mount_slug": "theme", "uploads_path": "uploads"}}
+	project := map[string]any{"version": 1, "project": map[string]any{"slug": "client", "name": "Client"}, "env": map[string]any{"compose": "docker compose", "wordpress_service": "wordpress", "cli_service": "cli", "theme_mount_slug": "theme", "uploads_path": "uploads"}}
 	projectData, err := json.MarshalIndent(project, "", "  ")
 	if err != nil {
 		t.Fatalf("MarshalIndent() error = %v", err)
 	}
-	if err := os.WriteFile(filepath.Join(workdir, ".nf", "project.json"), append(projectData, '\n'), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(workdir, "nf.json"), append(projectData, '\n'), 0o644); err != nil {
 		t.Fatalf("WriteFile() error = %v", err)
 	}
 
@@ -6939,21 +6854,18 @@ func TestRunEnvShellExecutesWordpressShell(t *testing.T) {
 	if err := os.Mkdir(filepath.Join(workdir, ".git"), 0o755); err != nil {
 		t.Fatalf("Mkdir() error = %v", err)
 	}
-	if err := os.MkdirAll(filepath.Join(workdir, ".nf"), 0o755); err != nil {
-		t.Fatalf("MkdirAll() error = %v", err)
-	}
 	if err := os.MkdirAll(filepath.Join(workdir, "theme"), 0o755); err != nil {
 		t.Fatalf("MkdirAll() error = %v", err)
 	}
 	if err := os.WriteFile(filepath.Join(workdir, "theme", "style.css"), []byte("/* demo */\n"), 0o644); err != nil {
 		t.Fatalf("WriteFile() error = %v", err)
 	}
-	project := map[string]any{"schema": 1, "project": map[string]any{"slug": "client", "name": "Client"}, "wordpress": map[string]any{"theme_path": "theme", "theme_slug": "theme"}, "env": map[string]any{"compose": "docker compose", "wordpress_service": "wordpress", "cli_service": "cli", "theme_mount_slug": "theme", "uploads_path": "uploads"}}
+	project := map[string]any{"version": 1, "project": map[string]any{"slug": "client", "name": "Client"}, "wordpress": map[string]any{"theme_path": "theme", "theme_slug": "theme"}, "env": map[string]any{"compose": "docker compose", "wordpress_service": "wordpress", "cli_service": "cli", "theme_mount_slug": "theme", "uploads_path": "uploads"}}
 	projectData, err := json.MarshalIndent(project, "", "  ")
 	if err != nil {
 		t.Fatalf("MarshalIndent() error = %v", err)
 	}
-	if err := os.WriteFile(filepath.Join(workdir, ".nf", "project.json"), append(projectData, '\n'), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(workdir, "nf.json"), append(projectData, '\n'), 0o644); err != nil {
 		t.Fatalf("WriteFile() error = %v", err)
 	}
 
