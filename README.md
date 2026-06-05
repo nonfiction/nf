@@ -105,6 +105,13 @@ Package the theme:
 nf theme package
 ```
 
+Deploy the packaged theme release to a configured repo remote:
+
+```sh
+nf theme deploy production [--dry-run]
+nf theme rollback production [--dry-run]
+```
+
 ## Project metadata
 
 Project repositories use:
@@ -132,6 +139,8 @@ By default, `nf init` derives the project slug from the current git root folder 
 ```sh
 nf theme tasks
 nf theme package [--dry-run] [--source path] [--output path]
+nf theme deploy <remote> [--dry-run]
+nf theme rollback <remote> [--dry-run]
 nf theme <task> [-- args]
 ```
 
@@ -150,6 +159,10 @@ If `artifact.path` contains `{version}`, `nf` resolves it from:
 
 1. `theme/style.css` `Version:`
 2. `theme/package.json` `version`
+
+`nf theme deploy <remote>` is a one-command packaged release deploy. It builds the same theme artifact, uploads it to the selected remote env, extracts it under `wp-content/themes/.nf-releases/<theme-slug>/`, copies the release into the active theme directory, activates the configured theme slug with wp-cli, and records release metadata. It keeps the last 5 releases and matching uploaded zips, so release storage does not grow indefinitely. It does not require manual WordPress admin zip upload and supersedes direct in-place source rsync deploys.
+
+`nf theme rollback <remote>` switches the active theme directory back to the previous recorded release and activates the configured theme slug again. It uses remote `releases.json`; it does not rebuild or upload artifacts.
 
 ## Local WordPress env
 

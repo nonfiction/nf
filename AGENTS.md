@@ -120,6 +120,10 @@ Local state is disposable. Provider truth is canonical remotely.
 * Theme string tasks run through `sh -lc`; array tasks execute directly; passthrough args follow `--`.
 * Print the underlying command preview before running theme/env commands.
 * `nf theme package` only zips existing theme files. It does not run Composer, npm, or asset builds first.
+* `nf theme deploy <remote> [--dry-run]` is a packaged release deploy. It remains one command, does not require manual WP admin upload, and supersedes direct in-place rsync of the source theme.
+* Theme deploy releases live under `wp-content/themes/.nf-releases/<theme-slug>/`; metadata lives in `releases.json` there for rollback/history.
+* Theme deploy keeps the last 5 distinct releases and matching uploaded artifacts; older release dirs/zips and stale temp dirs are pruned after successful deploy.
+* `nf theme rollback <remote> [--dry-run]` restores the previous recorded release and does not rebuild or upload artifacts.
 
 ## Local env gotchas
 

@@ -449,6 +449,22 @@ Packaging rules:
 * `{version}` resolves from `theme/style.css` `Version:` first, then `theme/package.json` `version`
 * fail clearly if neither version source exists
 
+Deploy rules:
+
+* public UX stays `nf theme deploy <remote> [--dry-run]`
+* deploy is a one-command packaged release deploy, not manual WordPress zip upload
+* deploy uses the same packaging behavior as `nf theme package`; it does not run Composer, npm, or asset builds automatically
+* direct in-place source rsync to the active theme directory is superseded
+* remote releases live under `wp-content/themes/.nf-releases/<theme-slug>/<release-id>/`
+* active theme files live at `wp-content/themes/<theme-slug>/`
+* current deploy copies the fully extracted release into the active theme directory instead of making it a symlink, to keep Kinsta/Linode host and WordPress behavior boring
+* release metadata is recorded at `wp-content/themes/.nf-releases/<theme-slug>/releases.json` without secrets
+* deploy prunes remote release storage after success, keeping the last 5 distinct releases and their matching uploaded artifacts
+* deploy also removes stale extraction/temp release dirs under `.nf-releases/<theme-slug>/`
+* public rollback UX is `nf theme rollback <remote> [--dry-run]`
+* rollback selects the previous distinct `release_id` from remote `releases.json`, copies that release back into the active theme directory, runs wp-cli activation, and appends a rollback metadata entry
+* rollback does not rebuild or upload artifacts
+
 ## Local env model
 
 Built-in env commands come from `env` metadata in `.nf/project.json`.
@@ -586,9 +602,10 @@ Status:
 * [x] theme task execution
 * [x] theme packaging
 * [x] repo remote model
-* [ ] artifact upload/publish command
-* [ ] provider adapters for artifact deploy
-* [ ] rollback/release metadata
+* [x] packaged release deploy via `nf theme deploy <remote> [--dry-run]`
+* [x] Linode and Kinsta SSH/rsync artifact deploy paths
+* [x] release metadata layout for rollback/history
+* [x] public rollback command
 
 ### Phase 7: Database/uploads sync
 
