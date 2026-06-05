@@ -134,8 +134,7 @@ Common init flags:
 ```sh
 nf init \
   --project-slug client \
-  --project-name "Client" \
-  --theme-slug theme \
+  --theme-slug client \
   --theme-source theme
 ```
 

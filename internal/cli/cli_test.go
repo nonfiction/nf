@@ -208,7 +208,7 @@ func TestRunHelpShowsProjectCommandsInsideNFProject(t *testing.T) {
 
 func TestRunInitHelpShowsFlags(t *testing.T) {
 	output := captureStdout(t, func() { _ = runInitHelp() })
-	for _, want := range []string{"init\n\nUsage:\n", "nf init [flags]", "--project-slug string", "--project-name string", "--theme-slug string", "--theme-source string", "--type string", "--force"} {
+	for _, want := range []string{"init\n\nUsage:\n", "nf init [flags]", "--project-slug string", "--theme-slug string", "--theme-source string", "--type string", "--force"} {
 		if !strings.Contains(output, want) {
 			t.Fatalf("runInitHelp() output missing %q:\n%s", want, output)
 		}
@@ -5148,7 +5148,7 @@ func writeTestEnvProject(t *testing.T) (string, envConfig) {
 	if err := os.WriteFile(filepath.Join(repoRoot, "nf.json"), append(data, '\n'), 0o644); err != nil {
 		t.Fatalf("WriteFile(nf.json) error = %v", err)
 	}
-	cfg := envConfig{ProjectSlug: "client", ProjectName: "Client", RepoRoot: repoRoot, ThemePath: "theme", EnvDir: config.EnvDir("client"), WordpressPort: 18432, MailpitPort: 18433, Compose: "docker compose", WordpressService: "wordpress", CliService: "cli", ThemeMountSlug: "theme", UploadsPath: "uploads", ThemeSlug: "theme"}
+	cfg := envConfig{ProjectSlug: "client", RepoRoot: repoRoot, ThemePath: "theme", EnvDir: config.EnvDir("client"), WordpressPort: 18432, MailpitPort: 18433, Compose: "docker compose", WordpressService: "wordpress", CliService: "cli", ThemeMountSlug: "theme", UploadsPath: "uploads", ThemeSlug: "theme"}
 	return repoRoot, cfg
 }
 
@@ -5507,6 +5507,8 @@ func TestRunInitWritesPortableMetadataShape(t *testing.T) {
 	}
 	if project, ok := metadata["project"].(map[string]any); !ok || project["slug"] != "client" {
 		t.Fatalf("project block = %#v, want slug client", metadata["project"])
+	} else if _, exists := project["name"]; exists {
+		t.Fatalf("project block = %#v, did not want name", metadata["project"])
 	}
 	if wordpress, ok := metadata["wordpress"].(map[string]any); !ok || wordpress["theme_path"] != "theme" || wordpress["theme_slug"] != "client" {
 		t.Fatalf("wordpress block = %#v, want theme_path theme and theme_slug client", metadata["wordpress"])
@@ -5602,8 +5604,8 @@ func TestRunInitDefaultsProjectSlugFromGitRoot(t *testing.T) {
 	}
 	if project, ok := metadata["project"].(map[string]any); !ok || project["slug"] != "client-site" {
 		t.Fatalf("project block = %#v, want slug client-site", metadata["project"])
-	} else if project["name"] != "Client Site" {
-		t.Fatalf("project block = %#v, want name Client Site", metadata["project"])
+	} else if _, exists := project["name"]; exists {
+		t.Fatalf("project block = %#v, did not want name", metadata["project"])
 	}
 }
 
@@ -5981,7 +5983,7 @@ func writeTestWPDefaults(t *testing.T, salt string) {
 
 func TestRenderEnvFileUsesComposeProjectName(t *testing.T) {
 	wpPort, mailpitPort := envDerivedPorts("client")
-	cfg := envConfig{ProjectSlug: "client", ProjectName: "Client", WordpressPort: wpPort, MailpitPort: mailpitPort}
+	cfg := envConfig{ProjectSlug: "client", WordpressPort: wpPort, MailpitPort: mailpitPort}
 	want := fmt.Sprintf("COMPOSE_PROJECT_NAME=nf_client_env\nWP_PORT=%d\nMAILPIT_PORT=%d\nDB_NAME=client\nDB_USER=client\nDB_PASSWORD=wordpress\nDB_ROOT_PASSWORD=root\nWP_URL=http://localhost:%d\nWP_TITLE=Client\nADMIN_USER=admin\nADMIN_PASSWORD=admin\nADMIN_EMAIL=web@nonfiction.ca\n", wpPort, mailpitPort, wpPort)
 	if got := renderEnvFile(cfg); got != want {
 		t.Fatalf("renderEnvFile() = %q, want %q", got, want)
@@ -5995,7 +5997,7 @@ func TestEnvConfigWithAdminCredentialsUsesGlobalDefaultsAndProjectSlug(t *testin
 	if err := saveGlobalConfig(map[string]string{"default_wp_email": "web@nonfiction.ca", "default_wp_user": "owner"}); err != nil {
 		t.Fatalf("saveGlobalConfig() error = %v", err)
 	}
-	cfg, err := envConfigWithAdminCredentials(envConfig{ProjectSlug: "foobar", ProjectName: "FooBar"})
+	cfg, err := envConfigWithAdminCredentials(envConfig{ProjectSlug: "foobar"})
 	if err != nil {
 		t.Fatalf("envConfigWithAdminCredentials() error = %v", err)
 	}
@@ -6919,7 +6921,7 @@ func TestRunEnvPluginsInstallRemotePromptsBeforeExecution(t *testing.T) {
 }
 
 func TestRenderEnvInfoUsesEffectivePorts(t *testing.T) {
-	cfg := envConfig{ProjectSlug: "client", ProjectName: "Client", EnvDir: filepath.Join("/data", "envs", "client"), WordpressPort: 18432, MailpitPort: 18433}
+	cfg := envConfig{ProjectSlug: "client", EnvDir: filepath.Join("/data", "envs", "client"), WordpressPort: 18432, MailpitPort: 18433}
 	want := "client:local\n────────────\nSite       client\nEnv        local\nURL        http://localhost:18432\nPath       /data/envs/client\nPHP        8.3\nDatabase   client\nCompose    nf_client_env\nMailpit    http://localhost:18433"
 	if got := renderEnvInfo(cfg, true); got != want {
 		t.Fatalf("renderEnvInfo(full) = %q, want %q", got, want)
@@ -7086,7 +7088,6 @@ func TestPreflightEnvPortsDetectsBothCollisions(t *testing.T) {
 func TestEnvCommandHelpersBuildExpectedArgs(t *testing.T) {
 	cfg := envConfig{
 		ProjectSlug:      "client",
-		ProjectName:      "Client",
 		RepoRoot:         "/repo",
 		ThemePath:        "/repo/theme",
 		EnvDir:           filepath.Join("/data", "envs", "client"),

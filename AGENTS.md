@@ -154,7 +154,6 @@ Key rule: never silently clobber production credentials.
 Use neutral fictional examples:
 
 * project slug: `client`
-* project name: `Client`
 * target: `app1-linode`
 * target hostname: `app1.nonfiction.dev`
 * Linode site ID: `client-app1-linode`

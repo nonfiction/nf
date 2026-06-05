@@ -244,7 +244,6 @@ func loadEnvConfig(root string, metadata map[string]any) (envConfig, bool) {
 		return envConfig{}, false
 	}
 	projectSlug := firstNonEmpty(mapStringAtPath(metadata, "project", "slug"), "project")
-	projectName := firstNonEmpty(mapStringAtPath(metadata, "project", "name"), slugToTitle(projectSlug))
 	themePath := firstNonEmpty(mapStringAtPath(metadata, "wordpress", "theme_path"), "theme")
 	if !filepath.IsAbs(themePath) {
 		themePath = filepath.Join(root, themePath)
@@ -252,7 +251,6 @@ func loadEnvConfig(root string, metadata map[string]any) (envConfig, bool) {
 	wordpress := mapMapAtPath(metadata, "wordpress")
 	return envConfig{
 		ProjectSlug:      projectSlug,
-		ProjectName:      projectName,
 		RepoRoot:         root,
 		ThemePath:        themePath,
 		EnvDir:           config.EnvDir(projectSlug),

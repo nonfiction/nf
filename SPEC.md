@@ -413,7 +413,6 @@ Example shape:
   "version": 1,
   "project": {
     "slug": "client",
-    "name": "Client",
     "type": "wordpress-theme"
   },
   "wordpress": {

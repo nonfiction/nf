@@ -16,7 +16,6 @@ func runInitHelp() int {
 	fmt.Println("\nFlags:")
 	for _, line := range []string{
 		"--project-slug string   project slug (defaults to the current git root name)",
-		"--project-name string   project name",
 		"--theme-slug string     mounted theme slug",
 		"--theme-source string   theme source directory",
 		"--type string           project type (default wordpress-theme)",
@@ -103,7 +102,6 @@ func runInit(argv []string) int {
 	}
 	fs := flag.NewFlagSet("init", flag.ContinueOnError)
 	projectSlug := fs.String("project-slug", "", "")
-	projectName := fs.String("project-name", "", "")
 	themeSlug := fs.String("theme-slug", "", "")
 	themeSource := fs.String("theme-source", "", "")
 	projectType := fs.String("type", "wordpress-theme", "")
@@ -124,7 +122,7 @@ func runInit(argv []string) int {
 		}
 		projectSlug = &derivedSlug
 	}
-	return cmdProjectInit(projectInitArgs{projectSlug: *projectSlug, projectName: *projectName, themeSlug: *themeSlug, themeSource: *themeSource, projectType: *projectType, force: *force})
+	return cmdProjectInit(projectInitArgs{projectSlug: *projectSlug, themeSlug: *themeSlug, themeSource: *themeSource, projectType: *projectType, force: *force})
 }
 
 func runTheme(argv []string) int {

@@ -14,7 +14,6 @@ import (
 
 type envConfig struct {
 	ProjectSlug      string
-	ProjectName      string
 	RepoRoot         string
 	ThemePath        string
 	EnvDir           string

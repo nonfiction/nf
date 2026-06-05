@@ -80,12 +80,10 @@ func projectInitMetadata(args projectInitArgs) map[string]any {
 	themePath := firstNonEmpty(args.themeSource, "theme")
 	projectSlug := args.projectSlug
 	themeSlug := firstNonEmpty(args.themeSlug, projectSlug, "theme")
-	projectName := firstNonEmpty(args.projectName, slugToTitle(projectSlug))
 	metadata := map[string]any{
 		"version": 1,
 		"project": map[string]any{
 			"slug": projectSlug,
-			"name": projectName,
 			"type": firstNonEmpty(args.projectType, "wordpress-theme"),
 		},
 		"wordpress": map[string]any{
@@ -112,7 +110,6 @@ func projectInitMetadata(args projectInitArgs) map[string]any {
 
 type projectInitArgs struct {
 	projectSlug string
-	projectName string
 	themeSlug   string
 	themeSource string
 	projectType string
@@ -270,7 +267,7 @@ volumes:
 }
 
 func renderEnvFile(cfg envConfig) string {
-	wpTitle := firstNonEmpty(cfg.ProjectName, slugToTitle(cfg.ProjectSlug))
+	wpTitle := slugToTitle(cfg.ProjectSlug)
 	adminUser := firstNonEmpty(cfg.AdminUser, "admin")
 	adminPassword := firstNonEmpty(cfg.AdminPassword, "admin")
 	adminEmail := firstNonEmpty(cfg.AdminEmail, "web@nonfiction.ca")
