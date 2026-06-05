@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"archive/zip"
 	"bytes"
 	"encoding/json"
 	"fmt"
@@ -5507,8 +5508,8 @@ func TestRunInitWritesPortableMetadataShape(t *testing.T) {
 	if project, ok := metadata["project"].(map[string]any); !ok || project["slug"] != "client" {
 		t.Fatalf("project block = %#v, want slug client", metadata["project"])
 	}
-	if wordpress, ok := metadata["wordpress"].(map[string]any); !ok || wordpress["theme_path"] != "theme" || wordpress["theme_slug"] != "theme" {
-		t.Fatalf("wordpress block = %#v, want theme_path theme and theme_slug theme", metadata["wordpress"])
+	if wordpress, ok := metadata["wordpress"].(map[string]any); !ok || wordpress["theme_path"] != "theme" || wordpress["theme_slug"] != "client" {
+		t.Fatalf("wordpress block = %#v, want theme_path theme and theme_slug client", metadata["wordpress"])
 	} else if plugins, ok := wordpress["plugins"].([]any); !ok || len(plugins) != 0 {
 		t.Fatalf("wordpress.plugins = %#v, want empty list", wordpress["plugins"])
 	}
@@ -7554,6 +7555,65 @@ func TestRunThemePackageUsesThemeStyleVersionWhenPresent(t *testing.T) {
 		if strings.Contains(output, unwanted) {
 			t.Fatalf("Run() output unexpectedly contained %q: %s", unwanted, output)
 		}
+	}
+}
+
+func TestRunThemePackageUsesThemeSlugAsArchiveRoot(t *testing.T) {
+	workdir := t.TempDir()
+	if err := os.Mkdir(filepath.Join(workdir, ".git"), 0o755); err != nil {
+		t.Fatalf("Mkdir() error = %v", err)
+	}
+	if err := os.MkdirAll(filepath.Join(workdir, "theme", "assets"), 0o755); err != nil {
+		t.Fatalf("MkdirAll() error = %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(workdir, "theme", "style.css"), []byte("/*\nTheme Name: Demo\nVersion: 2.0.0\n*/\n"), 0o644); err != nil {
+		t.Fatalf("WriteFile() error = %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(workdir, "theme", "assets", "main.css"), []byte("body{}\n"), 0o644); err != nil {
+		t.Fatalf("WriteFile() error = %v", err)
+	}
+	project := map[string]any{
+		"version":   1,
+		"project":   map[string]any{"slug": "client", "name": "Client", "type": "wordpress-theme"},
+		"wordpress": map[string]any{"deploy_unit": "theme", "theme_slug": "client", "theme_path": "theme"},
+		"artifact":  map[string]any{"path": "dist/client-v{version}.zip"},
+	}
+	projectData, err := json.MarshalIndent(project, "", "  ")
+	if err != nil {
+		t.Fatalf("MarshalIndent() error = %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(workdir, "nf.json"), append(projectData, '\n'), 0o644); err != nil {
+		t.Fatalf("WriteFile() error = %v", err)
+	}
+
+	oldwd, err := os.Getwd()
+	if err != nil {
+		t.Fatalf("Getwd() error = %v", err)
+	}
+	if err := os.Chdir(workdir); err != nil {
+		t.Fatalf("Chdir() error = %v", err)
+	}
+	t.Cleanup(func() { _ = os.Chdir(oldwd) })
+
+	if got := Run([]string{"theme", "package"}); got != 0 {
+		t.Fatalf("Run() = %d, want 0", got)
+	}
+	zr, err := zip.OpenReader(filepath.Join(workdir, "dist", "client-v2.0.0.zip"))
+	if err != nil {
+		t.Fatalf("OpenReader() error = %v", err)
+	}
+	defer zr.Close()
+	names := map[string]bool{}
+	for _, file := range zr.File {
+		names[file.Name] = true
+	}
+	for _, want := range []string{"client/style.css", "client/assets/main.css"} {
+		if !names[want] {
+			t.Fatalf("zip entries = %#v, missing %q", names, want)
+		}
+	}
+	if names["theme/style.css"] {
+		t.Fatalf("zip entries = %#v, should not use source directory name as archive root", names)
 	}
 }
 

@@ -78,9 +78,9 @@ func ensureEnvProjectMetadata() error {
 
 func projectInitMetadata(args projectInitArgs) map[string]any {
 	themePath := firstNonEmpty(args.themeSource, "theme")
-	themeSlug := firstNonEmpty(args.themeSlug, "theme")
-	projectName := firstNonEmpty(args.projectName, slugToTitle(args.projectSlug))
 	projectSlug := args.projectSlug
+	themeSlug := firstNonEmpty(args.themeSlug, projectSlug, "theme")
+	projectName := firstNonEmpty(args.projectName, slugToTitle(projectSlug))
 	metadata := map[string]any{
 		"version": 1,
 		"project": map[string]any{
@@ -493,7 +493,12 @@ func cmdPackage(commandName, source, output string, dryRun bool) int {
 			output = filepath.Join(root, output, projectSlug+".zip")
 		}
 	}
-	result, err := theme.PackageTheme(sourceDir, output, dryRun)
+	themeSlug := firstNonEmpty(mapStringAtPath(metadata, "wordpress", "theme_slug"), projectSlug, filepath.Base(filepath.Clean(sourceDir)), "theme")
+	if err := validateThemeDeploySlug(themeSlug); err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		return 1
+	}
+	result, err := theme.PackageTheme(sourceDir, output, themeSlug, dryRun)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		return 1

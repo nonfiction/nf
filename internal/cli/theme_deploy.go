@@ -73,7 +73,7 @@ func cmdThemeDeploy(remoteName string, dryRun bool) int {
 		fmt.Fprintf(os.Stderr, "Theme source directory does not exist: %s\n", themeSource)
 		return 1
 	}
-	themeSlug := firstNonEmpty(mapStringAtPath(metadata, "wordpress", "theme_slug"), filepath.Base(themeSource), "theme")
+	themeSlug := firstNonEmpty(mapStringAtPath(metadata, "wordpress", "theme_slug"), mapStringAtPath(metadata, "project", "slug"), filepath.Base(themeSource), "theme")
 	if err := validateThemeDeploySlug(themeSlug); err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		return 1
@@ -161,7 +161,7 @@ func cmdThemeRollback(remoteName string, dryRun bool) int {
 		return 1
 	}
 	themeSource := firstNonEmpty(mapStringAtPath(metadata, "wordpress", "theme_path"), "theme")
-	themeSlug := firstNonEmpty(mapStringAtPath(metadata, "wordpress", "theme_slug"), filepath.Base(themeSource), "theme")
+	themeSlug := firstNonEmpty(mapStringAtPath(metadata, "wordpress", "theme_slug"), mapStringAtPath(metadata, "project", "slug"), filepath.Base(themeSource), "theme")
 	if err := validateThemeDeploySlug(themeSlug); err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		return 1
@@ -302,7 +302,11 @@ func prepareThemeDeployArtifact(root string, metadata map[string]any, sourceDir 
 			output = filepath.Join(root, output, projectSlug+".zip")
 		}
 	}
-	result, err := theme.PackageTheme(sourceDir, output, dryRun)
+	themeSlug := firstNonEmpty(mapStringAtPath(metadata, "wordpress", "theme_slug"), projectSlug, filepath.Base(filepath.Clean(sourceDir)), "theme")
+	if err := validateThemeDeploySlug(themeSlug); err != nil {
+		return themeDeployArtifact{}, err
+	}
+	result, err := theme.PackageTheme(sourceDir, output, themeSlug, dryRun)
 	if err != nil {
 		return themeDeployArtifact{}, err
 	}
@@ -319,7 +323,7 @@ func prepareThemeDeployArtifact(root string, metadata map[string]any, sourceDir 
 		OutputPath:  result.OutputPath,
 		FileName:    filepath.Base(result.OutputPath),
 		FileCount:   result.FileCount,
-		ArchiveRoot: filepath.Base(filepath.Clean(sourceDir)),
+		ArchiveRoot: result.ArchiveRoot,
 		Version:     version,
 		Checksum:    checksum,
 		ReleaseID:   releaseID,

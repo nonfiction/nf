@@ -263,7 +263,7 @@ func loadEnvConfig(root string, metadata map[string]any) (envConfig, bool) {
 		CliService:       firstNonEmpty(mapStringAtPath(raw, "cli_service"), "cli"),
 		ThemeMountSlug:   firstNonEmpty(mapStringAtPath(raw, "theme_mount_slug"), "theme"),
 		UploadsPath:      firstNonEmpty(mapStringAtPath(raw, "uploads_path"), "uploads"),
-		ThemeSlug:        firstNonEmpty(recordValueString(wordpress["theme_slug"]), "theme"),
+		ThemeSlug:        firstNonEmpty(recordValueString(wordpress["theme_slug"]), projectSlug, "theme"),
 	}, true
 }
 

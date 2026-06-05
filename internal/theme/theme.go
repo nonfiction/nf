@@ -56,21 +56,33 @@ func shouldSkip(path, outputPath string) bool {
 	return false
 }
 
-func archiveName(root, path string) (string, error) {
-	return filepath.Rel(filepath.Dir(root), path)
+func archiveName(root, path, archiveRoot string) (string, error) {
+	rel, err := filepath.Rel(root, path)
+	if err != nil {
+		return "", err
+	}
+	return filepath.ToSlash(filepath.Join(archiveRoot, rel)), nil
 }
 
 type Result struct {
-	SourceDir  string
-	OutputPath string
-	FileCount  int
-	DryRun     bool
+	SourceDir   string
+	OutputPath  string
+	ArchiveRoot string
+	FileCount   int
+	DryRun      bool
 }
 
-func PackageTheme(sourceDir, outputPath string, dryRun bool) (Result, error) {
+func PackageTheme(sourceDir, outputPath, archiveRoot string, dryRun bool) (Result, error) {
 	info, err := os.Stat(sourceDir)
 	if err != nil || !info.IsDir() {
 		return Result{}, ThemeError{Msg: fmt.Sprintf("Theme source directory does not exist: %s", sourceDir)}
+	}
+	archiveRoot = strings.TrimSpace(archiveRoot)
+	if archiveRoot == "" {
+		archiveRoot = filepath.Base(filepath.Clean(sourceDir))
+	}
+	if filepath.IsAbs(archiveRoot) || strings.ContainsAny(archiveRoot, "/\\") || strings.Contains(archiveRoot, "..") {
+		return Result{}, ThemeError{Msg: fmt.Sprintf("Theme archive root %q must be one safe directory name", archiveRoot)}
 	}
 	files := make([]string, 0)
 	err = filepath.WalkDir(sourceDir, func(path string, d fs.DirEntry, walkErr error) error {
@@ -103,7 +115,7 @@ func PackageTheme(sourceDir, outputPath string, dryRun bool) (Result, error) {
 		}
 		zw := zip.NewWriter(out)
 		for _, path := range files {
-			name, err := archiveName(sourceDir, path)
+			name, err := archiveName(sourceDir, path, archiveRoot)
 			if err != nil {
 				_ = zw.Close()
 				_ = out.Close()
@@ -135,5 +147,5 @@ func PackageTheme(sourceDir, outputPath string, dryRun bool) (Result, error) {
 			return Result{}, err
 		}
 	}
-	return Result{SourceDir: sourceDir, OutputPath: outputPath, FileCount: len(files), DryRun: dryRun}, nil
+	return Result{SourceDir: sourceDir, OutputPath: outputPath, ArchiveRoot: archiveRoot, FileCount: len(files), DryRun: dryRun}, nil
 }
