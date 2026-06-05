@@ -71,6 +71,7 @@ It includes:
 
 * `nf.json`
 * local WordPress dev env
+* WordPress plugin bootstrap intent
 * theme tasks
 * theme packaging/artifact recipe
 * repo-local remotes such as `production` or `staging`
@@ -79,13 +80,8 @@ Repo-local remotes map names to global remote site/env records:
 
 ```json
 {
-  "deploy": {
-    "remotes": {
-      "production": {
-        "site_id": "client-app1-linode",
-        "env": "live"
-      }
-    }
+  "remotes": {
+    "production": "client.app1-linode:live"
   }
 }
 ```
@@ -291,6 +287,8 @@ Do not add old compatibility routes unless explicitly requested.
 * [x] `nf env show`
 * [x] `nf env shell`
 * [x] `nf env wp -- <args>`
+* [x] `nf env plugins list`
+* [x] `nf env plugins install`
 * [x] `nf env snapshot add [name]`
 * [x] `nf env snapshot list`
 * [x] `nf env snapshot import [remote] [--name name]`
@@ -397,6 +395,7 @@ Tracked fields include:
 * manifest version
 * project slug/name/type
 * WordPress/theme structure
+* WordPress plugin bootstrap intent
 * local env intent
 * artifact recipe
 * repo remotes
@@ -415,7 +414,17 @@ Example shape:
   "wordpress": {
     "deploy_unit": "theme",
     "theme_slug": "theme",
-    "theme_path": "theme"
+    "theme_path": "theme",
+    "plugins": [
+      "stream",
+      "wp-crontrol",
+      {
+        "slug": "acf-pro",
+        "source": "$NF_PLUGIN_ACF_PRO_ZIP",
+        "activate": true,
+        "auto_update": true
+      }
+    ]
   },
   "env": {
     "compose": "docker compose",
@@ -482,6 +491,8 @@ Current built-ins:
 * `show`
 * `shell`
 * `wp`
+* `plugins list`
+* `plugins install`
 
 Rules:
 
@@ -491,6 +502,12 @@ Rules:
 * `nf env up` should be idempotent
 * `nf env up` preflights WordPress and Mailpit host ports before Docker Compose starts
 * `nf env show` prints paths, compose project name, and URLs without starting Docker
+* `wordpress.plugins` is a bootstrap checklist, not a full plugin lifecycle manager
+* string plugin entries install from wordpress.org, activate, and enable auto-updates by default
+* object plugin entries require `slug`, support `source`, support `auto_update`, and default `activate` and `auto_update` to true
+* plugin `source` may be a wp.org marker, zip URL/path, or env-var-backed value such as `$NF_PLUGIN_ACF_PRO_ZIP`
+* `nf env plugins install` is idempotent: it installs only missing plugins, activates only inactive plugins when requested, and enables native WordPress auto-updates only when not already enabled; it does not update, remove, pin, disable auto-updates, or manage licenses
+* secrets, license keys, and private signed URLs must not be stored directly in `nf.json`
 * generated env scaffolding stays under `NF_DATA_HOME`, not in project repos
 
 Snapshots:

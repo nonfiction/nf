@@ -92,6 +92,7 @@ func projectInitMetadata(args projectInitArgs) map[string]any {
 			"deploy_unit": "theme",
 			"theme_slug":  themeSlug,
 			"theme_path":  themePath,
+			"plugins":     []any{},
 		},
 		"env": map[string]any{
 			"compose":           "docker compose",
@@ -249,6 +250,8 @@ func renderEnvCompose(cfg envConfig) string {
       ADMIN_USER: ${ADMIN_USER}
       ADMIN_PASSWORD: ${ADMIN_PASSWORD}
       ADMIN_EMAIL: ${ADMIN_EMAIL}
+      HOME: /tmp
+      WP_CLI_CACHE_DIR: /tmp/wp-cli-cache
     volumes:
       - wp_data:/var/www/html
       - %s:/var/www/html/wp-content/themes/%s

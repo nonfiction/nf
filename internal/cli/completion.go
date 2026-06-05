@@ -224,17 +224,26 @@ func remoteCompletionCandidates(args []string) []string {
 
 func envCompletionCandidates(args []string) []string {
 	if len(args) == 0 {
-		return []string{"show", "password", "up", "down", "logs", "shell", "ssh", "wp", "snapshot", "pull", "push", "reset", "help"}
+		return []string{"show", "password", "up", "down", "logs", "shell", "ssh", "wp", "plugins", "snapshot", "pull", "push", "reset", "help"}
 	}
 	args[0] = cliCommandAlias(args[0])
 	switch args[0] {
 	case "pull", "push":
 		return projectRemoteCompletionNames()
+	case "plugins":
+		return envPluginsCompletionCandidates(args[1:])
 	case "snapshot":
 		return envSnapshotCompletionCandidates(args[1:])
 	default:
 		return nil
 	}
+}
+
+func envPluginsCompletionCandidates(args []string) []string {
+	if len(args) == 0 {
+		return []string{"list", "ls", "install", "help"}
+	}
+	return nil
 }
 
 func envSnapshotCompletionCandidates(args []string) []string {

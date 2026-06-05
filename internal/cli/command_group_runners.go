@@ -36,6 +36,7 @@ func runEnvHelp() int {
 		{"logs", "tail WordPress logs"},
 		{"shell, ssh", "open a shell in the local env"},
 		{"wp -- <args>", "run wp-cli in the local env"},
+		{"plugins", "manage configured WordPress plugins"},
 		{"snapshot", "manage env snapshots"},
 		{"pull [remote] [--dry-run] [--execute] [--yes]", "pull database and mutable wp-content from a remote env"},
 		{"push [remote] [--dry-run] [--execute] [--yes]", "push database and mutable wp-content to a remote env"},
@@ -228,13 +229,16 @@ func runEnv(argv []string) int {
 	name := argv[0]
 	name = cliCommandAlias(name)
 	switch name {
-	case "show", "password", "up", "down", "logs", "reset", "shell", "wp", "push", "pull", "snapshot":
+	case "show", "password", "up", "down", "logs", "reset", "shell", "wp", "push", "pull", "plugins", "snapshot":
 	default:
 		fmt.Fprintln(os.Stderr, "unsupported env command")
 		return 1
 	}
 	if name == "snapshot" {
 		return runEnvSnapshot(argv[1:])
+	}
+	if name == "plugins" {
+		return runEnvPlugins(argv[1:])
 	}
 	if name == "show" && len(argv) != 1 {
 		fmt.Fprintln(os.Stderr, "env show takes no arguments")
@@ -350,6 +354,51 @@ func runEnv(argv []string) int {
 		fmt.Println(renderEnvInfo(cfg, false))
 	}
 	return 0
+}
+
+func runEnvPlugins(argv []string) int {
+	if len(argv) == 0 || argv[0] == "help" {
+		printGroupHelp("env plugins", []helpLine{
+			{"list, ls", "list configured WordPress plugins"},
+			{"install", "install and activate configured WordPress plugins"},
+		})
+		return 0
+	}
+	cmd := cliCommandAlias(argv[0])
+	args := argv[1:]
+	switch cmd {
+	case "list", "install":
+		if len(args) != 0 {
+			fmt.Fprintf(os.Stderr, "env plugins %s takes no arguments\n", cmd)
+			return 1
+		}
+	default:
+		fmt.Fprintln(os.Stderr, "unsupported env plugins command")
+		return 1
+	}
+	if err := requireProjectContext("env plugins " + cmd); err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		return 1
+	}
+	root, err := discoverProjectRootOrError()
+	if err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		return 1
+	}
+	metadata, err := loadProjectMetadataOrError(root)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		return 1
+	}
+	if cmd == "list" {
+		return cmdEnvPluginsList(metadata)
+	}
+	cfg, ok := loadEnvConfig(root, metadata)
+	if !ok {
+		fmt.Fprintln(os.Stderr, "Missing env metadata in nf.json. Run nf env up first.")
+		return 1
+	}
+	return cmdEnvPluginsInstall(cfg, metadata)
 }
 
 func runEnvSnapshot(argv []string) int {

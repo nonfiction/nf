@@ -44,6 +44,19 @@ func runCommandSpecQuiet(spec execSpec) error {
 	return cmd.Run()
 }
 
+func runCommandSpecOutputQuiet(spec execSpec) (string, error) {
+	if len(spec.Args) == 0 {
+		return "", fmt.Errorf("unsupported repo command type")
+	}
+	printCommandArgs(spec.Args)
+	cmd := exec.Command(spec.Args[0], spec.Args[1:]...)
+	cmd.Dir = spec.Dir
+	cmd.Stderr = io.Discard
+	cmd.Stdin = os.Stdin
+	output, err := cmd.Output()
+	return string(output), err
+}
+
 func runRsyncCommand(args []string) error {
 	if len(args) == 0 {
 		return fmt.Errorf("unsupported rsync command")

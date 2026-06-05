@@ -105,6 +105,7 @@ Local state is disposable. Provider truth is canonical remotely.
 * `nf remote add` validates the requested site/env exists in local cache before writing `nf.json`.
 * `nf site shell/wp` are preflight-only today; they must not mutate remote state yet.
 * `nf env push/pull [remote]` defaults to an interactive confirmation before executing remote sync. Use `--dry-run` or `--non-interactive` without `--execute` for preflight-only output. Non-interactive execution requires `--execute --yes`.
+* `wordpress.plugins` in `nf.json` is a local env bootstrap checklist, not a full lifecycle manager. String entries install from wordpress.org, activate, and enable auto-updates by default; object entries require `slug`, support `source` and `auto_update`, and default `activate` and `auto_update` to true.
 
 ## Project-context gotchas
 
@@ -131,6 +132,7 @@ Local state is disposable. Provider truth is canonical remotely.
 * Local snapshot files stay under `NF_DATA_HOME` / `~/.local/share/nf/snapshots/local/<project-slug>/<snapshot-name>/`.
 * Remote snapshot files stay under `NF_DATA_HOME` / `~/.local/share/nf/snapshots/remote/<env-id-slug>-YYYY-MM-DD-HHMMSS/`.
 * `nf env up` should be idempotent: ensure env exists, start Compose, install WordPress if missing, activate mounted theme.
+* `nf env plugins install` is idempotent: install only missing configured plugins, activate only inactive plugins when requested, and enable native WordPress auto-updates only when not already enabled. It must not update, remove, pin, disable auto-updates, or manage plugin licenses.
 * `nf env reset` is destructive for local env only.
 * Snapshot archives include uploads/plugins/mu-plugins/languages, not themes.
 * `nf env snapshot use` creates a safety snapshot named `YYYY-MM-DD-HHMMSS-pre-restore` before restore.

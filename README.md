@@ -90,6 +90,8 @@ Start local WordPress:
 nf env up
 nf env show
 nf env wp -- plugin list
+nf env plugins list
+nf env plugins install
 ```
 
 List theme tasks and run one:
@@ -176,12 +178,40 @@ nf env show
 nf env logs
 nf env shell
 nf env wp -- plugin list
+nf env plugins list
+nf env plugins install
 nf env down
 ```
 
 `nf env up` is idempotent. It starts Docker Compose, installs WordPress if needed, and ensures the mounted theme is active.
 
 `nf env reset` is destructive for the local env only. It removes Docker Compose volumes and recreates the env.
+
+Configured WordPress plugins live in `nf.json` under `wordpress.plugins`:
+
+```json
+{
+  "wordpress": {
+    "plugins": [
+      "stream",
+      "wp-crontrol",
+      "insert-headers-and-footers",
+      "block-visibility",
+      "imsanity",
+      {
+        "slug": "acf-pro",
+        "source": "$NF_PLUGIN_ACF_PRO_ZIP",
+        "activate": true,
+        "auto_update": true
+      }
+    ]
+  }
+}
+```
+
+String entries install from wordpress.org, activate, and enable auto-updates by default. Object entries require `slug`, may set `source` to a zip URL/path or env var, and may set `activate` or `auto_update` to `false`. Keep private plugin URLs and license data in environment variables, not `nf.json`.
+
+`nf env plugins install` is idempotent: it installs only missing plugins, activates only inactive plugins when `activate` is true, and enables native WordPress auto-updates only when not already enabled. It does not update, remove, pin, disable auto-updates, or manage plugin licenses.
 
 Generated env data lives under:
 
