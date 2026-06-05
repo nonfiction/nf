@@ -241,9 +241,15 @@ func envCompletionCandidates(args []string) []string {
 
 func envPluginsCompletionCandidates(args []string) []string {
 	if len(args) == 0 {
-		return []string{"list", "ls", "status", "diff", "install", "help"}
+		return []string{"list", "ls", "add", "remove", "rm", "status", "diff", "install", "help"}
 	}
 	args[0] = cliCommandAlias(args[0])
+	if args[0] == "add" {
+		return []string{"--source", "--no-activate", "--no-auto-update"}
+	}
+	if args[0] == "remove" {
+		return projectPluginCompletionNames()
+	}
 	if args[0] == "install" {
 		return append(projectRemoteCompletionNames(), "--dry-run", "--yes")
 	}
@@ -373,6 +379,26 @@ func projectTaskCompletionNames() []string {
 	values := make([]string, 0, len(tasks))
 	for name := range tasks {
 		values = append(values, name)
+	}
+	return uniqueSortedStrings(values)
+}
+
+func projectPluginCompletionNames() []string {
+	root, ok := currentNFProjectRoot()
+	if !ok {
+		return nil
+	}
+	metadata, err := loadProjectMetadataOrError(root)
+	if err != nil {
+		return nil
+	}
+	plugins, err := loadWordPressPluginSpecs(metadata)
+	if err != nil {
+		return nil
+	}
+	values := make([]string, 0, len(plugins))
+	for _, plugin := range plugins {
+		values = append(values, plugin.Slug)
 	}
 	return uniqueSortedStrings(values)
 }

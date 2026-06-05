@@ -103,6 +103,131 @@ func cmdEnvPluginsList(metadata map[string]any) int {
 	return 0
 }
 
+type envPluginAddOptions struct {
+	Slug          string
+	Source        string
+	Activate      bool
+	AutoUpdate    bool
+	HasActivate   bool
+	HasAutoUpdate bool
+}
+
+func cmdEnvPluginsAdd(root string, metadata map[string]any, opts envPluginAddOptions) int {
+	if _, err := loadWordPressPluginSpecs(metadata); err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		return 1
+	}
+	plugins, err := projectWordPressPlugins(metadata, true)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		return 1
+	}
+	for _, item := range plugins {
+		plugin, err := parseWordPressPluginSpec(0, item)
+		if err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			return 1
+		}
+		if plugin.Slug == opts.Slug {
+			fmt.Fprintf(os.Stderr, "nf.json wordpress.plugins already contains %q\n", opts.Slug)
+			return 1
+		}
+	}
+	plugins = append(plugins, wordpressPluginAddValue(opts))
+	wordpress := metadata["wordpress"].(map[string]any)
+	wordpress["plugins"] = plugins
+	if err := saveProjectMetadata(root, metadata); err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		return 1
+	}
+	fmt.Printf("Added WordPress plugin %s to nf.json.\n", opts.Slug)
+	return 0
+}
+
+func cmdEnvPluginsRemove(root string, metadata map[string]any, slug string) int {
+	if _, err := loadWordPressPluginSpecs(metadata); err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		return 1
+	}
+	plugins, err := projectWordPressPlugins(metadata, false)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		return 1
+	}
+	if len(plugins) == 0 {
+		fmt.Fprintf(os.Stderr, "nf.json wordpress.plugins does not contain %q\n", slug)
+		return 1
+	}
+	kept := make([]any, 0, len(plugins))
+	removed := false
+	for _, item := range plugins {
+		plugin, err := parseWordPressPluginSpec(0, item)
+		if err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			return 1
+		}
+		if plugin.Slug == slug {
+			removed = true
+			continue
+		}
+		kept = append(kept, item)
+	}
+	if !removed {
+		fmt.Fprintf(os.Stderr, "nf.json wordpress.plugins does not contain %q\n", slug)
+		return 1
+	}
+	wordpress := metadata["wordpress"].(map[string]any)
+	wordpress["plugins"] = kept
+	if err := saveProjectMetadata(root, metadata); err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		return 1
+	}
+	fmt.Printf("Removed WordPress plugin %s from nf.json.\n", slug)
+	return 0
+}
+
+func projectWordPressPlugins(metadata map[string]any, create bool) ([]any, error) {
+	wordpress, ok := metadata["wordpress"].(map[string]any)
+	if !ok || wordpress == nil {
+		if !create {
+			return nil, nil
+		}
+		wordpress = map[string]any{}
+		metadata["wordpress"] = wordpress
+	}
+	value, ok := wordpress["plugins"]
+	if !ok {
+		if !create {
+			return nil, nil
+		}
+		plugins := []any{}
+		wordpress["plugins"] = plugins
+		return plugins, nil
+	}
+	plugins, ok := value.([]any)
+	if !ok {
+		return nil, ProjectError{Msg: "nf.json wordpress.plugins must be an array"}
+	}
+	return plugins, nil
+}
+
+func wordpressPluginAddValue(opts envPluginAddOptions) any {
+	if strings.TrimSpace(opts.Source) == "" && !opts.HasActivate && !opts.HasAutoUpdate {
+		return opts.Slug
+	}
+	pairs := []orderedPair{{Key: "slug", Value: opts.Slug}}
+	if strings.TrimSpace(opts.Source) != "" {
+		pairs = append(pairs, orderedPair{Key: "source", Value: opts.Source})
+	}
+	if opts.HasActivate && !opts.Activate {
+		pairs = append(pairs, orderedPair{Key: "activate", Value: false})
+	}
+	if opts.HasAutoUpdate && !opts.AutoUpdate {
+		pairs = append(pairs, orderedPair{Key: "auto_update", Value: false})
+	}
+	return orderedObject{Pairs: pairs}
+}
+
 func cmdEnvPluginsStatusWithOptions(root string, metadata map[string]any, remoteName string) int {
 	if strings.TrimSpace(remoteName) == "" {
 		cfg, ok := loadEnvConfig(root, metadata)
@@ -138,7 +263,7 @@ func cmdEnvPluginsStatusLocal(cfg envConfig, metadata map[string]any) int {
 		return 0
 	}
 	checker := envPluginStatusChecker{cfg: cfg}
-	statuses, ready, err := checker.statuses(plugins)
+	statuses, ready, err := checker.statuses(plugins, false)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		return 1
@@ -162,7 +287,7 @@ func cmdEnvPluginsDiffLocal(cfg envConfig, metadata map[string]any) int {
 		return 0
 	}
 	checker := envPluginStatusChecker{cfg: cfg}
-	statuses, ready, err := checker.statuses(plugins)
+	statuses, ready, err := checker.statuses(plugins, true)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		return 1
@@ -225,7 +350,7 @@ func cmdEnvPluginsDiffRemote(metadata map[string]any, remoteName string) int {
 		fmt.Fprintln(os.Stderr, err)
 		return 1
 	}
-	statuses := parseRemotePluginStatusOutput(plugins, string(output))
+	statuses := parseWordPressPluginDiffStatusOutput(plugins, string(output))
 	return printWordPressPluginDiff("Plugin diff:", &target, statuses)
 }
 
@@ -391,6 +516,7 @@ type wordpressPluginStatus struct {
 	Installed  bool
 	Active     bool
 	AutoUpdate bool
+	Extra      bool
 }
 
 type wordpressPluginDiff struct {
@@ -414,13 +540,16 @@ type envPluginStatusChecker struct {
 	cfg envConfig
 }
 
-func (c envPluginStatusChecker) statuses(plugins []wordpressPluginSpec) ([]wordpressPluginStatus, bool, error) {
+func (c envPluginStatusChecker) statuses(plugins []wordpressPluginSpec, includeExtras bool) ([]wordpressPluginStatus, bool, error) {
 	output, err := runCommandSpecOutputSilent(execSpec{Dir: localEnvDir(c.cfg), Args: envCliArgs(c.cfg, "sh", "-lc", localPluginStatusScript(plugins))})
 	if err != nil {
 		return nil, false, err
 	}
 	if strings.TrimSpace(output) == "__NF_NOT_READY__" {
 		return nil, false, nil
+	}
+	if includeExtras {
+		return parseWordPressPluginDiffStatusOutput(plugins, output), true, nil
 	}
 	return parseRemotePluginStatusOutput(plugins, output), true, nil
 }
@@ -550,7 +679,9 @@ func wordpressPluginDiffs(statuses []wordpressPluginStatus) ([]wordpressPluginDi
 	drift := false
 	for _, status := range statuses {
 		changes := []string{}
-		if !status.Installed {
+		if status.Extra {
+			changes = append(changes, extraPluginDiffChange(status))
+		} else if !status.Installed {
 			if pluginLocalSourceMissing(status.Plugin) {
 				changes = append(changes, "source unavailable locally")
 			} else {
@@ -578,6 +709,18 @@ func wordpressPluginDiffs(statuses []wordpressPluginStatus) ([]wordpressPluginDi
 		diffs = append(diffs, wordpressPluginDiff{Plugin: status.Plugin, Change: change, Drift: len(changes) > 0})
 	}
 	return diffs, drift
+}
+
+func extraPluginDiffChange(status wordpressPluginStatus) string {
+	active := "inactive"
+	if status.Active {
+		active = "active"
+	}
+	autoUpdate := "auto-update off"
+	if status.AutoUpdate {
+		autoUpdate = "auto-update on"
+	}
+	return "extra (" + active + ", " + autoUpdate + ")"
 }
 
 func pluginLocalSourceMissing(plugin wordpressPluginSpec) bool {
@@ -688,6 +831,7 @@ func localPluginStatusScript(plugins []wordpressPluginSpec) string {
 		builder.WriteString(slug)
 		builder.WriteString(" \"$installed\" \"$active\" \"$auto_update\"\n")
 	}
+	writeExtraPluginStatusScript(&builder, plugins, "wp", true)
 	return builder.String()
 }
 
@@ -760,7 +904,44 @@ func remotePluginStatusScript(target envRemoteSyncTarget, plugins []wordpressPlu
 		builder.WriteString(slug)
 		builder.WriteString(" \"$installed\" \"$active\" \"$auto_update\"\n")
 	}
+	writeExtraPluginStatusScript(&builder, plugins, "wp_cmd", false)
 	return builder.String()
+}
+
+func writeExtraPluginStatusScript(builder *strings.Builder, plugins []wordpressPluginSpec, wpCommand string, allowRoot bool) {
+	configured := strings.Builder{}
+	for _, plugin := range plugins {
+		configured.WriteString(" ")
+		configured.WriteString(plugin.Slug)
+		configured.WriteString(" ")
+	}
+	builder.WriteString("configured_plugins=")
+	builder.WriteString(shellQuoteArg(configured.String()))
+	builder.WriteString("\n")
+	builder.WriteString(wpCommand)
+	builder.WriteString(" plugin list --field=name")
+	if allowRoot {
+		builder.WriteString(" --allow-root")
+	}
+	builder.WriteString(" 2>/dev/null | while IFS= read -r slug; do\n")
+	builder.WriteString("  case \"$configured_plugins\" in *\" $slug \"*) continue ;; esac\n")
+	builder.WriteString("  active=no auto_update=no\n")
+	builder.WriteString("  if ")
+	builder.WriteString(wpCommand)
+	builder.WriteString(" plugin is-active \"$slug\"")
+	if allowRoot {
+		builder.WriteString(" --allow-root")
+	}
+	builder.WriteString(" >/dev/null 2>&1; then active=yes; fi\n")
+	builder.WriteString("  if ")
+	builder.WriteString(wpCommand)
+	builder.WriteString(" plugin auto-updates status \"$slug\" --enabled-only --field=name")
+	if allowRoot {
+		builder.WriteString(" --allow-root")
+	}
+	builder.WriteString(" 2>/dev/null | grep -qx \"$slug\"; then auto_update=yes; fi\n")
+	builder.WriteString("  printf '%s\\t%s\\t%s\\t%s\\t%s\\n' \"$slug\" yes \"$active\" \"$auto_update\" extra\n")
+	builder.WriteString("done\n")
 }
 
 func parseRemotePluginStatusOutput(plugins []wordpressPluginSpec, output string) []wordpressPluginStatus {
@@ -777,6 +958,31 @@ func parseRemotePluginStatusOutput(plugins []wordpressPluginSpec, output string)
 		status := bySlug[plugin.Slug]
 		status.Plugin = plugin
 		statuses = append(statuses, status)
+	}
+	return statuses
+}
+
+func parseWordPressPluginDiffStatusOutput(plugins []wordpressPluginSpec, output string) []wordpressPluginStatus {
+	statuses := parseRemotePluginStatusOutput(plugins, output)
+	configured := map[string]struct{}{}
+	for _, plugin := range plugins {
+		configured[plugin.Slug] = struct{}{}
+	}
+	for _, line := range strings.Split(output, "\n") {
+		fields := strings.Split(strings.TrimSpace(line), "\t")
+		if len(fields) != 5 || fields[4] != "extra" {
+			continue
+		}
+		if _, ok := configured[fields[0]]; ok {
+			continue
+		}
+		statuses = append(statuses, wordpressPluginStatus{
+			Plugin:     wordpressPluginSpec{Slug: fields[0], Source: "installed"},
+			Installed:  fields[1] == "yes",
+			Active:     fields[2] == "yes",
+			AutoUpdate: fields[3] == "yes",
+			Extra:      true,
+		})
 	}
 	return statuses
 }

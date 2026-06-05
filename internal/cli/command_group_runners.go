@@ -360,6 +360,8 @@ func runEnvPlugins(argv []string) int {
 	if len(argv) == 0 || argv[0] == "help" {
 		printGroupHelp("env plugins", []helpLine{
 			{"list, ls", "list configured WordPress plugins"},
+			{"add <plugin> [--source <source>] [--no-activate] [--no-auto-update]", "add a WordPress plugin to nf.json"},
+			{"remove, rm <plugin>", "remove a WordPress plugin from nf.json"},
 			{"status [remote]", "show configured WordPress plugin status"},
 			{"diff [remote]", "show configured WordPress plugin drift"},
 			{"install [remote] [--dry-run] [--yes]", "install and activate configured WordPress plugins"},
@@ -368,8 +370,10 @@ func runEnvPlugins(argv []string) int {
 	}
 	cmd := cliCommandAlias(argv[0])
 	args := argv[1:]
+	var addOpts envPluginAddOptions
 	var installOpts envPluginInstallOptions
 	remoteName := ""
+	removeSlug := ""
 	switch cmd {
 	case "list":
 		if len(args) != 0 {
@@ -387,6 +391,18 @@ func runEnvPlugins(argv []string) int {
 				return 1
 			}
 			remoteName = args[0]
+		}
+	case "add":
+		var ok bool
+		addOpts, ok = parseEnvPluginAddArgs(args)
+		if !ok {
+			return 1
+		}
+	case "remove":
+		var ok bool
+		removeSlug, ok = parseEnvPluginRemoveArgs(args)
+		if !ok {
+			return 1
 		}
 	case "install":
 		var ok bool
@@ -415,6 +431,12 @@ func runEnvPlugins(argv []string) int {
 	if cmd == "list" {
 		return cmdEnvPluginsList(metadata)
 	}
+	if cmd == "add" {
+		return cmdEnvPluginsAdd(root, metadata, addOpts)
+	}
+	if cmd == "remove" {
+		return cmdEnvPluginsRemove(root, metadata, removeSlug)
+	}
 	if cmd == "status" {
 		return cmdEnvPluginsStatusWithOptions(root, metadata, remoteName)
 	}
@@ -422,6 +444,62 @@ func runEnvPlugins(argv []string) int {
 		return cmdEnvPluginsDiffWithOptions(root, metadata, remoteName)
 	}
 	return cmdEnvPluginsInstallWithOptions(root, metadata, installOpts)
+}
+
+func parseEnvPluginRemoveArgs(args []string) (string, bool) {
+	if len(args) != 1 {
+		fmt.Fprintln(os.Stderr, "env plugins remove requires exactly one plugin slug")
+		return "", false
+	}
+	slug := strings.TrimSpace(args[0])
+	if slug == "" || strings.HasPrefix(slug, "-") {
+		fmt.Fprintln(os.Stderr, "env plugins remove requires exactly one plugin slug")
+		return "", false
+	}
+	return slug, true
+}
+
+func parseEnvPluginAddArgs(args []string) (envPluginAddOptions, bool) {
+	opts := envPluginAddOptions{Activate: true, AutoUpdate: true}
+	positionals := make([]string, 0, 1)
+	for i := 0; i < len(args); i++ {
+		arg := args[i]
+		switch arg {
+		case "--source":
+			if i+1 >= len(args) {
+				fmt.Fprintln(os.Stderr, "env plugins add --source requires a value")
+				return opts, false
+			}
+			i++
+			opts.Source = strings.TrimSpace(args[i])
+			if opts.Source == "" {
+				fmt.Fprintln(os.Stderr, "env plugins add --source must not be empty")
+				return opts, false
+			}
+		case "--no-activate":
+			opts.Activate = false
+			opts.HasActivate = true
+		case "--no-auto-update":
+			opts.AutoUpdate = false
+			opts.HasAutoUpdate = true
+		default:
+			if strings.HasPrefix(arg, "-") {
+				fmt.Fprintf(os.Stderr, "unknown env plugins add flag: %s\n", arg)
+				return opts, false
+			}
+			positionals = append(positionals, arg)
+		}
+	}
+	if len(positionals) != 1 {
+		fmt.Fprintln(os.Stderr, "env plugins add requires exactly one plugin slug")
+		return opts, false
+	}
+	opts.Slug = strings.TrimSpace(positionals[0])
+	if opts.Slug == "" {
+		fmt.Fprintln(os.Stderr, "env plugins add plugin slug must not be empty")
+		return opts, false
+	}
+	return opts, true
 }
 
 func parseEnvPluginInstallArgs(args []string) (envPluginInstallOptions, bool) {

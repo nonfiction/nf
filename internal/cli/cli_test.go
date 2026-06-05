@@ -446,10 +446,11 @@ func TestRunCompleteSuggestsProjectValues(t *testing.T) {
 		}
 	}
 	project := map[string]any{
-		"version": 1,
-		"project": map[string]any{"slug": "client"},
-		"remotes": map[string]any{"production": "client-app1-linode:live"},
-		"tasks":   map[string]any{"build": map[string]any{"description": "Build assets", "run": "npm run build"}},
+		"version":   1,
+		"project":   map[string]any{"slug": "client"},
+		"wordpress": map[string]any{"plugins": []any{"stream"}},
+		"remotes":   map[string]any{"production": "client-app1-linode:live"},
+		"tasks":     map[string]any{"build": map[string]any{"description": "Build assets", "run": "npm run build"}},
 	}
 	projectData, err := json.MarshalIndent(project, "", "  ")
 	if err != nil {
@@ -535,10 +536,30 @@ func TestRunCompleteSuggestsProjectValues(t *testing.T) {
 			t.Fatalf("Run(__complete env plugins) = %d, want 0", got)
 		}
 	})
-	for _, want := range []string{"list\n", "ls\n", "status\n", "diff\n", "install\n", "help\n"} {
+	for _, want := range []string{"list\n", "ls\n", "add\n", "remove\n", "rm\n", "status\n", "diff\n", "install\n", "help\n"} {
 		if !strings.Contains(envPluginsCommandOutput, want) {
 			t.Fatalf("env plugins command completion missing %q:\n%s", want, envPluginsCommandOutput)
 		}
+	}
+
+	envPluginsAddOutput := captureStdout(t, func() {
+		if got := Run([]string{"__complete", "--", "env", "plugins", "add", ""}); got != 0 {
+			t.Fatalf("Run(__complete env plugins add) = %d, want 0", got)
+		}
+	})
+	for _, want := range []string{"--source\n", "--no-activate\n", "--no-auto-update\n"} {
+		if !strings.Contains(envPluginsAddOutput, want) {
+			t.Fatalf("env plugins add completion missing %q:\n%s", want, envPluginsAddOutput)
+		}
+	}
+
+	envPluginsRemoveOutput := captureStdout(t, func() {
+		if got := Run([]string{"__complete", "--", "env", "plugins", "remove", ""}); got != 0 {
+			t.Fatalf("Run(__complete env plugins remove) = %d, want 0", got)
+		}
+	})
+	if !strings.Contains(envPluginsRemoveOutput, "stream\n") {
+		t.Fatalf("env plugins remove completion missing stream:\n%s", envPluginsRemoveOutput)
 	}
 
 	envPluginsStatusOutput := captureStdout(t, func() {
@@ -6098,6 +6119,198 @@ func TestRunEnvPluginsListReadsWordPressPlugins(t *testing.T) {
 	}
 }
 
+func TestRunEnvPluginsAddUpdatesProjectMetadata(t *testing.T) {
+	repoRoot := t.TempDir()
+	if err := os.Mkdir(filepath.Join(repoRoot, ".git"), 0o755); err != nil {
+		t.Fatalf("Mkdir(.git) error = %v", err)
+	}
+	project := map[string]any{
+		"version":   1,
+		"project":   map[string]any{"slug": "client", "name": "Client"},
+		"wordpress": map[string]any{"theme_path": "theme", "theme_slug": "theme", "plugins": []any{"stream"}},
+		"env":       map[string]any{"compose": "docker compose", "wordpress_service": "wordpress", "cli_service": "cli", "theme_mount_slug": "theme", "uploads_path": "uploads"},
+		"remotes":   map[string]any{},
+	}
+	data, err := json.MarshalIndent(project, "", "  ")
+	if err != nil {
+		t.Fatalf("MarshalIndent(project) error = %v", err)
+	}
+	projectPath := filepath.Join(repoRoot, "nf.json")
+	if err := os.WriteFile(projectPath, append(data, '\n'), 0o644); err != nil {
+		t.Fatalf("WriteFile(nf.json) error = %v", err)
+	}
+	oldwd, err := os.Getwd()
+	if err != nil {
+		t.Fatalf("Getwd() error = %v", err)
+	}
+	if err := os.Chdir(repoRoot); err != nil {
+		t.Fatalf("Chdir() error = %v", err)
+	}
+	t.Cleanup(func() { _ = os.Chdir(oldwd) })
+
+	output := captureStdout(t, func() {
+		if got := Run([]string{"env", "plugins", "add", "acf-pro", "--source", "$NF_PLUGIN_ACF_PRO_ZIP", "--no-auto-update"}); got != 0 {
+			t.Fatalf("Run(env plugins add) = %d, want 0", got)
+		}
+	})
+	if !strings.Contains(output, "Added WordPress plugin acf-pro to nf.json.") {
+		t.Fatalf("env plugins add output unexpected:\n%s", output)
+	}
+	updated, err := os.ReadFile(projectPath)
+	if err != nil {
+		t.Fatalf("ReadFile(nf.json) error = %v", err)
+	}
+	text := string(updated)
+	for _, want := range []string{`"version": 1`, `"wordpress":`, `"plugins": [`, `"stream"`, `"slug": "acf-pro"`, `"source": "$NF_PLUGIN_ACF_PRO_ZIP"`, `"auto_update": false`} {
+		if !strings.Contains(text, want) {
+			t.Fatalf("nf.json missing %q:\n%s", want, text)
+		}
+	}
+	if strings.Contains(text, `"activate": true`) || strings.Contains(text, `"auto_update": true`) {
+		t.Fatalf("nf.json wrote noisy true defaults:\n%s", text)
+	}
+}
+
+func TestRunEnvPluginsAddCreatesWordPressPlugins(t *testing.T) {
+	repoRoot := t.TempDir()
+	if err := os.Mkdir(filepath.Join(repoRoot, ".git"), 0o755); err != nil {
+		t.Fatalf("Mkdir(.git) error = %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(repoRoot, "nf.json"), []byte("{\n  \"version\": 1,\n  \"project\": {\n    \"slug\": \"client\"\n  }\n}\n"), 0o644); err != nil {
+		t.Fatalf("WriteFile(nf.json) error = %v", err)
+	}
+	oldwd, err := os.Getwd()
+	if err != nil {
+		t.Fatalf("Getwd() error = %v", err)
+	}
+	if err := os.Chdir(repoRoot); err != nil {
+		t.Fatalf("Chdir() error = %v", err)
+	}
+	t.Cleanup(func() { _ = os.Chdir(oldwd) })
+
+	if got := Run([]string{"env", "plugins", "add", "stream"}); got != 0 {
+		t.Fatalf("Run(env plugins add) = %d, want 0", got)
+	}
+	metadata, err := loadProjectMetadataOrError(repoRoot)
+	if err != nil {
+		t.Fatalf("loadProjectMetadataOrError() error = %v", err)
+	}
+	plugins := mapMapAtPath(metadata, "wordpress")["plugins"].([]any)
+	if len(plugins) != 1 || plugins[0] != "stream" {
+		t.Fatalf("wordpress.plugins = %#v, want [stream]", plugins)
+	}
+}
+
+func TestRunEnvPluginsAddRejectsDuplicate(t *testing.T) {
+	repoRoot := t.TempDir()
+	if err := os.Mkdir(filepath.Join(repoRoot, ".git"), 0o755); err != nil {
+		t.Fatalf("Mkdir(.git) error = %v", err)
+	}
+	project := map[string]any{"version": 1, "project": map[string]any{"slug": "client"}, "wordpress": map[string]any{"plugins": []any{"stream"}}}
+	data, err := json.MarshalIndent(project, "", "  ")
+	if err != nil {
+		t.Fatalf("MarshalIndent(project) error = %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(repoRoot, "nf.json"), append(data, '\n'), 0o644); err != nil {
+		t.Fatalf("WriteFile(nf.json) error = %v", err)
+	}
+	oldwd, err := os.Getwd()
+	if err != nil {
+		t.Fatalf("Getwd() error = %v", err)
+	}
+	if err := os.Chdir(repoRoot); err != nil {
+		t.Fatalf("Chdir() error = %v", err)
+	}
+	t.Cleanup(func() { _ = os.Chdir(oldwd) })
+
+	stderr := captureStderr(t, func() {
+		if got := Run([]string{"env", "plugins", "add", "stream"}); got != 1 {
+			t.Fatalf("Run(env plugins add duplicate) = %d, want 1", got)
+		}
+	})
+	if !strings.Contains(stderr, `nf.json wordpress.plugins already contains "stream"`) {
+		t.Fatalf("duplicate stderr unexpected:\n%s", stderr)
+	}
+}
+
+func TestRunEnvPluginsRemoveUpdatesProjectMetadata(t *testing.T) {
+	repoRoot := t.TempDir()
+	if err := os.Mkdir(filepath.Join(repoRoot, ".git"), 0o755); err != nil {
+		t.Fatalf("Mkdir(.git) error = %v", err)
+	}
+	project := map[string]any{"version": 1, "project": map[string]any{"slug": "client"}, "wordpress": map[string]any{"plugins": []any{"stream", map[string]any{"slug": "acf-pro", "source": "$NF_PLUGIN_ACF_PRO_ZIP"}}}}
+	data, err := json.MarshalIndent(project, "", "  ")
+	if err != nil {
+		t.Fatalf("MarshalIndent(project) error = %v", err)
+	}
+	projectPath := filepath.Join(repoRoot, "nf.json")
+	if err := os.WriteFile(projectPath, append(data, '\n'), 0o644); err != nil {
+		t.Fatalf("WriteFile(nf.json) error = %v", err)
+	}
+	oldwd, err := os.Getwd()
+	if err != nil {
+		t.Fatalf("Getwd() error = %v", err)
+	}
+	if err := os.Chdir(repoRoot); err != nil {
+		t.Fatalf("Chdir() error = %v", err)
+	}
+	t.Cleanup(func() { _ = os.Chdir(oldwd) })
+
+	output := captureStdout(t, func() {
+		if got := Run([]string{"env", "plugins", "rm", "stream"}); got != 0 {
+			t.Fatalf("Run(env plugins rm) = %d, want 0", got)
+		}
+	})
+	if !strings.Contains(output, "Removed WordPress plugin stream from nf.json.") {
+		t.Fatalf("env plugins rm output unexpected:\n%s", output)
+	}
+	updated, err := os.ReadFile(projectPath)
+	if err != nil {
+		t.Fatalf("ReadFile(nf.json) error = %v", err)
+	}
+	text := string(updated)
+	if strings.Contains(text, `"stream"`) {
+		t.Fatalf("nf.json still contains removed plugin:\n%s", text)
+	}
+	for _, want := range []string{`"slug": "acf-pro"`, `"source": "$NF_PLUGIN_ACF_PRO_ZIP"`} {
+		if !strings.Contains(text, want) {
+			t.Fatalf("nf.json missing %q:\n%s", want, text)
+		}
+	}
+}
+
+func TestRunEnvPluginsRemoveRejectsMissing(t *testing.T) {
+	repoRoot := t.TempDir()
+	if err := os.Mkdir(filepath.Join(repoRoot, ".git"), 0o755); err != nil {
+		t.Fatalf("Mkdir(.git) error = %v", err)
+	}
+	project := map[string]any{"version": 1, "project": map[string]any{"slug": "client"}, "wordpress": map[string]any{"plugins": []any{"stream"}}}
+	data, err := json.MarshalIndent(project, "", "  ")
+	if err != nil {
+		t.Fatalf("MarshalIndent(project) error = %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(repoRoot, "nf.json"), append(data, '\n'), 0o644); err != nil {
+		t.Fatalf("WriteFile(nf.json) error = %v", err)
+	}
+	oldwd, err := os.Getwd()
+	if err != nil {
+		t.Fatalf("Getwd() error = %v", err)
+	}
+	if err := os.Chdir(repoRoot); err != nil {
+		t.Fatalf("Chdir() error = %v", err)
+	}
+	t.Cleanup(func() { _ = os.Chdir(oldwd) })
+
+	stderr := captureStderr(t, func() {
+		if got := Run([]string{"env", "plugins", "remove", "missing"}); got != 1 {
+			t.Fatalf("Run(env plugins remove missing) = %d, want 1", got)
+		}
+	})
+	if !strings.Contains(stderr, `nf.json wordpress.plugins does not contain "missing"`) {
+		t.Fatalf("missing stderr unexpected:\n%s", stderr)
+	}
+}
+
 func TestRunEnvPluginsInstallInstallsMissingAndActivatesInstalled(t *testing.T) {
 	repoRoot := t.TempDir()
 	if err := os.Mkdir(filepath.Join(repoRoot, ".git"), 0o755); err != nil {
@@ -6313,7 +6526,7 @@ func TestRunEnvPluginsDiffShowsLocalDrift(t *testing.T) {
 		t.Fatalf("WriteFile(nf.json) error = %v", err)
 	}
 	dockerDir := t.TempDir()
-	dockerScript := []byte("#!/bin/sh\ncase \"$*\" in\n  *core*is-installed*) printf 'stream\\tyes\\tyes\\tyes\\nwp-crontrol\\tyes\\tyes\\tno\\nacf-pro\\tno\\tno\\tno\\n'; exit 0 ;;\nesac\nexit 1\n")
+	dockerScript := []byte("#!/bin/sh\ncase \"$*\" in\n  *core*is-installed*) printf 'stream\\tyes\\tyes\\tyes\\nwp-crontrol\\tyes\\tyes\\tno\\nacf-pro\\tno\\tno\\tno\\nakismet\\tyes\\tno\\tno\\textra\\nimsanity\\tyes\\tyes\\tyes\\textra\\n'; exit 0 ;;\nesac\nexit 1\n")
 	if err := os.WriteFile(filepath.Join(dockerDir, "docker"), dockerScript, 0o755); err != nil {
 		t.Fatalf("WriteFile(docker) error = %v", err)
 	}
@@ -6339,7 +6552,7 @@ func TestRunEnvPluginsDiffShowsLocalDrift(t *testing.T) {
 	if got != 2 {
 		t.Fatalf("Run(env plugins diff) = %d, want 2", got)
 	}
-	for _, want := range []string{"Plugin diff:", "plugin", "change", "stream", "ok", "wp-crontrol", "enable auto-update", "acf-pro", "source unavailable locally"} {
+	for _, want := range []string{"Plugin diff:", "plugin", "change", "stream", "ok", "wp-crontrol", "enable auto-update", "acf-pro", "source unavailable locally", "akismet", "extra (inactive, auto-update off)", "imsanity", "extra (active, auto-update on)"} {
 		if !strings.Contains(output, want) {
 			t.Fatalf("env plugins diff output missing %q:\n%s", want, output)
 		}
@@ -6441,7 +6654,7 @@ func TestRunEnvPluginsDiffRemoteShowsDrift(t *testing.T) {
 	t.Cleanup(func() { _ = os.Chdir(oldwd) })
 	oldRunSSHOutput := runSSHOutputFn
 	runSSHOutputFn = func(args []string) ([]byte, error) {
-		return []byte("stream\tyes\tyes\tyes\nwp-crontrol\tno\tno\tno\n"), nil
+		return []byte("stream\tyes\tyes\tyes\nwp-crontrol\tno\tno\tno\nimsanity\tyes\tyes\tyes\textra\n"), nil
 	}
 	t.Cleanup(func() { runSSHOutputFn = oldRunSSHOutput })
 
@@ -6452,7 +6665,7 @@ func TestRunEnvPluginsDiffRemoteShowsDrift(t *testing.T) {
 	if got != 2 {
 		t.Fatalf("Run(env plugins diff remote) = %d, want 2", got)
 	}
-	for _, want := range []string{"Plugin diff:", "remote:   production", "site:     client-kinsta", "env:      live", "provider: kinsta", "stream", "ok", "wp-crontrol", "install, activate, enable auto-update"} {
+	for _, want := range []string{"Plugin diff:", "remote:   production", "site:     client-kinsta", "env:      live", "provider: kinsta", "stream", "ok", "wp-crontrol", "install, activate, enable auto-update", "imsanity", "extra (active, auto-update on)"} {
 		if !strings.Contains(output, want) {
 			t.Fatalf("env plugins remote diff output missing %q:\n%s", want, output)
 		}

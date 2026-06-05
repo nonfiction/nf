@@ -288,6 +288,8 @@ Do not add old compatibility routes unless explicitly requested.
 * [x] `nf env shell`
 * [x] `nf env wp -- <args>`
 * [x] `nf env plugins list`
+* [x] `nf env plugins add <plugin> [--source <source>] [--no-activate] [--no-auto-update]`
+* [x] `nf env plugins remove <plugin>`
 * [x] `nf env plugins status [remote]`
 * [x] `nf env plugins diff [remote]`
 * [x] `nf env plugins install [remote] [--dry-run] [--yes]`
@@ -495,6 +497,8 @@ Current built-ins:
 * `shell`
 * `wp`
 * `plugins list`
+* `plugins add <plugin> [--source <source>] [--no-activate] [--no-auto-update]`
+* `plugins remove <plugin>`
 * `plugins status [remote]`
 * `plugins diff [remote]`
 * `plugins install [remote] [--dry-run] [--yes]`
@@ -511,9 +515,11 @@ Rules:
 * string plugin entries install from wordpress.org, activate, and enable auto-updates by default
 * object plugin entries require `slug`, support `source`, support `auto_update`, and default `activate` and `auto_update` to true
 * plugin `source` may be a wp.org marker, zip URL/path, or env-var-backed value such as `$NF_PLUGIN_ACF_PRO_ZIP`
+* `nf env plugins add <plugin>` appends to `wordpress.plugins` in `nf.json`, creates the array if missing, rejects duplicate slugs, and does not install anything
+* `nf env plugins remove <plugin>` removes a configured plugin from `nf.json`, rejects missing slugs, and does not uninstall anything
 * `nf env plugins install` with no remote targets the local env
 * `nf env plugins status [remote]` compares configured plugins against local or remote WordPress state and reports installed, active, and auto-update status
-* `nf env plugins diff [remote]` reports needed install/activate/auto-update changes, mutates nothing, exits 0 when all configured plugins match, and exits 2 when drift exists
+* `nf env plugins diff [remote]` reports needed install/activate/auto-update changes and installed plugins that are not configured in `nf.json`; it mutates nothing, exits 0 when configured plugins match and no extras are installed, and exits 2 when drift exists
 * `nf env plugins install <remote>` validates the repo remote/cache, prints a remote plugin plan, and asks for yes/no confirmation unless `--yes` is passed
 * `nf env plugins install <remote> --dry-run` previews only and does not run SSH
 * remote plugin installs run WP-CLI on the remote host; URL sources must be reachable from that host, and local zip sources are uploaded to a temporary remote directory before install and cleaned up afterward
