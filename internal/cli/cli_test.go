@@ -500,6 +500,15 @@ func TestRunCompleteSuggestsProjectValues(t *testing.T) {
 		t.Fatalf("theme deploy completion = %q, want production", themeDeployOutput)
 	}
 
+	themeRollbackOutput := captureStdout(t, func() {
+		if got := Run([]string{"__complete", "--", "theme", "rollback", "pro"}); got != 0 {
+			t.Fatalf("Run(__complete theme rollback pro) = %d, want 0", got)
+		}
+	})
+	if strings.TrimSpace(themeRollbackOutput) != "production" {
+		t.Fatalf("theme rollback completion = %q, want production", themeRollbackOutput)
+	}
+
 	themeDeployAllOutput := captureStdout(t, func() {
 		if got := Run([]string{"__complete", "--", "theme", "deploy", ""}); got != 0 {
 			t.Fatalf("Run(__complete theme deploy) = %d, want 0", got)
@@ -3501,7 +3510,7 @@ func TestRunEnvPullPreflightResolvesLinodeTargetFromProvidersCache(t *testing.T)
 	}
 }
 
-func TestRunThemeDeployDryRunRsyncsThemeToConfiguredRemote(t *testing.T) {
+func TestRunThemeDeployDryRunPlansPackagedReleaseToConfiguredRemote(t *testing.T) {
 	stateDir := t.TempDir()
 	t.Setenv("NF_STATE_HOME", stateDir)
 	if err := state.SaveStateRecords("sites", []map[string]any{{"provider": "kinsta", "site_id": "client-kinsta", "env": "live", "url": "https://www.example.com/", "path": "/www/client/public", "ssh": map[string]any{"host": "203.0.113.10", "port": "12345", "user": "client"}}}); err != nil {
@@ -3514,7 +3523,7 @@ func TestRunThemeDeployDryRunRsyncsThemeToConfiguredRemote(t *testing.T) {
 			t.Fatalf("MkdirAll(%s) error = %v", dir, err)
 		}
 	}
-	if err := os.WriteFile(filepath.Join(repoRoot, "build", "theme", "style.css"), []byte("/* Theme */\n"), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(repoRoot, "build", "theme", "style.css"), []byte("/*\nTheme Name: Theme\nVersion: 1.2.3\n*/\n"), 0o644); err != nil {
 		t.Fatalf("WriteFile(style.css) error = %v", err)
 	}
 	project := map[string]any{
@@ -3539,11 +3548,9 @@ func TestRunThemeDeployDryRunRsyncsThemeToConfiguredRemote(t *testing.T) {
 	}
 	t.Cleanup(func() { _ = os.Chdir(oldwd) })
 
-	var rsyncCommands [][]string
 	oldRunRsync := runRsyncCommandFn
 	runRsyncCommandFn = func(args []string) error {
-		rsyncCommands = append(rsyncCommands, append([]string(nil), args...))
-		printCommandArgs(args)
+		t.Fatalf("runRsyncCommandFn called during dry-run: %#v", args)
 		return nil
 	}
 	t.Cleanup(func() { runRsyncCommandFn = oldRunRsync })
@@ -3559,17 +3566,71 @@ func TestRunThemeDeployDryRunRsyncsThemeToConfiguredRemote(t *testing.T) {
 			t.Fatalf("Run(theme deploy --dry-run) = %d, want 0", got)
 		}
 	})
-	for _, want := range []string{"Theme deploy plan:", "remote:      production", "site:        client-kinsta", "env:         live", "provider:    kinsta", "source:      " + filepath.Join(repoRoot, "build", "theme"), "destination: client@203.0.113.10:/www/client/public/wp-content/themes/theme", "mode:        dry-run", "> ssh -p 12345 client@203.0.113.10 'mkdir -p /www/client/public/wp-content/themes/theme'", "> rsync -az --delete --dry-run -e 'ssh -p 12345'", "> ssh -p 12345 client@203.0.113.10 'wp --path=/www/client/public theme activate theme --allow-root'", "No remote files were changed."} {
+	for _, want := range []string{"Theme deploy plan:", "remote:      production", "site:        client-kinsta", "env:         live", "provider:    kinsta", "source:      " + filepath.Join(repoRoot, "build", "theme"), "artifact:    " + filepath.Join(repoRoot, "dist", "client-v1.2.3.zip"), "release id:  v1.2.3-", "release dir: /www/client/public/wp-content/themes/.nf-releases/theme/v1.2.3-", "active dir:  /www/client/public/wp-content/themes/theme", "keep:        last 5 releases", "mode:        dry-run", "Would package " + filepath.Join(repoRoot, "build", "theme") + " -> " + filepath.Join(repoRoot, "dist", "client-v1.2.3.zip"), "> ssh -p 12345 client@203.0.113.10 'mkdir -p /www/client/public/wp-content/themes/.nf-releases/theme/_uploads'", "> rsync -az -e 'ssh -p 12345' " + filepath.Join(repoRoot, "dist", "client-v1.2.3.zip") + " client@203.0.113.10:/www/client/public/wp-content/themes/.nf-releases/theme/_uploads/client-v1.2.3.zip", "remote script: extract release, switch active theme, activate, record metadata, prune old releases", "> ssh -p 12345 client@203.0.113.10 'sh -s -- nf-theme-deploy-release'", "No remote files were changed."} {
 		if !strings.Contains(stdout, want) {
 			t.Fatalf("theme deploy stdout missing %q:\n%s", want, stdout)
 		}
 	}
-	if len(rsyncCommands) != 1 {
-		t.Fatalf("rsync commands len = %d, want 1: %#v", len(rsyncCommands), rsyncCommands)
+	for _, unwanted := range []string{"unzip -q", "GLOB_ONLYDIR", "wp --path=/www/client/public theme activate"} {
+		if strings.Contains(stdout, unwanted) {
+			t.Fatalf("theme deploy stdout should not print remote script fragment %q:\n%s", unwanted, stdout)
+		}
 	}
-	wantDest := "client@203.0.113.10:/www/client/public/wp-content/themes/theme/"
-	if got := rsyncCommands[0][len(rsyncCommands[0])-1]; got != wantDest {
-		t.Fatalf("rsync destination = %q, want %q", got, wantDest)
+}
+
+func TestRunThemeDeployDryRunPlansLinodePackagedRelease(t *testing.T) {
+	stateDir := t.TempDir()
+	t.Setenv("NF_STATE_HOME", stateDir)
+	t.Setenv("NF_CONFIG_HOME", t.TempDir())
+	if err := state.SaveStateRecords("providers", []map[string]any{{"provider": "linode", "targets": []map[string]any{{"name": "app1-linode", "provider": "linode", "hostname": "app1-linode.nonfiction.dev", "ssh": map[string]any{"user": "nonfiction", "host": "app1-linode.nonfiction.dev", "port": "22"}}}}}); err != nil {
+		t.Fatalf("SaveStateRecords(providers) error = %v", err)
+	}
+	if err := state.SaveStateRecords("sites", []map[string]any{{"provider": "linode", "site_id": "client.app1-linode", "env": "staging", "target": "app1-linode", "url": "https://client-staging.app1-linode.nonfiction.dev", "path": "/var/www/sites/client_staging/public", "ssh": map[string]any{"user": "nonfiction", "host": "app1-linode.nonfiction.dev", "port": "22"}}}); err != nil {
+		t.Fatalf("SaveStateRecords(sites) error = %v", err)
+	}
+
+	repoRoot := t.TempDir()
+	for _, dir := range []string{".git", ".nf", "theme"} {
+		if err := os.MkdirAll(filepath.Join(repoRoot, dir), 0o755); err != nil {
+			t.Fatalf("MkdirAll(%s) error = %v", dir, err)
+		}
+	}
+	if err := os.WriteFile(filepath.Join(repoRoot, "theme", "style.css"), []byte("/*\nTheme Name: Theme\nVersion: 2.0.0\n*/\n"), 0o644); err != nil {
+		t.Fatalf("WriteFile(style.css) error = %v", err)
+	}
+	project := map[string]any{"schema": 1, "project": map[string]any{"slug": "client"}, "wordpress": map[string]any{"theme_path": "theme", "theme_slug": "client-theme"}, "deploy": map[string]any{"remotes": map[string]any{"staging": map[string]any{"site_id": "client.app1-linode", "env": "staging"}}}}
+	projectData, err := json.MarshalIndent(project, "", "  ")
+	if err != nil {
+		t.Fatalf("MarshalIndent(project) error = %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(repoRoot, ".nf", "project.json"), append(projectData, '\n'), 0o644); err != nil {
+		t.Fatalf("WriteFile(project) error = %v", err)
+	}
+	oldwd, err := os.Getwd()
+	if err != nil {
+		t.Fatalf("Getwd() error = %v", err)
+	}
+	if err := os.Chdir(repoRoot); err != nil {
+		t.Fatalf("Chdir() error = %v", err)
+	}
+	t.Cleanup(func() { _ = os.Chdir(oldwd) })
+
+	oldRunRsync := runRsyncCommandFn
+	runRsyncCommandFn = func(args []string) error { t.Fatalf("runRsyncCommandFn called during dry-run: %#v", args); return nil }
+	t.Cleanup(func() { runRsyncCommandFn = oldRunRsync })
+	oldRunSSH := runSSHCommandFn
+	runSSHCommandFn = func(args []string) error { t.Fatalf("runSSHCommandFn called during dry-run: %#v", args); return nil }
+	t.Cleanup(func() { runSSHCommandFn = oldRunSSH })
+
+	stdout := captureStdout(t, func() {
+		if got := Run([]string{"theme", "deploy", "staging", "--dry-run"}); got != 0 {
+			t.Fatalf("Run(theme deploy --dry-run) = %d, want 0", got)
+		}
+	})
+	for _, want := range []string{"provider:    linode", "artifact:    " + filepath.Join(repoRoot, "dist", "client-v2.0.0.zip"), "release dir: /var/www/sites/client_staging/public/wp-content/themes/.nf-releases/client-theme/v2.0.0-", "active dir:  /var/www/sites/client_staging/public/wp-content/themes/client-theme", "remote script: extract release, switch active theme, activate, record metadata, prune old releases", "> ssh -p 22 nonfiction@app1-linode.nonfiction.dev 'sh -s -- nf-theme-deploy-release'"} {
+		if !strings.Contains(stdout, want) {
+			t.Fatalf("theme deploy linode stdout missing %q:\n%s", want, stdout)
+		}
 	}
 }
 
@@ -3585,6 +3646,9 @@ func TestRunThemeDeployWithoutRemotePromptsPicker(t *testing.T) {
 		if err := os.MkdirAll(filepath.Join(repoRoot, dir), 0o755); err != nil {
 			t.Fatalf("MkdirAll(%s) error = %v", dir, err)
 		}
+	}
+	if err := os.WriteFile(filepath.Join(repoRoot, "theme", "style.css"), []byte("/*\nTheme Name: Theme\nVersion: 1.0.0\n*/\n"), 0o644); err != nil {
+		t.Fatalf("WriteFile(style.css) error = %v", err)
 	}
 	project := map[string]any{
 		"schema":    1,
@@ -3623,6 +3687,9 @@ func TestRunThemeDeployWithoutRemotePromptsPicker(t *testing.T) {
 	oldRunSSH := runSSHCommandFn
 	runSSHCommandFn = func(args []string) error { return nil }
 	t.Cleanup(func() { runSSHCommandFn = oldRunSSH })
+	oldRunSSHStdin := runSSHStdinCommandFn
+	runSSHStdinCommandFn = func(args []string, script string) error { return nil }
+	t.Cleanup(func() { runSSHStdinCommandFn = oldRunSSHStdin })
 
 	stdout := captureStdout(t, func() {
 		if got := Run([]string{"theme", "deploy"}); got != 0 {
@@ -3635,8 +3702,121 @@ func TestRunThemeDeployWithoutRemotePromptsPicker(t *testing.T) {
 	if len(selectOptions) != 1 || selectOptions[0] != (ui.SelectOption{Value: "production", Label: "production -> client-kinsta:live"}) {
 		t.Fatalf("select options = %#v", selectOptions)
 	}
-	if !strings.Contains(stdout, "remote:      production") || !strings.Contains(stdout, "Theme deployed.") {
+	if !strings.Contains(stdout, "remote:      production") || !strings.Contains(stdout, "Theme release deployed.") {
 		t.Fatalf("theme deploy picker stdout = %q", stdout)
+	}
+}
+
+func TestRunThemeRollbackDryRunPlansPreviousKinstaRelease(t *testing.T) {
+	stateDir := t.TempDir()
+	t.Setenv("NF_STATE_HOME", stateDir)
+	if err := state.SaveStateRecords("sites", []map[string]any{{"provider": "kinsta", "site_id": "client-kinsta", "env": "live", "url": "https://www.example.com/", "path": "/www/client/public", "ssh": map[string]any{"host": "203.0.113.10", "port": "12345", "user": "client"}}}); err != nil {
+		t.Fatalf("SaveStateRecords(sites) error = %v", err)
+	}
+	repoRoot := t.TempDir()
+	for _, dir := range []string{".git", ".nf", "theme"} {
+		if err := os.MkdirAll(filepath.Join(repoRoot, dir), 0o755); err != nil {
+			t.Fatalf("MkdirAll(%s) error = %v", dir, err)
+		}
+	}
+	project := map[string]any{"schema": 1, "project": map[string]any{"slug": "client"}, "wordpress": map[string]any{"theme_path": "theme", "theme_slug": "theme"}, "deploy": map[string]any{"remotes": map[string]any{"production": map[string]any{"site_id": "client-kinsta", "env": "live"}}}}
+	projectData, err := json.MarshalIndent(project, "", "  ")
+	if err != nil {
+		t.Fatalf("MarshalIndent(project) error = %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(repoRoot, ".nf", "project.json"), append(projectData, '\n'), 0o644); err != nil {
+		t.Fatalf("WriteFile(project) error = %v", err)
+	}
+	oldwd, err := os.Getwd()
+	if err != nil {
+		t.Fatalf("Getwd() error = %v", err)
+	}
+	if err := os.Chdir(repoRoot); err != nil {
+		t.Fatalf("Chdir() error = %v", err)
+	}
+	t.Cleanup(func() { _ = os.Chdir(oldwd) })
+	oldRunSSH := runSSHCommandFn
+	runSSHCommandFn = func(args []string) error { t.Fatalf("runSSHCommandFn called during dry-run: %#v", args); return nil }
+	t.Cleanup(func() { runSSHCommandFn = oldRunSSH })
+
+	stdout := captureStdout(t, func() {
+		if got := Run([]string{"theme", "rollback", "production", "--dry-run"}); got != 0 {
+			t.Fatalf("Run(theme rollback --dry-run) = %d, want 0", got)
+		}
+	})
+	for _, want := range []string{"Theme rollback plan:", "remote:      production", "provider:    kinsta", "releases:    /www/client/public/wp-content/themes/.nf-releases/theme/releases.json", "release dir: /www/client/public/wp-content/themes/.nf-releases/theme/<previous-release>", "active dir:  /www/client/public/wp-content/themes/theme", "mode:        dry-run", "remote script: select previous release, switch active theme, activate, record rollback", "> ssh -p 12345 client@203.0.113.10 'sh -s -- nf-theme-rollback-release'", "No remote files were changed."} {
+		if !strings.Contains(stdout, want) {
+			t.Fatalf("theme rollback stdout missing %q:\n%s", want, stdout)
+		}
+	}
+	for _, unwanted := range []string{"target_release=$(php -r", "wp --path=/www/client/public theme activate"} {
+		if strings.Contains(stdout, unwanted) {
+			t.Fatalf("theme rollback stdout should not print remote script fragment %q:\n%s", unwanted, stdout)
+		}
+	}
+}
+
+func TestRunThemeRollbackExecuteRunsLinodeRollbackScript(t *testing.T) {
+	stateDir := t.TempDir()
+	t.Setenv("NF_STATE_HOME", stateDir)
+	t.Setenv("NF_CONFIG_HOME", t.TempDir())
+	if err := state.SaveStateRecords("providers", []map[string]any{{"provider": "linode", "targets": []map[string]any{{"name": "app1-linode", "provider": "linode", "hostname": "app1-linode.nonfiction.dev", "ssh": map[string]any{"user": "nonfiction", "host": "app1-linode.nonfiction.dev", "port": "22"}}}}}); err != nil {
+		t.Fatalf("SaveStateRecords(providers) error = %v", err)
+	}
+	if err := state.SaveStateRecords("sites", []map[string]any{{"provider": "linode", "site_id": "client.app1-linode", "env": "live", "target": "app1-linode", "path": "/var/www/sites/client/public", "ssh": map[string]any{"user": "nonfiction", "host": "app1-linode.nonfiction.dev", "port": "22"}}}); err != nil {
+		t.Fatalf("SaveStateRecords(sites) error = %v", err)
+	}
+	repoRoot := t.TempDir()
+	for _, dir := range []string{".git", ".nf", "theme"} {
+		if err := os.MkdirAll(filepath.Join(repoRoot, dir), 0o755); err != nil {
+			t.Fatalf("MkdirAll(%s) error = %v", dir, err)
+		}
+	}
+	project := map[string]any{"schema": 1, "project": map[string]any{"slug": "client"}, "wordpress": map[string]any{"theme_path": "theme", "theme_slug": "client-theme"}, "deploy": map[string]any{"remotes": map[string]any{"production": map[string]any{"site_id": "client.app1-linode", "env": "live"}}}}
+	projectData, err := json.MarshalIndent(project, "", "  ")
+	if err != nil {
+		t.Fatalf("MarshalIndent(project) error = %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(repoRoot, ".nf", "project.json"), append(projectData, '\n'), 0o644); err != nil {
+		t.Fatalf("WriteFile(project) error = %v", err)
+	}
+	oldwd, err := os.Getwd()
+	if err != nil {
+		t.Fatalf("Getwd() error = %v", err)
+	}
+	if err := os.Chdir(repoRoot); err != nil {
+		t.Fatalf("Chdir() error = %v", err)
+	}
+	t.Cleanup(func() { _ = os.Chdir(oldwd) })
+	oldRunSSHStdin := runSSHStdinCommandFn
+	var sshCommands [][]string
+	var sshScripts []string
+	runSSHStdinCommandFn = func(args []string, script string) error {
+		sshCommands = append(sshCommands, append([]string(nil), args...))
+		sshScripts = append(sshScripts, script)
+		return nil
+	}
+	t.Cleanup(func() { runSSHStdinCommandFn = oldRunSSHStdin })
+
+	stdout := captureStdout(t, func() {
+		if got := Run([]string{"theme", "rollback", "production"}); got != 0 {
+			t.Fatalf("Run(theme rollback) = %d, want 0", got)
+		}
+	})
+	if !strings.Contains(stdout, "Theme release rolled back.") {
+		t.Fatalf("theme rollback stdout = %q", stdout)
+	}
+	if len(sshCommands) != 1 {
+		t.Fatalf("ssh commands len = %d, want 1: %#v", len(sshCommands), sshCommands)
+	}
+	if sshCommands[0][len(sshCommands[0])-1] != "sh -s -- nf-theme-rollback-release" {
+		t.Fatalf("rollback ssh command = %#v", sshCommands[0])
+	}
+	script := sshScripts[0]
+	for _, want := range []string{"release_base=/var/www/sites/client/public/wp-content/themes/.nf-releases/client-theme", "metadata_file=/var/www/sites/client/public/wp-content/themes/.nf-releases/client-theme/releases.json", "target_release=$(php -r", "cp -a \"$release_dir\" \"$active_tmp\"", "sudo -u www-data wp --path=/var/www/sites/client/public theme activate client-theme --allow-root", `"action"=>"rollback"`} {
+		if !strings.Contains(script, want) {
+			t.Fatalf("rollback ssh script missing %q:\n%s", want, script)
+		}
 	}
 }
 
@@ -4931,7 +5111,7 @@ func TestRunThemeHelpShowsThemeCommandsInsideGit(t *testing.T) {
 	t.Cleanup(func() { _ = os.Chdir(oldwd) })
 
 	output := captureStdout(t, func() { _ = runThemeHelp() })
-	for _, wanted := range []string{"\n  tasks                                      list configured theme tasks\n", "\n  package [--dry-run] [--source] [--output]  package theme files\n", "\n  deploy <remote> [--dry-run]                rsync theme files to a repo remote\n", "\nTheme tasks:\n"} {
+	for _, wanted := range []string{"\n  tasks                                      list configured theme tasks\n", "\n  package [--dry-run] [--source] [--output]  package theme files\n", "\n  deploy <remote> [--dry-run]                deploy a packaged theme release\n", "\n  rollback <remote> [--dry-run]              roll back to the previous theme release\n", "\nTheme tasks:\n"} {
 		if !strings.Contains(output, wanted) {
 			t.Fatalf("runThemeHelp() output missing %q:\n%s", wanted, output)
 		}
@@ -4950,7 +5130,7 @@ func TestRunThemeHelpShowsCommandsOnlyOutsideGit(t *testing.T) {
 	t.Cleanup(func() { _ = os.Chdir(oldwd) })
 
 	output := captureStdout(t, func() { _ = runThemeHelp() })
-	for _, want := range []string{"\n  tasks                                      list configured theme tasks\n", "\n  package [--dry-run] [--source] [--output]  package theme files\n", "\n  deploy <remote> [--dry-run]                rsync theme files to a repo remote\n"} {
+	for _, want := range []string{"\n  tasks                                      list configured theme tasks\n", "\n  package [--dry-run] [--source] [--output]  package theme files\n", "\n  deploy <remote> [--dry-run]                deploy a packaged theme release\n", "\n  rollback <remote> [--dry-run]              roll back to the previous theme release\n"} {
 		if !strings.Contains(output, want) {
 			t.Fatalf("runThemeHelp() output missing %q:\n%s", want, output)
 		}
