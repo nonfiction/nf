@@ -1622,7 +1622,7 @@ func TestRunTargetRemoveLinodeInfersDNSRecordsWhenCachedDNSNamesMissing(t *testi
 	}
 }
 
-func TestRunTargetRemoveContinuesWhenDNSimpleZoneAlreadyGone(t *testing.T) {
+func TestRunTargetRemoveFailsWhenDNSimpleListing404s(t *testing.T) {
 	configDir := t.TempDir()
 	stateDir := t.TempDir()
 	t.Setenv("NF_CONFIG_HOME", configDir)
@@ -1667,13 +1667,16 @@ func TestRunTargetRemoveContinuesWhenDNSimpleZoneAlreadyGone(t *testing.T) {
 		deleteDNSTXTRecordFn = oldTXTDelete
 	})
 
-	output := captureStdout(t, func() {
-		if got := Run([]string{"target", "remove", "app1-linode", "--execute", "--yes", "--non-interactive"}); got != 0 {
-			t.Fatalf("Run(target remove) = %d, want 0", got)
+	output := captureStderr(t, func() {
+		if got := Run([]string{"target", "remove", "app1-linode", "--execute", "--yes", "--non-interactive"}); got != 1 {
+			t.Fatalf("Run(target remove) = %d, want 1", got)
 		}
 	})
-	if !strings.Contains(output, "DNSimple record app1-linode.nonfiction.dev already absent") {
-		t.Fatalf("target remove output = %q, want DNS already absent warning", output)
+	if strings.Contains(output, "already absent") {
+		t.Fatalf("target remove output = %q, should not treat list failure as already absent", output)
+	}
+	if !strings.Contains(output, "Listing DNSimple A records for zone nonfiction.dev") {
+		t.Fatalf("target remove output = %q, want listing error", output)
 	}
 	if got, want := strings.Join(deletedLinodes, ","), "98222343"; got != want {
 		t.Fatalf("deleted linodes = %q, want %q", got, want)
@@ -1683,8 +1686,50 @@ func TestRunTargetRemoveContinuesWhenDNSimpleZoneAlreadyGone(t *testing.T) {
 		t.Fatalf("LoadStateRecords(providers) error = %v", err)
 	}
 	targets := targetMaps(records[0]["targets"])
-	if len(targets) != 1 || recordValueString(targets[0]["name"]) != "app2-linode" {
-		t.Fatalf("provider targets = %#v, want only app2-linode", targets)
+	if len(targets) != 2 {
+		t.Fatalf("provider targets = %#v, want unchanged targets after DNS failure", targets)
+	}
+}
+
+func TestRunTargetRemoveRequiresDNSimpleAccountIDBeforeDeletingLinode(t *testing.T) {
+	configDir := t.TempDir()
+	stateDir := t.TempDir()
+	t.Setenv("NF_CONFIG_HOME", configDir)
+	t.Setenv("NF_STATE_HOME", stateDir)
+	t.Setenv("DNSIMPLE_TOKEN", "token")
+	if err := saveGlobalConfig(map[string]string{"base_domain": "nonfiction.dev"}); err != nil {
+		t.Fatalf("saveGlobalConfig() error = %v", err)
+	}
+	providers := []map[string]any{{
+		"provider": "linode",
+		"targets": []map[string]any{{
+			"id":       "98222343",
+			"name":     "app1-linode",
+			"provider": "linode",
+			"hostname": "app1-linode.nonfiction.dev",
+		}},
+	}}
+	if err := state.SaveStateRecords("providers", providers); err != nil {
+		t.Fatalf("SaveStateRecords(providers) error = %v", err)
+	}
+	deletedLinodes := []string{}
+	oldLinodeDelete := runLinodeDeleteFn
+	runLinodeDeleteFn = func(id string) error {
+		deletedLinodes = append(deletedLinodes, id)
+		return nil
+	}
+	t.Cleanup(func() { runLinodeDeleteFn = oldLinodeDelete })
+
+	output := captureStderr(t, func() {
+		if got := Run([]string{"target", "remove", "app1-linode", "--execute", "--yes", "--non-interactive"}); got != 1 {
+			t.Fatalf("Run(target remove) = %d, want 1", got)
+		}
+	})
+	if !strings.Contains(output, "Expected dnsimple_account_id") {
+		t.Fatalf("target remove output = %q, want missing account id error", output)
+	}
+	if len(deletedLinodes) != 0 {
+		t.Fatalf("deleted linodes = %v, want none", deletedLinodes)
 	}
 }
 

@@ -1,0 +1,541 @@
+package cli
+
+// Project initialization plus generated local env file renderers.
+
+import (
+	"encoding/json"
+	"fmt"
+	"os"
+	"path"
+	"path/filepath"
+	"sort"
+	"strings"
+
+	"github.com/nonfiction/nf/internal/config"
+	"github.com/nonfiction/nf/internal/envwizard"
+	"github.com/nonfiction/nf/internal/passwords"
+	"github.com/nonfiction/nf/internal/theme"
+	"github.com/nonfiction/nf/internal/ui"
+)
+
+func cmdProjectInit(args projectInitArgs) int {
+	root := projectInitRoot()
+	if err := writeProjectInit(root, args); err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		return 1
+	}
+	return 0
+}
+
+func projectInitRoot() string {
+	if root, ok := currentGitRoot(); ok {
+		return root
+	}
+	wd, err := os.Getwd()
+	if err != nil {
+		return "."
+	}
+	return wd
+}
+
+func writeProjectInit(root string, args projectInitArgs) error {
+	metadata := projectInitMetadata(args)
+	projectPath := config.ProjectFile(root)
+	if !args.force {
+		if _, err := os.Stat(projectPath); err == nil {
+			return ProjectError{Msg: fmt.Sprintf("%s already exists; use --force to overwrite.", projectPath)}
+		} else if !os.IsNotExist(err) {
+			return err
+		}
+	}
+	if err := os.MkdirAll(filepath.Dir(projectPath), 0o755); err != nil {
+		return err
+	}
+	if err := os.WriteFile(projectPath, []byte(projectInitJSON(metadata)), 0o644); err != nil {
+		return err
+	}
+	fmt.Printf("Wrote %s\n", projectPath)
+	return nil
+}
+
+func ensureEnvProjectMetadata() error {
+	root, ok := currentGitRoot()
+	if !ok {
+		return ProjectError{Msg: "env up requires a .git repository above the current directory"}
+	}
+	projectPath := config.ProjectFile(root)
+	if _, err := os.Stat(projectPath); err == nil {
+		return nil
+	} else if !os.IsNotExist(err) {
+		return err
+	}
+	slug, err := currentGitRootBase()
+	if err != nil {
+		return err
+	}
+	return writeProjectInit(root, projectInitArgs{projectSlug: slug, projectType: "wordpress-theme"})
+}
+
+func projectInitMetadata(args projectInitArgs) map[string]any {
+	themePath := firstNonEmpty(args.themeSource, "theme")
+	themePathArg := shellQuoteArg(themePath)
+	themeSlug := firstNonEmpty(args.themeSlug, "theme")
+	projectName := firstNonEmpty(args.projectName, slugToTitle(args.projectSlug))
+	projectSlug := args.projectSlug
+	metadata := map[string]any{
+		"schema": 1,
+		"project": map[string]any{
+			"slug": projectSlug,
+			"name": projectName,
+			"type": firstNonEmpty(args.projectType, "wordpress-theme"),
+		},
+		"wordpress": map[string]any{
+			"deploy_unit": "theme",
+			"theme_slug":  themeSlug,
+			"theme_path":  themePath,
+		},
+		"env": map[string]any{
+			"compose":           "docker compose",
+			"wordpress_service": "wordpress",
+			"cli_service":       "cli",
+			"theme_mount_slug":  "theme",
+			"uploads_path":      "uploads",
+		},
+		"build": map[string]any{
+			"steps": []any{"composer --working-dir=" + themePathArg + " install", "npm --prefix " + themePathArg + " run build"},
+		},
+		"artifact": map[string]any{
+			"path":    filepath.ToSlash(filepath.Join("dist", projectSlug+"-v{version}.zip")),
+			"include": []any{"vendor/", "assets/dist/"},
+			"exclude": []any{"node_modules/", ".git/"},
+		},
+		"deploy": map[string]any{
+			"targets": map[string]any{},
+		},
+		"tasks": defaultProjectTasks(),
+	}
+	return metadata
+}
+
+type projectInitArgs struct {
+	projectSlug string
+	projectName string
+	themeSlug   string
+	themeSource string
+	projectType string
+	force       bool
+}
+
+func projectInitJSON(metadata map[string]any) string {
+	data, _ := json.MarshalIndent(metadata, "", "  ")
+	return string(append(data, '\n'))
+}
+
+func renderEnvCompose(cfg envConfig) string {
+	themeMountSlug := firstNonEmpty(cfg.ThemeMountSlug, "theme")
+	wordpressService := firstNonEmpty(cfg.WordpressService, "wordpress")
+	cliService := firstNonEmpty(cfg.CliService, "cli")
+	themePath := cfg.ThemePath
+	uploadsPath := firstNonEmpty(cfg.UploadsPath, "uploads")
+	return fmt.Sprintf(`services:
+  db:
+    image: mariadb:11
+    command: --character-set-server=utf8mb4 --collation-server=utf8mb4_unicode_ci
+    environment:
+      MARIADB_DATABASE: ${DB_NAME}
+      MARIADB_USER: ${DB_USER}
+      MARIADB_PASSWORD: ${DB_PASSWORD}
+      MARIADB_ROOT_PASSWORD: ${DB_ROOT_PASSWORD}
+    healthcheck:
+      test: ["CMD", "healthcheck.sh", "--connect", "--innodb_initialized"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+    volumes:
+      - db_data:/var/lib/mysql
+
+  %s:
+    build:
+      context: .
+      dockerfile: wordpress/Dockerfile
+    depends_on:
+      db:
+        condition: service_healthy
+    ports:
+      - "${WP_PORT}:80"
+    environment:
+      WORDPRESS_DB_HOST: db:3306
+      WORDPRESS_DB_NAME: ${DB_NAME}
+      WORDPRESS_DB_USER: ${DB_USER}
+      WORDPRESS_DB_PASSWORD: ${DB_PASSWORD}
+      WP_URL: ${WP_URL}
+      WP_TITLE: ${WP_TITLE}
+      ADMIN_USER: ${ADMIN_USER}
+      ADMIN_PASSWORD: ${ADMIN_PASSWORD}
+      ADMIN_EMAIL: ${ADMIN_EMAIL}
+      WORDPRESS_CONFIG_EXTRA: |
+        define('WP_HOME', getenv('WP_URL'));
+        define('WP_SITEURL', getenv('WP_URL'));
+        define('FS_METHOD', 'direct');
+        if ( ! defined('WP_DEBUG') ) define('WP_DEBUG', true);
+        if ( ! defined('WP_DEBUG_LOG') ) define('WP_DEBUG_LOG', true);
+        if ( ! defined('WP_DEBUG_DISPLAY') ) define('WP_DEBUG_DISPLAY', false);
+    volumes:
+      - wp_data:/var/www/html
+      - %s:/var/www/html/wp-content/themes/%s
+      - ./php/uploads.ini:/usr/local/etc/php/conf.d/uploads.ini:ro
+
+  %s:
+    image: wordpress:cli-php8.4
+    depends_on:
+      %s:
+        condition: service_started
+    working_dir: /var/www/html
+    user: "33:33"
+    environment:
+      WORDPRESS_DB_HOST: db:3306
+      WORDPRESS_DB_NAME: ${DB_NAME}
+      WORDPRESS_DB_USER: ${DB_USER}
+      WORDPRESS_DB_PASSWORD: ${DB_PASSWORD}
+      WP_URL: ${WP_URL}
+      WP_TITLE: ${WP_TITLE}
+      ADMIN_USER: ${ADMIN_USER}
+      ADMIN_PASSWORD: ${ADMIN_PASSWORD}
+      ADMIN_EMAIL: ${ADMIN_EMAIL}
+    volumes:
+      - wp_data:/var/www/html
+      - %s:/var/www/html/wp-content/themes/%s
+      - ./%s:%s
+      - %s:/env-snapshots
+
+  mailpit:
+    image: axllent/mailpit
+    ports:
+      - "${MAILPIT_PORT}:8025"
+
+volumes:
+  db_data:
+  wp_data:
+`, wordpressService, themePath, themeMountSlug, cliService, wordpressService, themePath, themeMountSlug, uploadsPath, path.Join("/", "env", uploadsPath), envSnapshotComposeMount(cfg))
+}
+
+func renderEnvFile(cfg envConfig) string {
+	wpTitle := firstNonEmpty(cfg.ProjectName, slugToTitle(cfg.ProjectSlug))
+	adminUser := firstNonEmpty(cfg.AdminUser, "admin")
+	adminPassword := firstNonEmpty(cfg.AdminPassword, "admin")
+	adminEmail := firstNonEmpty(cfg.AdminEmail, "web@nonfiction.ca")
+	return fmt.Sprintf(`COMPOSE_PROJECT_NAME=%s
+WP_PORT=%d
+MAILPIT_PORT=%d
+DB_NAME=%s
+DB_USER=%s
+DB_PASSWORD=wordpress
+DB_ROOT_PASSWORD=root
+WP_URL=http://localhost:%d
+WP_TITLE=%s
+ADMIN_USER=%s
+ADMIN_PASSWORD=%s
+ADMIN_EMAIL=%s
+`, envComposeProjectName(cfg.ProjectSlug), cfg.WordpressPort, cfg.MailpitPort, cfg.ProjectSlug, cfg.ProjectSlug, cfg.WordpressPort, wpTitle, adminUser, adminPassword, adminEmail)
+}
+
+func envComposeProjectName(projectSlug string) string {
+	return "nf_" + cleanEnvSlug(projectSlug) + "_env"
+}
+
+func renderEnvInfo(cfg envConfig, includeURLs bool) string {
+	title := cfg.ProjectSlug + ":local"
+	lines := []string{title, strings.Repeat("─", len(title))}
+	rows := []detailRow{
+		{label: "Site", value: cfg.ProjectSlug},
+		{label: "Env", value: "local"},
+	}
+	if includeURLs {
+		rows = append(rows, detailRow{label: "URL", value: fmt.Sprintf("http://localhost:%d", cfg.WordpressPort)})
+	}
+	rows = append(rows,
+		detailRow{label: "Path", value: localEnvDir(cfg)},
+		detailRow{label: "PHP", value: localEnvPHPVersion()},
+		detailRow{label: "Database", value: cfg.ProjectSlug},
+		detailRow{label: "Compose", value: envComposeProjectName(cfg.ProjectSlug)},
+	)
+	if includeURLs {
+		rows = append(rows, detailRow{label: "Mailpit", value: fmt.Sprintf("http://localhost:%d", cfg.MailpitPort)})
+	}
+	lines = append(lines, detailRowLines(rows, 0)...)
+	accessRows := []detailRow{
+		{label: "Admin user", value: cfg.AdminUser},
+		{label: "Admin pass", value: cfg.AdminPassword},
+	}
+	if includeURLs && hasDetailRows(accessRows) {
+		lines = append(lines, "", "Access")
+		lines = append(lines, detailRowLines(accessRows, 2)...)
+	}
+	return strings.Join(lines, "\n")
+}
+
+func localEnvPHPVersion() string { return "8.3" }
+
+func renderEnvUploadsINI() string {
+	return "file_uploads=On\nmemory_limit=256M\nupload_max_filesize=128M\npost_max_size=128M\nmax_execution_time=120\nmax_input_time=120\n"
+}
+
+func renderEnvDockerfile() string {
+	return `FROM wordpress:php8.3-apache
+
+RUN a2enmod rewrite \
+  && sed -ri 's/AllowOverride None/AllowOverride All/g' /etc/apache2/apache2.conf
+
+COPY wordpress/wordpress-rewrites.conf /etc/apache2/conf-enabled/wordpress-rewrites.conf
+`
+}
+
+func renderEnvRewritesConf() string {
+	return `<Directory /var/www/html>
+  Options FollowSymLinks
+  AllowOverride All
+  Require all granted
+
+  RewriteEngine On
+  RewriteBase /
+  RewriteRule ^index\.php$ - [L]
+  RewriteCond %{REQUEST_FILENAME} !-f
+  RewriteCond %{REQUEST_FILENAME} !-d
+  RewriteRule . /index.php [L]
+</Directory>
+`
+}
+
+func cmdPasswordDerive(slug, purpose string, nonInteractive bool) int {
+	if err := envwizard.Ensure(passwordRequirements(), nonInteractive); err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		return 1
+	}
+	salt, err := passwords.SecretSalt()
+	if err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		return 1
+	}
+	fmt.Println(passwords.DerivePassword(slug, purpose, salt))
+	return 0
+}
+
+func cmdThemePackage(source, output string, dryRun bool) int {
+	return cmdPackage("theme package", source, output, dryRun)
+}
+
+func parseThemeDeployArgs(args []string) (remote string, dryRun bool, ok bool) {
+	for _, arg := range args {
+		switch arg {
+		case "--dry-run":
+			dryRun = true
+		case "--":
+			return "", false, false
+		default:
+			if strings.HasPrefix(arg, "-") {
+				return "", false, false
+			}
+			if remote != "" {
+				return "", false, false
+			}
+			remote = arg
+		}
+	}
+	return remote, dryRun, true
+}
+
+func chooseProjectRemote(action string) (string, error) {
+	options, err := projectRemoteSelectOptions(action)
+	if err != nil {
+		return "", err
+	}
+	return remoteSelectFn("Choose a remote to "+action, options)
+}
+
+func chooseProjectRemoteOrOnly(action string) (string, error) {
+	options, err := projectRemoteSelectOptions(action)
+	if err != nil {
+		return "", err
+	}
+	if len(options) == 1 {
+		return options[0].Value, nil
+	}
+	return remoteSelectFn("Choose a remote to "+action, options)
+}
+
+func projectRemoteSelectOptions(action string) ([]ui.SelectOption, error) {
+	root, ok := currentGitRoot()
+	if !ok {
+		return nil, ProjectError{Msg: fmt.Sprintf("%s requires a .git repository above the current directory", action)}
+	}
+	metadata, err := loadProjectMetadataOrError(root)
+	if err != nil {
+		return nil, err
+	}
+	remotes, err := projectRemotes(metadata, false)
+	if err != nil {
+		return nil, err
+	}
+	if len(remotes) == 0 {
+		return nil, ProjectError{Msg: "No remotes found. Add one with nf remote add <name> <site.target:env>."}
+	}
+	names := make([]string, 0, len(remotes))
+	for name := range remotes {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	options := make([]ui.SelectOption, 0, len(names))
+	for _, name := range names {
+		remote, _ := remotes[name].(map[string]any)
+		label := name
+		if remote != nil {
+			if siteID := strings.TrimSpace(recordValueString(remote["site_id"])); siteID != "" {
+				if env := strings.TrimSpace(recordValueString(remote["env"])); env != "" {
+					label += " -> " + siteID + ":" + env
+				} else {
+					label += " -> " + siteID
+				}
+			}
+		}
+		options = append(options, ui.SelectOption{Value: name, Label: label})
+	}
+	return options, nil
+}
+
+func validateThemeDeploySlug(slug string) error {
+	slug = strings.TrimSpace(slug)
+	if slug == "" {
+		return ProjectError{Msg: "wordpress.theme_slug cannot be empty"}
+	}
+	if filepath.IsAbs(slug) || strings.ContainsAny(slug, "/\\") || strings.Contains(slug, "..") {
+		return ProjectError{Msg: fmt.Sprintf("wordpress.theme_slug %q must be one safe directory name", slug)}
+	}
+	return nil
+}
+
+func cmdPackage(commandName, source, output string, dryRun bool) int {
+	root, _ := config.DiscoverProjectRoot("")
+	if root == "" {
+		root = "."
+	}
+	metadata, err := theme.LoadProjectMetadata(root)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		return 1
+	}
+	if source == "" {
+		source = firstNonEmpty(mapStringAtPath(metadata, "wordpress", "theme_path"), "theme")
+	}
+	sourceDir := source
+	if !filepath.IsAbs(sourceDir) {
+		sourceDir = filepath.Join(root, sourceDir)
+	}
+	projectSlug := firstNonEmpty(mapStringAtPath(metadata, "project", "slug"), "project")
+	versionedOutput := output
+	if versionedOutput == "" {
+		versionedOutput = firstNonEmpty(mapStringAtPath(metadata, "artifact", "path"), filepath.ToSlash(filepath.Join("dist", projectSlug+"-v{version}.zip")))
+	}
+	versionedOutput, err = resolveVersionedArtifactPath(sourceDir, versionedOutput)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		return 1
+	}
+	output = versionedOutput
+	if !filepath.IsAbs(output) {
+		if strings.HasSuffix(strings.ToLower(output), ".zip") {
+			output = filepath.Join(root, output)
+		} else {
+			output = filepath.Join(root, output, projectSlug+".zip")
+		}
+	}
+	result, err := theme.PackageTheme(sourceDir, output, dryRun)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		return 1
+	}
+	if result.DryRun {
+		fmt.Printf("Would package %s -> %s (%d files)\n", result.SourceDir, result.OutputPath, result.FileCount)
+	} else {
+		fmt.Printf("Wrote %s (%d files)\n", result.OutputPath, result.FileCount)
+	}
+	return 0
+}
+
+func resolveVersionedArtifactPath(sourceDir, template string) (string, error) {
+	if !strings.Contains(template, "{version}") {
+		return template, nil
+	}
+	version, err := readThemeVersion(sourceDir)
+	if err != nil {
+		return "", err
+	}
+	return strings.ReplaceAll(template, "{version}", version), nil
+}
+
+func readThemeVersion(sourceDir string) (string, error) {
+	stylePath := filepath.Join(sourceDir, "style.css")
+	if version, found, err := readThemeStyleVersion(stylePath); err != nil {
+		return "", err
+	} else if found {
+		return version, nil
+	}
+
+	packagePath := filepath.Join(sourceDir, "package.json")
+	if version, found, err := readThemePackageVersion(packagePath); err != nil {
+		return "", err
+	} else if found {
+		return version, nil
+	}
+
+	return "", fmt.Errorf("theme version not found: no Version header in %s and no version field in %s", stylePath, packagePath)
+}
+
+func readThemeStyleVersion(stylePath string) (string, bool, error) {
+	data, err := os.ReadFile(stylePath)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return "", false, nil
+		}
+		return "", false, err
+	}
+	for _, line := range strings.Split(string(data), "\n") {
+		trimmed := strings.TrimSpace(strings.TrimPrefix(strings.TrimSpace(line), "*"))
+		key, value, ok := strings.Cut(trimmed, ":")
+		if !ok || !strings.EqualFold(strings.TrimSpace(key), "version") {
+			continue
+		}
+		version := strings.TrimSpace(strings.TrimSuffix(strings.TrimSpace(value), "*/"))
+		if version != "" {
+			return version, true, nil
+		}
+	}
+	return "", false, nil
+}
+
+func readThemePackageVersion(packagePath string) (string, bool, error) {
+	data, err := os.ReadFile(packagePath)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return "", false, nil
+		}
+		return "", false, err
+	}
+	var payload struct {
+		Version string `json:"version"`
+	}
+	if err := json.Unmarshal(data, &payload); err != nil {
+		return "", false, err
+	}
+	version := strings.TrimSpace(payload.Version)
+	if version == "" {
+		return "", false, nil
+	}
+	return version, true, nil
+}
+
+func normalizePassthroughArgs(args []string) []string {
+	if len(args) > 0 && args[0] == "--" {
+		return args[1:]
+	}
+	return args
+}

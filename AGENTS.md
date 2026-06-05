@@ -9,7 +9,7 @@ Use this file for repo shortcuts and learned implementation gotchas. Put durable
 * CLI dispatcher: `internal/cli.Run`.
 * Primary always-visible command groups: `init`, `provider`, `target`, `site`, `config`, `password`.
 * Project-only command groups: `remote`, `theme`, `env`. They appear only when the current repo has `.nf/` next to `.git`.
-* `site env` hangs under `site`, not as a top-level group.
+* Remote env operations live under `site` (`site list --envs`, `site show <site:env>`, `site shell`, `site wp`, `site snapshot`), not as a separate `site env` group.
 * Do not re-add public `nf server ...`, `nf instance ...`, or top-level local env aliases (`nf up/down/logs/reset/info/shell/wp`) unless explicitly requested.
 
 ## Fast checks
@@ -25,7 +25,7 @@ CLI smoke checks:
 go run ./cmd/nf --help
 go run ./cmd/nf provider list
 go run ./cmd/nf site list
-go run ./cmd/nf site env help
+go run ./cmd/nf site list --envs
 ```
 
 Project-context smoke checks need an `nf` project repo with `.nf/project.json` next to `.git`:
@@ -103,7 +103,7 @@ Local state is disposable. Provider truth is canonical remotely.
 * Remote target site discovery is not implemented yet.
 * Linode-hosted site/env truth is intended to live on each target at `/var/lib/nf/sites.json`, read over SSH as the standard user.
 * `nf remote add` validates the requested site/env exists in local cache before writing `.nf/project.json`.
-* `nf site env shell/wp` are preflight-only today; they must not mutate remote state yet.
+* `nf site shell/wp` are preflight-only today; they must not mutate remote state yet.
 * `nf env push/pull [remote]` defaults to an interactive confirmation before executing remote sync. Use `--dry-run` or `--non-interactive` without `--execute` for preflight-only output. Non-interactive execution requires `--execute --yes`.
 
 ## Project-context gotchas

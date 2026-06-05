@@ -244,7 +244,7 @@ nf theme ...
 nf env ...
 ```
 
-`nf site env ...` hangs under `nf site ...` in all contexts.
+Remote env operations stay under `nf site ...` as `nf site list --envs`, `nf site show <site:env>`, `nf site shell <site:env>`, `nf site wp <site:env>`, and `nf site snapshot ...`.
 
 Old public routes intentionally removed:
 
@@ -318,8 +318,8 @@ Do not add old compatibility routes unless explicitly requested.
 ### Preflight-only / scaffolded
 
 * [ ] `nf site refresh`: currently lists cached targets; remote target site discovery not implemented yet
-* [ ] `nf site env shell [site-id] [--live|--staging]`: validates cache, does not execute remote shell yet
-* [ ] `nf site env wp <site-id> [--live|--staging] <cmd>`: validates cache, does not run remote wp-cli yet
+* [ ] `nf site shell <env-id>`: validates cache, does not execute remote shell yet
+* [ ] `nf site wp <env-id> -- <cmd>`: validates cache, does not run remote wp-cli yet
 * [ ] `nf env push <remote>`: validates repo remote/cache, does not sync yet
 * [ ] `nf env pull <remote>`: validates repo remote/cache, does not sync yet
 
@@ -363,12 +363,12 @@ Current readers:
 
 * `nf site list`
 * `nf site show`
-* `nf site env list`
-* `nf site env show`
+* `nf site list --envs`
+* `nf site show <site:env>`
 * `nf remote add`
 * `nf remote show`
 * `nf env push/pull` guarded sync with dry-run/preflight mode
-* `nf site env shell/wp` preflight
+* `nf site shell/wp` preflight
 
 Desired refresh behavior:
 
@@ -529,13 +529,13 @@ never silently clobber production credentials
 
 ### Phase 1: Command surface cleanup
 
-Goal: make the public command model match `provider -> target -> site -> env` plus repo/local commands.
+Goal: make the public command model match `provider -> target -> site` plus repo/local commands, with remote env operations hanging under `site`.
 
 Status:
 
 * [x] remove old public `server`/`instance` routes
 * [x] remove top-level local env aliases
-* [x] add `provider`, `target`, `site`, `site env`, `remote`, `theme`, `env`, `config`, `password`
+* [x] add `provider`, `target`, `site`, `remote`, `theme`, `env`, `config`, `password`
 * [x] update docs/tests for current command surface
 
 ### Phase 2: Config/state split
@@ -587,8 +587,8 @@ Goal: safely run remote shell and wp-cli through provider-aware env records.
 
 Status:
 
-* [x] preflight-only `nf site env shell`
-* [x] preflight-only `nf site env wp`
+* [x] preflight-only `nf site shell`
+* [x] preflight-only `nf site wp`
 * [ ] Linode SSH execution adapter
 * [ ] Kinsta execution adapter or explicit unsupported behavior
 * [ ] audit output and command previews
