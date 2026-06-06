@@ -65,6 +65,13 @@ func runThemeHelp() int {
 	return 0
 }
 
+func runPublicHelp() int {
+	printGroupHelp("public", []helpLine{
+		{"deploy <remote> [--dry-run] [--yes]", "deploy configured static public paths"},
+	})
+	return 0
+}
+
 func parseEnvRemoteSyncArgs(action string, args []string) (string, envRemoteSyncOptions, bool) {
 	var opts envRemoteSyncOptions
 	positionals := make([]string, 0, 1)
@@ -216,6 +223,35 @@ func runTheme(argv []string) int {
 			return 0
 		}
 		fmt.Fprintln(os.Stderr, "unsupported theme command")
+		return 1
+	}
+}
+
+func runPublic(argv []string) int {
+	if len(argv) == 0 || argv[0] == "help" || argv[0] == "--help" || argv[0] == "-h" {
+		return runPublicHelp()
+	}
+	switch argv[0] {
+	case "deploy":
+		if err := requireProjectContext("public deploy"); err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			return 1
+		}
+		remote, opts, ok := parsePublicDeployArgs(argv[1:])
+		if !ok {
+			return 1
+		}
+		if strings.TrimSpace(remote) == "" {
+			selected, err := chooseProjectRemote("deploy public files to")
+			if err != nil {
+				fmt.Fprintln(os.Stderr, err)
+				return 1
+			}
+			remote = selected
+		}
+		return cmdPublicDeploy(remote, opts)
+	default:
+		fmt.Fprintln(os.Stderr, "unsupported public command")
 		return 1
 	}
 }
@@ -631,6 +667,7 @@ func runHelp() int {
 			helpLine{"remote", "manage repo remotes"},
 			helpLine{"env", "manage the local development env"},
 			helpLine{"theme", "package files and run theme tasks"},
+			helpLine{"public", "deploy static public paths"},
 		)
 	}
 	lines = append(lines,
@@ -645,7 +682,7 @@ func runHelp() int {
 
 func projectOnlyCommand(name string) bool {
 	switch name {
-	case "remote", "theme", "env":
+	case "remote", "theme", "env", "public":
 		return true
 	default:
 		return false

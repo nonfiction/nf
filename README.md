@@ -51,6 +51,7 @@ Inside an `nf` project repo with `nf.json` next to `.git`, help also shows:
   remote      manage repo remotes
   env         manage the local development env
   theme       package files and run theme tasks
+  public      deploy static public paths
 ```
 
 ## Shell completion
@@ -117,6 +118,7 @@ Deploy the packaged theme release to a configured repo remote:
 ```sh
 nf theme deploy production [--dry-run]
 nf theme rollback production [--dry-run]
+nf public deploy production [--dry-run]
 ```
 
 ## Project metadata
@@ -169,6 +171,60 @@ If `artifact.path` contains `{version}`, `nf` resolves it from:
 `nf theme deploy <remote>` is a one-command packaged release deploy. It builds the same theme artifact, uploads it to the selected remote env, extracts it under `wp-content/themes/.nf-releases/<theme-slug>/`, copies the release into the active theme directory, activates the configured theme slug with wp-cli, and records release metadata. It keeps the last 5 releases and matching uploaded zips, so release storage does not grow indefinitely. It does not require manual WordPress admin zip upload and supersedes direct in-place source rsync deploys.
 
 `nf theme rollback <remote>` switches the active theme directory back to the previous recorded release and activates the configured theme slug again. It uses remote `releases.json`; it does not rebuild or upload artifacts.
+
+## Static public artifacts
+
+Use `public/` for static artifacts that must live at specific non-WordPress URL paths, such as annual report microsites.
+
+```json
+{
+  "public": {
+    "paths": [
+      {
+        "source": "public/annual-report-2026",
+        "path": "/annual-report-2026"
+      }
+    ]
+  }
+}
+```
+
+Deploy them separately from the theme:
+
+```sh
+nf public deploy production --dry-run
+nf public deploy production
+```
+
+`nf` only deploys paths explicitly listed in `nf.json`. `source` must be repo-relative and symlink-free. `path` must be an absolute URL path and cannot target `/`, traversal, `/wp-admin`, `/wp-content`, `/wp-includes`, or `/uploads`. Add `"delete": true` to mirror removals with `rsync --delete`; execution then requires `--yes`.
+
+For large artifacts that should not live in git, use a project task to materialize the deployable files into `public/` first, then deploy the local directory:
+
+```json
+{
+  "tasks": {
+    "fetch-annual-report-2026": {
+      "description": "Fetch annual report static export",
+      "run": "scripts/fetch-annual-report-2026"
+    }
+  },
+  "public": {
+    "paths": [
+      {
+        "source": "public/annual-report-2026",
+        "path": "/annual-report-2026"
+      }
+    ]
+  }
+}
+```
+
+```sh
+nf theme fetch-annual-report-2026
+nf public deploy production --dry-run
+```
+
+Remote HTTP crawling, archives, and rsync side-loaded sources are intentionally outside this first slice.
 
 ## Local WordPress env
 

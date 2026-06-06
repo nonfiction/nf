@@ -238,6 +238,7 @@ Project-only command groups are available when the current repo has `nf.json` ne
 nf remote ...
 nf theme ...
 nf env ...
+nf public ...
 ```
 
 Remote env operations stay under `nf site ...` as `nf site list --envs`, `nf site show <site:env>`, `nf site shell <site:env>`, `nf site wp <site:env>`, and `nf site snapshot ...`.
@@ -277,6 +278,7 @@ Do not add old compatibility routes unless explicitly requested.
 * [x] `nf remote show <name>`
 * [x] `nf remote remove <name>`
 * [x] `nf remote list`
+* [x] `nf public deploy <remote> [--dry-run] [--yes]`
 * [x] `nf theme tasks`
 * [x] `nf theme package`
 * [x] direct theme tasks from `nf.json`
@@ -403,6 +405,7 @@ Tracked fields include:
 * WordPress plugin bootstrap intent
 * local env intent
 * artifact recipe
+* static public path deploy recipe
 * repo remotes
 * theme tasks
 
@@ -439,6 +442,14 @@ Example shape:
   },
   "artifact": {
     "path": "dist/client-v{version}.zip"
+  },
+  "public": {
+    "paths": [
+      {
+        "source": "public/annual-report-2026",
+        "path": "/annual-report-2026"
+      }
+    ]
   },
   "remotes": {
     "production": "client.app1-linode:live"
@@ -482,6 +493,48 @@ Deploy rules:
 * public rollback UX is `nf theme rollback <remote> [--dry-run]`
 * rollback selects the previous distinct `release_id` from remote `releases.json`, copies that release back into the active theme directory, runs wp-cli activation, and appends a rollback metadata entry
 * rollback does not rebuild or upload artifacts
+
+## Static public artifacts
+
+Static files that must live at non-WordPress URL paths can be tracked in the repo and deployed separately from the WordPress theme.
+
+Convention:
+
+```text
+public/
+  annual-report-2026/
+    index.html
+    assets/...
+```
+
+Config:
+
+```json
+{
+  "public": {
+    "paths": [
+      {
+        "source": "public/annual-report-2026",
+        "path": "/annual-report-2026",
+        "delete": false
+      }
+    ]
+  }
+}
+```
+
+Rules:
+
+* public deploy UX is `nf public deploy <remote> [--dry-run] [--yes]`
+* `public.paths` is explicit; `nf` never uploads every folder under `public/` by inference
+* `source` must be a repo-relative directory and must not contain symlinks
+* `path` must be an absolute URL path under the remote document root
+* deploy refuses `/`, traversal, backslashes, and reserved WordPress paths such as `/wp-admin`, `/wp-content`, `/wp-includes`, and `/uploads`
+* deploy uses rsync over the configured remote SSH path
+* `delete: true` adds `rsync --delete` and requires `--yes` when not in dry-run mode
+* public deploy does not package, build, activate WordPress themes, update the database, or manage uploads
+* large or remote artifacts should be materialized into the configured repo `source` by a project task before `nf public deploy`
+* HTTP crawling, archive download/extract, and rsync side-loaded source types are intentionally deferred
 
 ## Local env model
 
@@ -646,6 +699,17 @@ Status:
 * [x] Linode and Kinsta SSH/rsync artifact deploy paths
 * [x] release metadata layout for rollback/history
 * [x] public rollback command
+
+### Phase 6b: Static public artifact deployment
+
+Goal: deploy explicit static artifact directories to non-WordPress URL paths under a remote document root.
+
+Status:
+
+* [x] repo `public.paths` metadata
+* [x] `nf public deploy <remote> [--dry-run] [--yes]`
+* [x] path safety checks for root/traversal/reserved WordPress paths
+* [ ] release metadata and rollback for public artifact deploys
 
 ### Phase 7: Database/uploads sync
 

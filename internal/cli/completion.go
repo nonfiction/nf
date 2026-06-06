@@ -113,6 +113,8 @@ func completeContextCandidates(args []string) []string {
 		return envCompletionCandidates(args[1:])
 	case "theme":
 		return themeCompletionCandidates(args[1:])
+	case "public":
+		return publicCompletionCandidates(args[1:])
 	default:
 		return nil
 	}
@@ -121,7 +123,7 @@ func completeContextCandidates(args []string) []string {
 func rootCompletionCandidates() []string {
 	candidates := []string{"init", "provider", "target", "site", "config", "password", "completion", "help"}
 	if projectContextAvailable() {
-		candidates = append(candidates, "remote", "env", "theme")
+		candidates = append(candidates, "remote", "env", "theme", "public")
 	}
 	sort.Strings(candidates)
 	return candidates
@@ -293,6 +295,16 @@ func themeCompletionCandidates(args []string) []string {
 	default:
 		return nil
 	}
+}
+
+func publicCompletionCandidates(args []string) []string {
+	if len(args) == 0 {
+		return []string{"deploy", "help"}
+	}
+	if args[0] == "deploy" {
+		return append(projectRemoteCompletionNames(), "--dry-run", "--yes")
+	}
+	return nil
 }
 
 func cachedTargetCompletionNames() []string {

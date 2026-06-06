@@ -145,7 +145,7 @@ func TestRunHelpShowsTopLevelCommandsOutsideGit(t *testing.T) {
 			t.Fatalf("runHelp() output missing %q:\n%s", wanted, output)
 		}
 	}
-	for _, unwanted := range []string{"\n  remote  ", "\n  theme   ", "\n  env     ", "\n  repo  ", "\n  instance  ", "\n  server  ", "Shortcuts:", "nf up", "nf shell", "snapshot create", "\n  commands\n", "\n  run <name>\n", "\n  build\n"} {
+	for _, unwanted := range []string{"\n  remote  ", "\n  theme   ", "\n  env     ", "\n  public  ", "\n  repo  ", "\n  instance  ", "\n  server  ", "Shortcuts:", "nf up", "nf shell", "snapshot create", "\n  commands\n", "\n  run <name>\n", "\n  build\n"} {
 		if strings.Contains(output, unwanted) {
 			t.Fatalf("runHelp() output unexpectedly contained %q:\n%s", unwanted, output)
 		}
@@ -172,7 +172,7 @@ func TestRunHelpHidesProjectCommandsInsideGitWithoutNFDir(t *testing.T) {
 			t.Fatalf("runHelp() output missing %q:\n%s", wanted, output)
 		}
 	}
-	for _, unwanted := range []string{"\n  remote  ", "\n  theme   ", "\n  env     ", "\n  instance  ", "\n  server  ", "Shortcuts:", "nf up", "nf shell", "snapshot create", "\n  commands\n", "\n  run <name>\n", "\n  build\n"} {
+	for _, unwanted := range []string{"\n  remote  ", "\n  theme   ", "\n  env     ", "\n  public  ", "\n  instance  ", "\n  server  ", "Shortcuts:", "nf up", "nf shell", "snapshot create", "\n  commands\n", "\n  run <name>\n", "\n  build\n"} {
 		if strings.Contains(output, unwanted) {
 			t.Fatalf("runHelp() output unexpectedly contained %q:\n%s", unwanted, output)
 		}
@@ -199,7 +199,7 @@ func TestRunHelpShowsProjectCommandsInsideNFProject(t *testing.T) {
 	t.Cleanup(func() { _ = os.Chdir(oldwd) })
 
 	output := captureStdout(t, func() { _ = runHelp() })
-	for _, wanted := range []string{"\n  remote      manage repo remotes\n", "\n  env         manage the local development env\n", "\n  theme       package files and run theme tasks\n"} {
+	for _, wanted := range []string{"\n  remote      manage repo remotes\n", "\n  env         manage the local development env\n", "\n  theme       package files and run theme tasks\n", "\n  public      deploy static public paths\n"} {
 		if !strings.Contains(output, wanted) {
 			t.Fatalf("runHelp() output missing %q:\n%s", wanted, output)
 		}
@@ -3694,6 +3694,115 @@ func TestRunThemeDeployDryRunPlansPackagedReleaseToConfiguredRemote(t *testing.T
 		if strings.Contains(stdout, unwanted) {
 			t.Fatalf("theme deploy stdout should not print remote script fragment %q:\n%s", unwanted, stdout)
 		}
+	}
+}
+
+func TestRunPublicDeployDryRunPlansConfiguredPaths(t *testing.T) {
+	stateDir := t.TempDir()
+	t.Setenv("NF_STATE_HOME", stateDir)
+	if err := state.SaveStateRecords("sites", []map[string]any{{"provider": "kinsta", "site_id": "client-kinsta", "env": "live", "url": "https://www.example.com/", "path": "/www/client/public", "ssh": map[string]any{"host": "203.0.113.10", "port": "12345", "user": "client"}}}); err != nil {
+		t.Fatalf("SaveStateRecords(sites) error = %v", err)
+	}
+	repoRoot := t.TempDir()
+	for _, dir := range []string{".git", "public/annual-report-2026/assets"} {
+		if err := os.MkdirAll(filepath.Join(repoRoot, dir), 0o755); err != nil {
+			t.Fatalf("MkdirAll(%s) error = %v", dir, err)
+		}
+	}
+	for _, file := range []string{"public/annual-report-2026/index.html", "public/annual-report-2026/assets/app.js"} {
+		if err := os.WriteFile(filepath.Join(repoRoot, file), []byte("ok"), 0o644); err != nil {
+			t.Fatalf("WriteFile(%s) error = %v", file, err)
+		}
+	}
+	project := map[string]any{
+		"version": 1,
+		"project": map[string]any{"slug": "client"},
+		"public":  map[string]any{"paths": []any{map[string]any{"source": "public/annual-report-2026", "path": "/annual-report-2026"}}},
+		"remotes": map[string]any{"production": "client-kinsta:live"},
+	}
+	projectData, err := json.MarshalIndent(project, "", "  ")
+	if err != nil {
+		t.Fatalf("MarshalIndent(project) error = %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(repoRoot, "nf.json"), append(projectData, '\n'), 0o644); err != nil {
+		t.Fatalf("WriteFile(project) error = %v", err)
+	}
+	oldwd, err := os.Getwd()
+	if err != nil {
+		t.Fatalf("Getwd() error = %v", err)
+	}
+	if err := os.Chdir(repoRoot); err != nil {
+		t.Fatalf("Chdir() error = %v", err)
+	}
+	t.Cleanup(func() { _ = os.Chdir(oldwd) })
+	oldRunRsync := runRsyncCommandFn
+	runRsyncCommandFn = func(args []string) error { t.Fatalf("runRsyncCommandFn called during dry-run: %#v", args); return nil }
+	t.Cleanup(func() { runRsyncCommandFn = oldRunRsync })
+	oldRunSSH := runSSHCommandFn
+	runSSHCommandFn = func(args []string) error { t.Fatalf("runSSHCommandFn called during dry-run: %#v", args); return nil }
+	t.Cleanup(func() { runSSHCommandFn = oldRunSSH })
+
+	stdout := captureStdout(t, func() {
+		if got := Run([]string{"public", "deploy", "production", "--dry-run"}); got != 0 {
+			t.Fatalf("Run(public deploy --dry-run) = %d, want 0", got)
+		}
+	})
+	for _, want := range []string{"Public deploy plan:", "remote:      production", "site:        client-kinsta", "env:         live", "provider:    kinsta", "mode:        dry-run", "source:    " + filepath.Join(repoRoot, "public", "annual-report-2026"), "url path:  /annual-report-2026", "remote:    /www/client/public/annual-report-2026", "files:     2", "delete:    false", "> ssh -p 12345 client@203.0.113.10 'mkdir -p /www/client/public/annual-report-2026'", "> rsync -az -e 'ssh -p 12345' " + filepath.Join(repoRoot, "public", "annual-report-2026") + string(filepath.Separator) + " client@203.0.113.10:/www/client/public/annual-report-2026/", "No remote files were changed."} {
+		if !strings.Contains(stdout, want) {
+			t.Fatalf("public deploy stdout missing %q:\n%s", want, stdout)
+		}
+	}
+}
+
+func TestRunPublicDeployDeleteRequiresYes(t *testing.T) {
+	stateDir := t.TempDir()
+	t.Setenv("NF_STATE_HOME", stateDir)
+	if err := state.SaveStateRecords("sites", []map[string]any{{"provider": "kinsta", "site_id": "client-kinsta", "env": "live", "path": "/www/client/public", "ssh": map[string]any{"host": "203.0.113.10", "port": "12345", "user": "client"}}}); err != nil {
+		t.Fatalf("SaveStateRecords(sites) error = %v", err)
+	}
+	repoRoot := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(repoRoot, ".git"), 0o755); err != nil {
+		t.Fatalf("MkdirAll(.git) error = %v", err)
+	}
+	if err := os.MkdirAll(filepath.Join(repoRoot, "public/report"), 0o755); err != nil {
+		t.Fatalf("MkdirAll(public/report) error = %v", err)
+	}
+	project := map[string]any{"version": 1, "public": map[string]any{"paths": []any{map[string]any{"source": "public/report", "path": "/report", "delete": true}}}, "remotes": map[string]any{"production": "client-kinsta:live"}}
+	projectData, err := json.MarshalIndent(project, "", "  ")
+	if err != nil {
+		t.Fatalf("MarshalIndent(project) error = %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(repoRoot, "nf.json"), append(projectData, '\n'), 0o644); err != nil {
+		t.Fatalf("WriteFile(project) error = %v", err)
+	}
+	oldwd, err := os.Getwd()
+	if err != nil {
+		t.Fatalf("Getwd() error = %v", err)
+	}
+	if err := os.Chdir(repoRoot); err != nil {
+		t.Fatalf("Chdir() error = %v", err)
+	}
+	t.Cleanup(func() { _ = os.Chdir(oldwd) })
+
+	stderr := captureStderr(t, func() {
+		if got := Run([]string{"public", "deploy", "production"}); got != 1 {
+			t.Fatalf("Run(public deploy) = %d, want 1", got)
+		}
+	})
+	if !strings.Contains(stderr, "public deploy with delete=true requires --yes") {
+		t.Fatalf("public deploy stderr = %q", stderr)
+	}
+}
+
+func TestRunPublicDeployRejectsReservedPath(t *testing.T) {
+	repoRoot := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(repoRoot, "public/bad"), 0o755); err != nil {
+		t.Fatalf("MkdirAll(public/bad) error = %v", err)
+	}
+	metadata := map[string]any{"public": map[string]any{"paths": []any{map[string]any{"source": "public/bad", "path": "/wp-content/bad"}}}}
+	_, err := loadPublicDeployPaths(repoRoot, metadata, "/www/client/public")
+	if err == nil || !strings.Contains(err.Error(), "reserved WordPress path") {
+		t.Fatalf("loadPublicDeployPaths() error = %v, want reserved path error", err)
 	}
 }
 
