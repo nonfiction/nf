@@ -199,7 +199,7 @@ func TestRunHelpShowsProjectCommandsInsideNFProject(t *testing.T) {
 	t.Cleanup(func() { _ = os.Chdir(oldwd) })
 
 	output := captureStdout(t, func() { _ = runHelp() })
-	for _, wanted := range []string{"\n  remote      manage repo remotes\n", "\n  env         manage the local development env\n", "\n  theme       package files and run theme tasks\n", "\n  public      deploy static public paths\n"} {
+	for _, wanted := range []string{"\n  remote      manage repo remotes\n", "\n  env         manage the local development env\n", "\n  theme       package clean artifacts and run theme tasks\n", "\n  public      deploy static public paths\n"} {
 		if !strings.Contains(output, wanted) {
 			t.Fatalf("runHelp() output missing %q:\n%s", wanted, output)
 		}
@@ -5306,7 +5306,7 @@ func TestRunThemeHelpShowsThemeCommandsInsideGit(t *testing.T) {
 	t.Cleanup(func() { _ = os.Chdir(oldwd) })
 
 	output := captureStdout(t, func() { _ = runThemeHelp() })
-	for _, wanted := range []string{"\n  tasks                                      list configured theme tasks\n", "\n  package [--dry-run] [--source] [--output]  package theme files\n", "\n  deploy <remote> [--dry-run]                deploy a packaged theme release\n", "\n  rollback <remote> [--dry-run]              roll back to the previous theme release\n", "\nTheme tasks:\n"} {
+	for _, wanted := range []string{"\n  tasks                                      list configured theme tasks\n", "\n  package [--dry-run] [--source] [--output]  package a clean theme artifact\n", "\n  deploy <remote> [--dry-run]                deploy a packaged theme release\n", "\n  rollback <remote> [--dry-run]              roll back to the previous theme release\n", "\nTheme tasks:\n"} {
 		if !strings.Contains(output, wanted) {
 			t.Fatalf("runThemeHelp() output missing %q:\n%s", wanted, output)
 		}
@@ -5325,7 +5325,7 @@ func TestRunThemeHelpShowsCommandsOnlyOutsideGit(t *testing.T) {
 	t.Cleanup(func() { _ = os.Chdir(oldwd) })
 
 	output := captureStdout(t, func() { _ = runThemeHelp() })
-	for _, want := range []string{"\n  tasks                                      list configured theme tasks\n", "\n  package [--dry-run] [--source] [--output]  package theme files\n", "\n  deploy <remote> [--dry-run]                deploy a packaged theme release\n", "\n  rollback <remote> [--dry-run]              roll back to the previous theme release\n"} {
+	for _, want := range []string{"\n  tasks                                      list configured theme tasks\n", "\n  package [--dry-run] [--source] [--output]  package a clean theme artifact\n", "\n  deploy <remote> [--dry-run]                deploy a packaged theme release\n", "\n  rollback <remote> [--dry-run]              roll back to the previous theme release\n"} {
 		if !strings.Contains(output, want) {
 			t.Fatalf("runThemeHelp() output missing %q:\n%s", want, output)
 		}
@@ -7725,6 +7725,183 @@ func TestRunThemePackageUsesThemeSlugAsArchiveRoot(t *testing.T) {
 	if names["theme/style.css"] {
 		t.Fatalf("zip entries = %#v, should not use source directory name as archive root", names)
 	}
+}
+
+func TestRunThemePackageStagesProductionComposerDependencies(t *testing.T) {
+	workdir := t.TempDir()
+	if err := os.Mkdir(filepath.Join(workdir, ".git"), 0o755); err != nil {
+		t.Fatalf("Mkdir() error = %v", err)
+	}
+	for _, dir := range []string{
+		filepath.Join(workdir, "theme", "app"),
+		filepath.Join(workdir, "theme", "config"),
+		filepath.Join(workdir, "theme", "src"),
+		filepath.Join(workdir, "theme", "dist"),
+		filepath.Join(workdir, "theme", "vendor", "friendsofphp", "php-cs-fixer"),
+	} {
+		if err := os.MkdirAll(dir, 0o755); err != nil {
+			t.Fatalf("MkdirAll(%s) error = %v", dir, err)
+		}
+	}
+	files := map[string]string{
+		filepath.Join(workdir, "theme", "style.css"):                                         "/*\nTheme Name: Demo\nVersion: 2.0.0\n*/\n",
+		filepath.Join(workdir, "theme", "screenshot.png"):                                    "png",
+		filepath.Join(workdir, "theme", "index.php"):                                         "<?php\n",
+		filepath.Join(workdir, "theme", "app", "setup.php"):                                  "<?php\n",
+		filepath.Join(workdir, "theme", "config", "theme.php"):                               "<?php\n",
+		filepath.Join(workdir, "theme", "src", "Runtime.php"):                                "<?php\n",
+		filepath.Join(workdir, "theme", "dist", "manifest.json"):                             "{}\n",
+		filepath.Join(workdir, "theme", "composer.json"):                                     `{"require":{"acme/runtime":"1.0.0"},"require-dev":{"friendsofphp/php-cs-fixer":"3.0.0"}}`,
+		filepath.Join(workdir, "theme", "composer.lock"):                                     "{}\n",
+		filepath.Join(workdir, "theme", "package.json"):                                      `{"scripts":{"build":"vite build"}}`,
+		filepath.Join(workdir, "theme", ".php-cs-fixer.php"):                                 "<?php\n",
+		filepath.Join(workdir, "theme", "phpcs.xml"):                                         "<ruleset />\n",
+		filepath.Join(workdir, "theme", "vite.config.js"):                                    "export default {}\n",
+		filepath.Join(workdir, "theme", "vendor", "friendsofphp", "php-cs-fixer", "dev.php"): "<?php\n",
+	}
+	for path, content := range files {
+		if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
+			t.Fatalf("WriteFile(%s) error = %v", path, err)
+		}
+	}
+	project := map[string]any{
+		"version":   1,
+		"project":   map[string]any{"slug": "client", "name": "Client", "type": "wordpress-theme"},
+		"wordpress": map[string]any{"deploy_unit": "theme", "theme_slug": "client", "theme_path": "theme"},
+		"artifact":  map[string]any{"path": "dist/client-v{version}.zip"},
+	}
+	projectData, err := json.MarshalIndent(project, "", "  ")
+	if err != nil {
+		t.Fatalf("MarshalIndent() error = %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(workdir, "nf.json"), append(projectData, '\n'), 0o644); err != nil {
+		t.Fatalf("WriteFile(nf.json) error = %v", err)
+	}
+
+	composerArgsPath := filepath.Join(t.TempDir(), "composer-args.txt")
+	binDir := t.TempDir()
+	composerScript := "#!/bin/sh\nprintf '%s\\n' \"$@\" > \"$COMPOSER_ARGS_FILE\"\ncase \" $* \" in *\" --no-dev \"*) ;; *) exit 7 ;; esac\nif [ -d vendor ]; then exit 8; fi\nmkdir -p vendor/acme/runtime\nprintf '<?php\\n' > vendor/autoload.php\nprintf '<?php\\n' > vendor/acme/runtime/runtime.php\n"
+	if err := os.WriteFile(filepath.Join(binDir, "composer"), []byte(composerScript), 0o755); err != nil {
+		t.Fatalf("WriteFile(composer) error = %v", err)
+	}
+	t.Setenv("COMPOSER_ARGS_FILE", composerArgsPath)
+	t.Setenv("PATH", binDir+string(os.PathListSeparator)+os.Getenv("PATH"))
+
+	oldwd, err := os.Getwd()
+	if err != nil {
+		t.Fatalf("Getwd() error = %v", err)
+	}
+	if err := os.Chdir(workdir); err != nil {
+		t.Fatalf("Chdir() error = %v", err)
+	}
+	t.Cleanup(func() { _ = os.Chdir(oldwd) })
+
+	if got := Run([]string{"theme", "package"}); got != 0 {
+		t.Fatalf("Run() = %d, want 0", got)
+	}
+	composerArgs, err := os.ReadFile(composerArgsPath)
+	if err != nil {
+		t.Fatalf("ReadFile(composer args) error = %v", err)
+	}
+	if !strings.Contains(string(composerArgs), "install\n") || !strings.Contains(string(composerArgs), "--no-dev\n") {
+		t.Fatalf("composer args = %q, want install --no-dev", composerArgs)
+	}
+	if _, err := os.Stat(filepath.Join(workdir, "theme", "vendor", "friendsofphp", "php-cs-fixer", "dev.php")); err != nil {
+		t.Fatalf("source vendor was mutated or removed: %v", err)
+	}
+
+	names := readZipNames(t, filepath.Join(workdir, "dist", "client-v2.0.0.zip"))
+	for _, want := range []string{
+		"client/style.css",
+		"client/screenshot.png",
+		"client/index.php",
+		"client/app/setup.php",
+		"client/config/theme.php",
+		"client/src/Runtime.php",
+		"client/dist/manifest.json",
+		"client/vendor/autoload.php",
+		"client/vendor/acme/runtime/runtime.php",
+	} {
+		if !names[want] {
+			t.Fatalf("zip entries missing %q: %#v", want, names)
+		}
+	}
+	for _, unwanted := range []string{
+		"client/vendor/friendsofphp/php-cs-fixer/dev.php",
+		"client/composer.json",
+		"client/composer.lock",
+		"client/package.json",
+		"client/.php-cs-fixer.php",
+		"client/phpcs.xml",
+		"client/vite.config.js",
+	} {
+		if names[unwanted] {
+			t.Fatalf("zip entries unexpectedly contained %q: %#v", unwanted, names)
+		}
+	}
+}
+
+func TestRunThemePackageFailsWhenBuildOutputMissing(t *testing.T) {
+	workdir := t.TempDir()
+	if err := os.Mkdir(filepath.Join(workdir, ".git"), 0o755); err != nil {
+		t.Fatalf("Mkdir() error = %v", err)
+	}
+	if err := os.MkdirAll(filepath.Join(workdir, "theme"), 0o755); err != nil {
+		t.Fatalf("MkdirAll() error = %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(workdir, "theme", "style.css"), []byte("/*\nTheme Name: Demo\nVersion: 2.0.0\n*/\n"), 0o644); err != nil {
+		t.Fatalf("WriteFile(style.css) error = %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(workdir, "theme", "package.json"), []byte(`{"scripts":{"build":"vite build"}}`), 0o644); err != nil {
+		t.Fatalf("WriteFile(package.json) error = %v", err)
+	}
+	project := map[string]any{
+		"version":   1,
+		"project":   map[string]any{"slug": "client", "name": "Client", "type": "wordpress-theme"},
+		"wordpress": map[string]any{"deploy_unit": "theme", "theme_slug": "client", "theme_path": "theme"},
+		"artifact":  map[string]any{"path": "dist/client-v{version}.zip"},
+	}
+	projectData, err := json.MarshalIndent(project, "", "  ")
+	if err != nil {
+		t.Fatalf("MarshalIndent() error = %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(workdir, "nf.json"), append(projectData, '\n'), 0o644); err != nil {
+		t.Fatalf("WriteFile(nf.json) error = %v", err)
+	}
+
+	oldwd, err := os.Getwd()
+	if err != nil {
+		t.Fatalf("Getwd() error = %v", err)
+	}
+	if err := os.Chdir(workdir); err != nil {
+		t.Fatalf("Chdir() error = %v", err)
+	}
+	t.Cleanup(func() { _ = os.Chdir(oldwd) })
+
+	output := captureStderr(t, func() {
+		if got := Run([]string{"theme", "package", "--dry-run"}); got != 1 {
+			t.Fatalf("Run() = %d, want 1", got)
+		}
+	})
+	for _, want := range []string{"theme build output missing", "nf theme build"} {
+		if !strings.Contains(output, want) {
+			t.Fatalf("Run() stderr = %q, want %q", output, want)
+		}
+	}
+}
+
+func readZipNames(t *testing.T, path string) map[string]bool {
+	t.Helper()
+	zr, err := zip.OpenReader(path)
+	if err != nil {
+		t.Fatalf("OpenReader(%s) error = %v", path, err)
+	}
+	defer zr.Close()
+	names := map[string]bool{}
+	for _, file := range zr.File {
+		names[file.Name] = true
+	}
+	return names
 }
 
 func TestRunThemePackageFallsBackToPackageVersionWhenStyleVersionMissing(t *testing.T) {
