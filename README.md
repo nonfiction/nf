@@ -50,7 +50,7 @@ Inside an `nf` project repo with `nf.json` next to `.git`, help also shows:
 ```text
   remote      manage repo remotes
   env         manage the local development env
-  theme       package files and run theme tasks
+  theme       package clean artifacts and run theme tasks
   public      deploy static public paths
 ```
 
@@ -156,12 +156,16 @@ nf theme <task> [-- args]
 
 String tasks run through `sh -lc` from the project root. Array tasks execute directly. The underlying command is printed before execution.
 
-`nf theme package` zips existing theme files only. It does not run Composer, npm, or asset builds first. Run the right theme task before packaging:
+`nf theme package` creates a clean staged release artifact instead of zipping the development checkout as-is. It copies runtime theme files to a temporary staging directory, excludes obvious local development files, and when `composer.json` is present runs `composer install --no-dev --no-interaction --prefer-dist --optimize-autoloader --no-progress` in that staging directory before writing the zip. This preserves the working tree's `theme/vendor/` while ensuring the artifact contains production Composer dependencies such as `vendor/autoload.php` and excludes `require-dev` tooling.
+
+It still does not run npm or asset builds. Run the right theme task before packaging:
 
 ```sh
 nf theme build
 nf theme package
 ```
+
+If `package.json` has a `build` script, packaging requires built files under `dist/` or `assets/dist/` and fails clearly when they are missing. Development-only files such as `node_modules`, editor config, PHP-CS-Fixer/PHPCS/PHPStan/Psalm config, npm manifests and lockfiles, and common frontend tooling config are excluded from the artifact. The zip root remains `wordpress.theme_slug`.
 
 If `artifact.path` contains `{version}`, `nf` resolves it from:
 

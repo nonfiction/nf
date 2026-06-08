@@ -470,10 +470,14 @@ Theme task rules:
 
 Packaging rules:
 
-* `nf theme package` zips existing theme files only
-* it does not run Composer, npm, or asset builds first
+* `nf theme package` builds a clean staged artifact instead of zipping the development checkout as-is
+* staging copies runtime theme files to a temporary directory and does not mutate the working project's `vendor/`
+* when `composer.json` exists, staging runs `composer install --no-dev --no-interaction --prefer-dist --optimize-autoloader --no-progress` so the artifact contains production Composer dependencies and excludes `require-dev` packages
+* it does not run npm or asset builds first
+* if `package.json` has a `build` script, packaging requires built files under `dist/` or `assets/dist/` and fails clearly when they are missing
+* package archives exclude obvious development-only files such as `node_modules`, editor config, formatter/linter/static-analysis config, npm manifests and lockfiles, common frontend tooling config, and Composer manifest files after staging
 * package archives use `wordpress.theme_slug` as the zip root directory, even when source files live in `wordpress.theme_path`
-* deploy artifacts must include built files when needed, such as `vendor/` or `assets/dist/`
+* deploy artifacts must include built files when needed, such as `vendor/autoload.php`, `dist/`, or `assets/dist/`
 * `artifact.path` may contain `{version}`
 * `{version}` resolves from `theme/style.css` `Version:` first, then `theme/package.json` `version`
 * fail clearly if neither version source exists
@@ -482,7 +486,7 @@ Deploy rules:
 
 * public UX stays `nf theme deploy <remote> [--dry-run]`
 * deploy is a one-command packaged release deploy, not manual WordPress zip upload
-* deploy uses the same packaging behavior as `nf theme package`; it does not run Composer, npm, or asset builds automatically
+* deploy uses the same packaging behavior as `nf theme package`; it stages Composer production dependencies but does not run npm or asset builds automatically
 * direct in-place source rsync to the active theme directory is superseded
 * remote releases live under `wp-content/themes/.nf-releases/<theme-slug>/<release-id>/`
 * active theme files live at `wp-content/themes/<theme-slug>/`
