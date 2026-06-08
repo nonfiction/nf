@@ -47,7 +47,7 @@ func runEnvHelp() int {
 func runThemeHelp() int {
 	lines := []helpLine{
 		{"tasks", "list configured theme tasks"},
-		{"package [--dry-run] [--source] [--output]", "package theme files"},
+		{"package [--dry-run] [--source] [--output]", "package a clean theme artifact"},
 		{"deploy <remote> [--dry-run]", "deploy a packaged theme release"},
 		{"rollback <remote> [--dry-run]", "roll back to the previous theme release"},
 	}
@@ -666,7 +666,7 @@ func runHelp() int {
 		lines = append(lines,
 			helpLine{"remote", "manage repo remotes"},
 			helpLine{"env", "manage the local development env"},
-			helpLine{"theme", "package files and run theme tasks"},
+			helpLine{"theme", "package clean artifacts and run theme tasks"},
 			helpLine{"public", "deploy static public paths"},
 		)
 	}
