@@ -83,8 +83,9 @@ func projectInitMetadata(args projectInitArgs) map[string]any {
 	metadata := map[string]any{
 		"version": 1,
 		"project": map[string]any{
-			"slug": projectSlug,
-			"type": firstNonEmpty(args.projectType, "wordpress-theme"),
+			"slug":             projectSlug,
+			"type":             firstNonEmpty(args.projectType, "wordpress-theme"),
+			"password_version": 0,
 		},
 		"wordpress": map[string]any{
 			"deploy_unit": "theme",

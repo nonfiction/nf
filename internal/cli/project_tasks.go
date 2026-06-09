@@ -251,6 +251,7 @@ func loadEnvConfig(root string, metadata map[string]any) (envConfig, bool) {
 	wordpress := mapMapAtPath(metadata, "wordpress")
 	return envConfig{
 		ProjectSlug:      projectSlug,
+		PasswordVersion:  projectPasswordVersion(metadata),
 		RepoRoot:         root,
 		ThemePath:        themePath,
 		EnvDir:           config.EnvDir(projectSlug),

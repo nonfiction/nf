@@ -14,7 +14,6 @@ import (
 	"strings"
 
 	"github.com/nonfiction/nf/internal/config"
-	"github.com/nonfiction/nf/internal/passwords"
 )
 
 func envCommandDir(cfg envConfig) string {
@@ -78,11 +77,7 @@ func envAdminPassword(cfg envConfig) (string, error) {
 	if cfg.AdminPassword != "" {
 		return cfg.AdminPassword, nil
 	}
-	salt, err := passwords.SecretSalt()
-	if err != nil {
-		return "", err
-	}
-	return passwords.DerivePassword(cfg.ProjectSlug, "wp-admin", salt), nil
+	return deriveProjectPassword(cfg.ProjectSlug, "wp-admin", cfg.PasswordVersion)
 }
 
 func writeManagedFile(path, contents string, mode os.FileMode) error {

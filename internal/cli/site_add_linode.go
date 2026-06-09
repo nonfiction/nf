@@ -170,6 +170,7 @@ func printSiteAddPlan(plan siteAddPlan, mode string) {
 	fmt.Printf("  ssh: %s@%s\n", plan.SSHUser, plan.SSHHost)
 	fmt.Printf("  site: %s\n", plan.Site)
 	fmt.Printf("  site id: %s\n", plan.SiteID)
+	fmt.Printf("  password version: %s\n", firstNonEmpty(plan.PasswordVersion, "0"))
 	fmt.Printf("  admin user: %s\n", plan.AdminUser)
 	fmt.Printf("  admin email: %s\n", plan.AdminEmail)
 	fmt.Printf("  admin password: derived from %s\n", plan.Site)

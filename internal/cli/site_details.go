@@ -367,11 +367,8 @@ func siteAdminPassword(record map[string]any) (string, error) {
 	if slug == "" {
 		return "", nil
 	}
-	salt, err := passwords.SecretSalt()
-	if err != nil {
-		return "", err
-	}
-	return passwords.DerivePassword(slug, "wp-admin", salt), nil
+	version := currentProjectPasswordVersionForSite(slug)
+	return deriveProjectPassword(slug, "wp-admin", version)
 }
 
 func sitePasswordSlug(record map[string]any) string {

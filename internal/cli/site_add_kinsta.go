@@ -13,7 +13,6 @@ import (
 	"github.com/nonfiction/nf/internal/config"
 	"github.com/nonfiction/nf/internal/envwizard"
 	"github.com/nonfiction/nf/internal/kinsta"
-	"github.com/nonfiction/nf/internal/passwords"
 	"github.com/nonfiction/nf/internal/state"
 	"github.com/nonfiction/nf/internal/ui"
 )
@@ -71,24 +70,26 @@ func buildKinstaSiteAddPlan(args siteAddArgs) (kinstaSiteAddPlan, error) {
 	if dnsAccountID == "" {
 		return kinstaSiteAddPlan{}, ProjectError{Msg: fmt.Sprintf("Expected dnsimple_account_id in %s. Run nf provider check dnsimple.", config.ConfigFile())}
 	}
-	salt, err := passwords.SecretSalt()
+	passwordVersion := currentProjectPasswordVersionForSite(siteSlug)
+	adminPassword, err := deriveProjectPassword(siteSlug, "wp-admin", passwordVersion)
 	if err != nil {
 		return kinstaSiteAddPlan{}, err
 	}
 	plan := kinstaSiteAddPlan{
-		Target:        target,
-		TargetName:    targetName,
-		CompanyID:     companyID,
-		Site:          siteSlug,
-		SiteID:        kinstaSiteID(siteSlug),
-		BaseDomain:    baseDomain,
-		Region:        region,
-		PHPVersion:    phpVersion,
-		AdminUser:     adminUser,
-		AdminEmail:    adminEmail,
-		AdminPassword: passwords.DerivePassword(siteSlug, "wp-admin", salt),
-		DNSZone:       baseDomain,
-		DNSAccountID:  dnsAccountID,
+		Target:          target,
+		TargetName:      targetName,
+		CompanyID:       companyID,
+		Site:            siteSlug,
+		SiteID:          kinstaSiteID(siteSlug),
+		BaseDomain:      baseDomain,
+		PasswordVersion: passwordVersion,
+		Region:          region,
+		PHPVersion:      phpVersion,
+		AdminUser:       adminUser,
+		AdminEmail:      adminEmail,
+		AdminPassword:   adminPassword,
+		DNSZone:         baseDomain,
+		DNSAccountID:    dnsAccountID,
 	}
 	for _, env := range []string{"live", "staging"} {
 		domain := kinstaSiteDomain(siteSlug, baseDomain, env)
@@ -192,6 +193,7 @@ func printKinstaSiteAddPlan(plan kinstaSiteAddPlan, mode string) {
 	}
 	fmt.Printf("  site: %s\n", plan.Site)
 	fmt.Printf("  site id: %s\n", plan.SiteID)
+	fmt.Printf("  password version: %s\n", firstNonEmpty(plan.PasswordVersion, "0"))
 	fmt.Printf("  region: %s\n", plan.Region)
 	fmt.Printf("  php: %s\n", plan.PHPVersion)
 	fmt.Printf("  admin user: %s\n", plan.AdminUser)

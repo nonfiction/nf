@@ -8,7 +8,6 @@ import (
 	"strings"
 
 	"github.com/nonfiction/nf/internal/config"
-	"github.com/nonfiction/nf/internal/passwords"
 	"github.com/nonfiction/nf/internal/state"
 )
 
@@ -33,19 +32,20 @@ type siteEnvPlan struct {
 }
 
 type siteAddPlan struct {
-	Target        map[string]any
-	TargetName    string
-	SSHUser       string
-	SSHHost       string
-	Site          string
-	SiteID        string
-	BaseDomain    string
-	PHPVersion    string
-	AdminUser     string
-	AdminEmail    string
-	AdminPassword string
-	DBPassword    string
-	Envs          []siteEnvPlan
+	Target          map[string]any
+	TargetName      string
+	SSHUser         string
+	SSHHost         string
+	Site            string
+	SiteID          string
+	BaseDomain      string
+	PasswordVersion string
+	PHPVersion      string
+	AdminUser       string
+	AdminEmail      string
+	AdminPassword   string
+	DBPassword      string
+	Envs            []siteEnvPlan
 }
 
 type kinstaSiteAddEnvPlan struct {
@@ -65,20 +65,21 @@ type kinstaSiteAddEnvPlan struct {
 }
 
 type kinstaSiteAddPlan struct {
-	Target        map[string]any
-	TargetName    string
-	CompanyID     string
-	Site          string
-	SiteID        string
-	BaseDomain    string
-	Region        string
-	PHPVersion    string
-	AdminUser     string
-	AdminEmail    string
-	AdminPassword string
-	DNSZone       string
-	DNSAccountID  string
-	Envs          []kinstaSiteAddEnvPlan
+	Target          map[string]any
+	TargetName      string
+	CompanyID       string
+	Site            string
+	SiteID          string
+	BaseDomain      string
+	PasswordVersion string
+	Region          string
+	PHPVersion      string
+	AdminUser       string
+	AdminEmail      string
+	AdminPassword   string
+	DNSZone         string
+	DNSAccountID    string
+	Envs            []kinstaSiteAddEnvPlan
 }
 
 type kinstaProvisionResult struct {
@@ -240,23 +241,29 @@ func buildSiteAddPlan(args siteAddArgs) (siteAddPlan, error) {
 	if sshUser == "" {
 		return siteAddPlan{}, ProjectError{Msg: fmt.Sprintf("Target %q is missing an SSH user. Set linode_default_user with nf config set-linode-default-user <user>.", targetName)}
 	}
-	salt, err := passwords.SecretSalt()
+	passwordVersion := currentProjectPasswordVersionForSite(siteSlug)
+	adminPassword, err := deriveProjectPassword(siteSlug, "wp-admin", passwordVersion)
+	if err != nil {
+		return siteAddPlan{}, err
+	}
+	dbPassword, err := deriveProjectPassword(siteSlug, "mysql", passwordVersion)
 	if err != nil {
 		return siteAddPlan{}, err
 	}
 	plan := siteAddPlan{
-		Target:        target,
-		TargetName:    targetName,
-		SSHUser:       sshUser,
-		SSHHost:       sshHost,
-		Site:          siteSlug,
-		SiteID:        linodeSiteID(siteSlug, targetName),
-		BaseDomain:    baseDomain,
-		PHPVersion:    targetPHPVersion(target),
-		AdminUser:     adminUser,
-		AdminEmail:    adminEmail,
-		AdminPassword: passwords.DerivePassword(siteSlug, "wp-admin", salt),
-		DBPassword:    passwords.DerivePassword(siteSlug, "mysql", salt),
+		Target:          target,
+		TargetName:      targetName,
+		SSHUser:         sshUser,
+		SSHHost:         sshHost,
+		Site:            siteSlug,
+		SiteID:          linodeSiteID(siteSlug, targetName),
+		BaseDomain:      baseDomain,
+		PasswordVersion: passwordVersion,
+		PHPVersion:      targetPHPVersion(target),
+		AdminUser:       adminUser,
+		AdminEmail:      adminEmail,
+		AdminPassword:   adminPassword,
+		DBPassword:      dbPassword,
 	}
 	for _, env := range []string{"live", "staging"} {
 		hostname := siteEnvHostname(siteSlug, targetName, baseDomain, env)
