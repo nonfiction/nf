@@ -741,7 +741,7 @@ Status:
 * [ ] release/update workflow
 * [ ] onboarding docs
 
-No separate shared state sync is planned. Shared truth comes from provider APIs, Kinsta API, each Linode target's `/var/lib/nf/sites.json`, and deterministic password derivation from the agreed `NF_PASSWORD_SALT`.
+No separate shared state sync is planned. Shared truth comes from provider APIs, Kinsta API, each Linode target's `/var/lib/nf/sites.json`, and deterministic password derivation from the agreed `NF_PASSWORD_SALT` plus the repo-local `project.password_version` when non-zero.
 
 ## Non-goals for now
 

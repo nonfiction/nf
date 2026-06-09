@@ -131,6 +131,8 @@ nf.json
 
 This file is safe to commit. It must not contain API tokens, SSH keys, live database passwords, provider secrets, or mutable provider inventory.
 
+Generated project metadata includes `project.password_version: 0`. Leave it at `0` for stable derived passwords; increment it to rotate derived passwords for that project/site without changing the shared `NF_PASSWORD_SALT`.
+
 Common init flags:
 
 ```sh
@@ -487,7 +489,7 @@ nf password show-salt
 nf password derive <scope> <value...>
 ```
 
-Password derivation uses `NF_PASSWORD_SALT` from the environment or `~/.config/nf/.env`. Legacy `NF_SECRET_SALT` is accepted only as a migration fallback.
+Password derivation uses `NF_PASSWORD_SALT` from the environment or `~/.config/nf/.env`. Legacy `NF_SECRET_SALT` is accepted only as a migration fallback. Project site passwords also include `project.password_version` from `nf.json` when it is non-zero; missing or `0` preserves the original derivation.
 
 ## Safety
 
