@@ -2280,7 +2280,7 @@ func TestRunSiteAddLinodeExecuteRunsSSHAndCachesEnvs(t *testing.T) {
 	if sshUser != "nonfiction" || sshHost != "app1-linode.nonfiction.dev" {
 		t.Fatalf("ssh target = %s@%s, want nonfiction@app1-linode.nonfiction.dev", sshUser, sshHost)
 	}
-	for _, want := range []string{"/var/www/sites/foobar/public", "/var/www/sites/foobar_staging/public", "CREATE DATABASE IF NOT EXISTS", "wp core install", "foobar.app1-linode.nonfiction.dev", "foobar-staging.app1-linode.nonfiction.dev", "/var/lib/nf/sites.json"} {
+	for _, want := range []string{"/var/www/sites/foobar/public", "/var/www/sites/foobar_staging/public", "CREATE DATABASE IF NOT EXISTS", "wp core install", "foobar.app1-linode.nonfiction.dev", "foobar-staging.app1-linode.nonfiction.dev", "/var/lib/nf/sites.json", "/etc/nginx/conf.d/nf-server-names-hash.conf", "server_names_hash_bucket_size 128;", "server_names_hash_max_size 4096;"} {
 		if !strings.Contains(sshScript, want) {
 			t.Fatalf("ssh script missing %q:\n%s", want, sshScript)
 		}
