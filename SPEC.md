@@ -472,7 +472,7 @@ Packaging rules:
 
 * `nf theme package` builds a clean staged artifact instead of zipping the development checkout as-is
 * staging copies runtime theme files to a temporary directory and does not mutate the working project's `vendor/`
-* when `composer.json` exists, staging runs `composer install --no-dev --no-interaction --prefer-dist --optimize-autoloader --no-progress` so the artifact contains production Composer dependencies and excludes `require-dev` packages
+* when `composer.json` exists, staging runs `composer install --no-dev --no-interaction --prefer-dist --optimize-autoloader --no-progress` so the artifact is ready to upload/install/activate with `vendor/autoload.php` and runtime Composer packages from `require`, while excluding `require-dev` packages and dev-only Composer tooling binaries such as PHP-CS-Fixer, PHPCS, and PHPCBF
 * it does not run npm or asset builds first
 * if `package.json` has a `build` script, packaging requires built files under `dist/` or `assets/dist/` and fails clearly when they are missing
 * package archives exclude obvious development-only files such as `node_modules`, editor config, formatter/linter/static-analysis config, npm manifests and lockfiles, common frontend tooling config, and Composer manifest files after staging

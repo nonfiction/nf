@@ -156,7 +156,7 @@ nf theme <task> [-- args]
 
 String tasks run through `sh -lc` from the project root. Array tasks execute directly. The underlying command is printed before execution.
 
-`nf theme package` creates a clean staged release artifact instead of zipping the development checkout as-is. It copies runtime theme files to a temporary staging directory, excludes obvious local development files, and when `composer.json` is present runs `composer install --no-dev --no-interaction --prefer-dist --optimize-autoloader --no-progress` in that staging directory before writing the zip. This preserves the working tree's `theme/vendor/` while ensuring the artifact contains production Composer dependencies such as `vendor/autoload.php` and excludes `require-dev` tooling.
+`nf theme package` creates a clean staged release artifact instead of zipping the development checkout as-is. It copies runtime theme files to a temporary staging directory, excludes obvious local development files, and when `composer.json` is present runs `composer install --no-dev --no-interaction --prefer-dist --optimize-autoloader --no-progress` in that staging directory before writing the zip. This preserves the working tree's `theme/vendor/` while ensuring the artifact is ready to upload/install/activate: it includes `vendor/autoload.php` and runtime Composer packages from `require`, but excludes `require-dev` packages and dev-only Composer tooling binaries such as PHP-CS-Fixer, PHPCS, and PHPCBF.
 
 It still does not run npm or asset builds. Run the right theme task before packaging:
 
