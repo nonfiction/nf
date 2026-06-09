@@ -56,7 +56,7 @@ func (legacyTestProvider) FindServerByLabel(ctx context.Context, label string) (
 		if id == "" {
 			id = valueString(record["instance_id"])
 		}
-		return &CreatedServer{Provider: "linode", ProviderID: id, Name: label, Hostname: label, IPv4: linodeIPFromRecord(record), Tags: recordStringList(record["tags"])}, nil
+		return &CreatedServer{Provider: "linode", ProviderID: id, Name: label, Hostname: label, IPv4: linodeIPFromRecord(record), Region: valueString(record["region"]), Type: valueString(record["type"]), Image: valueString(record["image"]), Tags: recordStringList(record["tags"])}, nil
 	}
 	return nil, nil
 }

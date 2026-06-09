@@ -348,6 +348,83 @@ func TestBuildPlanInteractiveUsesSelectForUbuntuPHPStack(t *testing.T) {
 	}
 }
 
+func TestBuildPlanTargetModeDetectsExistingLinodeBeforeCreationPrompts(t *testing.T) {
+	configHome := t.TempDir()
+	t.Setenv("NF_CONFIG_HOME", configHome)
+	t.Setenv("NF_STATE_HOME", filepath.Join(configHome, "state"))
+	t.Setenv("NF_SERVER_DOMAIN", "nonfiction.dev")
+
+	oldProviderFactory := serverProviderFactory
+	oldRunLinodeValue := runLinodeCLIValueFn
+	oldSelect := selectVersionFn
+	oldPrompt := promptStringFn
+	oldMultiSelect := multiSelectFn
+	oldConfirm := confirmFn
+	t.Cleanup(func() {
+		serverProviderFactory = oldProviderFactory
+		runLinodeCLIValueFn = oldRunLinodeValue
+		selectVersionFn = oldSelect
+		promptStringFn = oldPrompt
+		multiSelectFn = oldMultiSelect
+		confirmFn = oldConfirm
+	})
+
+	serverProviderFactory = func(plan Plan) (ServerProvider, error) { return legacyTestProvider{}, nil }
+	runLinodeCLIValueFn = func(args []string) (any, error) {
+		if len(args) >= 2 && args[0] == "linodes" && args[1] == "list" {
+			return []any{map[string]any{"id": json.Number("98589908"), "label": "app4-linode", "ipv4": []any{"172.105.101.108"}, "region": "ca-central", "type": "g6-standard-1", "image": "linode/ubuntu24.04", "tags": []any{"nf"}}}, nil
+		}
+		t.Fatalf("unexpected linode-cli value args: %v", args)
+		return nil, nil
+	}
+	selectVersionFn = func(title string, options []ui.SelectOption) (string, error) {
+		t.Fatalf("unexpected stack prompt for existing target: %q", title)
+		return "", nil
+	}
+	promptStringFn = func(prompt, defaultValue string, allowBlank bool) (string, error) {
+		t.Fatalf("unexpected prompt for existing target: %q", prompt)
+		return "", nil
+	}
+	multiSelectFn = func(title string, options []ui.SelectOption) ([]string, error) {
+		t.Fatalf("unexpected SSH key prompt for existing target: %q", title)
+		return nil, nil
+	}
+	var confirmPrompt string
+	confirmFn = func(prompt string, defaultYes bool) (bool, error) {
+		confirmPrompt = prompt
+		return false, nil
+	}
+
+	plan, err := BuildPlan(Args{Provider: "linode", DnsProvider: "dnsimple", Name: "app4", TargetMode: true})
+	if err != nil {
+		t.Fatalf("BuildPlan() error = %v", err)
+	}
+	if !plan.ReuseExisting {
+		t.Fatal("ReuseExisting = false, want true")
+	}
+	if got, want := plan.Name, "app4-linode"; got != want {
+		t.Fatalf("Name = %q, want %q", got, want)
+	}
+	if got, want := plan.Region, "ca-central"; got != want {
+		t.Fatalf("Region = %q, want %q", got, want)
+	}
+	if got, want := plan.LinodeType, "g6-standard-1"; got != want {
+		t.Fatalf("LinodeType = %q, want %q", got, want)
+	}
+	if got, want := plan.UbuntuVersion, "24.04"; got != want {
+		t.Fatalf("UbuntuVersion = %q, want %q", got, want)
+	}
+	if got, want := sshKeySummary(plan), "unchanged on existing target"; got != want {
+		t.Fatalf("sshKeySummary() = %q, want %q", got, want)
+	}
+	if _, _, err := preparePlan(plan); err != nil {
+		t.Fatalf("preparePlan() error = %v", err)
+	}
+	if got, want := confirmPrompt, "This will reuse the existing Linode target and reconcile DNS/firewall state. Continue?"; got != want {
+		t.Fatalf("confirm prompt = %q, want %q", got, want)
+	}
+}
+
 func TestBuildPlanInteractiveFileSSHSourcePromptsForKeyPath(t *testing.T) {
 	oldSelect := selectVersionFn
 	oldPrompt := promptStringFn

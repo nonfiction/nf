@@ -136,6 +136,7 @@ type Plan struct {
 	NonInteractive    bool
 	ShowCloudInit     bool
 	TargetMode        bool
+	ReuseExisting     bool
 }
 
 type ubuntuRelease struct {
@@ -614,6 +615,9 @@ func appendLinodeAuthorizedKeyArgs(args []string, keys []SSHAuthorizedKey) []str
 }
 
 func sshKeySummary(plan Plan) string {
+	if plan.ReuseExisting {
+		return "unchanged on existing target"
+	}
 	source := firstNonEmpty(plan.SshKeySource, "linode-profile")
 	switch source {
 	case "file":
@@ -659,6 +663,9 @@ type CreatedServer struct {
 	Name       string   `json:"name"`
 	Hostname   string   `json:"hostname"`
 	IPv4       string   `json:"ipv4"`
+	Region     string   `json:"region,omitempty"`
+	Type       string   `json:"type,omitempty"`
+	Image      string   `json:"image,omitempty"`
 	Tags       []string `json:"tags,omitempty"`
 }
 
@@ -805,7 +812,7 @@ func createdServerFromLinodeInstance(inst linodego.Instance) *CreatedServer {
 		}
 	}
 	id := strconv.Itoa(inst.ID)
-	return &CreatedServer{Provider: "linode", ProviderID: id, Name: inst.Label, Hostname: inst.Label, IPv4: ip, Tags: inst.Tags}
+	return &CreatedServer{Provider: "linode", ProviderID: id, Name: inst.Label, Hostname: inst.Label, IPv4: ip, Region: inst.Region, Type: inst.Type, Image: inst.Image, Tags: inst.Tags}
 }
 
 func createdServerHasTag(server CreatedServer, tag string) bool {
@@ -2042,6 +2049,34 @@ func applyProvisionResumeDefaults(args Args, record map[string]any) (Args, []SSH
 	return args, sshAuthorizedKeysFromRecord(record)
 }
 
+func applyExistingTargetDefaults(args Args, existing CreatedServer, defaultRegion, defaultType, defaultImage, defaultUser string) Args {
+	if args.Region == "" {
+		args.Region = firstNonEmpty(existing.Region, defaultRegion)
+	}
+	if args.Type == "" {
+		args.Type = firstNonEmpty(existing.Type, defaultType)
+	}
+	if args.Image == "" {
+		args.Image = firstNonEmpty(existing.Image, defaultImage)
+	}
+	if args.UbuntuVersion == "" && args.Image == "" {
+		args.UbuntuVersion = "24.04"
+	}
+	if args.SshUser == "" {
+		args.SshUser = defaultUser
+	}
+	return args
+}
+
+func detectExistingTarget(ctx context.Context, providerName, label string) (*CreatedServer, error) {
+	plan := Plan{Provider: providerName, Label: label}
+	provider, err := serverProviderFactory(plan)
+	if err != nil {
+		return nil, err
+	}
+	return provider.FindServerByLabel(ctx, label)
+}
+
 func existingProvisionStatus(record map[string]any) string {
 	return strings.ToLower(valueString(record["status"]))
 }
@@ -2081,7 +2116,7 @@ func createdServerFromRecord(plan Plan, record map[string]any) (CreatedServer, e
 	if ipv4 == "" {
 		return CreatedServer{}, Error{Msg: fmt.Sprintf("Existing provisioning record for %q is missing an IPv4 address and cannot resume.", plan.Hostname)}
 	}
-	return CreatedServer{Provider: plan.Provider, ProviderID: providerID, Name: plan.Name, Hostname: plan.Hostname, IPv4: ipv4}, nil
+	return CreatedServer{Provider: plan.Provider, ProviderID: providerID, Name: plan.Name, Hostname: plan.Hostname, IPv4: ipv4, Region: valueString(record["region"]), Type: valueString(record["type"]), Image: firstNonEmpty(valueString(record["image"]), nestedMapValue(record, "os", "image"))}, nil
 }
 
 func existingCreatedAt(record map[string]any, fallback string) string {
@@ -2404,15 +2439,29 @@ func BuildPlan(args Args) (Plan, error) {
 		return Plan{}, Error{Msg: "Server name cannot be empty."}
 	}
 	resumeKeys := []SSHAuthorizedKey(nil)
+	reuseExisting := false
 	resumeRecord, _, err := findProvisionRecord(Plan{Provider: provider, Name: name, Hostname: hostname, Label: label, TargetMode: args.TargetMode})
 	if err != nil {
 		return Plan{}, err
 	}
+	defaultRegion := firstNonEmpty(globalConfigValue("linode_default_region"), "ca-central")
+	defaultType := firstNonEmpty(globalConfigValue("linode_default_type"), "g6-standard-1")
+	defaultImage := globalConfigValue("linode_default_image")
+	defaultUser := firstNonEmpty(globalConfigValue("linode_default_user"), "nonfiction")
 	if resumeRecord != nil {
 		status := existingProvisionStatus(resumeRecord)
 		phase := existingProvisionPhase(resumeRecord)
-		if status != "provisioned" && phase != "complete" {
+		if args.TargetMode || (status != "provisioned" && phase != "complete") {
 			args, resumeKeys = applyProvisionResumeDefaults(args, resumeRecord)
+		}
+		if args.TargetMode && (status == "provisioned" || phase == "complete") {
+			reuseExisting = true
+			args = applyExistingTargetDefaults(args, CreatedServer{}, defaultRegion, defaultType, defaultImage, defaultUser)
+		}
+	} else if args.TargetMode && !nonInteractive {
+		if existing, err := detectExistingTarget(context.Background(), provider, label); err == nil && existing != nil && createdServerHasTag(*existing, "nf") {
+			reuseExisting = true
+			args = applyExistingTargetDefaults(args, *existing, defaultRegion, defaultType, defaultImage, defaultUser)
 		}
 	}
 	firewallMode := strings.ToLower(firstNonEmpty(args.Firewall, "managed"))
@@ -2424,10 +2473,6 @@ func BuildPlan(args Args) (Plan, error) {
 	if firewallMode == "none" && strings.TrimSpace(args.FirewallID) != "" {
 		return Plan{}, Error{Msg: "--firewall-id requires --firewall managed."}
 	}
-	defaultRegion := firstNonEmpty(globalConfigValue("linode_default_region"), "ca-central")
-	defaultType := firstNonEmpty(globalConfigValue("linode_default_type"), "g6-standard-1")
-	defaultImage := globalConfigValue("linode_default_image")
-	defaultUser := firstNonEmpty(globalConfigValue("linode_default_user"), "nonfiction")
 	ubuntuRelease, err := selectUbuntuStack(args.UbuntuVersion, firstNonEmpty(args.Image, defaultImage), nonInteractive)
 	if err != nil {
 		return Plan{}, err
@@ -2514,6 +2559,7 @@ func BuildPlan(args Args) (Plan, error) {
 		NonInteractive:    nonInteractive,
 		ShowCloudInit:     args.ShowCloudInit,
 		TargetMode:        args.TargetMode,
+		ReuseExisting:     reuseExisting,
 	})
 	plan.AuthorizedKeys = resumeKeys
 	return plan, nil
@@ -2709,7 +2755,7 @@ func preparePlan(plan Plan) (Plan, string, error) {
 		}
 		return plan, plan.WriteCloudInit, nil
 	}
-	if len(plan.AuthorizedKeys) == 0 {
+	if len(plan.AuthorizedKeys) == 0 && !plan.ReuseExisting {
 		provider, err := serverProviderFactory(plan)
 		if err != nil {
 			return Plan{}, plan.WriteCloudInit, err
@@ -2723,7 +2769,11 @@ func preparePlan(plan Plan) (Plan, string, error) {
 	if plan.Execute && plan.Yes {
 		return plan, plan.WriteCloudInit, nil
 	}
-	answer, err := confirmFn("This will create a Linode server and DNS records. Continue?", false)
+	prompt := "This will create a Linode server and DNS records. Continue?"
+	if plan.ReuseExisting {
+		prompt = "This will reuse the existing Linode target and reconcile DNS/firewall state. Continue?"
+	}
+	answer, err := confirmFn(prompt, false)
 	if err != nil {
 		return Plan{}, plan.WriteCloudInit, err
 	}
@@ -2848,7 +2898,7 @@ func ProvisionServer(plan Plan) (*ServerCreateResult, error) {
 	}
 	ctx := context.Background()
 	sshKeys := effectivePlan.AuthorizedKeys
-	if len(sshKeys) == 0 {
+	if len(sshKeys) == 0 && !effectivePlan.ReuseExisting {
 		var err error
 		sshKeys, err = resolveAuthorizedKeys(ctx, provider, effectivePlan, true)
 		if err != nil {
@@ -2909,6 +2959,9 @@ func ProvisionServer(plan Plan) (*ServerCreateResult, error) {
 				return nil, err
 			}
 		} else {
+			if effectivePlan.ReuseExisting {
+				return nil, Error{Msg: fmt.Sprintf("Existing Linode target %q was detected before confirmation, but it was not found during execution. No changes made.", effectivePlan.Name)}
+			}
 			dnsZone, err := dnsimpleZoneLookup(effectivePlan, dnsimpleToken)
 			if err != nil {
 				return nil, err
