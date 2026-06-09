@@ -7737,6 +7737,7 @@ func TestRunThemePackageStagesProductionComposerDependencies(t *testing.T) {
 		filepath.Join(workdir, "theme", "config"),
 		filepath.Join(workdir, "theme", "src"),
 		filepath.Join(workdir, "theme", "dist"),
+		filepath.Join(workdir, "theme", "vendor", "bin"),
 		filepath.Join(workdir, "theme", "vendor", "friendsofphp", "php-cs-fixer"),
 	} {
 		if err := os.MkdirAll(dir, 0o755); err != nil {
@@ -7757,6 +7758,7 @@ func TestRunThemePackageStagesProductionComposerDependencies(t *testing.T) {
 		filepath.Join(workdir, "theme", ".php-cs-fixer.php"):                                 "<?php\n",
 		filepath.Join(workdir, "theme", "phpcs.xml"):                                         "<ruleset />\n",
 		filepath.Join(workdir, "theme", "vite.config.js"):                                    "export default {}\n",
+		filepath.Join(workdir, "theme", "vendor", "bin", "phpcs"):                            "#!/bin/sh\n",
 		filepath.Join(workdir, "theme", "vendor", "friendsofphp", "php-cs-fixer", "dev.php"): "<?php\n",
 	}
 	for path, content := range files {
@@ -7827,6 +7829,7 @@ func TestRunThemePackageStagesProductionComposerDependencies(t *testing.T) {
 		}
 	}
 	for _, unwanted := range []string{
+		"client/vendor/bin/phpcs",
 		"client/vendor/friendsofphp/php-cs-fixer/dev.php",
 		"client/composer.json",
 		"client/composer.lock",
