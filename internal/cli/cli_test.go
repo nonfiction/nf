@@ -2249,6 +2249,63 @@ func TestRunSiteAddLinodeDryRunPlansLiveAndStaging(t *testing.T) {
 	}
 }
 
+func TestBuildSiteAddPlanUsesMatchingProjectPasswordVersion(t *testing.T) {
+	configDir := t.TempDir()
+	stateDir := t.TempDir()
+	t.Setenv("NF_CONFIG_HOME", configDir)
+	t.Setenv("NF_STATE_HOME", stateDir)
+	t.Setenv("NF_PASSWORD_SALT", "test-salt")
+	if err := saveGlobalConfig(map[string]string{"base_domain": "nonfiction.dev", "default_wp_email": "web@nonfiction.ca", "default_wp_user": "admin", "linode_default_user": "nonfiction"}); err != nil {
+		t.Fatalf("saveGlobalConfig() error = %v", err)
+	}
+	if err := state.SaveStateRecords("providers", []map[string]any{{"provider": "linode", "targets": []map[string]any{{"name": "app1-linode", "provider": "linode", "hostname": "app1-linode.nonfiction.dev", "ssh_user": "nonfiction"}}}}); err != nil {
+		t.Fatalf("SaveStateRecords(providers) error = %v", err)
+	}
+	repoRoot := t.TempDir()
+	if err := os.Mkdir(filepath.Join(repoRoot, ".git"), 0o755); err != nil {
+		t.Fatalf("Mkdir(.git) error = %v", err)
+	}
+	project := map[string]any{"version": 1, "project": map[string]any{"slug": "foobar", "password_version": 5}}
+	data, err := json.MarshalIndent(project, "", "  ")
+	if err != nil {
+		t.Fatalf("MarshalIndent() error = %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(repoRoot, "nf.json"), append(data, '\n'), 0o644); err != nil {
+		t.Fatalf("WriteFile(nf.json) error = %v", err)
+	}
+	oldwd, err := os.Getwd()
+	if err != nil {
+		t.Fatalf("Getwd() error = %v", err)
+	}
+	if err := os.Chdir(repoRoot); err != nil {
+		t.Fatalf("Chdir() error = %v", err)
+	}
+	t.Cleanup(func() { _ = os.Chdir(oldwd) })
+
+	plan, err := buildSiteAddPlan(siteAddArgs{target: "app1-linode", site: "foobar"})
+	if err != nil {
+		t.Fatalf("buildSiteAddPlan() error = %v", err)
+	}
+	if got, want := plan.PasswordVersion, "5"; got != want {
+		t.Fatalf("PasswordVersion = %q, want %q", got, want)
+	}
+	if got, want := plan.AdminPassword, passwords.DerivePassword("foobar:v5", "wp-admin", "test-salt"); got != want {
+		t.Fatalf("AdminPassword = %q, want %q", got, want)
+	}
+	if got, want := plan.DBPassword, passwords.DerivePassword("foobar:v5", "mysql", "test-salt"); got != want {
+		t.Fatalf("DBPassword = %q, want %q", got, want)
+	}
+	records := siteAddRecords(plan)
+	if len(records) != 2 {
+		t.Fatalf("siteAddRecords len = %d, want 2", len(records))
+	}
+	for _, record := range records {
+		if _, ok := record["password_version"]; ok {
+			t.Fatalf("siteAddRecords wrote password_version into provider state: %#v", record)
+		}
+	}
+}
+
 func TestRunSiteAddLinodeExecuteRunsSSHAndCachesEnvs(t *testing.T) {
 	configDir := t.TempDir()
 	stateDir := t.TempDir()
@@ -2284,6 +2341,9 @@ func TestRunSiteAddLinodeExecuteRunsSSHAndCachesEnvs(t *testing.T) {
 		if !strings.Contains(sshScript, want) {
 			t.Fatalf("ssh script missing %q:\n%s", want, sshScript)
 		}
+	}
+	if strings.Contains(sshScript, "password_version") {
+		t.Fatalf("ssh script wrote password_version into target state:\n%s", sshScript)
 	}
 	sites, err := state.LoadStateRecords("sites")
 	if err != nil {
@@ -2327,6 +2387,9 @@ func TestRunSiteAddLinodeExecuteRunsSSHAndCachesEnvs(t *testing.T) {
 		}
 		if got := recordValueString(record["name"]); got != "foobar" {
 			t.Fatalf("%s name = %q, want foobar", want.env, got)
+		}
+		if _, ok := record["password_version"]; ok {
+			t.Fatalf("%s cached record wrote password_version: %#v", want.env, record)
 		}
 		if got := recordValueString(record["target_name"]); got != "" {
 			t.Fatalf("%s target_name = %q, want empty", want.env, got)
@@ -2493,6 +2556,9 @@ func TestRunSiteAddKinstaExecuteCachesEnvs(t *testing.T) {
 		}
 		if got := recordValueString(record["target"]); got != "kinsta" {
 			t.Fatalf("%s target = %q, want kinsta", want.env, got)
+		}
+		if _, ok := record["password_version"]; ok {
+			t.Fatalf("%s cached record wrote password_version: %#v", want.env, record)
 		}
 		if got := recordValueString(record["hostname"]); got != want.domain {
 			t.Fatalf("%s hostname = %q, want %q", want.env, got, want.domain)
@@ -3169,6 +3235,48 @@ func TestRunSitePasswordPrintsAdminPasswordOnly(t *testing.T) {
 	}
 
 	want := passwords.DerivePassword("happytents", "wp-admin", "test-salt") + "\n"
+	output := captureStdout(t, func() {
+		if got := Run([]string{"site", "password", "happytents.app2-linode"}); got != 0 {
+			t.Fatalf("Run(site password) = %d, want 0", got)
+		}
+	})
+	if output != want {
+		t.Fatalf("site password output = %q, want %q", output, want)
+	}
+}
+
+func TestRunSitePasswordUsesMatchingProjectPasswordVersion(t *testing.T) {
+	stateDir := t.TempDir()
+	t.Setenv("NF_STATE_HOME", stateDir)
+	t.Setenv("NF_PASSWORD_SALT", "test-salt")
+	repoRoot := t.TempDir()
+	if err := os.Mkdir(filepath.Join(repoRoot, ".git"), 0o755); err != nil {
+		t.Fatalf("Mkdir(.git) error = %v", err)
+	}
+	project := map[string]any{"version": 1, "project": map[string]any{"slug": "happytents", "password_version": 4}}
+	data, err := json.MarshalIndent(project, "", "  ")
+	if err != nil {
+		t.Fatalf("MarshalIndent() error = %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(repoRoot, "nf.json"), append(data, '\n'), 0o644); err != nil {
+		t.Fatalf("WriteFile(nf.json) error = %v", err)
+	}
+	oldwd, err := os.Getwd()
+	if err != nil {
+		t.Fatalf("Getwd() error = %v", err)
+	}
+	if err := os.Chdir(repoRoot); err != nil {
+		t.Fatalf("Chdir() error = %v", err)
+	}
+	t.Cleanup(func() { _ = os.Chdir(oldwd) })
+	if err := state.SaveStateRecords("sites", []map[string]any{
+		{"provider": "linode", "site_id": "happytents.app2-linode", "name": "happytents", "env": "live", "target": "app2-linode"},
+		{"provider": "linode", "site_id": "happytents.app2-linode", "name": "happytents", "env": "staging", "target": "app2-linode"},
+	}); err != nil {
+		t.Fatalf("SaveStateRecords(sites) error = %v", err)
+	}
+
+	want := passwords.DerivePassword("happytents:v4", "wp-admin", "test-salt") + "\n"
 	output := captureStdout(t, func() {
 		if got := Run([]string{"site", "password", "happytents.app2-linode"}); got != 0 {
 			t.Fatalf("Run(site password) = %d, want 0", got)
@@ -5616,6 +5724,8 @@ func TestRunInitWritesPortableMetadataShape(t *testing.T) {
 	}
 	if project, ok := metadata["project"].(map[string]any); !ok || project["slug"] != "client" {
 		t.Fatalf("project block = %#v, want slug client", metadata["project"])
+	} else if project["password_version"] != float64(0) {
+		t.Fatalf("project.password_version = %#v, want 0", project["password_version"])
 	} else if _, exists := project["name"]; exists {
 		t.Fatalf("project block = %#v, did not want name", metadata["project"])
 	}
@@ -6121,6 +6231,22 @@ func TestEnvConfigWithAdminCredentialsUsesGlobalDefaultsAndProjectSlug(t *testin
 	}
 }
 
+func TestEnvConfigWithAdminCredentialsUsesPasswordVersion(t *testing.T) {
+	configHome := t.TempDir()
+	t.Setenv("NF_CONFIG_HOME", configHome)
+	t.Setenv("NF_PASSWORD_SALT", "test-salt")
+	if err := saveGlobalConfig(map[string]string{"default_wp_email": "web@nonfiction.ca"}); err != nil {
+		t.Fatalf("saveGlobalConfig() error = %v", err)
+	}
+	cfg, err := envConfigWithAdminCredentials(envConfig{ProjectSlug: "foobar", PasswordVersion: "2"})
+	if err != nil {
+		t.Fatalf("envConfigWithAdminCredentials() error = %v", err)
+	}
+	if got, want := cfg.AdminPassword, passwords.DerivePassword("foobar:v2", "wp-admin", "test-salt"); got != want {
+		t.Fatalf("AdminPassword = %q, want %q", got, want)
+	}
+}
+
 func TestRunEnvPasswordPrintsCurrentProjectAdminPassword(t *testing.T) {
 	configHome := t.TempDir()
 	t.Setenv("NF_CONFIG_HOME", configHome)
@@ -6157,6 +6283,47 @@ func TestRunEnvPasswordPrintsCurrentProjectAdminPassword(t *testing.T) {
 		}
 	})
 	want := passwords.DerivePassword("foobar", "wp-admin", "test-salt") + "\n"
+	if output != want {
+		t.Fatalf("Run(env password) output = %q, want %q", output, want)
+	}
+}
+
+func TestRunEnvPasswordUsesProjectPasswordVersion(t *testing.T) {
+	configHome := t.TempDir()
+	t.Setenv("NF_CONFIG_HOME", configHome)
+	t.Setenv("NF_PASSWORD_SALT", "test-salt")
+	repoRoot := t.TempDir()
+	if err := os.Mkdir(filepath.Join(repoRoot, ".git"), 0o755); err != nil {
+		t.Fatalf("Mkdir(.git) error = %v", err)
+	}
+	project := map[string]any{
+		"version":   1,
+		"project":   map[string]any{"slug": "foobar", "password_version": 3},
+		"wordpress": map[string]any{"theme_path": "theme", "theme_slug": "theme"},
+		"env":       map[string]any{"compose": "docker compose", "wordpress_service": "wordpress", "cli_service": "cli", "theme_mount_slug": "theme", "uploads_path": "uploads"},
+	}
+	data, err := json.MarshalIndent(project, "", "  ")
+	if err != nil {
+		t.Fatalf("MarshalIndent() error = %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(repoRoot, "nf.json"), append(data, '\n'), 0o644); err != nil {
+		t.Fatalf("WriteFile(nf.json) error = %v", err)
+	}
+	oldwd, err := os.Getwd()
+	if err != nil {
+		t.Fatalf("Getwd() error = %v", err)
+	}
+	if err := os.Chdir(repoRoot); err != nil {
+		t.Fatalf("Chdir() error = %v", err)
+	}
+	t.Cleanup(func() { _ = os.Chdir(oldwd) })
+
+	output := captureStdout(t, func() {
+		if got := Run([]string{"env", "password"}); got != 0 {
+			t.Fatalf("Run(env password) = %d, want 0", got)
+		}
+	})
+	want := passwords.DerivePassword("foobar:v3", "wp-admin", "test-salt") + "\n"
 	if output != want {
 		t.Fatalf("Run(env password) output = %q, want %q", output, want)
 	}
