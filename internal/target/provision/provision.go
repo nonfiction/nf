@@ -1148,6 +1148,11 @@ write_files:
       ssl_session_timeout 10m;
       ssl_protocols TLSv1.2 TLSv1.3;
       ssl_prefer_server_ciphers off;
+  - path: /etc/nginx/conf.d/nf-server-names-hash.conf
+    permissions: '0644'
+    content: |
+      server_names_hash_bucket_size 128;
+      server_names_hash_max_size 4096;
   - path: /etc/nginx/sites-available/nf-server
     permissions: '0644'
     content: |
