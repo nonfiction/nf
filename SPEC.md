@@ -45,7 +45,7 @@ Definitions:
 * **provider**: external platform or service integration.
 * **target**: deployable place. Examples: `kinsta`, `app1-linode`.
 * **site**: WordPress site hosted on a target. Site IDs use `<site>-<target>`.
-* **env**: remote environment for a site, usually `live` or `staging`.
+* **env**: remote environment for a site. A site has `live`; `staging` is optional and intentionally managed.
 
 Remote env display IDs use:
 
@@ -266,14 +266,15 @@ Do not add old compatibility routes unless explicitly requested.
 * [x] `nf target show <target>`
 * [x] `nf target add linode <name>` create/ensure target scaffold
 * [x] `nf target remove <target>` remove an empty Linode target
-* [x] `nf site add <target> <site>` create live and staging env scaffolds on a target
+* [x] `nf site add <target> <site> [--with-staging]` create live env scaffolding by default, with optional staging
+* [x] `nf site staging status/add/remove` manage optional staging env lifecycle
 * [x] `nf site refresh` discovers remote site/env records from cached Kinsta and Linode targets
 * [x] `nf site list [--refresh] [--envs]`
 * [x] `nf site show <site-id-or-alias-or-env-id>`
 * [x] `nf site shell <env-id>`
 * [x] `nf site wp <env-id> -- <args>`
 * [x] `nf site password [site]`
-* [x] `nf site remove [site]`
+* [x] `nf site remove [site]` remove a whole site
 * [x] `nf remote add [name] [env-id]` with cache validation and prompts for omitted values
 * [x] `nf remote show <name>`
 * [x] `nf remote remove <name>`

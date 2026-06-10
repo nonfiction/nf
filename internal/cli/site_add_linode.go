@@ -164,7 +164,11 @@ func renderSiteAddScript(plan siteAddPlan) string {
 }
 
 func printSiteAddPlan(plan siteAddPlan, mode string) {
-	fmt.Println("Add site plan:")
+	printSiteAddPlanWithTitle(plan, mode, "Add site plan:")
+}
+
+func printSiteAddPlanWithTitle(plan siteAddPlan, mode, title string) {
+	fmt.Println(title)
 	fmt.Printf("  target: %s\n", plan.TargetName)
 	fmt.Printf("  provider: linode\n")
 	fmt.Printf("  ssh: %s@%s\n", plan.SSHUser, plan.SSHHost)
@@ -237,7 +241,11 @@ func cmdSiteAdd(args siteAddArgs) int {
 		return 0
 	}
 	if !args.yes {
-		confirmed, err := ui.Confirm(fmt.Sprintf("Add site %q with live and staging envs on target %q?", plan.Site, plan.TargetName), false)
+		message := fmt.Sprintf("Add site %q with live env on target %q?", plan.Site, plan.TargetName)
+		if args.withStaging {
+			message = fmt.Sprintf("Add site %q with live and staging envs on target %q?", plan.Site, plan.TargetName)
+		}
+		confirmed, err := ui.Confirm(message, false)
 		if err != nil {
 			fmt.Fprintln(os.Stderr, err)
 			return 1

@@ -127,6 +127,13 @@ func cmdShowSiteEnv(siteID, env string, jsonOutput bool) int {
 		}
 	}
 	if record == nil {
+		if normalizedRecordString(env) == "staging" {
+			matches, resolvedSiteID, err := siteRecordsMatchingSite(bundle.Sites, siteID)
+			if err == nil && len(matches) > 0 {
+				fmt.Fprintf(os.Stderr, "Site %q has no staging env. Create it with: nf site staging add %s\n", resolvedSiteID, resolvedSiteID)
+				return 1
+			}
+		}
 		fmt.Fprintf(os.Stderr, "No remote env matched site %q env %q.\n", siteID, env)
 		return 1
 	}

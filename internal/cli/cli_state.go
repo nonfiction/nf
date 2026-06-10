@@ -16,25 +16,26 @@ type ProjectError struct{ Msg string }
 func (e ProjectError) Error() string { return e.Msg }
 
 var (
-	runLinodeDeleteFn       = runLinodeDelete
-	deleteDNSRecordFn       = provision.DeleteDNSimpleARecord
-	deleteDNSTXTRecordFn    = provision.DeleteDNSimpleTXTRecord
-	upsertDNSRecordFn       = provision.UpsertDNSimpleRecord
-	providerCheckDNSimpleFn = checkDNSimpleProvider
-	providerCheckKinstaFn   = checkKinstaProvider
-	providerCheckLinodeFn   = checkLinodeProvider
-	kinstaProvisionSiteFn   = provisionKinstaSite
-	kinstaRemoveSiteFn      = removeKinstaSite
-	targetSSHReachableFn    = targetSSHReachable
-	runSSHScriptFn          = runSSHScript
-	runSSHCommandFn         = runSSHCommand
-	runSSHStdinCommandFn    = runSSHStdinCommand
-	runSSHOutputFn          = runSSHOutput
-	runRsyncCommandFn       = runRsyncCommand
-	targetSelectFn          = ui.Select
-	providerSelectFn        = ui.Select
-	siteSelectFn            = ui.Select
-	remoteSelectFn          = ui.Select
-	remotePromptString      = ui.PromptString
-	siteIsInteractiveFn     = envwizard.IsInteractiveTerminal
+	runLinodeDeleteFn        = runLinodeDelete
+	deleteDNSRecordFn        = provision.DeleteDNSimpleARecord
+	deleteDNSTXTRecordFn     = provision.DeleteDNSimpleTXTRecord
+	upsertDNSRecordFn        = provision.UpsertDNSimpleRecord
+	providerCheckDNSimpleFn  = checkDNSimpleProvider
+	providerCheckKinstaFn    = checkKinstaProvider
+	providerCheckLinodeFn    = checkLinodeProvider
+	kinstaProvisionSiteFn    = provisionKinstaSite
+	kinstaProvisionStagingFn = provisionKinstaStaging
+	kinstaRemoveSiteFn       = removeKinstaSite
+	targetSSHReachableFn     = targetSSHReachable
+	runSSHScriptFn           = runSSHScript
+	runSSHCommandFn          = runSSHCommand
+	runSSHStdinCommandFn     = runSSHStdinCommand
+	runSSHOutputFn           = runSSHOutput
+	runRsyncCommandFn        = runRsyncCommand
+	targetSelectFn           = ui.Select
+	providerSelectFn         = ui.Select
+	siteSelectFn             = ui.Select
+	remoteSelectFn           = ui.Select
+	remotePromptString       = ui.PromptString
+	siteIsInteractiveFn      = envwizard.IsInteractiveTerminal
 )

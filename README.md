@@ -451,10 +451,13 @@ nf target remove <target> [--dry-run] [--execute --yes]
 nf target refresh
 nf target list
 nf target show <target>
-nf site add <target> <site> [--region region] [--php version] [--execute --yes]
+nf site add <target> <site> [--with-staging] [--region region] [--php version] [--execute --yes]
 nf site refresh
 nf site list [--refresh] [--envs]
 nf site show <site-id-or-alias-or-env-id>
+nf site staging status <site-id-or-alias>
+nf site staging add <site-id-or-alias> [--dry-run] [--execute --yes]
+nf site staging remove <site-id-or-alias> [--dry-run] [--execute --yes]
 nf site shell <site.target:env>
 nf site wp <site.target:env> -- <cmd>
 nf site snapshot <site.target:env> [--output path] [--dry-run]
@@ -493,12 +496,13 @@ Current behavior:
 * `nf target remove <target>` removes an empty Linode target.
 * `nf target refresh` updates target records from configured target providers so added and removed targets are reflected in `providers.json`.
 * `nf target list/show` read target records from `providers.json`, with a legacy `servers.json` fallback.
-* `nf site add <target> <site>` creates live and staging WordPress envs on a target.
+* `nf site add <target> <site>` creates the live WordPress env on a target. Add `--with-staging` to create live and staging in one operation.
+* `nf site staging status/add/remove` manages an optional staging env for an existing site. `rm` is a shorthand for `remove`.
 * `nf site refresh` discovers sites from the cached target list. Remote target site discovery is not implemented yet.
 * `nf site list --envs`, `nf site show`, `nf site shell`, `nf site wp`, and `nf site snapshot` read the local disposable site cache for now.
 * `nf site password [site]` shows the derived admin password only.
 * `nf site basicauth ...` uses `basicauth_default_user` from `config.json` and a per-site derived password with `project.password_version` as the rotation source. Linode envs are managed over SSH by updating the env nginx vhost. Kinsta Password protection exists in MyKinsta, but currently requires manual MyKinsta use because no public API endpoint is exposed.
-* `nf site remove [site]` removes a Linode site and deletes its env data.
+* `nf site remove [site]` removes a whole Linode site and deletes its env data.
 * `nf remote add` validates an env ID against the cache, then repo remotes are stored in `nf.json` under `remotes` as `<site>.<target>:<env>` refs.
 * `nf site shell/wp ...` currently preflights against the cache, then stops without running remote commands.
 * `nf env push/pull [remote]` syncs database and mutable `wp-content` after an interactive confirmation. Omit `remote` to pick from configured repo remotes. Add `--dry-run` for a non-mutating plan, or use `--non-interactive` without `--execute` for preflight-only output.

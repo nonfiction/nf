@@ -91,7 +91,7 @@ func buildKinstaSiteAddPlan(args siteAddArgs) (kinstaSiteAddPlan, error) {
 		DNSZone:         baseDomain,
 		DNSAccountID:    dnsAccountID,
 	}
-	for _, env := range []string{"live", "staging"} {
+	for _, env := range siteAddEnvNames(args.withStaging) {
 		domain := kinstaSiteDomain(siteSlug, baseDomain, env)
 		branch := "main"
 		if env == "staging" {
@@ -167,14 +167,34 @@ func kinstaSiteAddRecord(plan kinstaSiteAddPlan, env kinstaSiteAddEnvPlan, resul
 }
 
 func upsertKinstaSiteAddRecords(plan kinstaSiteAddPlan, result kinstaProvisionResult) error {
+	return upsertKinstaSiteRecords(plan, result, true)
+}
+
+func upsertKinstaSiteEnvRecords(plan kinstaSiteAddPlan, result kinstaProvisionResult) error {
+	return upsertKinstaSiteRecords(plan, result, false)
+}
+
+func upsertKinstaSiteRecords(plan kinstaSiteAddPlan, result kinstaProvisionResult, replaceWholeSite bool) error {
 	existing, err := state.LoadStateRecords("sites")
 	if err != nil {
 		return err
 	}
 	kept := make([]map[string]any, 0, len(existing)+len(result.Envs))
 	for _, record := range existing {
-		if siteEnvMatchesSite(record, plan.SiteID) {
+		if replaceWholeSite && siteEnvMatchesSite(record, plan.SiteID) {
 			continue
+		}
+		if !replaceWholeSite && siteEnvMatchesSite(record, plan.SiteID) {
+			replaceEnv := false
+			for _, env := range result.Envs {
+				if normalizedRecordString(siteEnvName(record)) == normalizedRecordString(env.Env) {
+					replaceEnv = true
+					break
+				}
+			}
+			if replaceEnv {
+				continue
+			}
 		}
 		kept = append(kept, record)
 	}
@@ -185,7 +205,11 @@ func upsertKinstaSiteAddRecords(plan kinstaSiteAddPlan, result kinstaProvisionRe
 }
 
 func printKinstaSiteAddPlan(plan kinstaSiteAddPlan, mode string) {
-	fmt.Println("Add site plan:")
+	printKinstaSiteAddPlanWithTitle(plan, mode, "Add site plan:")
+}
+
+func printKinstaSiteAddPlanWithTitle(plan kinstaSiteAddPlan, mode, title string) {
+	fmt.Println(title)
 	fmt.Printf("  target: %s\n", plan.TargetName)
 	fmt.Printf("  provider: kinsta\n")
 	if plan.CompanyID != "" {
@@ -226,6 +250,15 @@ func cmdKinstaSiteAdd(args siteAddArgs) int {
 		fmt.Fprintln(os.Stderr, err)
 		return 1
 	}
+	existing, err := state.LoadStateRecords("sites")
+	if err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		return 1
+	}
+	if err := ensureSiteNotCached(existing, plan.SiteID); err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		return 1
+	}
 	willExecute := args.execute || (!args.dryRun && !args.nonInteractive)
 	mode := "dry-run"
 	if willExecute {
@@ -236,7 +269,11 @@ func cmdKinstaSiteAdd(args siteAddArgs) int {
 		return 0
 	}
 	if !args.yes {
-		confirmed, err := ui.Confirm(fmt.Sprintf("Add site %q with live and staging envs on target %q?", plan.Site, plan.TargetName), false)
+		message := fmt.Sprintf("Add site %q with live env on target %q?", plan.Site, plan.TargetName)
+		if args.withStaging {
+			message = fmt.Sprintf("Add site %q with live and staging envs on target %q?", plan.Site, plan.TargetName)
+		}
+		confirmed, err := ui.Confirm(message, false)
 		if err != nil {
 			fmt.Fprintln(os.Stderr, err)
 			return 1
@@ -287,15 +324,51 @@ func provisionKinstaSite(plan kinstaSiteAddPlan) (kinstaProvisionResult, error) 
 	if err != nil {
 		return kinstaProvisionResult{}, err
 	}
-	liveEnv, stagingEnv, err := ensureKinstaEnvironments(ctx, client, kinstaSite.ID, plan.PHPVersion)
+	liveEnv, err := ensureKinstaLiveEnvironment(ctx, client, kinstaSite.ID, plan.PHPVersion)
 	if err != nil {
 		return kinstaProvisionResult{}, err
 	}
-	result := kinstaProvisionResult{CompanyID: companyID, SiteID: kinstaSite.ID, Envs: make([]kinstaSiteAddEnvPlan, 0, len(plan.Envs))}
+	return provisionKinstaSelectedEnvs(ctx, client, dnsToken, plan, companyID, kinstaSite.ID, liveEnv)
+}
+
+func provisionKinstaStaging(plan kinstaSiteAddPlan) (kinstaProvisionResult, error) {
+	token := envwizard.Value("KINSTA_API_KEY")
+	if token == "" {
+		return kinstaProvisionResult{}, fmt.Errorf("Expected KINSTA_API_KEY in the environment or %s.", config.EnvFile())
+	}
+	dnsToken := envwizard.Value("DNSIMPLE_TOKEN")
+	if dnsToken == "" {
+		return kinstaProvisionResult{}, fmt.Errorf("Expected DNSIMPLE_TOKEN in the environment or %s.", config.EnvFile())
+	}
+	kinstaSiteID := strings.TrimSpace(plan.KinstaSiteID)
+	if kinstaSiteID == "" {
+		return kinstaProvisionResult{}, fmt.Errorf("Selected Kinsta site %q has no Kinsta site_id. Run nf site refresh and try again.", plan.SiteID)
+	}
+	client := kinsta.NewClient(firstNonEmpty(envwizard.Value("KINSTA_BASE_URL"), "https://api.kinsta.com/v2"), token)
+	ctx := context.Background()
+	liveEnv, err := ensureKinstaLiveEnvironment(ctx, client, kinstaSiteID, plan.PHPVersion)
+	if err != nil {
+		return kinstaProvisionResult{}, err
+	}
+	return provisionKinstaSelectedEnvs(ctx, client, dnsToken, plan, plan.CompanyID, kinstaSiteID, liveEnv)
+}
+
+func provisionKinstaSelectedEnvs(ctx context.Context, client *kinsta.Client, dnsToken string, plan kinstaSiteAddPlan, companyID, kinstaSiteID string, liveEnv kinsta.Environment) (kinstaProvisionResult, error) {
+	result := kinstaProvisionResult{CompanyID: companyID, SiteID: kinstaSiteID, Envs: make([]kinstaSiteAddEnvPlan, 0, len(plan.Envs))}
+	var stagingEnv kinsta.Environment
 	for _, env := range plan.Envs {
 		remoteEnv := liveEnv
 		if env.Env == "staging" {
+			if stagingEnv.ID == "" {
+				var err error
+				stagingEnv, err = ensureKinstaStagingEnvironment(ctx, client, kinstaSiteID, liveEnv, plan.PHPVersion)
+				if err != nil {
+					return kinstaProvisionResult{}, err
+				}
+			}
 			remoteEnv = stagingEnv
+		} else if env.Env != "live" {
+			return kinstaProvisionResult{}, fmt.Errorf("Unsupported Kinsta env %q. Only live and staging are supported.", env.Env)
 		}
 		domain, err := ensureKinstaDomain(ctx, client, remoteEnv.ID, env.Domain)
 		if err != nil {
@@ -393,59 +466,72 @@ func ensureKinstaSite(ctx context.Context, client *kinsta.Client, plan kinstaSit
 	return kinsta.Site{}, fmt.Errorf("Kinsta site %q was created but was not found in site list", plan.Site)
 }
 
-func ensureKinstaEnvironments(ctx context.Context, client *kinsta.Client, siteID, phpVersion string) (kinsta.Environment, kinsta.Environment, error) {
+func ensureKinstaLiveEnvironment(ctx context.Context, client *kinsta.Client, siteID, phpVersion string) (kinsta.Environment, error) {
 	envs, err := waitKinstaEnvironments(ctx, client, siteID, func(envs []kinsta.Environment) (kinsta.Environment, bool) {
 		return findKinstaLiveEnvironment(envs)
 	})
 	if err != nil {
-		return kinsta.Environment{}, kinsta.Environment{}, err
+		return kinsta.Environment{}, err
 	}
 	live, ok := findKinstaLiveEnvironment(envs)
 	if !ok {
-		return kinsta.Environment{}, kinsta.Environment{}, fmt.Errorf("Kinsta site %s is missing live environment; found: %s", siteID, kinstaEnvironmentSummary(envs))
+		return kinsta.Environment{}, fmt.Errorf("Kinsta site %s is missing live environment; found: %s", siteID, kinstaEnvironmentSummary(envs))
 	}
 	if err := ensureKinstaEnvironmentPHP(ctx, client, live, phpVersion); err != nil {
-		return kinsta.Environment{}, kinsta.Environment{}, err
+		return kinsta.Environment{}, err
 	}
 	envs, err = waitKinstaEnvironments(ctx, client, siteID, func(envs []kinsta.Environment) (kinsta.Environment, bool) {
 		return findKinstaLiveEnvironment(envs)
 	})
 	if err != nil {
-		return kinsta.Environment{}, kinsta.Environment{}, err
+		return kinsta.Environment{}, err
 	}
 	live, ok = findKinstaLiveEnvironment(envs)
 	if !ok {
-		return kinsta.Environment{}, kinsta.Environment{}, fmt.Errorf("Kinsta site %s is missing live environment; found: %s", siteID, kinstaEnvironmentSummary(envs))
+		return kinsta.Environment{}, fmt.Errorf("Kinsta site %s is missing live environment; found: %s", siteID, kinstaEnvironmentSummary(envs))
+	}
+	return live, nil
+}
+
+func ensureKinstaStagingEnvironment(ctx context.Context, client *kinsta.Client, siteID string, live kinsta.Environment, phpVersion string) (kinsta.Environment, error) {
+	envs, err := waitKinstaEnvironments(ctx, client, siteID, func(envs []kinsta.Environment) (kinsta.Environment, bool) {
+		if staging, ok := findKinstaStagingEnvironment(envs, live); ok {
+			return staging, true
+		}
+		return findKinstaLiveEnvironment(envs)
+	})
+	if err != nil {
+		return kinsta.Environment{}, err
 	}
 	staging, ok := findKinstaStagingEnvironment(envs, live)
 	if ok {
 		if err := ensureKinstaEnvironmentPHP(ctx, client, staging, phpVersion); err != nil {
-			return kinsta.Environment{}, kinsta.Environment{}, err
+			return kinsta.Environment{}, err
 		}
-		return live, staging, nil
+		return staging, nil
 	}
 	fmt.Println("Creating Kinsta staging environment...")
 	opID, err := client.CloneEnvironment(ctx, siteID, kinsta.CloneEnvironmentRequest{DisplayName: "Staging", IsPremium: false, SourceEnvID: live.ID})
 	if err != nil {
-		return kinsta.Environment{}, kinsta.Environment{}, err
+		return kinsta.Environment{}, err
 	}
 	if err := waitKinstaOperation(ctx, client, opID); err != nil {
-		return kinsta.Environment{}, kinsta.Environment{}, err
+		return kinsta.Environment{}, err
 	}
 	envs, err = waitKinstaEnvironments(ctx, client, siteID, func(envs []kinsta.Environment) (kinsta.Environment, bool) {
 		return findKinstaStagingEnvironment(envs, live)
 	})
 	if err != nil {
-		return kinsta.Environment{}, kinsta.Environment{}, err
+		return kinsta.Environment{}, err
 	}
 	staging, ok = findKinstaStagingEnvironment(envs, live)
 	if !ok {
-		return kinsta.Environment{}, kinsta.Environment{}, fmt.Errorf("Kinsta staging environment was created but was not found in environment list; found: %s", kinstaEnvironmentSummary(envs))
+		return kinsta.Environment{}, fmt.Errorf("Kinsta staging environment was created but was not found in environment list; found: %s", kinstaEnvironmentSummary(envs))
 	}
 	if err := ensureKinstaEnvironmentPHP(ctx, client, staging, phpVersion); err != nil {
-		return kinsta.Environment{}, kinsta.Environment{}, err
+		return kinsta.Environment{}, err
 	}
-	return live, staging, nil
+	return staging, nil
 }
 
 func ensureKinstaEnvironmentPHP(ctx context.Context, client *kinsta.Client, env kinsta.Environment, phpVersion string) error {

@@ -102,10 +102,11 @@ Local state is disposable. Provider truth is canonical remotely.
 * Linode provider check discovers targets from Linode instances tagged `nf`.
 * `nf target remove <target>` removes an empty Linode target.
 * `nf target list/show` read targets from `providers.json`; legacy `servers.json` fallback may remain during cache migration.
-* `nf site add <target> <site>` creates live and staging WordPress envs on a target.
+* `nf site add <target> <site>` creates the live WordPress env on a target. Use `--with-staging` for one-command live+staging setup.
+* `nf site staging status/add/remove` manages optional staging env lifecycle. `rm` is a shorthand for `remove`.
 * `nf site refresh` fans out from cached targets. It must not claim to refresh providers.
 * `nf site password [site]` shows only the derived admin password.
-* `nf site remove [site]` removes a Linode site and deletes its env data.
+* `nf site remove [site]` removes a whole Linode site and deletes its env data.
 * Remote target site discovery is not implemented yet.
 * Linode-hosted site/env truth is intended to live on each target at `/var/lib/nf/sites.json`, read over SSH as the standard user.
 * `nf remote add` validates the requested site/env exists in local cache before writing `nf.json`.

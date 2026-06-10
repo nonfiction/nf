@@ -236,6 +236,8 @@ func runSite(argv []string) int {
 	switch argv[0] {
 	case "add":
 		return runSiteAdd(argv[1:])
+	case "staging":
+		return runSiteStaging(argv[1:])
 	case "refresh":
 		if len(argv) != 1 {
 			fmt.Fprintln(os.Stderr, "site refresh takes no arguments")
@@ -361,8 +363,12 @@ func runSite(argv []string) int {
 			}
 			needle = selected
 		}
-		if siteID, _, ok := splitSiteEnvRef(needle); ok {
-			fmt.Fprintf(os.Stderr, "Cannot remove one env; remove site %q to delete live and staging.\n", siteID)
+		if siteID, env, ok := splitSiteEnvRef(needle); ok {
+			if normalizedRecordString(env) == "staging" {
+				fmt.Fprintf(os.Stderr, "Use nf site staging remove %s to delete staging.\n", siteID)
+			} else {
+				fmt.Fprintf(os.Stderr, "Cannot remove env %q; remove site %q to delete the whole site.\n", env, siteID)
+			}
 			return 1
 		}
 		return cmdSiteRemove(needle, opts.dryRun, opts.execute, opts.yes, opts.nonInteractive)
@@ -375,7 +381,8 @@ func runSite(argv []string) int {
 func runSiteAdd(argv []string) int {
 	if len(argv) == 0 || argv[0] == "help" || argv[0] == "--help" || argv[0] == "-h" {
 		printGroupHelp("site add", []helpLine{
-			{"<target> <site> [flags]", "create live and staging envs"},
+			{"<target> <site> [flags]", "create a live env"},
+			{"--with-staging", "also create staging"},
 			{"--region <region>", "Kinsta region override"},
 			{"--php <version>", "Kinsta PHP version override"},
 			{"--dry-run", "show the plan only"},
@@ -398,6 +405,8 @@ func runSiteAdd(argv []string) int {
 			args.nonInteractive = true
 		case "--dry-run":
 			args.dryRun = true
+		case "--with-staging":
+			args.withStaging = true
 		case "--region":
 			if i+1 >= len(argv) || strings.TrimSpace(argv[i+1]) == "" {
 				fmt.Fprintln(os.Stderr, "--region requires a value")

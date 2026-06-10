@@ -100,8 +100,9 @@ func runSiteHelp() int {
 		{"password [site]", "show admin password only"},
 		{"basicauth <action> [site|env]", "manage provider basic auth"},
 		{"refresh", "refresh local site cache"},
-		{"add <target> <site> [flags]", "create live and staging envs"},
-		{"remove, rm [site] [flags]", "remove a site and both envs"},
+		{"add <target> <site> [flags]", "create a live env"},
+		{"staging <action> <site> [flags]", "manage staging env lifecycle"},
+		{"remove, rm [site] [flags]", "remove a whole site"},
 	})
 	return 0
 }

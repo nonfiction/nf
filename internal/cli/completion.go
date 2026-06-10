@@ -170,7 +170,7 @@ func targetAddFlagCandidates() []string {
 
 func siteCompletionCandidates(args []string) []string {
 	if len(args) == 0 {
-		return []string{"list", "ls", "show", "shell", "ssh", "wp", "snapshot", "password", "basicauth", "refresh", "add", "remove", "rm", "help"}
+		return []string{"list", "ls", "show", "shell", "ssh", "wp", "snapshot", "password", "basicauth", "refresh", "add", "staging", "remove", "rm", "help"}
 	}
 	args[0] = cliCommandAlias(args[0])
 	switch args[0] {
@@ -200,16 +200,45 @@ func siteCompletionCandidates(args []string) []string {
 		return cachedSiteCompletionNames()
 	case "basicauth":
 		return siteBasicAuthCompletionCandidates(args[1:])
+	case "staging":
+		return siteStagingCompletionCandidates(args[1:])
 	case "remove":
 		return cachedSiteCompletionNames()
 	case "add":
 		if len(args) == 1 {
 			return cachedTargetCompletionNames()
 		}
-		return []string{"--region", "--php", "--dry-run", "--execute", "--yes", "--non-interactive"}
+		return []string{"--with-staging", "--region", "--php", "--dry-run", "--execute", "--yes", "--non-interactive"}
 	default:
 		return nil
 	}
+}
+
+func siteStagingCompletionCandidates(args []string) []string {
+	if len(args) == 0 {
+		return []string{"status", "add", "remove", "rm", "help"}
+	}
+	args[0] = cliCommandAlias(args[0])
+	switch args[0] {
+	case "status":
+		if len(args) == 1 {
+			return cachedSiteCompletionNames()
+		}
+	case "add":
+		if len(args) >= 1 {
+			return siteStagingLifecycleCompletionCandidates()
+		}
+	case "remove":
+		if len(args) >= 1 {
+			return siteStagingLifecycleCompletionCandidates()
+		}
+	}
+	return nil
+}
+
+func siteStagingLifecycleCompletionCandidates() []string {
+	values := append(cachedSiteCompletionNames(), "--dry-run", "--execute", "--yes", "--non-interactive")
+	return uniqueSortedStrings(values)
 }
 
 func siteBasicAuthCompletionCandidates(args []string) []string {

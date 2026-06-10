@@ -157,6 +157,20 @@ func printSiteDetails(out map[string]any) {
 		})
 	}
 	fmt.Println(formatTable(rows))
+	if siteHasEnv(envs, "live") && !siteHasEnv(envs, "staging") {
+		fmt.Println()
+		fmt.Println("Staging: not created")
+		fmt.Printf("Create staging: nf site staging add %s\n", siteID)
+	}
+}
+
+func siteHasEnv(records []map[string]any, env string) bool {
+	for _, record := range records {
+		if normalizedRecordString(siteEnvName(record)) == normalizedRecordString(env) {
+			return true
+		}
+	}
+	return false
 }
 
 func siteEnvSSHDisplay(record map[string]any) string {

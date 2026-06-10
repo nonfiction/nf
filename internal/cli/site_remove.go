@@ -55,9 +55,15 @@ func buildSiteRemovePlan(siteID string) (siteRemovePlan, error) {
 	if provider != "linode" {
 		return siteRemovePlan{}, ProjectError{Msg: fmt.Sprintf("Unsupported provider %q. Only linode and kinsta site remove are available.", provider)}
 	}
+	return buildLinodeSiteRemovePlan(matches, resolvedSiteID)
+}
+
+func buildLinodeSiteRemovePlan(matches []map[string]any, resolvedSiteID string) (siteRemovePlan, error) {
+	first := matches[0]
+	provider := strings.ToLower(strings.TrimSpace(recordValueString(first["provider"])))
 	targetName := siteProviderTarget(first)
 	if targetName == "" {
-		return siteRemovePlan{}, ProjectError{Msg: fmt.Sprintf("Site %q is missing a target.", siteID)}
+		return siteRemovePlan{}, ProjectError{Msg: fmt.Sprintf("Site %q is missing a target.", resolvedSiteID)}
 	}
 	targets, err := cachedTargets()
 	if err != nil {
@@ -268,7 +274,11 @@ func safeSitePath(sitePath string) bool {
 }
 
 func printSiteRemovePlan(plan siteRemovePlan, mode string) {
-	fmt.Println("Remove site plan:")
+	title := "Remove site plan:"
+	if plan.EnvOnly {
+		title = "Remove staging env plan:"
+	}
+	fmt.Println(title)
 	fmt.Printf("  site id: %s\n", plan.SiteID)
 	if plan.Name != "" {
 		fmt.Printf("  site: %s\n", plan.Name)
@@ -292,7 +302,11 @@ func printSiteRemovePlan(plan siteRemovePlan, mode string) {
 				fmt.Printf("    domain: %s\n", env.Hostname)
 			}
 		}
-		fmt.Printf("  remote actions: delete Kinsta environments, delete Kinsta site\n")
+		if plan.EnvOnly {
+			fmt.Printf("  remote actions: delete Kinsta staging environment\n")
+		} else {
+			fmt.Printf("  remote actions: delete Kinsta environments, delete Kinsta site\n")
+		}
 		fmt.Printf("  local state: %s\n", state.StatePath("sites"))
 		fmt.Printf("  mode: %s\n", mode)
 		return
@@ -347,9 +361,17 @@ func renderSiteRemoveScript(plan siteRemovePlan) string {
 	}
 	b.WriteString("if [ -f /var/lib/nf/sites.json ]; then\n")
 	b.WriteString("  tmp=$(mktemp)\n")
-	b.WriteString("  jq --arg site_id ")
-	b.WriteString(q(plan.SiteID))
-	b.WriteString(" 'map(select(.site_id != $site_id))' /var/lib/nf/sites.json >\"$tmp\" && install -o ")
+	if plan.EnvOnly && len(plan.Envs) == 1 {
+		b.WriteString("  jq --arg site_id ")
+		b.WriteString(q(plan.SiteID))
+		b.WriteString(" --arg env ")
+		b.WriteString(q(plan.Envs[0].Env))
+		b.WriteString(" 'map(select(.site_id != $site_id or .env != $env))' /var/lib/nf/sites.json >\"$tmp\" && install -o ")
+	} else {
+		b.WriteString("  jq --arg site_id ")
+		b.WriteString(q(plan.SiteID))
+		b.WriteString(" 'map(select(.site_id != $site_id))' /var/lib/nf/sites.json >\"$tmp\" && install -o ")
+	}
 	b.WriteString(q(plan.SSHUser))
 	b.WriteString(" -g www-data -m 0664 \"$tmp\" /var/lib/nf/sites.json && rm -f \"$tmp\"\n")
 	b.WriteString("fi\n")
@@ -362,6 +384,13 @@ func renderSiteRemoveScript(plan siteRemovePlan) string {
 func removeSiteFromLocalCache(siteID string) error {
 	_, err := state.DeleteStateRecords("sites", func(record map[string]any) bool {
 		return normalizedRecordString(siteRecordID(record)) == normalizedRecordString(siteID)
+	})
+	return err
+}
+
+func removeSiteEnvFromLocalCache(siteID, env string) error {
+	_, err := state.DeleteStateRecords("sites", func(record map[string]any) bool {
+		return normalizedRecordString(siteRecordID(record)) == normalizedRecordString(siteID) && normalizedRecordString(siteEnvName(record)) == normalizedRecordString(env)
 	})
 	return err
 }
@@ -427,6 +456,9 @@ func removeKinstaSite(plan siteRemovePlan) error {
 		if err := waitKinstaOperation(ctx, client, opID); err != nil {
 			return err
 		}
+	}
+	if plan.EnvOnly {
+		return nil
 	}
 	fmt.Printf("Deleting Kinsta site %s...\n", plan.KinstaSiteID)
 	opID, err := client.DeleteSite(ctx, plan.KinstaSiteID)

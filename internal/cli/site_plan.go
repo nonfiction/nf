@@ -16,6 +16,7 @@ type siteAddArgs struct {
 	site           string
 	region         string
 	phpVersion     string
+	withStaging    bool
 	execute        bool
 	dryRun         bool
 	yes            bool
@@ -68,6 +69,7 @@ type kinstaSiteAddPlan struct {
 	Target          map[string]any
 	TargetName      string
 	CompanyID       string
+	KinstaSiteID    string
 	Site            string
 	SiteID          string
 	BaseDomain      string
@@ -101,6 +103,7 @@ type siteRemovePlan struct {
 	SiteID       string
 	Name         string
 	Provider     string
+	EnvOnly      bool
 	Target       map[string]any
 	TargetName   string
 	KinstaSiteID string
@@ -199,6 +202,13 @@ func siteEnvTitle(site, env string) string {
 	return title
 }
 
+func siteAddEnvNames(withStaging bool) []string {
+	if withStaging {
+		return []string{"live", "staging"}
+	}
+	return []string{"live"}
+}
+
 func buildSiteAddPlan(args siteAddArgs) (siteAddPlan, error) {
 	siteSlug, err := cleanSiteSlug(args.site)
 	if err != nil {
@@ -265,7 +275,7 @@ func buildSiteAddPlan(args siteAddArgs) (siteAddPlan, error) {
 		AdminPassword:   adminPassword,
 		DBPassword:      dbPassword,
 	}
-	for _, env := range []string{"live", "staging"} {
+	for _, env := range siteAddEnvNames(args.withStaging) {
 		hostname := siteEnvHostname(siteSlug, targetName, baseDomain, env)
 		plan.Envs = append(plan.Envs, siteEnvPlan{
 			Env:      env,
