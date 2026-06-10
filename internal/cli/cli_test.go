@@ -344,6 +344,64 @@ func TestRunCompleteSuggestsStaticAndCachedValues(t *testing.T) {
 		t.Fatalf("site password completion = %q, want site id only", sitePasswordOutput)
 	}
 
+	siteBasicAuthOutput := captureStdout(t, func() {
+		if got := Run([]string{"__complete", "--", "site", "b"}); got != 0 {
+			t.Fatalf("Run(__complete site b) = %d, want 0", got)
+		}
+	})
+	if strings.TrimSpace(siteBasicAuthOutput) != "basicauth" {
+		t.Fatalf("site basicauth command completion = %q, want basicauth", siteBasicAuthOutput)
+	}
+
+	siteBasicAuthActionsOutput := captureStdout(t, func() {
+		if got := Run([]string{"__complete", "--", "site", "basicauth", ""}); got != 0 {
+			t.Fatalf("Run(__complete site basicauth actions) = %d, want 0", got)
+		}
+	})
+	for _, want := range []string{"status\n", "enable\n", "disable\n", "password\n", "help\n"} {
+		if !strings.Contains(siteBasicAuthActionsOutput, want) {
+			t.Fatalf("site basicauth action completion missing %q:\n%s", want, siteBasicAuthActionsOutput)
+		}
+	}
+
+	siteBasicAuthEnvOutput := captureStdout(t, func() {
+		if got := Run([]string{"__complete", "--", "site", "basicauth", "status", "client"}); got != 0 {
+			t.Fatalf("Run(__complete site basicauth status client) = %d, want 0", got)
+		}
+	})
+	if strings.TrimSpace(siteBasicAuthEnvOutput) != "client-app1-linode:live" {
+		t.Fatalf("site basicauth env completion = %q, want env id only", siteBasicAuthEnvOutput)
+	}
+
+	siteBasicAuthFlagOutput := captureStdout(t, func() {
+		if got := Run([]string{"__complete", "--", "site", "basicauth", "enable", "client-app1-linode:live", "--"}); got != 0 {
+			t.Fatalf("Run(__complete site basicauth enable --) = %d, want 0", got)
+		}
+	})
+	for _, want := range []string{"--dry-run\n", "--execute\n", "--yes\n", "--non-interactive\n"} {
+		if !strings.Contains(siteBasicAuthFlagOutput, want) {
+			t.Fatalf("site basicauth flag completion missing %q:\n%s", want, siteBasicAuthFlagOutput)
+		}
+	}
+
+	siteBasicAuthPasswordOutput := captureStdout(t, func() {
+		if got := Run([]string{"__complete", "--", "site", "basicauth", "password", "client"}); got != 0 {
+			t.Fatalf("Run(__complete site basicauth password) = %d, want 0", got)
+		}
+	})
+	if strings.TrimSpace(siteBasicAuthPasswordOutput) != "client-app1-linode" {
+		t.Fatalf("site basicauth password completion = %q, want site id only", siteBasicAuthPasswordOutput)
+	}
+
+	configOutput := captureStdout(t, func() {
+		if got := Run([]string{"__complete", "--", "config", "set-basic"}); got != 0 {
+			t.Fatalf("Run(__complete config set-basic) = %d, want 0", got)
+		}
+	})
+	if strings.TrimSpace(configOutput) != "set-basicauth-default-user" {
+		t.Fatalf("config completion = %q, want set-basicauth-default-user", configOutput)
+	}
+
 	remoteAddOutput := captureStdout(t, func() {
 		if got := Run([]string{"__complete", "--", "remote", "add", "production", "client"}); got != 0 {
 			t.Fatalf("Run(__complete remote add) = %d, want 0", got)
@@ -628,6 +686,7 @@ func TestInitGlobalConfigPromptsForMissingSettings(t *testing.T) {
 		"Base domain: ":                "nonfiction.dev",
 		"Default WordPress email: ":    "web@nonfiction.ca",
 		"Default WordPress user: ":     "admin",
+		"Basic auth default user: ":    "nonfiction",
 		"Kinsta default PHP version: ": "8.3",
 		"Linode default region: ":      "ca-central",
 		"Linode default SSH user: ":    "nonfiction",
@@ -650,13 +709,14 @@ func TestInitGlobalConfigPromptsForMissingSettings(t *testing.T) {
 		t.Fatalf("loadGlobalConfig() error = %v", err)
 	}
 	for key, want := range map[string]string{
-		"base_domain":           "nonfiction.dev",
-		"default_wp_email":      "web@nonfiction.ca",
-		"default_wp_user":       "admin",
-		"kinsta_default_php":    "8.3",
-		"linode_default_region": "ca-central",
-		"linode_default_user":   "nonfiction",
-		"linode_default_type":   "g6-standard-1",
+		"base_domain":            "nonfiction.dev",
+		"default_wp_email":       "web@nonfiction.ca",
+		"default_wp_user":        "admin",
+		"basicauth_default_user": "nonfiction",
+		"kinsta_default_php":     "8.3",
+		"linode_default_region":  "ca-central",
+		"linode_default_user":    "nonfiction",
+		"linode_default_type":    "g6-standard-1",
 	} {
 		if got := values[key]; got != want {
 			t.Fatalf("config[%s] = %q, want %q", key, got, want)
@@ -715,6 +775,27 @@ func TestRunConfigSetKinstaDefaultPHP(t *testing.T) {
 	}
 	if got := values["kinsta_default_php"]; got != "8.3" {
 		t.Fatalf("kinsta_default_php = %q, want 8.3", got)
+	}
+}
+
+func TestRunConfigSetBasicAuthDefaultUser(t *testing.T) {
+	configDir := t.TempDir()
+	t.Setenv("NF_CONFIG_HOME", configDir)
+
+	output := captureStdout(t, func() {
+		if got := Run([]string{"config", "set-basicauth-default-user", "preview"}); got != 0 {
+			t.Fatalf("Run(config set-basicauth-default-user) = %d, want 0", got)
+		}
+	})
+	if !strings.Contains(output, "Set basicauth_default_user") {
+		t.Fatalf("output = %q, want set message", output)
+	}
+	values, err := loadGlobalConfig()
+	if err != nil {
+		t.Fatalf("loadGlobalConfig() error = %v", err)
+	}
+	if got := values["basicauth_default_user"]; got != "preview" {
+		t.Fatalf("basicauth_default_user = %q, want preview", got)
 	}
 }
 
@@ -3329,6 +3410,140 @@ func TestRunSitePasswordWithoutSitePromptsPicker(t *testing.T) {
 	}
 	if output != want {
 		t.Fatalf("site password output = %q, want %q", output, want)
+	}
+}
+
+func TestRunSiteBasicAuthPasswordUsesMatchingProjectPasswordVersion(t *testing.T) {
+	stateDir := t.TempDir()
+	t.Setenv("NF_STATE_HOME", stateDir)
+	t.Setenv("NF_PASSWORD_SALT", "test-salt")
+	repoRoot := t.TempDir()
+	if err := os.Mkdir(filepath.Join(repoRoot, ".git"), 0o755); err != nil {
+		t.Fatalf("Mkdir(.git) error = %v", err)
+	}
+	project := map[string]any{"version": 1, "project": map[string]any{"slug": "happytents", "password_version": 4}}
+	data, err := json.MarshalIndent(project, "", "  ")
+	if err != nil {
+		t.Fatalf("MarshalIndent() error = %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(repoRoot, "nf.json"), append(data, '\n'), 0o644); err != nil {
+		t.Fatalf("WriteFile(nf.json) error = %v", err)
+	}
+	oldwd, err := os.Getwd()
+	if err != nil {
+		t.Fatalf("Getwd() error = %v", err)
+	}
+	if err := os.Chdir(repoRoot); err != nil {
+		t.Fatalf("Chdir() error = %v", err)
+	}
+	t.Cleanup(func() { _ = os.Chdir(oldwd) })
+	if err := state.SaveStateRecords("sites", []map[string]any{
+		{"provider": "linode", "site_id": "happytents.app2-linode", "name": "happytents", "env": "live", "target": "app2-linode"},
+		{"provider": "linode", "site_id": "happytents.app2-linode", "name": "happytents", "env": "staging", "target": "app2-linode"},
+	}); err != nil {
+		t.Fatalf("SaveStateRecords(sites) error = %v", err)
+	}
+
+	want := passwords.DerivePassword("happytents:v4", "basic-auth", "test-salt") + "\n"
+	output := captureStdout(t, func() {
+		if got := Run([]string{"site", "basicauth", "password", "happytents.app2-linode"}); got != 0 {
+			t.Fatalf("Run(site basicauth password) = %d, want 0", got)
+		}
+	})
+	if output != want {
+		t.Fatalf("site basicauth password output = %q, want %q", output, want)
+	}
+}
+
+func TestRunSiteBasicAuthLinodeEnableRunsSSHWithDerivedHash(t *testing.T) {
+	configDir := t.TempDir()
+	stateDir := t.TempDir()
+	t.Setenv("NF_CONFIG_HOME", configDir)
+	t.Setenv("NF_STATE_HOME", stateDir)
+	t.Setenv("NF_PASSWORD_SALT", "test-salt")
+	if err := saveGlobalConfig(map[string]string{"basicauth_default_user": "preview", "linode_default_user": "nonfiction"}); err != nil {
+		t.Fatalf("saveGlobalConfig() error = %v", err)
+	}
+	repoRoot := t.TempDir()
+	if err := os.Mkdir(filepath.Join(repoRoot, ".git"), 0o755); err != nil {
+		t.Fatalf("Mkdir(.git) error = %v", err)
+	}
+	project := map[string]any{"version": 1, "project": map[string]any{"slug": "foobar", "password_version": 5}}
+	data, err := json.MarshalIndent(project, "", "  ")
+	if err != nil {
+		t.Fatalf("MarshalIndent() error = %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(repoRoot, "nf.json"), append(data, '\n'), 0o644); err != nil {
+		t.Fatalf("WriteFile(nf.json) error = %v", err)
+	}
+	oldwd, err := os.Getwd()
+	if err != nil {
+		t.Fatalf("Getwd() error = %v", err)
+	}
+	if err := os.Chdir(repoRoot); err != nil {
+		t.Fatalf("Chdir() error = %v", err)
+	}
+	t.Cleanup(func() { _ = os.Chdir(oldwd) })
+	if err := state.SaveStateRecords("providers", []map[string]any{{"provider": "linode", "targets": []map[string]any{{"name": "app1-linode", "provider": "linode", "hostname": "app1-linode.nonfiction.dev", "ssh": map[string]any{"user": "nonfiction", "host": "app1-linode.nonfiction.dev"}}}}}); err != nil {
+		t.Fatalf("SaveStateRecords(providers) error = %v", err)
+	}
+	if err := state.SaveStateRecords("sites", []map[string]any{{"provider": "linode", "site_id": "foobar.app1-linode", "env_id": "foobar.app1-linode:staging", "name": "foobar", "env": "staging", "target": "app1-linode", "hostname": "foobar-staging.app1-linode.nonfiction.dev", "url": "https://foobar-staging.app1-linode.nonfiction.dev", "path": "/var/www/sites/foobar_staging/public", "ssh": map[string]any{"user": "nonfiction", "host": "app1-linode.nonfiction.dev", "port": "22"}}}); err != nil {
+		t.Fatalf("SaveStateRecords(sites) error = %v", err)
+	}
+	var command []string
+	oldRunSSHCommand := runSSHCommandFn
+	runSSHCommandFn = func(args []string) error {
+		command = append([]string(nil), args...)
+		return nil
+	}
+	t.Cleanup(func() { runSSHCommandFn = oldRunSSHCommand })
+
+	output := captureStdout(t, func() {
+		if got := Run([]string{"site", "basicauth", "enable", "foobar.app1-linode:staging", "--execute", "--yes", "--non-interactive"}); got != 0 {
+			t.Fatalf("Run(site basicauth enable) = %d, want 0", got)
+		}
+	})
+	for _, want := range []string{"Site basic-auth plan:", "env:      foobar.app1-linode:staging", "provider: linode", "action:   enable", "user:     preview", "password: derived from foobar", "Basic auth enabled."} {
+		if !strings.Contains(output, want) {
+			t.Fatalf("site basicauth output missing %q:\n%s", want, output)
+		}
+	}
+	joined := strings.Join(command, " ")
+	derived := passwords.DerivePassword("foobar:v5", "basic-auth", "test-salt")
+	for _, want := range []string{"ssh -p 22 nonfiction@app1-linode.nonfiction.dev", "sudo bash -c", "file_slugs=(foobar.app1-linode.staging foobar-staging.app1-linode)", "/etc/nginx/sites-available/nf-site-$file_slug", "/etc/nginx/snippets/nf-basic-auth-$selected_file_slug.conf", "auth_basic", "awk -v inc=", "install -o root -g www-data -m 0640", "preview", basicAuthSHA(derived), "nginx -t", "systemctl reload nginx"} {
+		if !strings.Contains(joined, want) {
+			t.Fatalf("ssh command missing %q: %#v", want, command)
+		}
+	}
+	if strings.Contains(joined, "awk -v include=") {
+		t.Fatalf("ssh command used reserved gawk variable name: %#v", command)
+	}
+	if strings.Contains(joined, derived) {
+		t.Fatalf("ssh command included raw basic-auth password: %#v", command)
+	}
+}
+
+func TestRunSiteBasicAuthKinstaStatusUnsupported(t *testing.T) {
+	configDir := t.TempDir()
+	stateDir := t.TempDir()
+	t.Setenv("NF_CONFIG_HOME", configDir)
+	t.Setenv("NF_STATE_HOME", stateDir)
+	if err := saveGlobalConfig(map[string]string{"basicauth_default_user": "preview"}); err != nil {
+		t.Fatalf("saveGlobalConfig() error = %v", err)
+	}
+	if err := state.SaveStateRecords("sites", []map[string]any{{"provider": "kinsta", "site_id": "client-kinsta", "env": "staging", "url": "https://staging.example.com/", "path": "/www/clientstaging/public", "ssh": map[string]any{"host": "203.0.113.11", "port": "12346", "user": "clientstaging"}, "kinsta": map[string]any{"site_id": "ksite123", "environment_id": "kenv-staging"}}}); err != nil {
+		t.Fatalf("SaveStateRecords(sites) error = %v", err)
+	}
+
+	stdout := captureStdout(t, func() {
+		if got := Run([]string{"site", "basicauth", "status", "client-kinsta:staging"}); got != 1 {
+			t.Fatalf("Run(site basicauth status) = %d, want 1", got)
+		}
+	})
+	for _, want := range []string{"Site basic-auth status:", "provider: kinsta", "user:     preview", "status:   unsupported", kinstaBasicAuthUnsupportedMessage()} {
+		if !strings.Contains(stdout, want) {
+			t.Fatalf("site basicauth kinsta status missing %q:\n%s", want, stdout)
+		}
 	}
 }
 

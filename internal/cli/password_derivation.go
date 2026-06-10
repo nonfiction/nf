@@ -45,3 +45,8 @@ func currentProjectPasswordVersionForSite(siteSlug string) string {
 	}
 	return projectPasswordVersion(metadata)
 }
+
+func deriveSiteBasicAuthPassword(slug string) (string, error) {
+	version := currentProjectPasswordVersionForSite(slug)
+	return deriveProjectPassword(slug, "basic-auth", version)
+}

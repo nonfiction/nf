@@ -78,7 +78,7 @@ Do not read or write the user's real config/state in tests. `internal/target/pro
 ## Current cache files
 
 ```text
-config.json     non-secret global config, including base_domain and dnsimple_account_id
+config.json     non-secret global config, including base_domain, dnsimple_account_id, and basicauth_default_user
 .env            secrets/account tokens
 providers.json  provider check metadata and targets
 sites.json      cached remote site/env records
@@ -93,6 +93,7 @@ Local state is disposable. Provider truth is canonical remotely.
 * `dnsimple_account_id` belongs in `config.json`, fetched by DNSimple provider check from `DNSIMPLE_TOKEN`; do not set `DNSIMPLE_ACCOUNT_ID` in `.env`.
 * Password salt is `NF_PASSWORD_SALT`; legacy `NF_SECRET_SALT` is migration-only fallback.
 * `project.password_version` belongs in `nf.json`, defaults to `0`, is safe to commit, and rotates project/site derived passwords when set non-zero without changing `NF_PASSWORD_SALT`.
+* `basicauth_default_user` belongs in `config.json`, defaults to `nonfiction`, and is used with a per-site derived `basic-auth` password.
 * DNSimple provider check validates it can read the configured `base_domain` zone and writes zero targets.
 * Kinsta provider check writes one target named `kinsta`.
 * Linode provider check discovers targets from Linode instances tagged `nf`.
@@ -115,7 +116,7 @@ Local state is disposable. Provider truth is canonical remotely.
 * Project-context commands should be hidden or rejected outside a `.git` repo when they require repo metadata.
 * `nf.json` should store project metadata, local env intent, theme tasks, artifact recipe, and repo remotes only.
 * Never store secrets, generated caches, or global provider inventory in `nf.json`.
-* Basic-auth enablement is provider/env state, not project metadata: Kinsta owns it through its API, and Linode targets own it in `/var/lib/nf/sites.json`.
+* Basic-auth enablement is provider/env state, not project metadata. Linode envs own it in nginx target config. Kinsta Password protection exists in MyKinsta, but currently requires manual MyKinsta use because no public API endpoint is exposed.
 * Default WordPress theme convention is `theme/`.
 * Generated project metadata should default `wordpress.theme_path` and `env.theme_mount_slug` to `theme`, but `wordpress.theme_slug` to the project slug unless explicitly overridden.
 * Theme string tasks run through `sh -lc`; array tasks execute directly; passthrough args follow `--`.

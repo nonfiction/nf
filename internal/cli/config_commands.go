@@ -50,6 +50,12 @@ func runConfig(argv []string) int {
 			return 1
 		}
 		return cmdConfigSet("default_wp_user", argv[1])
+	case "set-basicauth-default-user":
+		if len(argv) != 2 || strings.TrimSpace(argv[1]) == "" {
+			fmt.Fprintln(os.Stderr, "config set-basicauth-default-user takes exactly one user")
+			return 1
+		}
+		return cmdConfigSet("basicauth_default_user", argv[1])
 	case "set-kinsta-default-region":
 		if len(argv) != 2 || strings.TrimSpace(argv[1]) == "" {
 			fmt.Fprintln(os.Stderr, "config set-kinsta-default-region takes exactly one region")
@@ -295,6 +301,7 @@ func cmdConfigShow() int {
 	}
 	fmt.Printf("Default WP Email: %s\n", values["default_wp_email"])
 	fmt.Printf("Default WP User: %s\n", values["default_wp_user"])
+	fmt.Printf("Basic Auth Default User: %s\n", firstNonEmpty(values["basicauth_default_user"], "nonfiction"))
 	fmt.Printf("Base Domain: %s\n", values["base_domain"])
 	fmt.Printf("DNSimple Account ID: %s\n", values["dnsimple_account_id"])
 	fmt.Printf("Kinsta Default Region: %s\n", values["kinsta_default_region"])

@@ -370,7 +370,8 @@ Non-secret config goes in `config.json`:
 ```json
 {
   "base_domain": "nonfiction.dev",
-  "dnsimple_account_id": "14"
+  "dnsimple_account_id": "14",
+  "basicauth_default_user": "nonfiction"
 }
 ```
 
@@ -392,6 +393,7 @@ nf config init
 nf config set-base-domain nonfiction.dev
 nf config set-default-wp-email dev@example.com
 nf config set-default-wp-user admin
+nf config set-basicauth-default-user nonfiction
 nf config set-kinsta-default-php 8.3
 nf config set-kinsta-default-region us-central1
 nf config set-linode-default-region us-east
@@ -434,6 +436,10 @@ nf site snapshot list
 nf site snapshot remove <name> [--yes]
 nf site snapshot prune [--keep N] [--dry-run] [--yes]
 nf site password [site-id-or-alias]
+nf site basicauth status <site.target:env>
+nf site basicauth enable <site.target:env> [--dry-run] [--execute --yes]
+nf site basicauth disable <site.target:env> [--dry-run] [--execute --yes]
+nf site basicauth password [site-id-or-alias]
 nf site remove [site-id-or-alias] [--dry-run] [--execute --yes]
 nf remote add [name] [site.target:env]
 nf remote show <name>
@@ -465,6 +471,7 @@ Current behavior:
 * `nf site refresh` discovers sites from the cached target list. Remote target site discovery is not implemented yet.
 * `nf site list --envs`, `nf site show`, `nf site shell`, `nf site wp`, and `nf site snapshot` read the local disposable site cache for now.
 * `nf site password [site]` shows the derived admin password only.
+* `nf site basicauth ...` uses `basicauth_default_user` from `config.json` and a per-site derived password with `project.password_version` as the rotation source. Linode envs are managed over SSH by updating the env nginx vhost. Kinsta Password protection exists in MyKinsta, but currently requires manual MyKinsta use because no public API endpoint is exposed.
 * `nf site remove [site]` removes a Linode site and deletes its env data.
 * `nf remote add` validates an env ID against the cache, then repo remotes are stored in `nf.json` under `remotes` as `<site>.<target>:<env>` refs.
 * `nf site shell/wp ...` currently preflights against the cache, then stops without running remote commands.
@@ -489,7 +496,7 @@ nf password show-salt
 nf password derive <scope> <value...>
 ```
 
-Password derivation uses `NF_PASSWORD_SALT` from the environment or `~/.config/nf/.env`. Legacy `NF_SECRET_SALT` is accepted only as a migration fallback. Project site passwords also include `project.password_version` from `nf.json` when it is non-zero; missing or `0` preserves the original derivation.
+Password derivation uses `NF_PASSWORD_SALT` from the environment or `~/.config/nf/.env`. Legacy `NF_SECRET_SALT` is accepted only as a migration fallback. Project site passwords, including provider basic-auth passwords, also include `project.password_version` from `nf.json` when it is non-zero; missing or `0` preserves the original derivation.
 
 ## Safety
 

@@ -104,7 +104,7 @@ func completeContextCandidates(args []string) []string {
 	case "site":
 		return siteCompletionCandidates(args[1:])
 	case "config":
-		return []string{"init", "show", "set-base-domain", "set-default-wp-email", "set-default-wp-user", "set-kinsta-default-region", "set-kinsta-default-php", "set-linode-default-region", "set-linode-default-type", "set-linode-default-image", "set-linode-default-user", "help"}
+		return []string{"init", "show", "set-base-domain", "set-default-wp-email", "set-default-wp-user", "set-basicauth-default-user", "set-kinsta-default-region", "set-kinsta-default-php", "set-linode-default-region", "set-linode-default-type", "set-linode-default-image", "set-linode-default-user", "help"}
 	case "password":
 		return []string{"show-salt", "set-salt", "derive", "help"}
 	case "remote":
@@ -168,7 +168,7 @@ func targetAddFlagCandidates() []string {
 
 func siteCompletionCandidates(args []string) []string {
 	if len(args) == 0 {
-		return []string{"list", "ls", "show", "shell", "ssh", "wp", "snapshot", "password", "refresh", "add", "remove", "rm", "help"}
+		return []string{"list", "ls", "show", "shell", "ssh", "wp", "snapshot", "password", "basicauth", "refresh", "add", "remove", "rm", "help"}
 	}
 	args[0] = cliCommandAlias(args[0])
 	switch args[0] {
@@ -196,6 +196,8 @@ func siteCompletionCandidates(args []string) []string {
 		return nil
 	case "password":
 		return cachedSiteCompletionNames()
+	case "basicauth":
+		return siteBasicAuthCompletionCandidates(args[1:])
 	case "remove":
 		return cachedSiteCompletionNames()
 	case "add":
@@ -206,6 +208,28 @@ func siteCompletionCandidates(args []string) []string {
 	default:
 		return nil
 	}
+}
+
+func siteBasicAuthCompletionCandidates(args []string) []string {
+	if len(args) == 0 {
+		return []string{"status", "enable", "disable", "password", "help"}
+	}
+	switch args[0] {
+	case "password":
+		return cachedSiteCompletionNames()
+	case "status":
+		if len(args) == 1 {
+			return cachedSiteEnvCompletionNames()
+		}
+	case "enable", "disable":
+		if len(args) == 1 {
+			return cachedSiteEnvCompletionNames()
+		}
+		if len(args) == 2 {
+			return []string{"--dry-run", "--execute", "--yes", "--non-interactive"}
+		}
+	}
+	return nil
 }
 
 func remoteCompletionCandidates(args []string) []string {
