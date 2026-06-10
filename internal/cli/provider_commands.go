@@ -264,6 +264,9 @@ func printProviderDetails(status providerConfigStatus, record map[string]any) {
 		{Label: "Company ID", Keys: []string{"company", "company_id"}},
 		{Label: "Provider status", Keys: []string{"status"}},
 	} {
+		if status.Name == "dnsimple" && field.Label == "Account email" {
+			continue
+		}
 		if value := firstRecordString(record, field.Keys...); value != "" {
 			fmt.Printf("%s: %s\n", field.Label, value)
 		}
@@ -328,7 +331,7 @@ func cmdProviderCheck(name string, jsonOutput bool) int {
 		return 0
 	}
 	fmt.Printf("Provider %s healthcheck passed.\n", status.Name)
-	for _, line := range providerHealthDetailLines(result.Details) {
+	for _, line := range providerHealthDetailLines(status.Name, result.Details) {
 		fmt.Println(line)
 	}
 	fmt.Printf("Saved provider metadata to %s.\n", state.StatePath("providers"))
@@ -348,9 +351,12 @@ func runProviderHealthcheck(provider string) (providerHealthResult, error) {
 	}
 }
 
-func providerHealthDetailLines(details map[string]string) []string {
+func providerHealthDetailLines(provider string, details map[string]string) []string {
 	keys := make([]string, 0, len(details))
 	for key := range details {
+		if provider == "dnsimple" && key == "account_email" {
+			continue
+		}
 		keys = append(keys, key)
 	}
 	sort.Strings(keys)

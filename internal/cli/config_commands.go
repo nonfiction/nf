@@ -295,21 +295,52 @@ func cmdConfigShow() int {
 		fmt.Fprintln(os.Stderr, err)
 		return 1
 	}
-	saltStatus := "Unset"
+	saltStatus := "unset"
 	if _, err := passwords.SecretSalt(); err == nil {
-		saltStatus = "Set"
+		saltStatus = "set"
 	}
-	fmt.Printf("Default WP Email: %s\n", values["default_wp_email"])
-	fmt.Printf("Default WP User: %s\n", values["default_wp_user"])
-	fmt.Printf("Basic Auth Default User: %s\n", firstNonEmpty(values["basicauth_default_user"], "nonfiction"))
-	fmt.Printf("Base Domain: %s\n", values["base_domain"])
-	fmt.Printf("DNSimple Account ID: %s\n", values["dnsimple_account_id"])
-	fmt.Printf("Kinsta Default Region: %s\n", values["kinsta_default_region"])
-	fmt.Printf("Kinsta Default PHP: %s\n", firstNonEmpty(values["kinsta_default_php"], "8.3"))
-	fmt.Printf("Linode Default Region: %s\n", values["linode_default_region"])
-	fmt.Printf("Linode Default Type: %s\n", values["linode_default_type"])
-	fmt.Printf("Linode Default Image: %s\n", values["linode_default_image"])
-	fmt.Printf("Linode Default User: %s\n", values["linode_default_user"])
-	fmt.Printf("Password Salt: %s\n", saltStatus)
+	fmt.Println("config")
+	fmt.Println(strings.Repeat("─", len("config")))
+	printDetailRows([]detailRow{{label: "Path", value: config.ConfigFile()}})
+	fmt.Println()
+	fmt.Println("Core")
+	printIndentedDetailRows([]detailRow{
+		{label: "Base domain", value: configShowValue(values, "base_domain", "")},
+		{label: "Password salt", value: saltStatus},
+	}, 2)
+	fmt.Println()
+	fmt.Println("WordPress")
+	printIndentedDetailRows([]detailRow{
+		{label: "Admin email", value: configShowValue(values, "default_wp_email", "")},
+		{label: "Admin user", value: configShowValue(values, "default_wp_user", "admin")},
+		{label: "Basic auth user", value: configShowValue(values, "basicauth_default_user", "nonfiction")},
+	}, 2)
+	fmt.Println()
+	fmt.Println("DNSimple")
+	printIndentedDetailRows([]detailRow{{label: "Account ID", value: configShowValue(values, "dnsimple_account_id", "")}}, 2)
+	fmt.Println()
+	fmt.Println("Kinsta")
+	printIndentedDetailRows([]detailRow{
+		{label: "Region", value: configShowValue(values, "kinsta_default_region", "")},
+		{label: "PHP", value: configShowValue(values, "kinsta_default_php", "8.3")},
+	}, 2)
+	fmt.Println()
+	fmt.Println("Linode")
+	printIndentedDetailRows([]detailRow{
+		{label: "Region", value: configShowValue(values, "linode_default_region", "ca-central")},
+		{label: "Type", value: configShowValue(values, "linode_default_type", "g6-standard-1")},
+		{label: "Image", value: configShowValue(values, "linode_default_image", "")},
+		{label: "User", value: configShowValue(values, "linode_default_user", "nonfiction")},
+	}, 2)
 	return 0
+}
+
+func configShowValue(values map[string]string, key, fallback string) string {
+	if value := strings.TrimSpace(values[key]); value != "" {
+		return value
+	}
+	if fallback != "" {
+		return fallback + " (default)"
+	}
+	return "unset"
 }

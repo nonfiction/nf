@@ -65,40 +65,41 @@ func cmdShowTarget(needle string, jsonOutput bool) int {
 
 func printTargetDetails(record map[string]any) {
 	name := firstRecordString(record, "_state_key", "target_name", "target", "name", "slug", "hostname", "label", "id")
-	provider := recordValueString(record["provider"])
-	fmt.Printf("Target: %s\n", name)
-	fmt.Printf("Provider: %s\n", provider)
-	if hostname := firstRecordString(record, "hostname", "host", "public_ipv4", "ipv4", "ip"); hostname != "" {
-		fmt.Printf("Hostname: %s\n", hostname)
+	lines := []string{}
+	if name != "" {
+		lines = append(lines, name, strings.Repeat("─", len(name)))
 	}
-	if id := firstRecordString(record, "id", "provider_id", "linode_id"); id != "" {
-		fmt.Printf("ID: %s\n", id)
+	lines = append(lines, detailRowLines([]detailRow{
+		{label: "Provider", value: recordValueString(record["provider"])},
+		{label: "Hostname", value: firstRecordString(record, "hostname", "host", "public_ipv4", "ipv4", "ip")},
+		{label: "ID", value: firstRecordString(record, "id", "provider_id", "linode_id")},
+		{label: "Status", value: targetLiveStatus(record)},
+		{label: "Cached status", value: recordValueString(record["status"])},
+		{label: "Region", value: firstRecordString(record, "region")},
+		{label: "Type", value: firstRecordString(record, "type", "linode_type")},
+		{label: "Image", value: firstRecordString(record, "image")},
+	}, 0)...)
+	accessRows := []detailRow{{label: "SSH", value: targetSSHCommand(record)}}
+	if hasDetailRows(accessRows) {
+		lines = append(lines, "", "Access")
+		lines = append(lines, detailRowLines(accessRows, 2)...)
 	}
-	if status := targetLiveStatus(record); status != "" {
-		fmt.Printf("Status: %s\n", status)
+	fmt.Println(strings.Join(lines, "\n"))
+}
+
+func targetSSHCommand(record map[string]any) string {
+	host := serverSSHHost(record)
+	if host == "" {
+		return ""
 	}
-	if cachedStatus := recordValueString(record["status"]); cachedStatus != "" {
-		fmt.Printf("Cached status: %s\n", cachedStatus)
+	destination := host
+	if user := serverSSHUser(record); user != "" {
+		destination = user + "@" + destination
 	}
-	if region := firstRecordString(record, "region"); region != "" {
-		fmt.Printf("Region: %s\n", region)
+	if port := firstNonEmpty(mapStringAtPath(record, "ssh", "port"), firstRecordString(record, "ssh_port")); port != "" && port != "22" {
+		return "ssh " + destination + " -p " + port
 	}
-	if targetType := firstRecordString(record, "type", "linode_type"); targetType != "" {
-		fmt.Printf("Type: %s\n", targetType)
-	}
-	if image := firstRecordString(record, "image"); image != "" {
-		fmt.Printf("Image: %s\n", image)
-	}
-	if sshHost := serverSSHHost(record); sshHost != "" {
-		ssh := sshHost
-		if sshUser := serverSSHUser(record); sshUser != "" {
-			ssh = sshUser + "@" + ssh
-		}
-		if port := firstNonEmpty(mapStringAtPath(record, "ssh", "port"), firstRecordString(record, "ssh_port")); port != "" && port != "22" {
-			ssh += ":" + port
-		}
-		fmt.Printf("SSH: %s\n", ssh)
-	}
+	return "ssh " + destination
 }
 
 func cmdSiteRefresh() int {

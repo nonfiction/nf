@@ -1019,6 +1019,95 @@ func TestRunConfigSetBasicAuthDefaultUser(t *testing.T) {
 	}
 }
 
+func TestRunConfigShowGroupsSettings(t *testing.T) {
+	configDir := t.TempDir()
+	t.Setenv("NF_CONFIG_HOME", configDir)
+	t.Setenv("NF_PASSWORD_SALT", "test-salt")
+	if err := saveGlobalConfig(map[string]string{
+		"base_domain":            "nonfiction.dev",
+		"default_wp_email":       "web@nonfiction.ca",
+		"default_wp_user":        "admin",
+		"basicauth_default_user": "nonfiction",
+		"dnsimple_account_id":    "14",
+		"kinsta_default_php":     "8.3",
+		"linode_default_region":  "ca-central",
+		"linode_default_type":    "g6-standard-1",
+		"linode_default_user":    "nonfiction",
+	}); err != nil {
+		t.Fatalf("saveGlobalConfig() error = %v", err)
+	}
+
+	output := captureStdout(t, func() {
+		if got := Run([]string{"config", "show"}); got != 0 {
+			t.Fatalf("Run(config show) = %d, want 0", got)
+		}
+	})
+	assertContainsInOrder(t, output, []string{
+		"config\n",
+		"──────\n",
+		"Path   " + config.ConfigFile() + "\n",
+		"Core\n",
+		"  Base domain     nonfiction.dev\n",
+		"  Password salt   set\n",
+		"WordPress\n",
+		"  Admin email       web@nonfiction.ca\n",
+		"  Admin user        admin\n",
+		"  Basic auth user   nonfiction\n",
+		"DNSimple\n",
+		"  Account ID   14\n",
+		"Kinsta\n",
+		"  Region   unset\n",
+		"  PHP      8.3\n",
+		"Linode\n",
+		"  Region   ca-central\n",
+		"  Type     g6-standard-1\n",
+		"  Image    unset\n",
+		"  User     nonfiction",
+	})
+	for _, notWant := range []string{"Default WP Email", "Default WP User", "Basic Auth Default User", "Password Salt:"} {
+		if strings.Contains(output, notWant) {
+			t.Fatalf("config show output contains %q:\n%s", notWant, output)
+		}
+	}
+}
+
+func TestRunConfigShowMarksFallbackDefaults(t *testing.T) {
+	configDir := t.TempDir()
+	t.Setenv("NF_CONFIG_HOME", configDir)
+	t.Setenv("NF_PASSWORD_SALT", "")
+	if err := saveGlobalConfig(map[string]string{
+		"base_domain":      "nonfiction.dev",
+		"default_wp_email": "web@nonfiction.ca",
+	}); err != nil {
+		t.Fatalf("saveGlobalConfig() error = %v", err)
+	}
+
+	output := captureStdout(t, func() {
+		if got := Run([]string{"config", "show"}); got != 0 {
+			t.Fatalf("Run(config show) = %d, want 0", got)
+		}
+	})
+	assertContainsInOrder(t, output, []string{
+		"Core\n",
+		"  Base domain     nonfiction.dev\n",
+		"  Password salt   unset\n",
+		"WordPress\n",
+		"  Admin email       web@nonfiction.ca\n",
+		"  Admin user        admin (default)\n",
+		"  Basic auth user   nonfiction (default)\n",
+		"DNSimple\n",
+		"  Account ID   unset\n",
+		"Kinsta\n",
+		"  Region   unset\n",
+		"  PHP      8.3 (default)\n",
+		"Linode\n",
+		"  Region   ca-central (default)\n",
+		"  Type     g6-standard-1 (default)\n",
+		"  Image    unset\n",
+		"  User     nonfiction (default)",
+	})
+}
+
 func TestRunProviderShowReadsCachedMetadata(t *testing.T) {
 	configDir := t.TempDir()
 	t.Setenv("NF_CONFIG_HOME", configDir)
@@ -1042,12 +1131,12 @@ func TestRunProviderShowReadsCachedMetadata(t *testing.T) {
 			t.Fatalf("Run() = %d, want 0", got)
 		}
 	})
-	for _, want := range []string{"Provider: dnsimple", "Status: configured", filepath.Join(stateDir, "providers.json"), "Account ID: 14", "Account email: hello@example.com", "Targets: 0"} {
+	for _, want := range []string{"Provider: dnsimple", "Status: configured", filepath.Join(stateDir, "providers.json"), "Account ID: 14", "Targets: 0"} {
 		if !strings.Contains(output, want) {
 			t.Fatalf("Run() output missing %q:\n%s", want, output)
 		}
 	}
-	for _, unwanted := range []string{"dnsimple-token-secret", "DNSIMPLE_TOKEN", `"provider": "dnsimple"`} {
+	for _, unwanted := range []string{"Account email", "hello@example.com", "dnsimple-token-secret", "DNSIMPLE_TOKEN", `"provider": "dnsimple"`} {
 		if strings.Contains(output, unwanted) {
 			t.Fatalf("Run() output included %q:\n%s", unwanted, output)
 		}
@@ -1211,6 +1300,55 @@ func TestRunProviderCheckRunsHealthcheckAndSavesMetadata(t *testing.T) {
 	targets, ok := records[0]["targets"].([]any)
 	if !ok || len(targets) != 1 {
 		t.Fatalf("provider targets = %#v, want one target", records[0]["targets"])
+	}
+}
+
+func TestRunProviderCheckDNSimpleSuppressesAccountEmail(t *testing.T) {
+	configDir := t.TempDir()
+	t.Setenv("NF_CONFIG_HOME", configDir)
+	stateDir := t.TempDir()
+	t.Setenv("NF_STATE_HOME", stateDir)
+	t.Setenv("DNSIMPLE_TOKEN", "dnsimple-token-secret")
+	if err := saveGlobalConfig(map[string]string{"base_domain": "nonfiction.dev"}); err != nil {
+		t.Fatalf("saveGlobalConfig() error = %v", err)
+	}
+	oldCheck := providerCheckDNSimpleFn
+	providerCheckDNSimpleFn = func() (providerHealthResult, error) {
+		return providerHealthResult{
+			Provider: "dnsimple",
+			Details:  map[string]string{"account_email": "hello@example.com", "account_id": "14", "managed_domain": "nonfiction.dev"},
+			Record: map[string]any{
+				"provider":       "dnsimple",
+				"account_email":  "hello@example.com",
+				"account_id":     "14",
+				"managed_domain": "nonfiction.dev",
+				"targets":        []map[string]any{},
+			},
+		}, nil
+	}
+	t.Cleanup(func() { providerCheckDNSimpleFn = oldCheck })
+
+	output := captureStdout(t, func() {
+		if got := Run([]string{"provider", "check", "dnsimple"}); got != 0 {
+			t.Fatalf("Run() = %d, want 0", got)
+		}
+	})
+	for _, want := range []string{"Provider dnsimple healthcheck passed.", "account_id: 14", "managed_domain: nonfiction.dev", "Saved provider metadata"} {
+		if !strings.Contains(output, want) {
+			t.Fatalf("Run() output missing %q:\n%s", want, output)
+		}
+	}
+	for _, unwanted := range []string{"account_email", "hello@example.com"} {
+		if strings.Contains(output, unwanted) {
+			t.Fatalf("Run() output included %q:\n%s", unwanted, output)
+		}
+	}
+	records, err := state.LoadStateRecords("providers")
+	if err != nil {
+		t.Fatalf("LoadStateRecords(providers) error = %v", err)
+	}
+	if len(records) != 1 || recordValueString(records[0]["account_email"]) != "hello@example.com" {
+		t.Fatalf("stored provider records = %#v, want account_email preserved", records)
 	}
 }
 
@@ -1601,9 +1739,18 @@ func TestRunTargetListAndShowUseStateTargets(t *testing.T) {
 			t.Fatalf("Run(target show) = %d, want 0", got)
 		}
 	})
-	for _, want := range []string{"Target: app1-linode", "Provider: linode", "Hostname: 203.0.113.10", "Status: active", "Cached status: active"} {
-		if !strings.Contains(showOutput, want) {
-			t.Fatalf("target show output missing %q:\n%s", want, showOutput)
+	assertContainsInOrder(t, showOutput, []string{
+		"app1-linode\n",
+		"───────────\n",
+		"Provider        linode\n",
+		"Hostname        203.0.113.10\n",
+		"ID              98222343\n",
+		"Status          active\n",
+		"Cached status   active",
+	})
+	for _, notWant := range []string{"Target:", "SSH:"} {
+		if strings.Contains(showOutput, notWant) {
+			t.Fatalf("target show output contains %q:\n%s", notWant, showOutput)
 		}
 	}
 	jsonOutput := captureStdout(t, func() {
@@ -1699,9 +1846,19 @@ func TestRunTargetShowWithoutTargetPromptsPicker(t *testing.T) {
 	if len(selectOptions) != 1 || selectOptions[0] != (ui.SelectOption{Value: "app1-linode", Label: "app1-linode"}) {
 		t.Fatalf("select options = %#v", selectOptions)
 	}
-	for _, want := range []string{"Target: app1-linode", "Provider: linode", "Hostname: app1-linode.nonfiction.dev", "ID: 98222343", "Status: reachable"} {
-		if !strings.Contains(output, want) {
-			t.Fatalf("target show output missing %q:\n%s", want, output)
+	assertContainsInOrder(t, output, []string{
+		"app1-linode\n",
+		"───────────\n",
+		"Provider   linode\n",
+		"Hostname   app1-linode.nonfiction.dev\n",
+		"ID         98222343\n",
+		"Status     reachable\n",
+		"Access\n",
+		"  SSH   ssh app1-linode.nonfiction.dev",
+	})
+	for _, notWant := range []string{"Target:", "SSH:"} {
+		if strings.Contains(output, notWant) {
+			t.Fatalf("target show output contains %q:\n%s", notWant, output)
 		}
 	}
 }
