@@ -42,6 +42,7 @@ Commands:
   config      manage global config
   password    derive passwords
   completion  print shell completion scripts
+  version     show nf version
   help        show help
 ```
 
@@ -53,6 +54,31 @@ Inside an `nf` project repo with `nf.json` next to `.git`, help also shows:
   theme       package clean artifacts and run theme tasks
   public      deploy static public paths
 ```
+
+## Versioning and releases
+
+`nf` uses date-based versions in `YYYY.MM.DD.N` form. `N` increments for multiple releases on the same UTC date. The current source version lives in `internal/version/VERSION`.
+
+Check the installed binary:
+
+```sh
+nf version
+nf version --short
+```
+
+Build release artifacts for the version in `internal/version/VERSION`:
+
+```sh
+scripts/release.sh
+```
+
+Build artifacts for an explicit version:
+
+```sh
+scripts/release.sh 2026.06.09.2
+```
+
+The release script writes binaries and checksums under `dist/`, stamping the version, git commit, and release date into the binary with Go linker flags. The release date is derived from the `YYYY.MM.DD` prefix.
 
 ## Shell completion
 

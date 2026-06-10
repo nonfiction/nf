@@ -23,6 +23,7 @@ CLI smoke checks:
 
 ```sh
 go run ./cmd/nf --help
+go run ./cmd/nf version
 go run ./cmd/nf provider list
 go run ./cmd/nf site list
 go run ./cmd/nf site list --envs
@@ -54,6 +55,8 @@ nix develop -c nf --help
 ```
 
 Nix flakes use the git source snapshot. Stage newly added source files before trusting `nix run` or `nix build`; otherwise Nix may silently build without untracked Go files.
+
+Release versions use date-based `YYYY.MM.DD.N` values. The source version lives in `internal/version/VERSION`. Build release artifacts with `scripts/release.sh [version]`; it writes stamped binaries and checksums under ignored `dist/`.
 
 ## Local paths and test isolation
 

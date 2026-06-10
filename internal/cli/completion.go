@@ -97,6 +97,8 @@ func completeContextCandidates(args []string) []string {
 		return rootCompletionCandidates()
 	case "completion":
 		return []string{"bash", "zsh"}
+	case "version":
+		return []string{"--short", "help"}
 	case "provider":
 		return providerCompletionCandidates(args[1:])
 	case "target":
@@ -121,7 +123,7 @@ func completeContextCandidates(args []string) []string {
 }
 
 func rootCompletionCandidates() []string {
-	candidates := []string{"init", "provider", "target", "site", "config", "password", "completion", "help"}
+	candidates := []string{"init", "provider", "target", "site", "config", "password", "completion", "version", "help"}
 	if projectContextAvailable() {
 		candidates = append(candidates, "remote", "env", "theme", "public")
 	}

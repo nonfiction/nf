@@ -11,13 +11,22 @@
       system: let
         inherit (inputs.flake-utils.lib) mkApp;
         pkgs = import inputs.nixpkgs {inherit system;};
+        version = pkgs.lib.strings.trim (builtins.readFile ./internal/version/VERSION);
+        versionDate = builtins.substring 0 4 version + "-" + builtins.substring 5 2 version + "-" + builtins.substring 8 2 version;
         nf = pkgs.buildGoModule {
           pname = "nf";
-          version = "0.1.0";
+          inherit version;
           src = ./.;
           modRoot = ".";
           subPackages = ["cmd/nf"];
           vendorHash = "sha256-DeRPEIZL//++6CBlY6WHSUQFywsNf4iHBvlHDmYCGpI=";
+          ldflags = [
+            "-s"
+            "-w"
+            "-X github.com/nonfiction/nf/internal/version.Version=${version}"
+            "-X github.com/nonfiction/nf/internal/version.Commit=${inputs.self.shortRev or "unknown"}"
+            "-X github.com/nonfiction/nf/internal/version.Date=${versionDate}"
+          ];
         };
         nf-build = pkgs.writeShellScriptBin "nf-build" ''
           set -eu
@@ -33,7 +42,11 @@
           fi
 
           mkdir -p "$HOME/.local/bin/"
-          (cd "$repo" && go build -o $HOME/.local/bin/nf ./cmd/nf)
+          version="$(cd "$repo" && go run ./cmd/nf version --short)"
+          commit="$(cd "$repo" && git rev-parse --short HEAD 2>/dev/null || printf unknown)"
+          date="''${version:0:4}-''${version:5:2}-''${version:8:2}"
+          ldflags="-X github.com/nonfiction/nf/internal/version.Version=$version -X github.com/nonfiction/nf/internal/version.Commit=$commit -X github.com/nonfiction/nf/internal/version.Date=$date"
+          (cd "$repo" && go build -trimpath -ldflags "$ldflags" -o $HOME/.local/bin/nf ./cmd/nf)
           echo "built $HOME/.local/bin/nf"
         '';
       in {

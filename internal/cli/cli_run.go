@@ -24,6 +24,8 @@ func Run(argv []string) int {
 		return runComplete(argv[1:])
 	case "completion":
 		return runCompletion(argv[1:])
+	case "version", "--version", "-v":
+		return runVersion(argv[1:])
 	case "provider":
 		return runProvider(argv[1:])
 	case "target":
@@ -105,6 +107,8 @@ func runTopicHelp(argv []string) int {
 		return runPasswordHelp()
 	case "completion":
 		return runCompletionHelp()
+	case "version":
+		return runVersionHelp()
 	default:
 		return runHelp()
 	}

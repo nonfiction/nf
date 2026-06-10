@@ -21,6 +21,7 @@ import (
 	"github.com/nonfiction/nf/internal/passwords"
 	"github.com/nonfiction/nf/internal/state"
 	"github.com/nonfiction/nf/internal/ui"
+	"github.com/nonfiction/nf/internal/version"
 )
 
 func TestSlugToTitle(t *testing.T) {
@@ -140,7 +141,7 @@ func TestRunHelpShowsTopLevelCommandsOutsideGit(t *testing.T) {
 	t.Cleanup(func() { _ = os.Chdir(oldwd) })
 
 	output := captureStdout(t, func() { _ = runHelp() })
-	for _, wanted := range []string{"\n  init        initialize project metadata\n", "\n  provider    manage provider integrations\n", "\n  target      manage deployable targets\n", "\n  site        manage remote sites and envs\n", "\n  config      manage global config\n", "\n  password    derive passwords\n", "\n  completion  print shell completion scripts\n", "\n  help        show help\n"} {
+	for _, wanted := range []string{"\n  init        initialize project metadata\n", "\n  provider    manage provider integrations\n", "\n  target      manage deployable targets\n", "\n  site        manage remote sites and envs\n", "\n  config      manage global config\n", "\n  password    derive passwords\n", "\n  completion  print shell completion scripts\n", "\n  version     show nf version\n", "\n  help        show help\n"} {
 		if !strings.Contains(output, wanted) {
 			t.Fatalf("runHelp() output missing %q:\n%s", wanted, output)
 		}
@@ -203,6 +204,39 @@ func TestRunHelpShowsProjectCommandsInsideNFProject(t *testing.T) {
 		if !strings.Contains(output, wanted) {
 			t.Fatalf("runHelp() output missing %q:\n%s", wanted, output)
 		}
+	}
+}
+
+func TestRunVersionShowsBuildMetadata(t *testing.T) {
+	oldVersion, oldCommit, oldDate := version.Version, version.Commit, version.Date
+	wantVersion := version.DefaultVersion()
+	version.Version = wantVersion
+	version.Commit = "abc1234"
+	version.Date = "2026-06-09"
+	t.Cleanup(func() {
+		version.Version = oldVersion
+		version.Commit = oldCommit
+		version.Date = oldDate
+	})
+
+	output := captureStdout(t, func() {
+		if got := Run([]string{"version"}); got != 0 {
+			t.Fatalf("Run(version) = %d, want 0", got)
+		}
+	})
+	for _, want := range []string{"version: " + wantVersion + "\n", "commit:  abc1234\n", "date:    2026-06-09\n"} {
+		if !strings.Contains(output, want) {
+			t.Fatalf("version output missing %q:\n%s", want, output)
+		}
+	}
+
+	shortOutput := captureStdout(t, func() {
+		if got := Run([]string{"version", "--short"}); got != 0 {
+			t.Fatalf("Run(version --short) = %d, want 0", got)
+		}
+	})
+	if strings.TrimSpace(shortOutput) != wantVersion {
+		t.Fatalf("version --short = %q, want %s", shortOutput, wantVersion)
 	}
 }
 
@@ -286,6 +320,22 @@ func TestRunCompleteSuggestsStaticAndCachedValues(t *testing.T) {
 	})
 	if strings.TrimSpace(rootOutput) != "provider" {
 		t.Fatalf("root completion = %q, want provider", rootOutput)
+	}
+	versionOutput := captureStdout(t, func() {
+		if got := Run([]string{"__complete", "--", "ver"}); got != 0 {
+			t.Fatalf("Run(__complete ver) = %d, want 0", got)
+		}
+	})
+	if strings.TrimSpace(versionOutput) != "version" {
+		t.Fatalf("version completion = %q, want version", versionOutput)
+	}
+	versionFlagOutput := captureStdout(t, func() {
+		if got := Run([]string{"__complete", "--", "version", "--"}); got != 0 {
+			t.Fatalf("Run(__complete version --) = %d, want 0", got)
+		}
+	})
+	if strings.TrimSpace(versionFlagOutput) != "--short" {
+		t.Fatalf("version flag completion = %q, want --short", versionFlagOutput)
 	}
 
 	providerOutput := captureStdout(t, func() {

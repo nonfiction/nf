@@ -674,6 +674,7 @@ func runHelp() int {
 		helpLine{"config", "manage global config"},
 		helpLine{"password", "derive passwords"},
 		helpLine{"completion", "print shell completion scripts"},
+		helpLine{"version", "show nf version"},
 		helpLine{"help", "show help"},
 	)
 	printGroupHelp("nf", lines)
