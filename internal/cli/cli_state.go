@@ -19,6 +19,7 @@ var (
 	runLinodeDeleteFn        = runLinodeDelete
 	deleteDNSRecordFn        = provision.DeleteDNSimpleARecord
 	deleteDNSTXTRecordFn     = provision.DeleteDNSimpleTXTRecord
+	deleteDNSTypedRecordFn   = provision.DeleteDNSimpleRecord
 	upsertDNSRecordFn        = provision.UpsertDNSimpleRecord
 	providerCheckDNSimpleFn  = checkDNSimpleProvider
 	providerCheckKinstaFn    = checkKinstaProvider

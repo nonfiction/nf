@@ -99,6 +99,12 @@ type siteRemoveEnvPlan struct {
 	Hostname string
 }
 
+type siteDNSDeletePlan struct {
+	Name       string
+	RecordType string
+	Inferred   bool
+}
+
 type siteRemovePlan struct {
 	SiteID       string
 	Name         string
@@ -109,7 +115,7 @@ type siteRemovePlan struct {
 	KinstaSiteID string
 	DNSZone      string
 	DNSAccountID string
-	DNSNames     []string
+	DNSRecords   []siteDNSDeletePlan
 	SSHUser      string
 	SSHHost      string
 	Envs         []siteRemoveEnvPlan

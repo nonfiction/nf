@@ -172,14 +172,14 @@ func buildKinstaSiteRemovePlan(matches []map[string]any, resolvedSiteID string) 
 		}
 		plan.Envs = append(plan.Envs, env)
 		if hostname != "" {
-			plan.DNSNames = append(plan.DNSNames, dnsimpleRelativeName(hostname, dnsZone))
+			plan.DNSRecords = append(plan.DNSRecords, inferredKinstaDNSDeleteRecords(hostname, dnsZone)...)
 		}
 	}
 	if strings.TrimSpace(kinstaSiteID) == "" {
 		return siteRemovePlan{}, ProjectError{Msg: fmt.Sprintf("Selected Kinsta site %q has no Kinsta site_id. Run nf site refresh and try again.", resolvedSiteID)}
 	}
 	plan.KinstaSiteID = kinstaSiteID
-	plan.DNSNames = uniqueNonEmptyStrings(plan.DNSNames)
+	plan.DNSRecords = uniqueDNSDeleteRecords(plan.DNSRecords)
 	sort.SliceStable(plan.Envs, func(i, j int) bool {
 		left, right := siteListEnvOrder(plan.Envs[i].Env), siteListEnvOrder(plan.Envs[j].Env)
 		if left != right {
@@ -207,29 +207,76 @@ func kinstaRemoveEnvHostname(record map[string]any) string {
 	return ""
 }
 
-func uniqueNonEmptyStrings(values []string) []string {
-	seen := map[string]bool{}
-	out := []string{}
-	for _, value := range values {
-		value = strings.TrimSpace(value)
-		if value == "" || seen[value] {
+func inferredKinstaDNSDeleteRecords(hostname, zone string) []siteDNSDeletePlan {
+	name := dnsimpleRelativeName(hostname, zone)
+	if strings.TrimSpace(name) == "" && strings.TrimSpace(hostname) == "" {
+		return nil
+	}
+	return []siteDNSDeletePlan{
+		{Name: name, RecordType: "A", Inferred: true},
+		{Name: name, RecordType: "CNAME", Inferred: true},
+		{Name: dnsimpleTLSChallengeName(name), RecordType: "TXT", Inferred: true},
+	}
+}
+
+func normalizeDNSDeleteRecord(record siteDNSDeletePlan) (siteDNSDeletePlan, bool) {
+	record.Name = strings.TrimSuffix(strings.TrimSpace(record.Name), ".")
+	record.RecordType = strings.ToUpper(strings.TrimSpace(record.RecordType))
+	if record.RecordType == "" {
+		return siteDNSDeletePlan{}, false
+	}
+	return record, true
+}
+
+func dnsDeleteRecordKey(record siteDNSDeletePlan) string {
+	return normalizedRecordString(record.RecordType) + "\x00" + normalizedRecordString(record.Name)
+}
+
+func uniqueDNSDeleteRecords(records []siteDNSDeletePlan) []siteDNSDeletePlan {
+	seen := map[string]int{}
+	out := []siteDNSDeletePlan{}
+	for _, record := range records {
+		normalized, ok := normalizeDNSDeleteRecord(record)
+		if !ok {
 			continue
 		}
-		seen[value] = true
-		out = append(out, value)
+		key := dnsDeleteRecordKey(normalized)
+		if index, exists := seen[key]; exists {
+			if out[index].Inferred && !normalized.Inferred {
+				out[index] = normalized
+			}
+			continue
+		}
+		seen[key] = len(out)
+		out = append(out, normalized)
 	}
 	return out
 }
 
-func sortedMapKeys(values map[string]bool) []string {
-	keys := make([]string, 0, len(values))
-	for key := range values {
-		if strings.TrimSpace(key) != "" {
-			keys = append(keys, key)
-		}
+func addDNSDeleteRecord(records map[string]siteDNSDeletePlan, record siteDNSDeletePlan) {
+	normalized, ok := normalizeDNSDeleteRecord(record)
+	if !ok {
+		return
 	}
-	sort.Strings(keys)
-	return keys
+	key := dnsDeleteRecordKey(normalized)
+	existing, exists := records[key]
+	if !exists || existing.Inferred && !normalized.Inferred {
+		records[key] = normalized
+	}
+}
+
+func sortedDNSDeleteRecords(records map[string]siteDNSDeletePlan) []siteDNSDeletePlan {
+	out := make([]siteDNSDeletePlan, 0, len(records))
+	for _, record := range records {
+		out = append(out, record)
+	}
+	sort.SliceStable(out, func(i, j int) bool {
+		if out[i].Name != out[j].Name {
+			return out[i].Name < out[j].Name
+		}
+		return out[i].RecordType < out[j].RecordType
+	})
+	return out
 }
 
 func validateSiteRemoveEnv(env siteRemoveEnvPlan) error {
@@ -288,9 +335,12 @@ func printSiteRemovePlan(plan siteRemovePlan, mode string) {
 	if plan.Provider == "kinsta" {
 		fmt.Printf("  kinsta site id: %s\n", plan.KinstaSiteID)
 		fmt.Printf("  dns: dnsimple zone %s account %s\n", plan.DNSZone, plan.DNSAccountID)
-		for _, name := range plan.DNSNames {
-			fmt.Printf("  dns delete: A %s\n", dnsimpleFQDNForRelativeName(name, plan.DNSZone))
-			fmt.Printf("  dns delete: TXT %s\n", dnsimpleFQDNForRelativeName(dnsimpleTLSChallengeName(name), plan.DNSZone))
+		for _, record := range plan.DNSRecords {
+			suffix := ""
+			if record.Inferred {
+				suffix = " (inferred)"
+			}
+			fmt.Printf("  dns delete: %s %s%s\n", record.RecordType, dnsimpleFQDNForRelativeName(record.Name, plan.DNSZone), suffix)
 		}
 		for _, env := range plan.Envs {
 			fmt.Printf("  env %s:\n", env.Env)
@@ -407,11 +457,9 @@ func removeKinstaSite(plan siteRemovePlan) error {
 	client := kinsta.NewClient(firstNonEmpty(envwizard.Value("KINSTA_BASE_URL"), "https://api.kinsta.com/v2"), token)
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Minute)
 	defer cancel()
-	aRecords := map[string]bool{}
-	txtRecords := map[string]bool{}
-	for _, name := range plan.DNSNames {
-		aRecords[name] = true
-		txtRecords[dnsimpleTLSChallengeName(name)] = true
+	dnsRecords := map[string]siteDNSDeletePlan{}
+	for _, record := range plan.DNSRecords {
+		addDNSDeleteRecord(dnsRecords, record)
 	}
 	for _, env := range plan.Envs {
 		if env.DomainID == "" {
@@ -426,24 +474,12 @@ func removeKinstaSite(plan siteRemovePlan) error {
 			if !kinstaDNSRecordBelongsToDomain(fqdn, env.Hostname) {
 				continue
 			}
-			name := dnsimpleRelativeName(fqdn, plan.DNSZone)
-			switch strings.ToUpper(record.RecordTypeName()) {
-			case "A":
-				aRecords[name] = true
-			case "TXT":
-				txtRecords[name] = true
-			}
+			addDNSDeleteRecord(dnsRecords, siteDNSDeletePlan{Name: dnsimpleRelativeName(fqdn, plan.DNSZone), RecordType: record.RecordTypeName()})
 		}
 	}
-	for _, name := range sortedMapKeys(aRecords) {
-		fmt.Printf("Deleting DNS A %s...\n", dnsimpleFQDNForRelativeName(name, plan.DNSZone))
-		if err := deleteDNSRecordFn(dnsToken, plan.DNSAccountID, plan.DNSZone, name); err != nil {
-			return err
-		}
-	}
-	for _, txtName := range sortedMapKeys(txtRecords) {
-		fmt.Printf("Deleting DNS TXT %s...\n", dnsimpleFQDNForRelativeName(txtName, plan.DNSZone))
-		if err := deleteDNSTXTRecordFn(dnsToken, plan.DNSAccountID, plan.DNSZone, txtName); err != nil {
+	for _, record := range sortedDNSDeleteRecords(dnsRecords) {
+		fmt.Printf("Deleting DNS %s %s...\n", record.RecordType, dnsimpleFQDNForRelativeName(record.Name, plan.DNSZone))
+		if err := deleteDNSTypedRecordFn(dnsToken, plan.DNSAccountID, plan.DNSZone, record.Name, record.RecordType); err != nil {
 			return err
 		}
 	}

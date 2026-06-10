@@ -313,6 +313,10 @@ func DeleteDNSimpleTXTRecord(token, accountID, zone, name string) error {
 	return defaultDNSimpleDeleteTXTRecord(token, accountID, zone, name)
 }
 
+func DeleteDNSimpleRecord(token, accountID, zone, name, recordType string) error {
+	return defaultDNSimpleDeleteRecord(token, accountID, zone, name, recordType)
+}
+
 func defaultDNSimpleWaitForRecordDistribution(token, accountID, zone, name string, timeout time.Duration) error {
 	provider, err := dnsimpleProviderFactory(context.Background(), token, accountID)
 	if err != nil {

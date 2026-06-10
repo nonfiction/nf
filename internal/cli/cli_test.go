@@ -2998,7 +2998,7 @@ func TestRunSiteStagingRemoveKinstaDryRunPlansOnlyStagingDeletion(t *testing.T) 
 			t.Fatalf("Run(site staging remove kinsta dry-run) = %d, want 0", got)
 		}
 	})
-	for _, want := range []string{"Remove staging env plan:", "site id: foobar.kinsta", "provider: kinsta", "env staging:", "kinsta environment id: kenv-staging", "dns delete: A foobar-staging.kinsta.nonfiction.dev", "remote actions: delete Kinsta staging environment", "mode: dry-run"} {
+	for _, want := range []string{"Remove staging env plan:", "site id: foobar.kinsta", "provider: kinsta", "env staging:", "kinsta environment id: kenv-staging", "dns delete: A foobar-staging.kinsta.nonfiction.dev (inferred)", "dns delete: CNAME foobar-staging.kinsta.nonfiction.dev (inferred)", "dns delete: TXT _acme-challenge.foobar-staging.kinsta.nonfiction.dev (inferred)", "remote actions: delete Kinsta staging environment", "mode: dry-run"} {
 		if !strings.Contains(output, want) {
 			t.Fatalf("site staging remove kinsta output missing %q:\n%s", want, output)
 		}
@@ -3007,6 +3007,98 @@ func TestRunSiteStagingRemoveKinstaDryRunPlansOnlyStagingDeletion(t *testing.T) 
 		if strings.Contains(output, notWant) {
 			t.Fatalf("site staging remove kinsta output contains %q:\n%s", notWant, output)
 		}
+	}
+}
+
+func TestRunSiteStagingRemoveKinstaExecuteDeletesTypedDNSAndKeepsLive(t *testing.T) {
+	configDir := t.TempDir()
+	stateDir := t.TempDir()
+	t.Setenv("NF_CONFIG_HOME", configDir)
+	t.Setenv("NF_STATE_HOME", stateDir)
+	t.Setenv("KINSTA_API_KEY", "kinsta-token")
+	t.Setenv("DNSIMPLE_TOKEN", "dns-token")
+	if err := saveGlobalConfig(map[string]string{"base_domain": "nonfiction.dev", "dnsimple_account_id": "14"}); err != nil {
+		t.Fatalf("saveGlobalConfig() error = %v", err)
+	}
+	if err := state.SaveStateRecords("sites", []map[string]any{
+		{"provider": "kinsta", "site_id": "foobar.kinsta", "name": "foobar", "env": "live", "target": "kinsta", "hostname": "foobar.kinsta.nonfiction.dev", "kinsta": map[string]any{"site_id": "ksite123", "environment_id": "kenv-live", "domain_id": "kdom-live"}},
+		{"provider": "kinsta", "site_id": "foobar.kinsta", "name": "foobar", "env": "staging", "target": "kinsta", "hostname": "foobar-staging.kinsta.nonfiction.dev", "kinsta": map[string]any{"site_id": "ksite123", "environment_id": "kenv-staging", "domain_id": "kdom-staging"}},
+	}); err != nil {
+		t.Fatalf("SaveStateRecords(sites) error = %v", err)
+	}
+	requests := []string{}
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requests = append(requests, r.Method+" "+r.URL.Path)
+		if got, want := r.Header.Get("Authorization"), "Bearer kinsta-token"; got != want {
+			t.Fatalf("Authorization = %q, want %q", got, want)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		switch r.Method + " " + r.URL.Path {
+		case "GET /sites/environments/domains/kdom-staging/verification-records":
+			_ = json.NewEncoder(w).Encode(map[string]any{"site_domain": map[string]any{"pointing_records": []map[string]any{{"name": "foobar-staging.kinsta.nonfiction.dev", "type": "CNAME", "content": "hosting.kinsta.cloud"}, {"name": "verify.foobar-staging.kinsta.nonfiction.dev", "type": "CNAME", "content": "verify.kinsta.cloud"}}, "verification_records": []map[string]any{{"name": "_acme-challenge.foobar-staging.kinsta.nonfiction.dev", "type": "TXT", "content": "token"}}}})
+		case "DELETE /sites/environments/kenv-staging":
+			w.WriteHeader(http.StatusAccepted)
+			_ = json.NewEncoder(w).Encode(map[string]any{"operation_id": "op-delete-staging", "status": 202})
+		case "GET /operations/op-delete-staging":
+			_ = json.NewEncoder(w).Encode(map[string]any{"operation": map[string]any{"status": "complete"}})
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	t.Cleanup(server.Close)
+	t.Setenv("KINSTA_BASE_URL", server.URL)
+	type dnsCall struct{ recordType, token, accountID, zone, name string }
+	dnsCalls := []dnsCall{}
+	oldTypedDelete := deleteDNSTypedRecordFn
+	deleteDNSTypedRecordFn = func(token, accountID, zone, name, recordType string) error {
+		dnsCalls = append(dnsCalls, dnsCall{recordType: recordType, token: token, accountID: accountID, zone: zone, name: name})
+		return nil
+	}
+	t.Cleanup(func() { deleteDNSTypedRecordFn = oldTypedDelete })
+
+	output := captureStdout(t, func() {
+		if got := Run([]string{"site", "staging", "remove", "foobar.kinsta", "--execute", "--yes", "--non-interactive"}); got != 0 {
+			t.Fatalf("Run(site staging remove kinsta execute) = %d, want 0", got)
+		}
+	})
+	if !strings.Contains(output, "Staging env removed.") || !strings.Contains(output, "mode: execute") {
+		t.Fatalf("site staging remove kinsta execute output = %q, want success", output)
+	}
+	for _, want := range []dnsCall{
+		{recordType: "A", token: "dns-token", accountID: "14", zone: "nonfiction.dev", name: "foobar-staging.kinsta"},
+		{recordType: "CNAME", token: "dns-token", accountID: "14", zone: "nonfiction.dev", name: "foobar-staging.kinsta"},
+		{recordType: "CNAME", token: "dns-token", accountID: "14", zone: "nonfiction.dev", name: "verify.foobar-staging.kinsta"},
+		{recordType: "TXT", token: "dns-token", accountID: "14", zone: "nonfiction.dev", name: "_acme-challenge.foobar-staging.kinsta"},
+	} {
+		found := false
+		for _, got := range dnsCalls {
+			if got == want {
+				found = true
+				break
+			}
+		}
+		if !found {
+			t.Fatalf("missing DNS delete %#v in %#v", want, dnsCalls)
+		}
+	}
+	for _, got := range dnsCalls {
+		if strings.Contains(got.name, "foobar.kinsta") && !strings.Contains(got.name, "foobar-staging.kinsta") {
+			t.Fatalf("deleted live DNS during staging remove: %#v", dnsCalls)
+		}
+	}
+	for _, notWant := range []string{"GET /sites/environments/domains/kdom-live/verification-records", "DELETE /sites/environments/kenv-live", "DELETE /sites/ksite123"} {
+		for _, got := range requests {
+			if got == notWant {
+				t.Fatalf("unexpected Kinsta request %q in %#v", notWant, requests)
+			}
+		}
+	}
+	records, err := state.LoadStateRecords("sites")
+	if err != nil {
+		t.Fatalf("LoadStateRecords(sites) error = %v", err)
+	}
+	if len(records) != 1 || !siteEnvRecordExists(records, "foobar.kinsta", "live") || siteEnvRecordExists(records, "foobar.kinsta", "staging") {
+		t.Fatalf("site cache after kinsta staging remove = %#v, want only live", records)
 	}
 }
 
@@ -3434,7 +3526,7 @@ func TestRunSiteRemoveKinstaDryRunPlansEnvAndSiteDeletion(t *testing.T) {
 			t.Fatalf("Run(site remove kinsta dry-run) = %d, want 0", got)
 		}
 	})
-	for _, want := range []string{"Remove site plan:", "site id: foobar.kinsta", "target: kinsta", "provider: kinsta", "kinsta site id: ksite123", "dns: dnsimple zone nonfiction.dev account 14", "dns delete: A foobar.kinsta.nonfiction.dev", "dns delete: TXT _acme-challenge.foobar.kinsta.nonfiction.dev", "dns delete: A foobar-staging.kinsta.nonfiction.dev", "dns delete: TXT _acme-challenge.foobar-staging.kinsta.nonfiction.dev", "env live:", "kinsta environment id: kenv-live", "env staging:", "kinsta environment id: kenv-staging", "remote actions: delete Kinsta environments, delete Kinsta site", "mode: dry-run"} {
+	for _, want := range []string{"Remove site plan:", "site id: foobar.kinsta", "target: kinsta", "provider: kinsta", "kinsta site id: ksite123", "dns: dnsimple zone nonfiction.dev account 14", "dns delete: A foobar.kinsta.nonfiction.dev (inferred)", "dns delete: CNAME foobar.kinsta.nonfiction.dev (inferred)", "dns delete: TXT _acme-challenge.foobar.kinsta.nonfiction.dev (inferred)", "dns delete: A foobar-staging.kinsta.nonfiction.dev (inferred)", "dns delete: CNAME foobar-staging.kinsta.nonfiction.dev (inferred)", "dns delete: TXT _acme-challenge.foobar-staging.kinsta.nonfiction.dev (inferred)", "env live:", "kinsta environment id: kenv-live", "env staging:", "kinsta environment id: kenv-staging", "remote actions: delete Kinsta environments, delete Kinsta site", "mode: dry-run"} {
 		if !strings.Contains(output, want) {
 			t.Fatalf("site remove kinsta dry-run output missing %q:\n%s", want, output)
 		}
@@ -3469,7 +3561,7 @@ func TestRunSiteRemoveKinstaExecuteDeletesRemoteAndCache(t *testing.T) {
 		case "GET /sites/environments/domains/kdom-live/verification-records":
 			_ = json.NewEncoder(w).Encode(map[string]any{"site_domain": map[string]any{"pointing_records": []map[string]any{{"name": "foobar.kinsta.nonfiction.dev", "type": "A", "content": "203.0.113.10"}}, "verification_records": []map[string]any{{"name": "_acme-challenge.foobar.kinsta.nonfiction.dev", "type": "TXT", "content": "token"}, {"name": "_kinsta.foobar.kinsta.nonfiction.dev", "type": "TXT", "content": "token"}}}})
 		case "GET /sites/environments/domains/kdom-staging/verification-records":
-			_ = json.NewEncoder(w).Encode(map[string]any{"site_domain": map[string]any{"pointing_records": []map[string]any{{"name": "foobar-staging.kinsta.nonfiction.dev", "type": "A", "content": "203.0.113.11"}}, "verification_records": []map[string]any{{"name": "_acme-challenge.foobar-staging.kinsta.nonfiction.dev", "type": "TXT", "content": "token"}}}})
+			_ = json.NewEncoder(w).Encode(map[string]any{"site_domain": map[string]any{"pointing_records": []map[string]any{{"name": "foobar-staging.kinsta.nonfiction.dev", "type": "CNAME", "content": "hosting.kinsta.cloud"}, {"name": "verify.foobar-staging.kinsta.nonfiction.dev", "type": "CNAME", "content": "verify.kinsta.cloud"}}, "verification_records": []map[string]any{{"name": "_acme-challenge.foobar-staging.kinsta.nonfiction.dev", "type": "TXT", "content": "token"}}}})
 		case "DELETE /sites/environments/kenv-live":
 			w.WriteHeader(http.StatusAccepted)
 			_ = json.NewEncoder(w).Encode(map[string]any{"operation_id": "op-delete-live", "status": 202})
@@ -3489,20 +3581,12 @@ func TestRunSiteRemoveKinstaExecuteDeletesRemoteAndCache(t *testing.T) {
 	t.Setenv("KINSTA_BASE_URL", server.URL)
 	type dnsCall struct{ kind, token, accountID, zone, name string }
 	dnsCalls := []dnsCall{}
-	oldDNSDelete := deleteDNSRecordFn
-	deleteDNSRecordFn = func(token, accountID, zone, name string) error {
-		dnsCalls = append(dnsCalls, dnsCall{kind: "A", token: token, accountID: accountID, zone: zone, name: name})
+	oldTypedDelete := deleteDNSTypedRecordFn
+	deleteDNSTypedRecordFn = func(token, accountID, zone, name, recordType string) error {
+		dnsCalls = append(dnsCalls, dnsCall{kind: recordType, token: token, accountID: accountID, zone: zone, name: name})
 		return nil
 	}
-	oldTXTDelete := deleteDNSTXTRecordFn
-	deleteDNSTXTRecordFn = func(token, accountID, zone, name string) error {
-		dnsCalls = append(dnsCalls, dnsCall{kind: "TXT", token: token, accountID: accountID, zone: zone, name: name})
-		return nil
-	}
-	t.Cleanup(func() {
-		deleteDNSRecordFn = oldDNSDelete
-		deleteDNSTXTRecordFn = oldTXTDelete
-	})
+	t.Cleanup(func() { deleteDNSTypedRecordFn = oldTypedDelete })
 
 	output := captureStdout(t, func() {
 		if got := Run([]string{"site", "remove", "foobar.kinsta", "--execute", "--yes", "--non-interactive"}); got != 0 {
@@ -3514,9 +3598,12 @@ func TestRunSiteRemoveKinstaExecuteDeletesRemoteAndCache(t *testing.T) {
 	}
 	for _, want := range []dnsCall{
 		{kind: "A", token: "dns-token", accountID: "14", zone: "nonfiction.dev", name: "foobar.kinsta"},
+		{kind: "CNAME", token: "dns-token", accountID: "14", zone: "nonfiction.dev", name: "foobar.kinsta"},
 		{kind: "TXT", token: "dns-token", accountID: "14", zone: "nonfiction.dev", name: "_acme-challenge.foobar.kinsta"},
 		{kind: "TXT", token: "dns-token", accountID: "14", zone: "nonfiction.dev", name: "_kinsta.foobar.kinsta"},
 		{kind: "A", token: "dns-token", accountID: "14", zone: "nonfiction.dev", name: "foobar-staging.kinsta"},
+		{kind: "CNAME", token: "dns-token", accountID: "14", zone: "nonfiction.dev", name: "foobar-staging.kinsta"},
+		{kind: "CNAME", token: "dns-token", accountID: "14", zone: "nonfiction.dev", name: "verify.foobar-staging.kinsta"},
 		{kind: "TXT", token: "dns-token", accountID: "14", zone: "nonfiction.dev", name: "_acme-challenge.foobar-staging.kinsta"},
 	} {
 		found := false
