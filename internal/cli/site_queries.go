@@ -129,7 +129,6 @@ func printSiteDetails(out map[string]any) {
 		fmt.Println(strings.Repeat("─", len(siteID)))
 	}
 	printDetailRows([]detailRow{
-		{label: "Site", value: siteID},
 		{label: "Name", value: recordValueString(out["name"])},
 		{label: "Provider", value: recordValueString(out["provider"])},
 		{label: "Target", value: recordValueString(out["target"])},
@@ -146,8 +145,14 @@ func printSiteDetails(out map[string]any) {
 	if len(envs) == 0 {
 		return
 	}
+	if siteHasEnv(envs, "live") && !siteHasEnv(envs, "staging") {
+		printDetailRows([]detailRow{
+			{label: "Staging", value: "not created"},
+			{label: "Next", value: "nf site staging add " + siteID},
+		})
+	}
 	fmt.Println()
-	fmt.Println("Environments:")
+	fmt.Println("Environments")
 	rows := [][]string{{"env", "php", "url"}}
 	for _, env := range envs {
 		rows = append(rows, []string{
@@ -157,11 +162,6 @@ func printSiteDetails(out map[string]any) {
 		})
 	}
 	fmt.Println(formatTable(rows))
-	if siteHasEnv(envs, "live") && !siteHasEnv(envs, "staging") {
-		fmt.Println()
-		fmt.Println("Staging: not created")
-		fmt.Printf("Create staging: nf site staging add %s\n", siteID)
-	}
 }
 
 func siteHasEnv(records []map[string]any, env string) bool {

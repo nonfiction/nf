@@ -293,13 +293,11 @@ func envComposeProjectName(projectSlug string) string {
 
 func renderEnvInfo(cfg envConfig, includeURLs bool) string {
 	title := cfg.ProjectSlug + ":local"
+	siteURL := fmt.Sprintf("http://localhost:%d", cfg.WordpressPort)
 	lines := []string{title, strings.Repeat("─", len(title))}
 	rows := []detailRow{
 		{label: "Site", value: cfg.ProjectSlug},
 		{label: "Env", value: "local"},
-	}
-	if includeURLs {
-		rows = append(rows, detailRow{label: "URL", value: fmt.Sprintf("http://localhost:%d", cfg.WordpressPort)})
 	}
 	rows = append(rows,
 		detailRow{label: "Path", value: localEnvDir(cfg)},
@@ -308,10 +306,14 @@ func renderEnvInfo(cfg envConfig, includeURLs bool) string {
 		detailRow{label: "Compose", value: envComposeProjectName(cfg.ProjectSlug)},
 	)
 	if includeURLs {
-		rows = append(rows, detailRow{label: "Mailpit", value: fmt.Sprintf("http://localhost:%d", cfg.MailpitPort)})
+		rows = append(rows,
+			detailRow{label: "URL", value: siteURL},
+			detailRow{label: "Mailpit", value: fmt.Sprintf("http://localhost:%d", cfg.MailpitPort)},
+		)
 	}
 	lines = append(lines, detailRowLines(rows, 0)...)
 	accessRows := []detailRow{
+		{label: "Admin URL", value: siteURL + "/wp-login.php"},
 		{label: "Admin user", value: cfg.AdminUser},
 		{label: "Admin pass", value: cfg.AdminPassword},
 	}

@@ -121,15 +121,17 @@ func cmdRemoteShow(name string) int {
 		return 1
 	}
 	envID := canonicalEnvID(siteID, remoteEnv)
-	fmt.Printf("Remote: %s\n", name)
-	fmt.Printf("Env: %s\n", envID)
+	lines := []string{name, strings.Repeat("─", len(name))}
+	rows := []detailRow{{label: "Env", value: envID}}
 	record, _, err := cachedSiteEnv(siteID, remoteEnv)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		return 1
 	}
 	if record == nil {
-		fmt.Println("Cache: no matching cached remote env")
+		rows = append(rows, detailRow{label: "Cache", value: "no matching cached remote env"})
+		lines = append(lines, detailRowLines(rows, 0)...)
+		fmt.Println(strings.Join(lines, "\n"))
 		return 0
 	}
 	if err := validateSiteRecord(record); err != nil {
@@ -137,29 +139,47 @@ func cmdRemoteShow(name string) int {
 		return 1
 	}
 	provider := strings.ToLower(strings.TrimSpace(recordValueString(record["provider"])))
-	fmt.Printf("Provider: %s\n", provider)
-	target := siteTargetName(record)
+	rows = append(rows, detailRow{label: "Provider", value: provider})
+	targetName := siteTargetName(record)
 	if provider == "linode" && siteServerReference(record) != "" {
-		target = siteServerReference(record)
+		targetName = siteServerReference(record)
 	}
-	fmt.Printf("Target: %s\n", target)
-	if url := firstRecordString(record, "url", "site_url", "home_url", "hostname"); url != "" {
-		fmt.Printf("URL: %s\n", url)
+	rows = append(rows, detailRow{label: "Target", value: targetName})
+	accessRows := []detailRow{
+		{label: "URL", value: firstRecordString(record, "url", "site_url", "home_url", "hostname")},
 	}
 	if provider == "linode" {
 		targetRef := siteProviderTarget(record)
-		target, err := cachedSiteTarget(targetRef)
+		targetRecord, err := cachedSiteTarget(targetRef)
 		if err != nil {
 			fmt.Fprintln(os.Stderr, err)
 			return 1
 		}
-		if target == nil {
+		if targetRecord == nil {
 			fmt.Fprintf(os.Stderr, "Linode site %q references target %q, but no cached target matched. Run nf provider check linode.\n", siteSummary(record), targetRef)
 			return 1
 		}
-		fmt.Printf("Target record: %s\n", serverSummary(target))
+		rows = append(rows, detailRow{label: "Target ID", value: firstRecordString(targetRecord, "provider_id", "id", "linode_id")})
+		accessRows = append(accessRows, detailRow{label: "SSH", value: remoteTargetSSHCommand(targetRecord)})
 	}
+	lines = append(lines, detailRowLines(rows, 0)...)
+	if hasDetailRows(accessRows) {
+		lines = append(lines, "", "Access")
+		lines = append(lines, detailRowLines(accessRows, 2)...)
+	}
+	fmt.Println(strings.Join(lines, "\n"))
 	return 0
+}
+
+func remoteTargetSSHCommand(target map[string]any) string {
+	host := serverSSHHost(target)
+	if host == "" {
+		return ""
+	}
+	if user := serverSSHUser(target); user != "" {
+		return "ssh " + user + "@" + host
+	}
+	return "ssh " + host
 }
 
 func cmdRemoteList() int {

@@ -2748,9 +2748,20 @@ func TestRunSiteAddLinodeExecuteRunsSSHAndCachesEnvs(t *testing.T) {
 			t.Fatalf("Run(site show) = %d, want 0", got)
 		}
 	})
-	for _, want := range []string{"foobar.app1-linode", "Site       foobar.app1-linode", "Name       foobar", "Provider   linode", "Target     app1-linode", "Environments:", "env", "php", "url", "live", "staging", "foobar.app1-linode.nonfiction.dev", "foobar-staging.app1-linode.nonfiction.dev"} {
-		if !strings.Contains(showOutput, want) {
-			t.Fatalf("site show output missing %q:\n%s", want, showOutput)
+	assertContainsInOrder(t, showOutput, []string{
+		"foobar.app1-linode\n",
+		"──────────────────\n",
+		"Name       foobar\n",
+		"Provider   linode\n",
+		"Target     app1-linode\n",
+		"Environments\n",
+		"env      php  url\n",
+		"live          https://foobar.app1-linode.nonfiction.dev\n",
+		"staging       https://foobar-staging.app1-linode.nonfiction.dev",
+	})
+	for _, notWant := range []string{"Site       foobar.app1-linode", "Environments:"} {
+		if strings.Contains(showOutput, notWant) {
+			t.Fatalf("site show output contains %q:\n%s", notWant, showOutput)
 		}
 	}
 	jsonOutput := captureStdout(t, func() {
@@ -2918,12 +2929,18 @@ func TestRunSiteAddKinstaExecuteCachesEnvs(t *testing.T) {
 			t.Fatalf("Run(site show kinsta) = %d, want 0", got)
 		}
 	})
-	for _, want := range []string{"foobar.kinsta", "Site       foobar.kinsta", "Name       foobar", "Provider   kinsta", "Target     kinsta", "Environments:", "env", "php", "url", "live     8.2", "staging  8.2", "https://foobar.kinsta.nonfiction.dev", "https://foobar-staging.kinsta.nonfiction.dev"} {
-		if !strings.Contains(showOutput, want) {
-			t.Fatalf("site show kinsta output missing %q:\n%s", want, showOutput)
-		}
-	}
-	for _, notWant := range []string{"path", "database", "ssh", "/www/foobar/public", "foobar@203.0.113.10:12345", "/www/foobarstaging/public", "foobarstaging@203.0.113.11:12346"} {
+	assertContainsInOrder(t, showOutput, []string{
+		"foobar.kinsta\n",
+		"─────────────\n",
+		"Name       foobar\n",
+		"Provider   kinsta\n",
+		"Target     kinsta\n",
+		"Environments\n",
+		"env      php  url\n",
+		"live     8.2  https://foobar.kinsta.nonfiction.dev\n",
+		"staging  8.2  https://foobar-staging.kinsta.nonfiction.dev",
+	})
+	for _, notWant := range []string{"Site       foobar.kinsta", "Environments:", "path", "database", "ssh", "/www/foobar/public", "foobar@203.0.113.10:12345", "/www/foobarstaging/public", "foobarstaging@203.0.113.11:12346"} {
 		if strings.Contains(showOutput, notWant) {
 			t.Fatalf("site show kinsta output contains %q:\n%s", notWant, showOutput)
 		}
@@ -2944,6 +2961,26 @@ func TestRunSiteStagingAddLinodeExecuteCreatesOnlyStaging(t *testing.T) {
 	}
 	if err := state.SaveStateRecords("sites", []map[string]any{{"provider": "linode", "site_id": "foobar.app1-linode", "env_id": "foobar.app1-linode:live", "name": "foobar", "env": "live", "target": "app1-linode", "path": "/var/www/sites/foobar/public", "database": "foobar", "hostname": "foobar.app1-linode.nonfiction.dev", "php_version": "8.3"}}); err != nil {
 		t.Fatalf("SaveStateRecords(sites) error = %v", err)
+	}
+	showOutput := captureStdout(t, func() {
+		if got := Run([]string{"site", "show", "foobar.app1-linode"}); got != 0 {
+			t.Fatalf("Run(site show) = %d, want 0", got)
+		}
+	})
+	assertContainsInOrder(t, showOutput, []string{
+		"foobar.app1-linode\n",
+		"Name       foobar\n",
+		"Provider   linode\n",
+		"Target     app1-linode\n",
+		"Staging   not created\n",
+		"Next      nf site staging add foobar.app1-linode\n",
+		"Environments\n",
+		"live  8.3  foobar.app1-linode.nonfiction.dev",
+	})
+	for _, notWant := range []string{"Site       foobar.app1-linode", "Staging: not created", "Create staging:", "Environments:"} {
+		if strings.Contains(showOutput, notWant) {
+			t.Fatalf("site show output contains %q:\n%s", notWant, showOutput)
+		}
 	}
 	var sshScript string
 	oldRunSSH := runSSHScriptFn
@@ -5218,7 +5255,7 @@ func TestRunRemoteAddListRemoveWritesProjectMetadata(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(stateDir, "sites.json"), append(stateData, '\n'), 0o644); err != nil {
 		t.Fatalf("WriteFile(sites) error = %v", err)
 	}
-	servers := map[string]any{"servers": map[string]any{"app1-linode": map[string]any{"name": "app1-linode", "provider": "linode", "hostname": "app1.nonfiction.dev"}}}
+	servers := map[string]any{"servers": map[string]any{"app1-linode": map[string]any{"name": "app1-linode", "provider": "linode", "provider_id": "98589908", "hostname": "app1.nonfiction.dev", "ssh_user": "nonfiction"}}}
 	serverData, err := json.MarshalIndent(servers, "", "  ")
 	if err != nil {
 		t.Fatalf("MarshalIndent(servers) error = %v", err)
@@ -5279,13 +5316,21 @@ func TestRunRemoteAddListRemoveWritesProjectMetadata(t *testing.T) {
 			t.Fatalf("Run(remote show) = %d, want 0", got)
 		}
 	})
-	for _, want := range []string{"Remote: production", "Env: client-app1-linode:live", "Provider: linode", "Target: app1-linode", "URL: https://client.app1.nonfiction.dev/"} {
-		if !strings.Contains(showOutput, want) {
-			t.Fatalf("remote show output missing %q:\n%s", want, showOutput)
+	assertContainsInOrder(t, showOutput, []string{
+		"production\n",
+		"──────────\n",
+		"Env         client-app1-linode:live\n",
+		"Provider    linode\n",
+		"Target      app1-linode\n",
+		"Target ID   98589908\n",
+		"Access\n",
+		"  URL   https://client.app1.nonfiction.dev/\n",
+		"  SSH   ssh nonfiction@app1.nonfiction.dev",
+	})
+	for _, notWant := range []string{"Remote:", "Site:", "Target record:"} {
+		if strings.Contains(showOutput, notWant) {
+			t.Fatalf("remote show output contains %q:\n%s", notWant, showOutput)
 		}
-	}
-	if strings.Contains(showOutput, "Site: client-app1-linode") {
-		t.Fatalf("remote show output contains separate site field:\n%s", showOutput)
 	}
 
 	oldRemoteSelect := remoteSelectFn
@@ -5302,7 +5347,7 @@ func TestRunRemoteAddListRemoveWritesProjectMetadata(t *testing.T) {
 	if showPickerCalled {
 		t.Fatalf("remote show without arg opened picker with one remote")
 	}
-	if !strings.Contains(showOnlyOutput, "Env: client-app1-linode:live") {
+	if !strings.Contains(showOnlyOutput, "Env         client-app1-linode:live") {
 		t.Fatalf("remote show without arg output = %q", showOnlyOutput)
 	}
 	remoteSelectFn = oldRemoteSelect
@@ -6437,9 +6482,20 @@ func TestRunSiteShowWithoutSitePromptsPicker(t *testing.T) {
 	if len(selectOptions) != 1 || selectOptions[0] != (ui.SelectOption{Value: "foobar-app1-linode", Label: "foobar-app1-linode"}) {
 		t.Fatalf("select options = %#v", selectOptions)
 	}
-	for _, want := range []string{"foobar-app1-linode", "Site       foobar-app1-linode", "Name       foobar", "Provider   linode", "Target     app1-linode", "Environments:", "env", "php", "url", "live", "staging"} {
-		if !strings.Contains(output, want) {
-			t.Fatalf("site show output missing %q:\n%s", want, output)
+	assertContainsInOrder(t, output, []string{
+		"foobar-app1-linode\n",
+		"──────────────────\n",
+		"Name       foobar\n",
+		"Provider   linode\n",
+		"Target     app1-linode\n",
+		"Environments\n",
+		"env      php  url\n",
+		"live",
+		"staging",
+	})
+	for _, notWant := range []string{"Site       foobar-app1-linode", "Environments:"} {
+		if strings.Contains(output, notWant) {
+			t.Fatalf("site show output contains %q:\n%s", notWant, output)
 		}
 	}
 	jsonOutput := captureStdout(t, func() {
@@ -8003,7 +8059,7 @@ func TestRunEnvPluginsInstallRemotePromptsBeforeExecution(t *testing.T) {
 
 func TestRenderEnvInfoUsesEffectivePorts(t *testing.T) {
 	cfg := envConfig{ProjectSlug: "client", EnvDir: filepath.Join("/data", "envs", "client"), WordpressPort: 18432, MailpitPort: 18433}
-	want := "client:local\n────────────\nSite       client\nEnv        local\nURL        http://localhost:18432\nPath       /data/envs/client\nPHP        8.3\nDatabase   client\nCompose    nf_client_env\nMailpit    http://localhost:18433"
+	want := "client:local\n────────────\nSite       client\nEnv        local\nPath       /data/envs/client\nPHP        8.3\nDatabase   client\nCompose    nf_client_env\nURL        http://localhost:18432\nMailpit    http://localhost:18433\n\nAccess\n  Admin URL   http://localhost:18432/wp-login.php"
 	if got := renderEnvInfo(cfg, true); got != want {
 		t.Fatalf("renderEnvInfo(full) = %q, want %q", got, want)
 	}
@@ -9072,11 +9128,18 @@ func TestRunEnvShowPrintsEnvInfo(t *testing.T) {
 	})
 	wpPort, mailpitPort := envDerivedPorts("client")
 	adminPassword := passwords.DerivePassword("client", "wp-admin", "test-salt")
-	for _, want := range []string{"client:local\n", "Site       client\n", "Env        local\n", "Compose    nf_client_env\n", fmt.Sprintf("URL        http://localhost:%d\n", wpPort), fmt.Sprintf("Mailpit    http://localhost:%d", mailpitPort), "Access\n", "  Admin user   admin\n", "  Admin pass   " + adminPassword} {
-		if !strings.Contains(output, want) {
-			t.Fatalf("Run(env show) output missing %q:\n%s", want, output)
-		}
-	}
+	assertContainsInOrder(t, output, []string{
+		"client:local\n",
+		"Site       client\n",
+		"Env        local\n",
+		"Compose    nf_client_env\n",
+		fmt.Sprintf("URL        http://localhost:%d\n", wpPort),
+		fmt.Sprintf("Mailpit    http://localhost:%d", mailpitPort),
+		"Access\n",
+		fmt.Sprintf("  Admin URL    http://localhost:%d/wp-login.php\n", wpPort),
+		"  Admin user   admin\n",
+		"  Admin pass   " + adminPassword,
+	})
 }
 
 func TestRunEnvShellExecutesWordpressShell(t *testing.T) {
