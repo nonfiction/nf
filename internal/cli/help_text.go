@@ -74,6 +74,7 @@ func runTargetHelp() int {
 		{"list, ls", "list deployable targets"},
 		{"show <target>", "show a deployable target"},
 		{"refresh", "refresh targets from providers"},
+		{},
 		{"add linode <name> [flags]", "create a Linode target"},
 		{"remove, rm <target>", "remove an empty Linode target"},
 	})
@@ -84,6 +85,7 @@ func runRemoteHelp() int {
 	printGroupHelp("remote", []helpLine{
 		{"list, ls", "list repo remotes"},
 		{"show <name>", "show a repo remote"},
+		{},
 		{"add [name] [env]", "add a repo remote"},
 		{"remove, rm <name>", "remove a repo remote"},
 	})
@@ -94,12 +96,15 @@ func runSiteHelp() int {
 	printGroupHelp("site", []helpLine{
 		{"list, ls [--envs]", "list sites or remote envs"},
 		{"show [site|env] [--json]", "show a site or remote env"},
+		{"refresh", "refresh local site cache"},
+		{},
 		{"shell, ssh <env>", "shell into a remote env"},
 		{"wp <env> -- <args>", "run wp-cli against a remote env"},
-		{"snapshot [env|list|remove|prune] [flags]", "manage remote snapshots"},
 		{"password [site]", "show admin password only"},
+		{},
+		{"snapshot [env|list|remove|prune] [flags]", "manage remote snapshots"},
 		{"basicauth <action> [site|env]", "manage provider basic auth"},
-		{"refresh", "refresh local site cache"},
+		{},
 		{"add <target> <site> [flags]", "create a live env"},
 		{"staging <action> <site> [flags]", "manage staging env lifecycle"},
 		{"remove, rm [site] [flags]", "remove a whole site"},
@@ -109,14 +114,17 @@ func runSiteHelp() int {
 
 func runConfigHelp() int {
 	printGroupHelp("config", []helpLine{
-		{"init", "initialize local config"},
 		{"show", "show global config"},
+		{"init", "initialize local config"},
+		{},
 		{"set-base-domain <domain>", "set provider base domain"},
 		{"set-default-wp-email <email>", "set default WordPress email"},
 		{"set-default-wp-user <user>", "set default WordPress user"},
 		{"set-basicauth-default-user <user>", "set default basic-auth user"},
+		{},
 		{"set-kinsta-default-region <region>", "set default Kinsta region"},
 		{"set-kinsta-default-php <version>", "set default Kinsta PHP version"},
+		{},
 		{"set-linode-default-region <region>", "set default Linode region"},
 		{"set-linode-default-type <type>", "set default Linode type"},
 		{"set-linode-default-image <image>", "set default Linode image"},
@@ -127,9 +135,10 @@ func runConfigHelp() int {
 
 func runPasswordHelp() int {
 	printGroupHelp("password", []helpLine{
+		{"derive <scope> [args...]", "derive a password"},
+		{},
 		{"show-salt", "show the masked password salt"},
 		{"set-salt <salt>", "save the shared password salt"},
-		{"derive <scope> [args...]", "derive a password"},
 	})
 	return 0
 }

@@ -73,6 +73,7 @@ func runSiteStaging(argv []string) int {
 func runSiteStagingHelp() int {
 	printGroupHelp("site staging", []helpLine{
 		{"status <site>", "show whether staging exists"},
+		{},
 		{"add <site> [--dry-run] [--execute] [--yes] [--non-interactive]", "create staging env"},
 		{"remove, rm <site> [--dry-run] [--execute] [--yes] [--non-interactive]", "delete staging env"},
 	})

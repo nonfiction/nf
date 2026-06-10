@@ -28,17 +28,20 @@ func runInitHelp() int {
 
 func runEnvHelp() int {
 	printGroupHelp("env", []helpLine{
-		{"show", "show paths, ports, and URLs"},
-		{"password", "show admin password only"},
 		{"up", "start the local env"},
 		{"down", "stop the local env"},
+		{"show", "show paths, ports, and URLs"},
+		{"password", "show admin password only"},
 		{"logs", "tail WordPress logs"},
 		{"shell, ssh", "open a shell in the local env"},
 		{"wp -- <args>", "run wp-cli in the local env"},
+		{},
 		{"plugins", "manage configured WordPress plugins"},
 		{"snapshot", "manage env snapshots"},
+		{},
 		{"pull [remote] [--dry-run] [--execute] [--yes]", "pull database and mutable wp-content from a remote env"},
 		{"push [remote] [--dry-run] [--execute] [--yes]", "push database and mutable wp-content to a remote env"},
+		{},
 		{"reset", "destroy and recreate the local env"},
 	})
 	return 0
@@ -48,6 +51,7 @@ func runThemeHelp() int {
 	lines := []helpLine{
 		{"tasks", "list configured theme tasks"},
 		{"package [--dry-run] [--source] [--output]", "package a clean theme artifact"},
+		{},
 		{"deploy <remote> [--dry-run]", "deploy a packaged theme release"},
 		{"rollback <remote> [--dry-run]", "roll back to the previous theme release"},
 	}
@@ -394,10 +398,12 @@ func runEnvPlugins(argv []string) int {
 	if len(argv) == 0 || argv[0] == "help" {
 		printGroupHelp("env plugins", []helpLine{
 			{"list, ls", "list configured WordPress plugins"},
-			{"add <plugin> [--source <source>] [--no-activate] [--no-auto-update]", "add a WordPress plugin to nf.json"},
-			{"remove, rm <plugin>", "remove a WordPress plugin from nf.json"},
 			{"status [remote]", "show configured WordPress plugin status"},
 			{"diff [remote]", "show configured WordPress plugin drift"},
+			{},
+			{"add <plugin> [--source <source>] [--no-activate] [--no-auto-update]", "add a WordPress plugin to nf.json"},
+			{"remove, rm <plugin>", "remove a WordPress plugin from nf.json"},
+			{},
 			{"install [remote] [--dry-run] [--yes]", "install and activate configured WordPress plugins"},
 		})
 		return 0
@@ -569,7 +575,9 @@ func runEnvSnapshot(argv []string) int {
 			{"list, ls", "list env snapshots"},
 			{"add [name]", "create an env snapshot"},
 			{"import [remote] [--name name]", "import a remote snapshot"},
+			{},
 			{"use [name] [--remote remote] [--name name] [--yes]", "restore an env snapshot"},
+			{},
 			{"remove, rm [name]", "delete an env snapshot"},
 			{"prune [--keep N] [--dry-run] [--yes]", "delete old auto snapshots"},
 		})
@@ -657,13 +665,14 @@ func runEnvSnapshot(argv []string) int {
 
 func runHelp() int {
 	lines := []helpLine{
-		{"init", "initialize project metadata"},
 		{"provider", "manage provider integrations"},
 		{"target", "manage deployable targets"},
 		{"site", "manage remote sites and envs"},
+		{"password", "derive passwords"},
 	}
 	if projectContextAvailable() {
 		lines = append(lines,
+			helpLine{},
 			helpLine{"remote", "manage repo remotes"},
 			helpLine{"env", "manage the local development env"},
 			helpLine{"theme", "package clean artifacts and run theme tasks"},
@@ -671,8 +680,9 @@ func runHelp() int {
 		)
 	}
 	lines = append(lines,
+		helpLine{},
+		helpLine{"init", "initialize project metadata"},
 		helpLine{"config", "manage global config"},
-		helpLine{"password", "derive passwords"},
 		helpLine{"completion", "print shell completion scripts"},
 		helpLine{"version", "show nf version"},
 		helpLine{"help", "show help"},

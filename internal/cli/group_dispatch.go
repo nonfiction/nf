@@ -382,9 +382,11 @@ func runSiteAdd(argv []string) int {
 	if len(argv) == 0 || argv[0] == "help" || argv[0] == "--help" || argv[0] == "-h" {
 		printGroupHelp("site add", []helpLine{
 			{"<target> <site> [flags]", "create a live env"},
+			{},
 			{"--with-staging", "also create staging"},
 			{"--region <region>", "Kinsta region override"},
 			{"--php <version>", "Kinsta PHP version override"},
+			{},
 			{"--dry-run", "show the plan only"},
 			{"--execute", "execute the plan"},
 			{"--yes", "confirm execution"},

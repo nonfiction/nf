@@ -63,9 +63,10 @@ func runSiteBasicAuth(argv []string) int {
 func runSiteBasicAuthHelp() int {
 	printGroupHelp("site basicauth", []helpLine{
 		{"status <env>", "show provider basic-auth status"},
+		{"password [site]", "show derived basic-auth password only"},
+		{},
 		{"enable <env> [--dry-run] [--execute] [--yes] [--non-interactive]", "enable provider basic auth"},
 		{"disable <env> [--dry-run] [--execute] [--yes] [--non-interactive]", "disable provider basic auth"},
-		{"password [site]", "show derived basic-auth password only"},
 	})
 	return 0
 }

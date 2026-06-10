@@ -129,6 +129,18 @@ func captureStderr(t *testing.T, fn func()) string {
 	return buf.String()
 }
 
+func assertContainsInOrder(t *testing.T, output string, values []string) {
+	t.Helper()
+	offset := 0
+	for _, value := range values {
+		index := strings.Index(output[offset:], value)
+		if index < 0 {
+			t.Fatalf("output missing %q after offset %d:\n%s", value, offset, output)
+		}
+		offset += index + len(value)
+	}
+}
+
 func TestRunHelpShowsTopLevelCommandsOutsideGit(t *testing.T) {
 	workdir := t.TempDir()
 	oldwd, err := os.Getwd()
@@ -141,6 +153,18 @@ func TestRunHelpShowsTopLevelCommandsOutsideGit(t *testing.T) {
 	t.Cleanup(func() { _ = os.Chdir(oldwd) })
 
 	output := captureStdout(t, func() { _ = runHelp() })
+	assertContainsInOrder(t, output, []string{
+		"nf\n\nCommands:\n",
+		"  provider    manage provider integrations\n",
+		"  target      manage deployable targets\n",
+		"  site        manage remote sites and envs\n",
+		"  password    derive passwords\n",
+		"\n  init        initialize project metadata\n",
+		"  config      manage global config\n",
+		"  completion  print shell completion scripts\n",
+		"  version     show nf version\n",
+		"  help        show help\n",
+	})
 	for _, wanted := range []string{"\n  init        initialize project metadata\n", "\n  provider    manage provider integrations\n", "\n  target      manage deployable targets\n", "\n  site        manage remote sites and envs\n", "\n  config      manage global config\n", "\n  password    derive passwords\n", "\n  completion  print shell completion scripts\n", "\n  version     show nf version\n", "\n  help        show help\n"} {
 		if !strings.Contains(output, wanted) {
 			t.Fatalf("runHelp() output missing %q:\n%s", wanted, output)
@@ -168,6 +192,14 @@ func TestRunHelpHidesProjectCommandsInsideGitWithoutNFDir(t *testing.T) {
 	t.Cleanup(func() { _ = os.Chdir(oldwd) })
 
 	output := captureStdout(t, func() { _ = runHelp() })
+	assertContainsInOrder(t, output, []string{
+		"  provider    manage provider integrations\n",
+		"  target      manage deployable targets\n",
+		"  site        manage remote sites and envs\n",
+		"  password    derive passwords\n",
+		"\n  init        initialize project metadata\n",
+		"  config      manage global config\n",
+	})
 	for _, wanted := range []string{"\n  init        initialize project metadata\n", "\n  provider    manage provider integrations\n", "\n  config      manage global config\n"} {
 		if !strings.Contains(output, wanted) {
 			t.Fatalf("runHelp() output missing %q:\n%s", wanted, output)
@@ -200,6 +232,18 @@ func TestRunHelpShowsProjectCommandsInsideNFProject(t *testing.T) {
 	t.Cleanup(func() { _ = os.Chdir(oldwd) })
 
 	output := captureStdout(t, func() { _ = runHelp() })
+	assertContainsInOrder(t, output, []string{
+		"  provider    manage provider integrations\n",
+		"  target      manage deployable targets\n",
+		"  site        manage remote sites and envs\n",
+		"  password    derive passwords\n",
+		"\n  remote      manage repo remotes\n",
+		"  env         manage the local development env\n",
+		"  theme       package clean artifacts and run theme tasks\n",
+		"  public      deploy static public paths\n",
+		"\n  init        initialize project metadata\n",
+		"  config      manage global config\n",
+	})
 	for _, wanted := range []string{"\n  remote      manage repo remotes\n", "\n  env         manage the local development env\n", "\n  theme       package clean artifacts and run theme tasks\n", "\n  public      deploy static public paths\n"} {
 		if !strings.Contains(output, wanted) {
 			t.Fatalf("runHelp() output missing %q:\n%s", wanted, output)
@@ -254,6 +298,7 @@ func TestRunInitHelpShowsFlags(t *testing.T) {
 
 func TestRunProviderHelpShowsCommands(t *testing.T) {
 	output := captureStdout(t, func() { _ = runProviderHelp() })
+	assertContainsInOrder(t, output, []string{"list, ls", "check [provider] [--json]", "show [provider] [--json]"})
 	for _, wanted := range []string{"provider\n\nCommands:\n", "\n  list, ls                   list provider integrations\n", "\n  check [provider] [--json]  run provider healthcheck\n", "\n  show [provider] [--json]   show cached provider metadata\n"} {
 		if !strings.Contains(output, wanted) {
 			t.Fatalf("runProviderHelp() output missing %q:\n%s", wanted, output)
@@ -263,10 +308,66 @@ func TestRunProviderHelpShowsCommands(t *testing.T) {
 
 func TestRunTargetHelpShowsRefresh(t *testing.T) {
 	output := captureStdout(t, func() { _ = runTargetHelp() })
+	assertContainsInOrder(t, output, []string{"list, ls", "show <target>", "refresh", "\n\n  add linode <name> [flags]", "remove, rm <target>"})
 	for _, wanted := range []string{"target\n\nCommands:\n", "\n  list, ls                   list deployable targets\n", "\n  refresh                    refresh targets from providers\n"} {
 		if !strings.Contains(output, wanted) {
 			t.Fatalf("runTargetHelp() output missing %q:\n%s", wanted, output)
 		}
+	}
+}
+
+func TestGroupedHelpScreensUseIntendedOrder(t *testing.T) {
+	tests := []struct {
+		name   string
+		render func() string
+		values []string
+	}{
+		{
+			name:   "remote",
+			render: func() string { return captureStdout(t, func() { _ = runRemoteHelp() }) },
+			values: []string{"list, ls", "show <name>", "\n\n  add [name] [env]", "remove, rm <name>"},
+		},
+		{
+			name:   "site",
+			render: func() string { return captureStdout(t, func() { _ = runSiteHelp() }) },
+			values: []string{"list, ls [--envs]", "show [site|env] [--json]", "refresh", "\n\n  shell, ssh <env>", "wp <env> -- <args>", "password [site]", "\n\n  snapshot [env|list|remove|prune] [flags]", "basicauth <action> [site|env]", "\n\n  add <target> <site> [flags]", "staging <action> <site> [flags]", "remove, rm [site] [flags]"},
+		},
+		{
+			name:   "config",
+			render: func() string { return captureStdout(t, func() { _ = runConfigHelp() }) },
+			values: []string{"show", "init", "\n\n  set-base-domain <domain>", "set-default-wp-email <email>", "set-default-wp-user <user>", "set-basicauth-default-user <user>", "\n\n  set-kinsta-default-region <region>", "set-kinsta-default-php <version>", "\n\n  set-linode-default-region <region>", "set-linode-default-type <type>", "set-linode-default-image <image>", "set-linode-default-user <user>"},
+		},
+		{
+			name:   "password",
+			render: func() string { return captureStdout(t, func() { _ = runPasswordHelp() }) },
+			values: []string{"derive <scope> [args...]", "\n\n  show-salt", "set-salt <salt>"},
+		},
+		{
+			name:   "site add",
+			render: func() string { return captureStdout(t, func() { _ = runSiteAdd([]string{"help"}) }) },
+			values: []string{"<target> <site> [flags]", "\n\n  --with-staging", "--region <region>", "--php <version>", "\n\n  --dry-run", "--execute", "--yes", "--non-interactive"},
+		},
+		{
+			name:   "site staging",
+			render: func() string { return captureStdout(t, func() { _ = runSiteStagingHelp() }) },
+			values: []string{"status <site>", "\n\n  add <site>", "remove, rm <site>"},
+		},
+		{
+			name:   "site basicauth",
+			render: func() string { return captureStdout(t, func() { _ = runSiteBasicAuthHelp() }) },
+			values: []string{"status <env>", "password [site]", "\n\n  enable <env>", "disable <env>"},
+		},
+		{
+			name:   "env plugins",
+			render: func() string { return captureStdout(t, func() { _ = runEnvPlugins([]string{"help"}) }) },
+			values: []string{"list, ls", "status [remote]", "diff [remote]", "\n\n  add <plugin>", "remove, rm <plugin>", "\n\n  install [remote] [--dry-run] [--yes]"},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			assertContainsInOrder(t, tt.render(), tt.values)
+		})
 	}
 }
 
@@ -5462,6 +5563,7 @@ func assertProjectRemote(t *testing.T, projectPath, remoteName, wantSiteID, want
 
 func TestRunEnvHelpShowsCommandsWithoutShortcuts(t *testing.T) {
 	output := captureStdout(t, func() { _ = runEnvHelp() })
+	assertContainsInOrder(t, output, []string{"up", "down", "show", "password", "logs", "shell, ssh", "wp -- <args>", "\n\n  plugins", "snapshot", "\n\n  pull [remote] [--dry-run] [--execute] [--yes]", "push [remote] [--dry-run] [--execute] [--yes]", "\n\n  reset"})
 	for _, wanted := range []string{"env\n\nCommands:\n", "show", "show paths, ports, and URLs", "password", "show admin password only", "up", "start the local env", "down", "stop the local env", "logs", "tail WordPress logs", "shell", "open a shell in the local env", "reset", "destroy and recreate the local env", "wp -- <args>", "run wp-cli in the local env", "plugins", "manage configured WordPress plugins", "push [remote] [--dry-run] [--execute] [--yes]", "pull [remote] [--dry-run] [--execute] [--yes]", "snapshot", "manage env snapshots"} {
 		if !strings.Contains(output, wanted) {
 			t.Fatalf("runEnvHelp() output missing %q:\n%s", wanted, output)
@@ -5476,6 +5578,7 @@ func TestRunEnvHelpShowsCommandsWithoutShortcuts(t *testing.T) {
 
 func TestRunEnvSnapshotHelpShowsDedicatedCommands(t *testing.T) {
 	output := captureStdout(t, func() { _ = runEnvSnapshot([]string{"help"}) })
+	assertContainsInOrder(t, output, []string{"list, ls", "add [name]", "import [remote] [--name name]", "\n\n  use [name] [--remote remote] [--name name] [--yes]", "\n\n  remove, rm [name]", "prune [--keep N] [--dry-run] [--yes]"})
 	for _, want := range []string{"env snapshot\n\nCommands:\n", "list, ls", "list env snapshots", "add [name]", "create an env snapshot", "import [remote] [--name name]", "import a remote snapshot", "use [name] [--remote remote] [--name name] [--yes]", "restore an env snapshot", "remove, rm [name]", "delete an env snapshot", "prune [--keep N] [--dry-run] [--yes]"} {
 		if !strings.Contains(output, want) {
 			t.Fatalf("runEnvSnapshot(help) output missing %q:\n%s", want, output)
@@ -6114,6 +6217,7 @@ func TestRunThemeHelpShowsThemeCommandsInsideGit(t *testing.T) {
 	t.Cleanup(func() { _ = os.Chdir(oldwd) })
 
 	output := captureStdout(t, func() { _ = runThemeHelp() })
+	assertContainsInOrder(t, output, []string{"tasks", "package [--dry-run] [--source] [--output]", "\n\n  deploy <remote> [--dry-run]", "rollback <remote> [--dry-run]", "\nTheme tasks:\n", "build"})
 	for _, wanted := range []string{"\n  tasks                                      list configured theme tasks\n", "\n  package [--dry-run] [--source] [--output]  package a clean theme artifact\n", "\n  deploy <remote> [--dry-run]                deploy a packaged theme release\n", "\n  rollback <remote> [--dry-run]              roll back to the previous theme release\n", "\nTheme tasks:\n"} {
 		if !strings.Contains(output, wanted) {
 			t.Fatalf("runThemeHelp() output missing %q:\n%s", wanted, output)
@@ -6133,6 +6237,7 @@ func TestRunThemeHelpShowsCommandsOnlyOutsideGit(t *testing.T) {
 	t.Cleanup(func() { _ = os.Chdir(oldwd) })
 
 	output := captureStdout(t, func() { _ = runThemeHelp() })
+	assertContainsInOrder(t, output, []string{"tasks", "package [--dry-run] [--source] [--output]", "\n\n  deploy <remote> [--dry-run]", "rollback <remote> [--dry-run]"})
 	for _, want := range []string{"\n  tasks                                      list configured theme tasks\n", "\n  package [--dry-run] [--source] [--output]  package a clean theme artifact\n", "\n  deploy <remote> [--dry-run]                deploy a packaged theme release\n", "\n  rollback <remote> [--dry-run]              roll back to the previous theme release\n"} {
 		if !strings.Contains(output, want) {
 			t.Fatalf("runThemeHelp() output missing %q:\n%s", want, output)
