@@ -134,6 +134,11 @@ type SFTPConfig struct {
 	SSHCommand string
 }
 
+type SFTPPassword struct {
+	EnvironmentID string
+	Password      string
+}
+
 type Domain struct {
 	ID         string `json:"id"`
 	Name       string `json:"name"`
@@ -297,6 +302,14 @@ func (c *Client) SFTPConfig(ctx context.Context, siteID, envID string) (SFTPConf
 		return SFTPConfig{}, err
 	}
 	return out.Config(), nil
+}
+
+func (c *Client) SFTPPassword(ctx context.Context, envID string) (SFTPPassword, error) {
+	var out sftpPasswordResponse
+	if err := c.do(ctx, http.MethodGet, "/sites/environments/"+url.PathEscape(envID)+"/ssh/password", nil, &out); err != nil {
+		return SFTPPassword{}, err
+	}
+	return out.Password(), nil
 }
 
 func (c *Client) DomainRecords(ctx context.Context, domainID string) (DomainRecords, error) {
@@ -489,6 +502,17 @@ type sftpConfigResponse struct {
 			} `json:"activeContainer"`
 		} `json:"environment"`
 	} `json:"site"`
+}
+
+type sftpPasswordResponse struct {
+	Environment struct {
+		ID           string `json:"id"`
+		SFTPPassword string `json:"sftp_password"`
+	} `json:"environment"`
+}
+
+func (r sftpPasswordResponse) Password() SFTPPassword {
+	return SFTPPassword{EnvironmentID: strings.TrimSpace(r.Environment.ID), Password: strings.TrimSpace(r.Environment.SFTPPassword)}
 }
 
 func (r sftpConfigResponse) Config() SFTPConfig {

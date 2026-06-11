@@ -27,6 +27,10 @@ func TestClientSiteEnvironmentDomainFlow(t *testing.T) {
 			_ = json.NewEncoder(w).Encode(map[string]any{"company": map[string]any{"sites": []map[string]any{{"id": "ksite123", "name": "foobar", "display_name": "foobar"}}}})
 		case "GET /sites/ksite123/environments":
 			_ = json.NewEncoder(w).Encode(map[string]any{"site": map[string]any{"environments": []map[string]any{{"id": "kenv-live", "name": "live", "container_info": map[string]any{"php_engine_version": "php8.3"}}, {"id": "kenv-staging", "display_name": "staging", "container_info": map[string]any{"php_engine_version": "php8.3"}}}}})
+		case "GET /sites/ksite123/environments/kenv-live/ssh/config":
+			_ = json.NewEncoder(w).Encode(map[string]any{"host": "1.2.3.4", "port": "2222", "user": "foobar"})
+		case "GET /sites/environments/kenv-live/ssh/password":
+			_ = json.NewEncoder(w).Encode(map[string]any{"environment": map[string]any{"id": "kenv-live", "sftp_password": "sftp-pass"}})
 		case "GET /sites/environments/kenv-live/domains":
 			_ = json.NewEncoder(w).Encode(map[string]any{"environment": map[string]any{"site_domains": []map[string]any{{"id": "kdom-live", "name": "foobar.kinsta.nonfiction.dev", "is_primary": true}}}})
 		case "GET /sites/environments/domains/kdom-live/verification-records":
@@ -79,6 +83,20 @@ func TestClientSiteEnvironmentDomainFlow(t *testing.T) {
 	}
 	if envs[0].CurrentPHPVersion() != "8.3" {
 		t.Fatalf("CurrentPHPVersion() = %q, want 8.3", envs[0].CurrentPHPVersion())
+	}
+	sftpCfg, err := client.SFTPConfig(ctx, "ksite123", "kenv-live")
+	if err != nil {
+		t.Fatalf("SFTPConfig() error = %v", err)
+	}
+	if sftpCfg.Host != "1.2.3.4" || sftpCfg.Port != "2222" || sftpCfg.User != "foobar" {
+		t.Fatalf("SFTPConfig() = %#v", sftpCfg)
+	}
+	sftpPassword, err := client.SFTPPassword(ctx, "kenv-live")
+	if err != nil {
+		t.Fatalf("SFTPPassword() error = %v", err)
+	}
+	if sftpPassword.Password != "sftp-pass" {
+		t.Fatalf("SFTPPassword() = %#v", sftpPassword)
 	}
 	domains, err := client.ListDomains(ctx, "kenv-live")
 	if err != nil {
