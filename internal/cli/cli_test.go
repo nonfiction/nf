@@ -2050,12 +2050,17 @@ func TestRunTargetShowWithoutTargetPromptsPicker(t *testing.T) {
 func TestRunTargetShowDisplaysCachedAdminerURL(t *testing.T) {
 	stateDir := t.TempDir()
 	t.Setenv("NF_STATE_HOME", stateDir)
+	t.Setenv("NF_PASSWORD_SALT", "test-salt")
 	if err := state.SaveStateRecords("providers", []map[string]any{{"provider": "linode", "targets": []map[string]any{{
 		"name":     "app1-linode",
 		"provider": "linode",
 		"hostname": "app1-linode.nonfiction.dev",
 		"ssh":      map[string]any{"user": "nonfiction", "host": "app1-linode.nonfiction.dev"},
-		"adminer":  map[string]any{"url": "https://adminer.app1-linode.nonfiction.dev/"},
+		"adminer": map[string]any{
+			"url":  "https://adminer.app1-linode.nonfiction.dev/",
+			"user": "adminer",
+			"auth": map[string]any{"password": map[string]any{"identity": "app1-linode.nonfiction.dev", "purpose": "adminer", "stored": false}},
+		},
 	}}}}); err != nil {
 		t.Fatalf("SaveStateRecords(providers) error = %v", err)
 	}
@@ -2072,6 +2077,8 @@ func TestRunTargetShowDisplaysCachedAdminerURL(t *testing.T) {
 		"Access\n",
 		"  SSH       ssh nonfiction@app1-linode.nonfiction.dev\n",
 		"  Adminer   https://adminer.app1-linode.nonfiction.dev/",
+		"   - User   adminer\n",
+		"   - Pass   " + passwords.DerivePassword("app1-linode.nonfiction.dev", "adminer", "test-salt"),
 	})
 }
 

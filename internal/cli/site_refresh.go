@@ -16,6 +16,7 @@ import (
 	"github.com/nonfiction/nf/internal/config"
 	"github.com/nonfiction/nf/internal/envwizard"
 	"github.com/nonfiction/nf/internal/kinsta"
+	"github.com/nonfiction/nf/internal/passwords"
 	"github.com/nonfiction/nf/internal/state"
 )
 
@@ -79,12 +80,34 @@ func printTargetDetails(record map[string]any) {
 		{label: "Type", value: firstRecordString(record, "type", "linode_type")},
 		{label: "Image", value: firstRecordString(record, "image")},
 	}, 0)...)
-	accessRows := []detailRow{{label: "SSH", value: targetSSHCommand(record)}, {label: "Adminer", value: targetAdminerURL(record)}}
+	adminerURL, adminerUser, adminerPassword := targetAdminerLogin(record)
+	accessRows := []detailRow{{label: "SSH", value: targetSSHCommand(record)}, {label: "Adminer", value: adminerURL}}
 	if hasDetailRows(accessRows) {
 		lines = append(lines, "", "Access")
 		lines = append(lines, detailRowLines(accessRows, 2)...)
+		if adminerURL != "" {
+			lines = append(lines, detailRowLines([]detailRow{{label: "- User", value: adminerUser}, {label: "- Pass", value: adminerPassword}}, 3)...)
+		}
 	}
 	fmt.Println(strings.Join(lines, "\n"))
+}
+
+func targetAdminerLogin(record map[string]any) (string, string, string) {
+	url := targetAdminerURL(record)
+	user := targetAdminerUser(record)
+	identity := firstNonEmpty(
+		mapStringAtPath(record, "adminer", "auth", "password", "identity"),
+		firstRecordString(record, "hostname", "host"),
+	)
+	if url == "" || user == "" || identity == "" {
+		return url, user, ""
+	}
+	salt, err := passwords.SecretSalt()
+	if err != nil {
+		return url, user, ""
+	}
+	purpose := firstNonEmpty(mapStringAtPath(record, "adminer", "auth", "password", "purpose"), "adminer")
+	return url, user, passwords.DerivePassword(identity, purpose, salt)
 }
 
 func targetSSHCommand(record map[string]any) string {
