@@ -146,7 +146,7 @@ func providerCompletionCandidates(args []string) []string {
 
 func targetCompletionCandidates(args []string) []string {
 	if len(args) == 0 {
-		return []string{"list", "ls", "show", "adminer", "refresh", "add", "remove", "rm", "help"}
+		return []string{"list", "ls", "show", "adminer", "password", "refresh", "add", "remove", "rm", "help"}
 	}
 	args[0] = cliCommandAlias(args[0])
 	switch args[0] {
@@ -159,6 +159,8 @@ func targetCompletionCandidates(args []string) []string {
 		return cachedTargetCompletionNames()
 	case "adminer":
 		return targetAdminerCompletionCandidates(args[1:])
+	case "password":
+		return append(cachedLinodeTargetCompletionNames(), "--root", "--adminer")
 	case "remove":
 		return cachedTargetCompletionNames()
 	default:

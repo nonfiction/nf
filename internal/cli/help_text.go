@@ -63,6 +63,7 @@ func runTargetHelp() int {
 		{"list, ls", "list deployable targets"},
 		{"show <target>", "show a deployable target"},
 		{"adminer show <target>", "show target Adminer access"},
+		{"password [target] [--root|--adminer]", "show target password only"},
 		{"refresh", "refresh targets from providers"},
 		{},
 		{"add linode <name> [flags]", "create a Linode target"},

@@ -308,8 +308,8 @@ func TestRunProviderHelpShowsCommands(t *testing.T) {
 
 func TestRunTargetHelpShowsRefresh(t *testing.T) {
 	output := captureStdout(t, func() { _ = runTargetHelp() })
-	assertContainsInOrder(t, output, []string{"list, ls", "show <target>", "adminer show <target>", "refresh", "\n\n  add linode <name> [flags]", "remove, rm <target>"})
-	for _, wanted := range []string{"target\n\nCommands:\n", "\n  list, ls                   list deployable targets\n", "\n  refresh                    refresh targets from providers\n"} {
+	assertContainsInOrder(t, output, []string{"list, ls", "show <target>", "adminer show <target>", "password [target] [--root|--adminer]", "refresh", "\n\n  add linode <name> [flags]", "remove, rm <target>"})
+	for _, wanted := range []string{"target\n\nCommands:\n", "list, ls", "list deployable targets", "password [target] [--root|--adminer]", "refresh", "refresh targets from providers"} {
 		if !strings.Contains(output, wanted) {
 			t.Fatalf("runTargetHelp() output missing %q:\n%s", wanted, output)
 		}
@@ -2176,6 +2176,71 @@ func TestRunTargetAdminerShowReadsTargetMetadataAndDerivesPassword(t *testing.T)
 	})
 	if got := strings.Join(sshArgs, " "); !strings.Contains(got, "nonfiction@app1-linode.nonfiction.dev") || !strings.Contains(got, "/var/lib/nf/target.json") {
 		t.Fatalf("ssh args = %#v, want target.json read", sshArgs)
+	}
+}
+
+func TestRunTargetPasswordPrintsRootPasswordByDefault(t *testing.T) {
+	stateDir := t.TempDir()
+	t.Setenv("NF_STATE_HOME", stateDir)
+	t.Setenv("NF_PASSWORD_SALT", "test-salt")
+	if err := state.SaveStateRecords("providers", []map[string]any{{"provider": "linode", "targets": []map[string]any{{"name": "app1-linode", "provider": "linode", "hostname": "app1-linode.nonfiction.dev"}}}}); err != nil {
+		t.Fatalf("SaveStateRecords(providers) error = %v", err)
+	}
+
+	output := captureStdout(t, func() {
+		if got := Run([]string{"target", "password", "app1-linode"}); got != 0 {
+			t.Fatalf("Run(target password) = %d, want 0", got)
+		}
+	})
+	want := passwords.DerivePassword("app1-linode.nonfiction.dev", "linode-root", "test-salt") + "\n"
+	if output != want {
+		t.Fatalf("target password output = %q, want %q", output, want)
+	}
+}
+
+func TestRunTargetPasswordPrintsAdminerPassword(t *testing.T) {
+	stateDir := t.TempDir()
+	t.Setenv("NF_STATE_HOME", stateDir)
+	t.Setenv("NF_PASSWORD_SALT", "test-salt")
+	if err := state.SaveStateRecords("providers", []map[string]any{{"provider": "linode", "targets": []map[string]any{{
+		"name":     "app1-linode",
+		"provider": "linode",
+		"hostname": "app1-linode.nonfiction.dev",
+		"ssh":      map[string]any{"user": "nonfiction", "host": "app1-linode.nonfiction.dev"},
+	}}}}); err != nil {
+		t.Fatalf("SaveStateRecords(providers) error = %v", err)
+	}
+	oldSSHOutput := runSSHOutputFn
+	runSSHOutputFn = func(args []string) ([]byte, error) {
+		return []byte(`{"hostname":"app1-linode.nonfiction.dev","adminer":{"auth":{"password":{"identity":"app1-linode.nonfiction.dev","purpose":"adminer-console"}}}}`), nil
+	}
+	t.Cleanup(func() { runSSHOutputFn = oldSSHOutput })
+
+	output := captureStdout(t, func() {
+		if got := Run([]string{"target", "password", "app1-linode", "--adminer"}); got != 0 {
+			t.Fatalf("Run(target password --adminer) = %d, want 0", got)
+		}
+	})
+	want := passwords.DerivePassword("app1-linode.nonfiction.dev", "adminer-console", "test-salt") + "\n"
+	if output != want {
+		t.Fatalf("target password --adminer output = %q, want %q", output, want)
+	}
+}
+
+func TestRunTargetPasswordRejectsNonLinode(t *testing.T) {
+	stateDir := t.TempDir()
+	t.Setenv("NF_STATE_HOME", stateDir)
+	if err := state.SaveStateRecords("providers", []map[string]any{{"provider": "kinsta", "targets": []map[string]any{{"name": "kinsta", "provider": "kinsta"}}}}); err != nil {
+		t.Fatalf("SaveStateRecords(providers) error = %v", err)
+	}
+
+	stderr := captureStderr(t, func() {
+		if got := Run([]string{"target", "password", "kinsta"}); got != 1 {
+			t.Fatalf("Run(target password kinsta) = %d, want 1", got)
+		}
+	})
+	if !strings.Contains(stderr, "target passwords are only available on linode targets") {
+		t.Fatalf("stderr = %q", stderr)
 	}
 }
 

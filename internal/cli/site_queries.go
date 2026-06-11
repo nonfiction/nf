@@ -14,6 +14,38 @@ import (
 	"github.com/nonfiction/nf/internal/ui"
 )
 
+type passwordScope string
+
+const (
+	passwordScopeWP        passwordScope = "wp"
+	passwordScopeDB        passwordScope = "db"
+	passwordScopeBasicAuth passwordScope = "basicauth"
+	passwordScopeRoot      passwordScope = "root"
+	passwordScopeAdminer   passwordScope = "adminer"
+)
+
+func parsePasswordScopeFlags(args []string, allowed map[string]passwordScope, defaultScope passwordScope, command string) ([]string, passwordScope, error) {
+	positionals := []string{}
+	scope := defaultScope
+	explicit := ""
+	for _, arg := range args {
+		if strings.HasPrefix(arg, "--") {
+			candidate, ok := allowed[arg]
+			if !ok {
+				return nil, scope, ProjectError{Msg: fmt.Sprintf("unknown %s flag: %s", command, arg)}
+			}
+			if explicit != "" {
+				return nil, scope, ProjectError{Msg: fmt.Sprintf("%s accepts only one password flag", command)}
+			}
+			explicit = arg
+			scope = candidate
+			continue
+		}
+		positionals = append(positionals, arg)
+	}
+	return positionals, scope, nil
+}
+
 func cmdServerRootPassword(needle string) int {
 	servers, err := state.LoadStateRecords("servers")
 	if err != nil {
