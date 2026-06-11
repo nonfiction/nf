@@ -330,7 +330,7 @@ func TestGroupedHelpScreensUseIntendedOrder(t *testing.T) {
 		{
 			name:   "site",
 			render: func() string { return captureStdout(t, func() { _ = runSiteHelp() }) },
-			values: []string{"list, ls [--envs]", "show [site|env] [--json]", "refresh", "\n\n  shell, sh <env>", "wp <env> -- <args>", "password [site]", "\n\n  snapshot [env|list|remove|prune] [flags]", "basicauth <action> [site|env]", "\n\n  add <target> <site> [flags]", "staging <action> <site> [flags]", "remove, rm [site] [flags]"},
+			values: []string{"list, ls [--envs]", "show [site|env] [--json]", "refresh", "\n\n  shell, sh <env>", "wp <env> -- <args>", "password [site|env] [--wp|--db|--basicauth]", "\n\n  snapshot [env|list|remove|prune] [flags]", "basicauth <action> [site|env]", "\n\n  add <target> <site> [flags]", "staging <action> <site> [flags]", "remove, rm [site] [flags]"},
 		},
 		{
 			name:   "config",
@@ -526,8 +526,8 @@ func TestRunCompleteSuggestsStaticAndCachedValues(t *testing.T) {
 			t.Fatalf("Run(__complete site password) = %d, want 0", got)
 		}
 	})
-	if strings.TrimSpace(sitePasswordOutput) != "client-app1-linode" {
-		t.Fatalf("site password completion = %q, want site id only", sitePasswordOutput)
+	if !strings.Contains(sitePasswordOutput, "client-app1-linode\n") || !strings.Contains(sitePasswordOutput, "client-app1-linode:live\n") {
+		t.Fatalf("site password completion = %q, want site and env ids", sitePasswordOutput)
 	}
 
 	siteBasicAuthOutput := captureStdout(t, func() {
@@ -836,6 +836,16 @@ func TestRunCompleteSuggestsProjectValues(t *testing.T) {
 	})
 	if strings.TrimSpace(envShellOutput) != "production" {
 		t.Fatalf("env shell completion = %q, want production", envShellOutput)
+	}
+	envPasswordOutput := captureStdout(t, func() {
+		if got := Run([]string{"__complete", "--", "env", "password", ""}); got != 0 {
+			t.Fatalf("Run(__complete env password) = %d, want 0", got)
+		}
+	})
+	for _, want := range []string{"production\n", "--wp\n", "--db\n", "--basicauth\n"} {
+		if !strings.Contains(envPasswordOutput, want) {
+			t.Fatalf("env password completion missing %q:\n%s", want, envPasswordOutput)
+		}
 	}
 
 	themeOutput := captureStdout(t, func() {
@@ -4490,6 +4500,115 @@ func TestRunSitePasswordPrintsAdminPasswordOnly(t *testing.T) {
 	}
 }
 
+func TestRunSitePasswordPrintsRequestedDerivedPassword(t *testing.T) {
+	stateDir := t.TempDir()
+	t.Setenv("NF_STATE_HOME", stateDir)
+	t.Setenv("NF_PASSWORD_SALT", "test-salt")
+	if err := state.SaveStateRecords("sites", []map[string]any{{"provider": "linode", "site_id": "happytents.app2-linode", "name": "happytents", "env": "live", "target": "app2-linode"}}); err != nil {
+		t.Fatalf("SaveStateRecords(sites) error = %v", err)
+	}
+
+	tests := []struct {
+		flag    string
+		purpose string
+	}{
+		{"--wp", "wp-admin"},
+		{"--db", "mysql"},
+		{"--basicauth", "basic-auth"},
+	}
+	for _, tt := range tests {
+		output := captureStdout(t, func() {
+			if got := Run([]string{"site", "password", "happytents.app2-linode", tt.flag}); got != 0 {
+				t.Fatalf("Run(site password %s) = %d, want 0", tt.flag, got)
+			}
+		})
+		want := passwords.DerivePassword("happytents", tt.purpose, "test-salt") + "\n"
+		if output != want {
+			t.Fatalf("site password %s output = %q, want %q", tt.flag, output, want)
+		}
+	}
+}
+
+func TestRunSitePasswordDBAcceptsEnvRef(t *testing.T) {
+	stateDir := t.TempDir()
+	t.Setenv("NF_STATE_HOME", stateDir)
+	t.Setenv("NF_PASSWORD_SALT", "test-salt")
+	if err := state.SaveStateRecords("sites", []map[string]any{
+		{"provider": "linode", "site_id": "happytents.app2-linode", "name": "happytents", "env": "live", "target": "app2-linode"},
+		{"provider": "linode", "site_id": "happytents.app2-linode", "name": "happytents", "env": "staging", "target": "app2-linode"},
+	}); err != nil {
+		t.Fatalf("SaveStateRecords(sites) error = %v", err)
+	}
+
+	output := captureStdout(t, func() {
+		if got := Run([]string{"site", "password", "happytents.app2-linode:staging", "--db"}); got != 0 {
+			t.Fatalf("Run(site password env --db) = %d, want 0", got)
+		}
+	})
+	want := passwords.DerivePassword("happytents", "mysql", "test-salt") + "\n"
+	if output != want {
+		t.Fatalf("site password env --db output = %q, want %q", output, want)
+	}
+}
+
+func TestRunSitePasswordKinstaDBReadsRemoteConfig(t *testing.T) {
+	stateDir := t.TempDir()
+	t.Setenv("NF_STATE_HOME", stateDir)
+	t.Setenv("KINSTA_API_KEY", "kinsta-token")
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if got, want := r.Header.Get("Authorization"), "Bearer kinsta-token"; got != want {
+			t.Fatalf("Authorization = %q, want %q", got, want)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		switch r.Method + " " + r.URL.Path {
+		case "GET /sites/ksite123/environments/kenv-staging/ssh/config":
+			_ = json.NewEncoder(w).Encode(map[string]any{"host": "1.2.3.4", "port": "2222", "user": "client"})
+		case "GET /sites/environments/kenv-staging/ssh/password":
+			_ = json.NewEncoder(w).Encode(map[string]any{"environment": map[string]any{"id": "kenv-staging", "sftp_password": "sftp-pass"}})
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	t.Cleanup(server.Close)
+	t.Setenv("KINSTA_BASE_URL", server.URL)
+	if err := state.SaveStateRecords("sites", []map[string]any{{"provider": "kinsta", "site_id": "client.kinsta", "name": "client", "env": "staging", "target": "kinsta", "path": "/www/client_123/public", "kinsta": map[string]any{"site_id": "ksite123", "environment_id": "kenv-staging"}}}); err != nil {
+		t.Fatalf("SaveStateRecords(sites) error = %v", err)
+	}
+	oldRunSSHOutput := runSSHOutputFn
+	var sshArgs []string
+	runSSHOutputFn = func(args []string) ([]byte, error) {
+		sshArgs = append([]string(nil), args...)
+		return []byte("db-secret\n"), nil
+	}
+	t.Cleanup(func() { runSSHOutputFn = oldRunSSHOutput })
+
+	output := captureStdout(t, func() {
+		if got := Run([]string{"site", "password", "client.kinsta:staging", "--db"}); got != 0 {
+			t.Fatalf("Run(site password kinsta --db) = %d, want 0", got)
+		}
+	})
+	if output != "db-secret\n" {
+		t.Fatalf("output = %q, want db-secret", output)
+	}
+	joined := strings.Join(sshArgs, " ")
+	for _, want := range []string{"ssh", "-p 2222", "client@1.2.3.4", "cd /www/client_123/public", "wp --path=/www/client_123/public config get DB_PASSWORD --type=constant"} {
+		if !strings.Contains(joined, want) {
+			t.Fatalf("ssh args missing %q: %#v", want, sshArgs)
+		}
+	}
+}
+
+func TestRunSitePasswordRejectsMultiplePasswordFlags(t *testing.T) {
+	stderr := captureStderr(t, func() {
+		if got := Run([]string{"site", "password", "client", "--wp", "--db"}); got != 1 {
+			t.Fatalf("Run(site password multiple flags) = %d, want 1", got)
+		}
+	})
+	if !strings.Contains(stderr, "site password accepts only one password flag") {
+		t.Fatalf("stderr = %q", stderr)
+	}
+}
+
 func TestRunSitePasswordUsesMatchingProjectPasswordVersion(t *testing.T) {
 	stateDir := t.TempDir()
 	t.Setenv("NF_STATE_HOME", stateDir)
@@ -6150,7 +6269,7 @@ func assertProjectRemote(t *testing.T, projectPath, remoteName, wantSiteID, want
 func TestRunEnvHelpShowsCommandsWithoutShortcuts(t *testing.T) {
 	output := captureStdout(t, func() { _ = runEnvHelp() })
 	assertContainsInOrder(t, output, []string{"up", "down", "show", "password", "logs", "shell, sh [remote]", "wp -- <args>", "\n\n  plugins", "snapshot", "\n\n  pull [remote] [--dry-run] [--execute] [--yes]", "push [remote] [--dry-run] [--execute] [--yes]", "\n\n  reset"})
-	for _, wanted := range []string{"env\n\nCommands:\n", "show", "show paths, ports, and URLs", "password", "show admin password only", "up", "start the local env", "down", "stop the local env", "logs", "tail WordPress logs", "shell", "open a local or remote shell", "reset", "destroy and recreate the local env", "wp -- <args>", "run wp-cli in the local env", "plugins", "manage configured WordPress plugins", "push [remote] [--dry-run] [--execute] [--yes]", "pull [remote] [--dry-run] [--execute] [--yes]", "snapshot", "manage env snapshots"} {
+	for _, wanted := range []string{"env\n\nCommands:\n", "show", "show paths, ports, and URLs", "password [remote] [--wp|--db|--basicauth]", "show a local or remote env password only", "up", "start the local env", "down", "stop the local env", "logs", "tail WordPress logs", "shell", "open a local or remote shell", "reset", "destroy and recreate the local env", "wp -- <args>", "run wp-cli in the local env", "plugins", "manage configured WordPress plugins", "push [remote] [--dry-run] [--execute] [--yes]", "pull [remote] [--dry-run] [--execute] [--yes]", "snapshot", "manage env snapshots"} {
 		if !strings.Contains(output, wanted) {
 			t.Fatalf("runEnvHelp() output missing %q:\n%s", wanted, output)
 		}
@@ -7801,12 +7920,123 @@ func TestRunEnvPasswordUsesProjectPasswordVersion(t *testing.T) {
 	}
 }
 
-func TestRunEnvPasswordRejectsArgs(t *testing.T) {
+func TestRunEnvPasswordPrintsRequestedPassword(t *testing.T) {
+	configHome := t.TempDir()
+	t.Setenv("NF_CONFIG_HOME", configHome)
+	t.Setenv("NF_PASSWORD_SALT", "test-salt")
 	repoRoot := t.TempDir()
 	if err := os.Mkdir(filepath.Join(repoRoot, ".git"), 0o755); err != nil {
 		t.Fatalf("Mkdir(.git) error = %v", err)
 	}
-	if err := os.WriteFile(filepath.Join(repoRoot, "nf.json"), []byte("{\n  \"version\": 1\n}\n"), 0o644); err != nil {
+	project := map[string]any{
+		"version":   1,
+		"project":   map[string]any{"slug": "foobar", "password_version": 3},
+		"wordpress": map[string]any{"theme_path": "theme", "theme_slug": "theme"},
+		"env":       map[string]any{"compose": "docker compose", "wordpress_service": "wordpress", "cli_service": "cli", "theme_mount_slug": "theme", "uploads_path": "uploads"},
+	}
+	data, err := json.MarshalIndent(project, "", "  ")
+	if err != nil {
+		t.Fatalf("MarshalIndent() error = %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(repoRoot, "nf.json"), append(data, '\n'), 0o644); err != nil {
+		t.Fatalf("WriteFile(nf.json) error = %v", err)
+	}
+	oldwd, err := os.Getwd()
+	if err != nil {
+		t.Fatalf("Getwd() error = %v", err)
+	}
+	if err := os.Chdir(repoRoot); err != nil {
+		t.Fatalf("Chdir() error = %v", err)
+	}
+	t.Cleanup(func() { _ = os.Chdir(oldwd) })
+
+	tests := []struct {
+		flag    string
+		purpose string
+	}{
+		{"--wp", "wp-admin"},
+		{"--db", "mysql"},
+		{"--basicauth", "basic-auth"},
+	}
+	for _, tt := range tests {
+		output := captureStdout(t, func() {
+			if got := Run([]string{"env", "password", tt.flag}); got != 0 {
+				t.Fatalf("Run(env password %s) = %d, want 0", tt.flag, got)
+			}
+		})
+		want := passwords.DerivePassword("foobar:v3", tt.purpose, "test-salt") + "\n"
+		if output != want {
+			t.Fatalf("env password %s output = %q, want %q", tt.flag, output, want)
+		}
+	}
+}
+
+func TestRunEnvPasswordPrintsRequestedRemotePassword(t *testing.T) {
+	configHome := t.TempDir()
+	t.Setenv("NF_CONFIG_HOME", configHome)
+	stateDir := t.TempDir()
+	t.Setenv("NF_STATE_HOME", stateDir)
+	t.Setenv("NF_PASSWORD_SALT", "test-salt")
+	repoRoot := t.TempDir()
+	if err := os.Mkdir(filepath.Join(repoRoot, ".git"), 0o755); err != nil {
+		t.Fatalf("Mkdir(.git) error = %v", err)
+	}
+	project := map[string]any{
+		"version":   1,
+		"project":   map[string]any{"slug": "local", "password_version": 9},
+		"wordpress": map[string]any{"theme_path": "theme", "theme_slug": "theme"},
+		"env":       map[string]any{"compose": "docker compose", "wordpress_service": "wordpress", "cli_service": "cli", "theme_mount_slug": "theme", "uploads_path": "uploads"},
+		"remotes":   map[string]any{"production": "client-app1-linode:staging"},
+	}
+	data, err := json.MarshalIndent(project, "", "  ")
+	if err != nil {
+		t.Fatalf("MarshalIndent() error = %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(repoRoot, "nf.json"), append(data, '\n'), 0o644); err != nil {
+		t.Fatalf("WriteFile(nf.json) error = %v", err)
+	}
+	oldwd, err := os.Getwd()
+	if err != nil {
+		t.Fatalf("Getwd() error = %v", err)
+	}
+	if err := os.Chdir(repoRoot); err != nil {
+		t.Fatalf("Chdir() error = %v", err)
+	}
+	t.Cleanup(func() { _ = os.Chdir(oldwd) })
+	if err := state.SaveStateRecords("sites", []map[string]any{
+		{"provider": "linode", "site_id": "client-app1-linode", "name": "client", "env": "live", "target": "app1-linode"},
+		{"provider": "linode", "site_id": "client-app1-linode", "name": "client", "env": "staging", "target": "app1-linode"},
+	}); err != nil {
+		t.Fatalf("SaveStateRecords(sites) error = %v", err)
+	}
+
+	tests := []struct {
+		flag    string
+		purpose string
+	}{
+		{"--wp", "wp-admin"},
+		{"--db", "mysql"},
+		{"--basicauth", "basic-auth"},
+	}
+	for _, tt := range tests {
+		output := captureStdout(t, func() {
+			if got := Run([]string{"env", "password", "production", tt.flag}); got != 0 {
+				t.Fatalf("Run(env password production %s) = %d, want 0", tt.flag, got)
+			}
+		})
+		want := passwords.DerivePassword("client", tt.purpose, "test-salt") + "\n"
+		if output != want {
+			t.Fatalf("env password production %s output = %q, want %q", tt.flag, output, want)
+		}
+	}
+}
+
+func TestRunEnvPasswordRejectsMultipleRemotes(t *testing.T) {
+	repoRoot := t.TempDir()
+	if err := os.Mkdir(filepath.Join(repoRoot, ".git"), 0o755); err != nil {
+		t.Fatalf("Mkdir(.git) error = %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(repoRoot, "nf.json"), []byte("{\n  \"version\": 1,\n  \"env\": {\"compose\": \"docker compose\", \"wordpress_service\": \"wordpress\", \"cli_service\": \"cli\", \"theme_mount_slug\": \"theme\", \"uploads_path\": \"uploads\"}\n}\n"), 0o644); err != nil {
 		t.Fatalf("WriteFile(nf.json) error = %v", err)
 	}
 	oldwd, err := os.Getwd()
@@ -7819,12 +8049,12 @@ func TestRunEnvPasswordRejectsArgs(t *testing.T) {
 	t.Cleanup(func() { _ = os.Chdir(oldwd) })
 
 	stderr := captureStderr(t, func() {
-		if got := Run([]string{"env", "password", "foobar"}); got != 1 {
-			t.Fatalf("Run(env password arg) = %d, want 1", got)
+		if got := Run([]string{"env", "password", "production", "staging"}); got != 1 {
+			t.Fatalf("Run(env password multiple remotes) = %d, want 1", got)
 		}
 	})
-	if !strings.Contains(stderr, "env password takes no arguments") {
-		t.Fatalf("stderr = %q, want no-args error", stderr)
+	if !strings.Contains(stderr, "env password takes at most one remote") {
+		t.Fatalf("stderr = %q, want at-most-one error", stderr)
 	}
 }
 

@@ -3,12 +3,17 @@ package cli
 // Site show, password, picker, and argument parsing helpers.
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"os"
 	"sort"
 	"strings"
+	"time"
 
+	"github.com/nonfiction/nf/internal/config"
+	"github.com/nonfiction/nf/internal/envwizard"
+	"github.com/nonfiction/nf/internal/kinsta"
 	"github.com/nonfiction/nf/internal/passwords"
 	"github.com/nonfiction/nf/internal/state"
 	"github.com/nonfiction/nf/internal/ui"
@@ -102,14 +107,20 @@ func cmdShowSite(needle string, jsonOutput bool) int {
 	return 0
 }
 
-func cmdSitePassword(needle string) int {
+func cmdSitePassword(needle string, scope passwordScope) int {
 	resolved, _, projectFileExists, targetAliasUsed, err := resolveSiteTarget(needle)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		return 1
 	}
-	if siteID, _, ok := splitSiteEnvRef(resolved); ok {
+	requestedEnv := ""
+	if siteID, env, ok := splitSiteEnvRef(resolved); ok {
+		if scope != passwordScopeDB {
+			fmt.Fprintf(os.Stderr, "site password takes a site, not an env; use %q.\n", siteID)
+			return 1
+		}
 		resolved = siteID
+		requestedEnv = env
 	}
 	bundle, err := state.LoadStateBundle()
 	if err != nil {
@@ -122,27 +133,187 @@ func cmdSitePassword(needle string) int {
 		fmt.Fprintf(os.Stderr, "No site matched %q.\n", needle)
 		return 1
 	}
-	password, err := siteAdminPassword(preferredPasswordSiteRecord(records))
+	record := preferredPasswordSiteRecord(records)
+	if scope == passwordScopeDB {
+		record = preferredPasswordSiteRecordForEnv(records, firstNonEmpty(requestedEnv, "live"))
+		if record == nil {
+			fmt.Fprintf(os.Stderr, "Site %q has no %s env.\n", resolved, firstNonEmpty(requestedEnv, "live"))
+			return 1
+		}
+	}
+	password, err := sitePasswordForRecord(record, scope)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		return 1
 	}
 	if password == "" {
-		fmt.Fprintf(os.Stderr, "Site %q has no derivable admin password.\n", resolved)
+		fmt.Fprintf(os.Stderr, "Site %q has no derivable %s password.\n", resolved, passwordScopeLabel(scope))
 		return 1
 	}
 	fmt.Println(password)
 	return 0
 }
 
-func cmdEnvPassword(cfg envConfig) int {
-	password, err := envAdminPassword(cfg)
+func cmdEnvPassword(cfg envConfig, scope passwordScope) int {
+	password, err := envPasswordForScope(cfg, scope)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		return 1
 	}
 	fmt.Println(password)
 	return 0
+}
+
+func cmdEnvRemotePassword(metadata map[string]any, remoteName string, scope passwordScope) int {
+	remoteName = strings.TrimSpace(remoteName)
+	if remoteName == "" {
+		fmt.Fprintln(os.Stderr, "env password requires a non-empty remote")
+		return 1
+	}
+	siteID, remoteEnv, ok, err := projectRemoteAlias(metadata, remoteName)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		return 1
+	}
+	if !ok {
+		fmt.Fprintf(os.Stderr, "No remote named %q in nf.json remotes.\n", remoteName)
+		return 1
+	}
+	record, _, err := cachedSiteEnv(siteID, remoteEnv)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		return 1
+	}
+	if record == nil {
+		fmt.Fprintf(os.Stderr, "No cached remote env matched site %q env %q. Run nf site refresh after target cache is current, or update the local state cache.\n", siteID, remoteEnv)
+		return 1
+	}
+	password, err := sitePasswordForRecord(record, scope)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		return 1
+	}
+	if password == "" {
+		fmt.Fprintf(os.Stderr, "Remote %q has no derivable %s password.\n", remoteName, passwordScopeLabel(scope))
+		return 1
+	}
+	fmt.Println(password)
+	return 0
+}
+
+func sitePasswordForRecord(record map[string]any, scope passwordScope) (string, error) {
+	switch scope {
+	case passwordScopeWP:
+		return siteAdminPassword(record)
+	case passwordScopeDB:
+		return siteDatabasePassword(record)
+	case passwordScopeBasicAuth:
+		slug := sitePasswordSlug(record)
+		if slug == "" {
+			return "", nil
+		}
+		return deriveSiteBasicAuthPassword(slug)
+	default:
+		return "", ProjectError{Msg: "unsupported site password scope"}
+	}
+}
+
+func envPasswordForScope(cfg envConfig, scope passwordScope) (string, error) {
+	switch scope {
+	case passwordScopeWP:
+		return envAdminPassword(cfg)
+	case passwordScopeDB:
+		return envDBPassword(cfg)
+	case passwordScopeBasicAuth:
+		return deriveProjectPassword(cfg.ProjectSlug, "basic-auth", cfg.PasswordVersion)
+	default:
+		return "", ProjectError{Msg: "unsupported env password scope"}
+	}
+}
+
+func passwordScopeLabel(scope passwordScope) string {
+	switch scope {
+	case passwordScopeWP:
+		return "admin"
+	case passwordScopeDB:
+		return "database"
+	case passwordScopeBasicAuth:
+		return "basic-auth"
+	case passwordScopeRoot:
+		return "root"
+	case passwordScopeAdminer:
+		return "adminer"
+	default:
+		return string(scope)
+	}
+}
+
+func preferredPasswordSiteRecordForEnv(records []map[string]any, env string) map[string]any {
+	for _, record := range records {
+		if normalizedRecordString(siteEnvName(record)) == normalizedRecordString(env) {
+			return record
+		}
+	}
+	return nil
+}
+
+func siteDatabasePassword(record map[string]any) (string, error) {
+	if password := firstRecordString(record, "db_password", "database_password", "mysql_password"); password != "" {
+		return password, nil
+	}
+	provider := strings.ToLower(strings.TrimSpace(recordValueString(record["provider"])))
+	if provider == "kinsta" {
+		return kinstaSiteDatabasePassword(record)
+	}
+	slug := sitePasswordSlug(record)
+	if slug == "" {
+		return "", nil
+	}
+	version := currentProjectPasswordVersionForSite(slug)
+	return deriveProjectPassword(slug, "mysql", version)
+}
+
+func kinstaSiteDatabasePassword(record map[string]any) (string, error) {
+	remoteSiteID := mapStringAtPath(record, "kinsta", "site_id")
+	remoteEnvID := mapStringAtPath(record, "kinsta", "environment_id")
+	if remoteSiteID == "" || remoteEnvID == "" {
+		return "", ProjectError{Msg: fmt.Sprintf("Kinsta site %q is missing API identifiers. Run nf site refresh and try again.", siteRecordID(record))}
+	}
+	token := envwizard.Value("KINSTA_API_KEY")
+	if token == "" {
+		return "", ProjectError{Msg: fmt.Sprintf("Expected KINSTA_API_KEY in the environment or %s.", config.EnvFile())}
+	}
+	client := kinsta.NewClient(firstNonEmpty(envwizard.Value("KINSTA_BASE_URL"), "https://api.kinsta.com/v2"), token)
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	cfg, err := client.SFTPConfig(ctx, remoteSiteID, remoteEnvID)
+	if err != nil {
+		return "", err
+	}
+	if _, err := client.SFTPPassword(ctx, remoteEnvID); err != nil {
+		return "", err
+	}
+	host := firstNonEmpty(cfg.Host, mapStringAtPath(record, "ssh", "host"))
+	user := firstNonEmpty(cfg.User, mapStringAtPath(record, "ssh", "user"))
+	port := firstNonEmpty(cfg.Port, mapStringAtPath(record, "ssh", "port"), "22")
+	if host == "" || user == "" {
+		return "", ProjectError{Msg: fmt.Sprintf("Kinsta site %q is missing SSH connection details.", siteRecordID(record))}
+	}
+	wpPath := firstNonEmpty(normalizeKinstaCachedPath(firstRecordString(record, "path")), kinstaEnvPath(user, ""))
+	if wpPath == "" {
+		return "", ProjectError{Msg: fmt.Sprintf("Kinsta site %q is missing path. Run nf site refresh.", siteRecordID(record))}
+	}
+	remoteCommand := "cd " + shellQuoteArg(wpPath) + " && wp --path=" + shellQuoteArg(wpPath) + " config get DB_PASSWORD --type=constant"
+	args := []string{"ssh", "-o", "BatchMode=yes", "-o", "StrictHostKeyChecking=no", "-o", "UserKnownHostsFile=/dev/null", "-p", port, user + "@" + host, remoteCommand}
+	output, err := runSSHOutputFn(args)
+	if err != nil {
+		return "", err
+	}
+	password := strings.TrimSpace(string(output))
+	if password == "" {
+		return "", ProjectError{Msg: fmt.Sprintf("Kinsta site %q returned an empty database password.", siteRecordID(record))}
+	}
+	return password, nil
 }
 
 func preferredPasswordSiteRecord(records []map[string]any) map[string]any {

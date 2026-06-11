@@ -211,7 +211,7 @@ func siteCompletionCandidates(args []string) []string {
 		}
 		return nil
 	case "password":
-		return cachedSiteCompletionNames()
+		return append(cachedSiteAndEnvCompletionNames(), "--wp", "--db", "--basicauth")
 	case "basicauth":
 		return siteBasicAuthCompletionCandidates(args[1:])
 	case "staging":
@@ -299,6 +299,8 @@ func envCompletionCandidates(args []string) []string {
 	}
 	args[0] = cliCommandAlias(args[0])
 	switch args[0] {
+	case "password":
+		return append(projectRemoteCompletionNames(), "--wp", "--db", "--basicauth")
 	case "up", "reset":
 		return []string{"--rebuild"}
 	case "pull", "push":

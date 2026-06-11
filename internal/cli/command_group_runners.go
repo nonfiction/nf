@@ -31,7 +31,7 @@ func runEnvHelp() int {
 		{"up [--rebuild]", "start the local env"},
 		{"down", "stop the local env"},
 		{"show", "show paths, ports, and URLs"},
-		{"password", "show admin password only"},
+		{"password [remote] [--wp|--db|--basicauth]", "show a local or remote env password only"},
 		{"logs", "tail WordPress logs"},
 		{"shell, sh [remote]", "open a local or remote shell"},
 		{"wp -- <args>", "run wp-cli in the local env"},
@@ -303,9 +303,22 @@ func runEnv(argv []string) int {
 		}
 		argv = []string{name}
 	}
-	if name == "password" && len(argv) != 1 {
-		fmt.Fprintln(os.Stderr, "env password takes no arguments")
-		return 1
+	envPasswordScope := passwordScopeWP
+	envPasswordRemote := ""
+	if name == "password" {
+		positionals, scope, err := parsePasswordScopeFlags(argv[1:], map[string]passwordScope{"--wp": passwordScopeWP, "--db": passwordScopeDB, "--basicauth": passwordScopeBasicAuth}, passwordScopeWP, "env password")
+		if err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			return 1
+		}
+		if len(positionals) > 1 {
+			fmt.Fprintln(os.Stderr, "env password takes at most one remote")
+			return 1
+		}
+		if len(positionals) == 1 {
+			envPasswordRemote = positionals[0]
+		}
+		envPasswordScope = scope
 	}
 	if name == "shell" {
 		for _, arg := range argv[1:] {
@@ -373,7 +386,10 @@ func runEnv(argv []string) int {
 		return 0
 	}
 	if name == "password" {
-		return cmdEnvPassword(cfg)
+		if envPasswordRemote != "" {
+			return cmdEnvRemotePassword(metadata, envPasswordRemote, envPasswordScope)
+		}
+		return cmdEnvPassword(cfg, envPasswordScope)
 	}
 	if name == "shell" && len(argv) == 2 {
 		remoteName := strings.TrimSpace(argv[1])

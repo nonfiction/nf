@@ -261,13 +261,18 @@ func runSite(argv []string) int {
 		}
 		return cmdSiteSnapshot(envRef, opts)
 	case "password":
-		if len(argv) > 2 {
+		positionals, scope, err := parsePasswordScopeFlags(argv[1:], map[string]passwordScope{"--wp": passwordScopeWP, "--db": passwordScopeDB, "--basicauth": passwordScopeBasicAuth}, passwordScopeWP, "site password")
+		if err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			return 1
+		}
+		if len(positionals) > 1 {
 			fmt.Fprintln(os.Stderr, "site password takes at most one site")
 			return 1
 		}
 		needle := ""
-		if len(argv) == 2 {
-			needle = argv[1]
+		if len(positionals) == 1 {
+			needle = positionals[0]
 		}
 		if needle == "" {
 			selected, err := chooseSiteForPassword()
@@ -277,11 +282,11 @@ func runSite(argv []string) int {
 			}
 			needle = selected
 		}
-		if siteID, _, ok := splitSiteEnvRef(needle); ok {
+		if siteID, _, ok := splitSiteEnvRef(needle); ok && scope != passwordScopeDB {
 			fmt.Fprintf(os.Stderr, "site password takes a site, not an env; use %q.\n", siteID)
 			return 1
 		}
-		return cmdSitePassword(needle)
+		return cmdSitePassword(needle, scope)
 	case "basicauth":
 		return runSiteBasicAuth(argv[1:])
 	case "remove":

@@ -91,7 +91,7 @@ func runSiteHelp() int {
 		{},
 		{"shell, sh <env>", "shell into a remote env"},
 		{"wp <env> -- <args>", "run wp-cli against a remote env"},
-		{"password [site]", "show admin password only"},
+		{"password [site|env] [--wp|--db|--basicauth]", "show a site password only"},
 		{},
 		{"snapshot [env|list|remove|prune] [flags]", "manage remote snapshots"},
 		{"basicauth <action> [site|env]", "manage provider basic auth"},
