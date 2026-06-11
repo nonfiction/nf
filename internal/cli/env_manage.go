@@ -16,6 +16,12 @@ import (
 	"github.com/nonfiction/nf/internal/config"
 )
 
+const (
+	defaultDockerDBImage        = "mariadb:11"
+	defaultDockerCLIImage       = "wordpress:cli-php8.3"
+	defaultDockerWordpressImage = "wordpress:php8.3-apache"
+)
+
 func envCommandDir(cfg envConfig) string {
 	return localEnvDir(cfg)
 }
@@ -38,7 +44,7 @@ func ensureManagedEnv(cfg envConfig) error {
 		filepath.Join(envDir, "docker-compose.yml"):                                  renderEnvCompose(cfg),
 		filepath.Join(envDir, ".env"):                                                renderEnvFile(cfg),
 		filepath.Join(envDir, "php", "uploads.ini"):                                  renderEnvUploadsINI(),
-		filepath.Join(envDir, "wordpress", "Dockerfile"):                             renderEnvDockerfile(),
+		filepath.Join(envDir, "wordpress", "Dockerfile"):                             renderEnvDockerfile(cfg),
 		filepath.Join(envDir, "wordpress", "wordpress-rewrites.conf"):                renderEnvRewritesConf(),
 		filepath.Join(envDir, firstNonEmpty(cfg.UploadsPath, "uploads"), ".gitkeep"): "",
 	}
@@ -51,12 +57,13 @@ func ensureManagedEnv(cfg envConfig) error {
 }
 
 func envConfigWithAdminCredentials(cfg envConfig) (envConfig, error) {
-	if cfg.AdminUser != "" && cfg.AdminEmail != "" && cfg.AdminPassword != "" && cfg.DBUser != "" && cfg.DBPassword != "" {
-		return cfg, nil
-	}
 	values, err := loadGlobalConfig()
 	if err != nil {
 		return cfg, err
+	}
+	cfg = envConfigWithDockerImages(cfg, values)
+	if cfg.AdminUser != "" && cfg.AdminEmail != "" && cfg.AdminPassword != "" && cfg.DBUser != "" && cfg.DBPassword != "" {
+		return cfg, nil
 	}
 	adminEmail := firstNonEmpty(cfg.AdminEmail, values["default_wp_email"])
 	if adminEmail == "" {
@@ -75,6 +82,13 @@ func envConfigWithAdminCredentials(cfg envConfig) (envConfig, error) {
 	cfg.AdminEmail = adminEmail
 	cfg.AdminPassword = adminPassword
 	return cfg, nil
+}
+
+func envConfigWithDockerImages(cfg envConfig, values map[string]string) envConfig {
+	cfg.DockerDBImage = firstNonEmpty(cfg.DockerDBImage, values["docker_db_image"], defaultDockerDBImage)
+	cfg.DockerCLIImage = firstNonEmpty(cfg.DockerCLIImage, values["docker_cli_image"], defaultDockerCLIImage)
+	cfg.DockerWPImage = firstNonEmpty(cfg.DockerWPImage, values["docker_wordpress_image"], defaultDockerWordpressImage)
+	return cfg
 }
 
 func envConfigWithDBCredentials(cfg envConfig) (envConfig, error) {

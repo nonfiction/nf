@@ -182,11 +182,14 @@ func renderEnvCompose(cfg envConfig) string {
 	themeMountSlug := firstNonEmpty(cfg.ThemeMountSlug, "theme")
 	wordpressService := firstNonEmpty(cfg.WordpressService, "wordpress")
 	cliService := firstNonEmpty(cfg.CliService, "cli")
+	dbImage := firstNonEmpty(cfg.DockerDBImage, defaultDockerDBImage)
+	cliImage := firstNonEmpty(cfg.DockerCLIImage, defaultDockerCLIImage)
+	wordpressImage := firstNonEmpty(cfg.DockerWPImage, defaultDockerWordpressImage)
 	themePath := cfg.ThemePath
 	uploadsPath := firstNonEmpty(cfg.UploadsPath, "uploads")
 	return fmt.Sprintf(`services:
   db:
-    image: mariadb:11
+    image: %s
     command: --character-set-server=utf8mb4 --collation-server=utf8mb4_unicode_ci
     environment:
       MARIADB_DATABASE: ${DB_NAME}
@@ -233,7 +236,7 @@ func renderEnvCompose(cfg envConfig) string {
       - ./php/uploads.ini:/usr/local/etc/php/conf.d/uploads.ini:ro
 
   %s:
-    image: wordpress:cli-php8.4
+    image: %s
     depends_on:
       %s:
         condition: service_started
@@ -263,7 +266,7 @@ func renderEnvCompose(cfg envConfig) string {
       - "${MAILPIT_PORT}:8025"
 
   adminer:
-    image: wordpress:php8.3-apache
+    image: %s
     depends_on:
       db:
         condition: service_healthy
@@ -277,7 +280,7 @@ func renderEnvCompose(cfg envConfig) string {
 volumes:
   db_data:
   wp_data:
-`, wordpressService, themePath, themeMountSlug, cliService, wordpressService, themePath, themeMountSlug, uploadsPath, path.Join("/", "env", uploadsPath), envSnapshotComposeMount(cfg))
+`, dbImage, wordpressService, themePath, themeMountSlug, cliService, cliImage, wordpressService, themePath, themeMountSlug, uploadsPath, path.Join("/", "env", uploadsPath), envSnapshotComposeMount(cfg), wordpressImage)
 }
 
 func renderEnvFile(cfg envConfig) string {
@@ -380,14 +383,14 @@ func renderEnvUploadsINI() string {
 	return "file_uploads=On\nmemory_limit=256M\nupload_max_filesize=128M\npost_max_size=128M\nmax_execution_time=120\nmax_input_time=120\n"
 }
 
-func renderEnvDockerfile() string {
-	return `FROM wordpress:php8.3-apache
+func renderEnvDockerfile(cfg envConfig) string {
+	return fmt.Sprintf(`FROM %s
 
 RUN a2enmod rewrite \
   && sed -ri 's/AllowOverride None/AllowOverride All/g' /etc/apache2/apache2.conf
 
 COPY wordpress/wordpress-rewrites.conf /etc/apache2/conf-enabled/wordpress-rewrites.conf
-`
+`, firstNonEmpty(cfg.DockerWPImage, defaultDockerWordpressImage))
 }
 
 func renderEnvRewritesConf() string {

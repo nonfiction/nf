@@ -24,6 +24,9 @@ type envConfig struct {
 	Compose          string
 	WordpressService string
 	CliService       string
+	DockerDBImage    string
+	DockerCLIImage   string
+	DockerWPImage    string
 	ThemeMountSlug   string
 	UploadsPath      string
 	ThemeSlug        string

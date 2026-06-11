@@ -66,6 +66,24 @@ func runConfig(argv []string) int {
 			return 1
 		}
 		return cmdConfigSet("adminer_default_user", argv[1])
+	case "set-docker-db-image":
+		if len(argv) != 2 || strings.TrimSpace(argv[1]) == "" {
+			fmt.Fprintln(os.Stderr, "config set-docker-db-image takes exactly one image")
+			return 1
+		}
+		return cmdConfigSet("docker_db_image", argv[1])
+	case "set-docker-cli-image":
+		if len(argv) != 2 || strings.TrimSpace(argv[1]) == "" {
+			fmt.Fprintln(os.Stderr, "config set-docker-cli-image takes exactly one image")
+			return 1
+		}
+		return cmdConfigSet("docker_cli_image", argv[1])
+	case "set-docker-wordpress-image":
+		if len(argv) != 2 || strings.TrimSpace(argv[1]) == "" {
+			fmt.Fprintln(os.Stderr, "config set-docker-wordpress-image takes exactly one image")
+			return 1
+		}
+		return cmdConfigSet("docker_wordpress_image", argv[1])
 	case "set-kinsta-default-region":
 		if len(argv) != 2 || strings.TrimSpace(argv[1]) == "" {
 			fmt.Fprintln(os.Stderr, "config set-kinsta-default-region takes exactly one region")
@@ -343,6 +361,13 @@ func cmdConfigShow() int {
 	fmt.Println("Adminer")
 	printIndentedDetailRows([]detailRow{
 		{label: "User", value: configShowValue(values, "adminer_default_user", "adminer")},
+	}, 2)
+	fmt.Println()
+	fmt.Println("Docker")
+	printIndentedDetailRows([]detailRow{
+		{label: "DB image", value: configShowValue(values, "docker_db_image", defaultDockerDBImage)},
+		{label: "CLI image", value: configShowValue(values, "docker_cli_image", defaultDockerCLIImage)},
+		{label: "WordPress image", value: configShowValue(values, "docker_wordpress_image", defaultDockerWordpressImage)},
 	}, 2)
 	fmt.Println()
 	fmt.Println("DNSimple")
