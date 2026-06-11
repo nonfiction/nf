@@ -97,13 +97,13 @@ Local state is disposable. Provider truth is canonical remotely.
 * Password salt is `NF_PASSWORD_SALT`; legacy `NF_SECRET_SALT` is migration-only fallback.
 * `project.password_version` belongs in `nf.json`, defaults to `0`, is safe to commit, and rotates project/site derived passwords when set non-zero without changing `NF_PASSWORD_SALT`.
 * `basicauth_default_user` belongs in `config.json`, defaults to `nonfiction`, and is used with a per-site derived `basic-auth` password.
-* `adminer_default_user` belongs in `config.json`, defaults to `nonfiction`, and is used for Linode target Adminer HTTP Basic auth and the shared MySQL admin user unless `nf target add linode --adminer-user` overrides it for that target.
+* `adminer_default_user` belongs in `config.json`, defaults to `adminer`, and is used for Linode target Adminer HTTP Basic auth, the shared MySQL admin user, and the Adminer subdomain label unless `nf target add linode --adminer-user` overrides it for that target.
 * DNSimple provider check validates it can read the configured `base_domain` zone and writes zero targets.
 * Kinsta provider check writes one target named `kinsta`.
 * Linode provider check discovers targets from Linode instances tagged `nf`.
 * `nf target remove <target>` removes an empty Linode target.
 * `nf target list/show` read targets from `providers.json`; legacy `servers.json` fallback may remain during cache migration.
-* `nf target adminer show <target>` reads `/var/lib/nf/target.json` over SSH and derives the target Adminer password from target hostname + purpose `adminer`; the raw password is not stored.
+* `nf target adminer show <target>` reads `/var/lib/nf/target.json` over SSH and derives the target Adminer password from target metadata identity/purpose; the raw password is not stored.
 * `nf site add <target> <site>` creates the live WordPress env on a target. Use `--with-staging` for one-command live+staging setup.
 * `nf site staging status/add/remove` manages optional staging env lifecycle. `rm` is a shorthand for `remove`.
 * `nf site refresh` fans out from cached targets. It must not claim to refresh providers.
@@ -112,7 +112,7 @@ Local state is disposable. Provider truth is canonical remotely.
 * Remote target site discovery is not implemented yet.
 * Linode-hosted site/env truth is intended to live on each target at `/var/lib/nf/sites.json`, read over SSH as the standard user.
 * Linode target metadata lives at `/var/lib/nf/target.json`. It includes Adminer/AdminNeo metadata but no raw Adminer password.
-* Linode Adminer is deployed as pinned AdminNeo at `https://db.<target-hostname>/` during target provisioning, protected by HTTP Basic auth and the wildcard target certificate.
+* Linode Adminer is deployed as pinned AdminNeo at `https://<adminer-user>.<target-hostname>/` during target provisioning, protected by HTTP Basic auth and the wildcard target certificate.
 * Linode site add grants the shared Adminer MySQL user privileges only on created site/env databases; site remove revokes those per-database grants before dropping DBs.
 * `nf remote add` validates the requested site/env exists in local cache before writing `nf.json`.
 * `nf site shell/wp` are preflight-only today; they must not mutate remote state yet.

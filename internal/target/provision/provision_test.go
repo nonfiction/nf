@@ -274,8 +274,14 @@ func TestBuildPlanDefaults(t *testing.T) {
 	if got, want := plan.SshUser, "nonfiction"; got != want {
 		t.Fatalf("SshUser = %q, want %q", got, want)
 	}
-	if got, want := plan.AdminerUser, "nonfiction"; got != want {
+	if got, want := plan.AdminerUser, "adminer"; got != want {
 		t.Fatalf("AdminerUser = %q, want %q", got, want)
+	}
+	if got, want := plan.AdminerHostname, "adminer.app1.nonfiction.dev"; got != want {
+		t.Fatalf("AdminerHostname = %q, want %q", got, want)
+	}
+	if got, want := plan.AdminerURL, "https://adminer.app1.nonfiction.dev/"; got != want {
+		t.Fatalf("AdminerURL = %q, want %q", got, want)
 	}
 	if got, want := plan.SshKeySource, "linode-profile"; got != want {
 		t.Fatalf("SshKeySource = %q, want %q", got, want)
@@ -417,6 +423,12 @@ func TestBuildPlanAdminerUserFlagOverridesConfig(t *testing.T) {
 	}
 	if got, want := plan.AdminerUser, "target_admin"; got != want {
 		t.Fatalf("AdminerUser = %q, want %q", got, want)
+	}
+	if got, want := plan.AdminerHostname, "target_admin.app1.nonfiction.dev"; got != want {
+		t.Fatalf("AdminerHostname = %q, want %q", got, want)
+	}
+	if got, want := plan.AdminerURL, "https://target_admin.app1.nonfiction.dev/"; got != want {
+		t.Fatalf("AdminerURL = %q, want %q", got, want)
 	}
 }
 
@@ -1102,9 +1114,9 @@ func TestCloudInitTemplateIsServerOnly(t *testing.T) {
 		"https://www.adminneo.org/files/5.4.1/mysql_en_default/adminneo-5.4.1.php",
 		"/var/www/shared/adminer/index.php",
 		"/var/lib/nf/adminer.htpasswd",
-		"server_name db.app1.nonfiction.dev;",
+		"server_name adminer.app1.nonfiction.dev;",
 		"auth_basic \"nf adminer\";",
-		"CREATE USER IF NOT EXISTS 'nonfiction'@'localhost' IDENTIFIED BY PASSWORD '<adminer mysql password hash>';",
+		"CREATE USER IF NOT EXISTS 'adminer'@'localhost' IDENTIFIED BY PASSWORD '<adminer mysql password hash>';",
 		`"purpose":"adminer"`,
 	} {
 		if !strings.Contains(rendered, want) {
@@ -1314,12 +1326,12 @@ func TestServerStateRecordShapeDoesNotContainSecrets(t *testing.T) {
 		t.Fatalf("credentials.root = %#v, want derived metadata", credentials["root"])
 	} else if _, ok := root["password"]; ok {
 		t.Fatalf("credentials.root unexpectedly stored a password: %#v", root)
-	} else if adminer, ok := credentials["adminer"].(map[string]any); !ok || adminer["derived"] != true || adminer["identity"] != "app1.nonfiction.dev" || adminer["purpose"] != "adminer" || adminer["stored"] != false || adminer["user"] != "nonfiction" {
+	} else if adminer, ok := credentials["adminer"].(map[string]any); !ok || adminer["derived"] != true || adminer["identity"] != "app1.nonfiction.dev" || adminer["purpose"] != "adminer" || adminer["stored"] != false || adminer["user"] != "adminer" {
 		t.Fatalf("credentials.adminer = %#v, want derived metadata", credentials["adminer"])
 	} else if _, ok := adminer["password"]; ok {
 		t.Fatalf("credentials.adminer unexpectedly stored a password: %#v", adminer)
 	}
-	if adminer, ok := record["adminer"].(map[string]any); !ok || adminer["tool"] != adminerToolName || adminer["version"] != adminerVersion || adminer["hostname"] != "db.app1.nonfiction.dev" || adminer["url"] != "https://db.app1.nonfiction.dev/" || adminer["user"] != "nonfiction" {
+	if adminer, ok := record["adminer"].(map[string]any); !ok || adminer["tool"] != adminerToolName || adminer["version"] != adminerVersion || adminer["hostname"] != "adminer.app1.nonfiction.dev" || adminer["url"] != "https://adminer.app1.nonfiction.dev/" || adminer["user"] != "adminer" {
 		t.Fatalf("adminer block = %#v, want AdminNeo metadata", record["adminer"])
 	} else if password, ok := adminer["auth"].(map[string]any)["password"].(map[string]any); !ok || password["purpose"] != "adminer" || password["stored"] != false {
 		t.Fatalf("adminer auth password = %#v, want derived metadata", adminer["auth"])

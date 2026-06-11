@@ -398,7 +398,7 @@ Non-secret config goes in `config.json`:
   "base_domain": "nonfiction.dev",
   "dnsimple_account_id": "14",
   "basicauth_default_user": "nonfiction",
-  "adminer_default_user": "nonfiction"
+  "adminer_default_user": "adminer"
 }
 ```
 
@@ -421,7 +421,7 @@ nf config set-base-domain nonfiction.dev
 nf config set-default-wp-email dev@example.com
 nf config set-default-wp-user admin
 nf config set-basicauth-default-user nonfiction
-nf config set-adminer-default-user nonfiction
+nf config set-adminer-default-user adminer
 nf config set-kinsta-default-php 8.3
 nf config set-kinsta-default-region us-central1
 nf config set-linode-default-region us-east
@@ -486,7 +486,7 @@ nf target add linode app1 \
   --region ca-central \
   --type g6-standard-1 \
   --image linode/ubuntu24.04 \
-  --adminer-user nonfiction \
+  --adminer-user adminer \
   --user nonfiction \
   --keys all
 ```
@@ -496,7 +496,7 @@ Current behavior:
 * `nf provider list` reports local credential status.
 * `nf provider check` calls safe read-only provider health endpoints and writes `providers.json`.
 * `nf provider show <provider>` reads cached provider metadata.
-* `nf target add linode <name>` creates a Linode target named `<name>-linode`, tags it `nf`, creates host and wildcard DNS records under `base_domain`, queues HTTPS setup on the target with a systemd retry timer, installs AdminNeo at `https://db.<target-hostname>/` behind HTTP Basic auth during target provisioning, and records the target under the Linode provider in `providers.json`. Add `--adminer-user` to override `adminer_default_user` for that target only. Add `--wait` to keep the CLI attached through SSH, TLS, and health checks. Existing completed targets that predate AdminNeo are not upgraded in place by provider checks or target refresh.
+* `nf target add linode <name>` creates a Linode target named `<name>-linode`, tags it `nf`, creates host and wildcard DNS records under `base_domain`, queues HTTPS setup on the target with a systemd retry timer, installs AdminNeo at `https://<adminer-user>.<target-hostname>/` behind HTTP Basic auth during target provisioning, and records the target under the Linode provider in `providers.json`. Add `--adminer-user` to override `adminer_default_user` for that target only; the same value controls the Adminer HTTP Basic user, shared MySQL user, and Adminer subdomain label. Add `--wait` to keep the CLI attached through SSH, TLS, and health checks. Existing completed targets that predate AdminNeo are not upgraded in place by provider checks or target refresh.
 * `nf target remove <target>` removes an empty Linode target.
 * `nf target refresh` updates target records from configured target providers so added and removed targets are reflected in `providers.json`.
 * `nf target list/show` read target records from `providers.json`, with a legacy `servers.json` fallback.

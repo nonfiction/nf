@@ -168,7 +168,7 @@ const firewallOutboundPolicy = "ACCEPT"
 const adminerToolName = "AdminNeo"
 const adminerVersion = "5.4.1"
 const adminerDownloadURL = "https://www.adminneo.org/files/5.4.1/mysql_en_default/adminneo-5.4.1.php"
-const adminerDefaultUser = "nonfiction"
+const adminerDefaultUser = "adminer"
 
 var firewallInboundPorts = []string{"22", "80", "443"}
 
@@ -307,16 +307,17 @@ func adminerMySQLPasswordHash(password string) string {
 	return "*" + strings.ToUpper(fmt.Sprintf("%x", second[:]))
 }
 
-func deriveAdminerHostname(hostname string) string {
+func deriveAdminerHostname(hostname, user string) string {
 	hostname = strings.TrimSpace(hostname)
-	if hostname == "" {
+	user = strings.TrimSpace(user)
+	if hostname == "" || user == "" {
 		return ""
 	}
-	return "db." + hostname
+	return user + "." + hostname
 }
 
-func deriveAdminerURL(hostname string) string {
-	adminerHostname := deriveAdminerHostname(hostname)
+func deriveAdminerURL(hostname, user string) string {
+	adminerHostname := deriveAdminerHostname(hostname, user)
 	if adminerHostname == "" {
 		return ""
 	}
@@ -2552,10 +2553,10 @@ func normalizePlan(plan Plan) Plan {
 		plan.AdminerUser = firstNonEmpty(globalConfigValue("adminer_default_user"), adminerDefaultUser)
 	}
 	if strings.TrimSpace(plan.AdminerHostname) == "" {
-		plan.AdminerHostname = deriveAdminerHostname(plan.Hostname)
+		plan.AdminerHostname = deriveAdminerHostname(plan.Hostname, plan.AdminerUser)
 	}
 	if strings.TrimSpace(plan.AdminerURL) == "" {
-		plan.AdminerURL = deriveAdminerURL(plan.Hostname)
+		plan.AdminerURL = deriveAdminerURL(plan.Hostname, plan.AdminerUser)
 	}
 	if strings.TrimSpace(plan.DnsimpleAccountID) == "" {
 		plan.DnsimpleAccountID = firstNonEmpty(dnsimpleAccountIDConfigValue(), "14")
@@ -2708,8 +2709,8 @@ func BuildPlan(args Args) (Plan, error) {
 		WildcardHostname:  wildcardHostname,
 		HealthURL:         healthURL,
 		AdminerUser:       adminerUser,
-		AdminerHostname:   deriveAdminerHostname(hostname),
-		AdminerURL:        deriveAdminerURL(hostname),
+		AdminerHostname:   deriveAdminerHostname(hostname, adminerUser),
+		AdminerURL:        deriveAdminerURL(hostname, adminerUser),
 		Region:            firstNonEmpty(region, defaultRegion),
 		LinodeType:        firstNonEmpty(linodeType, defaultType),
 		Image:             osPlan.Image,

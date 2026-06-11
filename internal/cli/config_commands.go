@@ -342,7 +342,7 @@ func cmdConfigShow() int {
 	fmt.Println()
 	fmt.Println("Adminer")
 	printIndentedDetailRows([]detailRow{
-		{label: "User", value: configShowValue(values, "adminer_default_user", "nonfiction")},
+		{label: "User", value: configShowValue(values, "adminer_default_user", "adminer")},
 	}, 2)
 	fmt.Println()
 	fmt.Println("DNSimple")

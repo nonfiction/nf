@@ -180,7 +180,7 @@ Linode targets also write non-secret target metadata to:
 /var/lib/nf/target.json
 ```
 
-That file includes Adminer/AdminNeo metadata such as URL, username, engine version, and derived credential identity/purpose, but never the raw password. Adminer is exposed at `https://db.<target-hostname>/` through the target wildcard certificate. The shared Adminer MySQL user is created during target provisioning and granted privileges per site-env database during site creation; site creation refuses a DB username that would collide with the shared Adminer MySQL user.
+That file includes Adminer/AdminNeo metadata such as URL, username, engine version, and derived credential identity/purpose, but never the raw password. Adminer is exposed at `https://<adminer-user>.<target-hostname>/` through the target wildcard certificate. The shared Adminer MySQL user is created during target provisioning and granted privileges per site-env database during site creation; site creation refuses a DB username that would collide with the shared Adminer MySQL user.
 
 ## State and config layout
 
@@ -671,7 +671,7 @@ Status:
 * [x] Kinsta read-only healthcheck and `kinsta` target
 * [x] Linode read-only healthcheck and tagged target discovery
 * [x] `nf target list/show` from `providers.json`
-* [x] `nf target add linode <name>` creates Linode targets with DNS, queued TLS retry, Adminer/AdminNeo, a per-target `--adminer-user` override, and empty remote site inventory. Existing completed pre-Adminer targets are not reconciled in place by provider checks or target refresh.
+* [x] `nf target add linode <name>` creates Linode targets with DNS, queued TLS retry, Adminer/AdminNeo at `https://<adminer-user>.<target-hostname>/`, a per-target `--adminer-user` override, and empty remote site inventory. Existing completed pre-Adminer targets are not reconciled in place by provider checks or target refresh.
 * [x] `nf target adminer show <target>` reads `/var/lib/nf/target.json` and derives the Adminer password locally
 * [x] legacy `servers.json` fallback during cache migration
 
