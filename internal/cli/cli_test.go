@@ -9256,6 +9256,16 @@ func TestEnvCommandHelpersBuildExpectedArgs(t *testing.T) {
 	if got, want := envWpThemeActivateArgs(cfg, "custom-slug"), []string{"docker", "compose", "exec", "--user", "nonfiction", "wordpress", "wp", "theme", "activate", "custom-slug"}; !reflect.DeepEqual(got, want) {
 		t.Fatalf("envWpThemeActivateArgs(explicit) = %#v, want %#v", got, want)
 	}
+	readyArgs := envWpBootstrapReadyArgs(cfg)
+	readyJoined := strings.Join(readyArgs, " ")
+	for _, wanted := range []string{"docker compose exec --user nonfiction wordpress sh -lc", "wp-config.php", "wp-settings.php", "WordPress files are not ready yet."} {
+		if !strings.Contains(readyJoined, wanted) {
+			t.Fatalf("envWpBootstrapReadyArgs() missing %q in %#v", wanted, readyArgs)
+		}
+	}
+	if got, want := envWpBootstrapPreviewArgs(cfg, "wait for WordPress files"), []string{"docker", "compose", "exec", "--user", "nonfiction", "wordpress", "<wait for WordPress files>"}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("envWpBootstrapPreviewArgs() = %#v, want %#v", got, want)
+	}
 	installArgs := envWpCoreInstallArgs(cfg)
 	joined := strings.Join(installArgs, " ")
 	for _, wanted := range []string{"docker compose exec --user nonfiction wordpress sh -lc", "WP_URL", "WP_TITLE", "ADMIN_USER", "ADMIN_PASSWORD", "ADMIN_EMAIL", "wp theme activate theme"} {
@@ -9411,8 +9421,8 @@ func TestRunEnvUpPrintsUnderlyingCommands(t *testing.T) {
 	for _, want := range []string{
 		"> docker compose build",
 		"> docker compose up -d",
-		"> docker compose exec --user nonfiction wordpress sh -lc",
-		"wp-content/mu-plugins/nf-mailpit.php",
+		"> docker compose exec --user nonfiction wordpress '<wait for WordPress files>'",
+		"> docker compose exec --user nonfiction wordpress '<configure Mailpit SMTP>'",
 		"> docker compose exec --user nonfiction wordpress wp core is-installed",
 		"> docker compose exec --user nonfiction wordpress sh -lc",
 	} {
@@ -9479,7 +9489,8 @@ func TestRunEnvUpActivatesThemeWhenAlreadyInstalled(t *testing.T) {
 	})
 	for _, want := range []string{
 		"> docker compose up -d",
-		"wp-content/mu-plugins/nf-mailpit.php",
+		"> docker compose exec --user nonfiction wordpress '<wait for WordPress files>'",
+		"> docker compose exec --user nonfiction wordpress '<configure Mailpit SMTP>'",
 		"> docker compose exec --user nonfiction wordpress wp core is-installed",
 		"> docker compose exec --user nonfiction wordpress wp theme is-active theme",
 		"> docker compose exec --user nonfiction wordpress wp theme activate theme",
@@ -9623,6 +9634,8 @@ func TestRunEnvResetPrintsUnderlyingCommands(t *testing.T) {
 		"> docker compose down -v --remove-orphans",
 		"> docker compose build",
 		"> docker compose up -d",
+		"> docker compose exec --user nonfiction wordpress '<wait for WordPress files>'",
+		"> docker compose exec --user nonfiction wordpress '<configure Mailpit SMTP>'",
 		"> docker compose exec --user nonfiction wordpress wp core is-installed",
 		"> docker compose exec --user nonfiction wordpress sh -lc",
 	} {
