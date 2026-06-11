@@ -1563,19 +1563,19 @@ func compactCloudInitHealthStyle(rendered string) string {
 }
 
 func compactCloudInitHealthLogo(rendered string) string {
-	svgStart := strings.Index(rendered, "\n          <svg class=\"logo\"")
-	if svgStart == -1 {
+	svgLineStart := strings.Index(rendered, "\n          <svg class=\"logo\"")
+	if svgLineStart == -1 {
 		return rendered
 	}
-	svgStart++
+	svgStart := svgLineStart + 1
 	svgEnd := strings.Index(rendered[svgStart:], "</svg>")
 	if svgEnd == -1 {
 		return rendered
 	}
-	lineStart := strings.LastIndex(rendered[:svgStart], "\n") + 1
-	indent := rendered[lineStart:svgStart]
+	markupStart := svgStart + strings.Index(rendered[svgStart:], "<svg")
+	indent := rendered[svgStart:markupStart]
 	compact := indent + `<img class="logo" src="/favicon.svg" alt="Nonfiction logo">`
-	return rendered[:lineStart] + compact + rendered[svgStart+svgEnd+len("</svg>"):]
+	return rendered[:svgStart] + compact + rendered[svgStart+svgEnd+len("</svg>"):]
 }
 
 func writeText(path, content string) error {

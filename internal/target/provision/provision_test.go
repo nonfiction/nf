@@ -1146,6 +1146,21 @@ func TestCloudInitTemplateIsServerOnly(t *testing.T) {
 	if openerIdx == -1 || closerIdx == -1 || openerIdx+1 >= len(lines) || closerIdx+1 >= len(lines) || lines[closerIdx+1] != "      cat >/var/www/nf/favicon.svg <<'EOF'" {
 		t.Fatalf("renderCloudInit() output missing normalized heredoc delimiters:\n%s", rendered)
 	}
+	if openerIdx+1 >= len(lines) || lines[openerIdx+1] != "      <!doctype html>" {
+		t.Fatalf("renderCloudInit() output did not keep index heredoc indentation:\n%s", rendered)
+	}
+	foundCompactedLogo := false
+	for i := openerIdx + 1; i < closerIdx; i++ {
+		if strings.Contains(lines[i], `<img class="logo" src="/favicon.svg" alt="Nonfiction logo">`) {
+			foundCompactedLogo = true
+			if !strings.HasPrefix(lines[i], "      ") {
+				t.Fatalf("renderCloudInit() compacted logo line lost runcmd indentation: %q", lines[i])
+			}
+		}
+	}
+	if !foundCompactedLogo {
+		t.Fatalf("renderCloudInit() output missing compacted logo line:\n%s", rendered)
+	}
 	faviconCloserIdx := -1
 	for i := closerIdx + 2; i < len(lines); i++ {
 		if lines[i] == "      EOF" {
