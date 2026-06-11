@@ -104,10 +104,11 @@ Local state is disposable. Provider truth is canonical remotely.
 * `nf target remove <target>` removes an empty Linode target.
 * `nf target list/show` read targets from `providers.json`; legacy `servers.json` fallback may remain during cache migration.
 * `nf target adminer show <target>` reads `/var/lib/nf/target.json` over SSH and derives the target Adminer password from target metadata identity/purpose; the raw password is not stored.
+* `nf target password [target] [--root|--adminer]` prints only the derived Linode target root or Adminer password.
 * `nf site add <target> <site>` creates the live WordPress env on a target. Use `--with-staging` for one-command live+staging setup.
 * `nf site staging status/add/remove` manages optional staging env lifecycle. `rm` is a shorthand for `remove`.
 * `nf site refresh` fans out from cached targets. It must not claim to refresh providers.
-* `nf site password [site]` shows only the derived admin password.
+* `nf site password [site|env] [--wp|--db|--basicauth]` shows only one selected site password. `--wp` is the default. Env refs are accepted for `--db`; use a site ref for `--wp` or `--basicauth`. Linode values are derived; Kinsta DB password output uses the Kinsta SFTP password endpoint.
 * `nf site remove [site]` removes a whole Linode site and deletes its env data.
 * Remote target site discovery is not implemented yet.
 * Linode-hosted site/env truth is intended to live on each target at `/var/lib/nf/sites.json`, read over SSH as the standard user.
@@ -115,7 +116,9 @@ Local state is disposable. Provider truth is canonical remotely.
 * Linode Adminer is deployed as pinned AdminNeo at `https://<adminer-user>.<target-hostname>/` during target provisioning, protected by HTTP Basic auth and the wildcard target certificate.
 * Linode site add grants the shared Adminer MySQL user privileges only on created site/env databases; site remove revokes those per-database grants before dropping DBs.
 * `nf remote add` validates the requested site/env exists in local cache before writing `nf.json`.
-* `nf site shell/wp` are preflight-only today; they must not mutate remote state yet.
+* `nf site shell/wp` validate the cache, preview the SSH or wp-cli command, then execute the remote command.
+* `nf env logs [remote]` tails local Docker WordPress logs with no remote, or tails remote `wp-content/debug.log` over SSH for a configured repo remote.
+* `nf env password [remote] [--wp|--db|--basicauth]` prints only one selected local or remote env password. `--wp` is the default.
 * `nf env push/pull [remote]` defaults to an interactive confirmation before executing remote sync. Use `--dry-run` or `--non-interactive` without `--execute` for preflight-only output. Non-interactive execution requires `--execute --yes`.
 * `wordpress.plugins` in `nf.json` is an env bootstrap checklist, not a full lifecycle manager. String entries install from wordpress.org, activate, and enable auto-updates by default; object entries require `slug`, support `source` and `auto_update`, and default `activate` and `auto_update` to true.
 
@@ -143,7 +146,12 @@ Local state is disposable. Provider truth is canonical remotely.
 * Env-generated files stay under `NF_DATA_HOME` / `~/.local/share/nf/envs/<project-slug>/`.
 * Local snapshot files stay under `NF_DATA_HOME` / `~/.local/share/nf/snapshots/local/<project-slug>/<snapshot-name>/`.
 * Remote snapshot files stay under `NF_DATA_HOME` / `~/.local/share/nf/snapshots/remote/<env-id-slug>-YYYY-MM-DD-HHMMSS/`.
-* `nf env up` should be idempotent: ensure env exists, start Compose, install WordPress if missing, activate mounted theme.
+* `nf env up` should be idempotent: ensure env exists, start Compose, configure Mailpit SMTP, install WordPress if missing, activate mounted theme. `--rebuild` rebuilds the generated WordPress image first.
+* `nf env reset --rebuild` creates the normal safety snapshot, removes Docker Compose volumes, rebuilds the generated WordPress image, and recreates the env.
+* Local env includes WordPress, MariaDB, Mailpit, and Adminer/AdminNeo containers. `nf env show` prints Mailpit and prefilled Adminer URLs.
+* Local env generated WordPress config enables `WP_DEBUG` and `WP_DEBUG_LOG`, disables debug display, and routes local mail through Mailpit.
+* Local env generated WordPress Dockerfile installs useful CLI tools and wp-cli. `nf env shell`, `nf env sh`, and `nf env wp` execute in the WordPress container as `docker_user`, defaulting to `nonfiction`.
+* Global config can override local env Docker defaults with `docker_db_image`, `docker_wordpress_image`, and `docker_user`.
 * `nf env plugins add <plugin>` appends to `wordpress.plugins` in `nf.json`, creates the array if missing, rejects duplicate slugs, and does not install anything. `nf env plugins remove <plugin>` removes a configured plugin from `nf.json`, rejects missing slugs, and does not uninstall anything. `nf env plugins status [remote]` compares configured plugins against local or remote WordPress state and reports installed, active, and auto-update status. `nf env plugins diff [remote]` reports needed install/activate/auto-update changes and installed plugins that are not configured in `nf.json`; it mutates nothing, exits 0 when configured plugins match and no extras are installed, and exits 2 when drift exists. `nf env plugins install` with no remote targets local env. `nf env plugins install <remote>` targets a configured repo remote, prints a plan, and asks yes/no unless `--yes`; `--dry-run` must not SSH. Remote URL plugin sources must be reachable from the remote host; local zip sources are uploaded to a temporary remote directory and cleaned up after install. Plugin install is idempotent: install only missing configured plugins, activate only inactive plugins when requested, and enable native WordPress auto-updates only when not already enabled. It must not update, remove, pin, disable auto-updates, or manage plugin licenses.
 * `nf env reset` is destructive for local env only.
 * Snapshot archives include uploads/plugins/mu-plugins/languages, not themes.

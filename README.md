@@ -132,7 +132,10 @@ Start local WordPress:
 
 ```sh
 nf env up
+nf env up --rebuild
 nf env show
+nf env password
+nf env logs
 nf env wp -- plugin list
 nf env plugins list
 nf env plugins add stream
@@ -283,9 +286,12 @@ Common workflow:
 
 ```sh
 nf env up
+nf env up --rebuild
 nf env show
+nf env password [remote] [--wp|--db|--basicauth]
 nf env logs
 nf env shell
+nf env sh [remote]
 nf env wp -- plugin list
 nf env plugins list
 nf env plugins add stream
@@ -295,11 +301,20 @@ nf env plugins status production
 nf env plugins diff production
 nf env plugins install
 nf env down
+nf env reset --rebuild
 ```
 
-`nf env up` is idempotent. It starts Docker Compose, installs WordPress if needed, and ensures the mounted theme is active.
+`nf env up` is idempotent. It starts Docker Compose, configures Mailpit SMTP, installs WordPress if needed, and ensures the mounted theme is active. Add `--rebuild` to rebuild the generated WordPress image first.
 
-`nf env reset` is destructive for the local env only. It removes Docker Compose volumes and recreates the env.
+`nf env reset` is destructive for the local env only. It creates a safety snapshot, removes Docker Compose volumes, and recreates the env. Add `--rebuild` to rebuild the generated WordPress image during recreation.
+
+The generated local env includes WordPress, MariaDB, Mailpit, and an Adminer/AdminNeo container. `nf env show` prints the site URL, WordPress login, Mailpit URL, and an Adminer URL prefilled with the database host/user/name. Generated WordPress config enables `WP_DEBUG` and `WP_DEBUG_LOG`, disables debug display, and `nf env logs` tails Docker logs for the WordPress service.
+
+The generated WordPress Docker image includes useful CLI tools plus `wp-cli`. `nf env shell`, `nf env sh`, and `nf env wp` run in the WordPress container as `docker_user`, which defaults to `nonfiction` and can be changed with `nf config set-docker-user <user>`.
+
+`nf env password [remote] [--wp|--db|--basicauth]` prints only one local or remote env password. `--wp` is the default.
+
+`nf env logs <remote>` resolves a configured repo remote, prints the SSH command preview, ensures `wp-content/debug.log` exists, and tails it on the remote host.
 
 Configured WordPress plugins live in `nf.json` under `wordpress.plugins`:
 
@@ -415,7 +430,10 @@ Non-secret config goes in `config.json`:
   "base_domain": "nonfiction.dev",
   "dnsimple_account_id": "14",
   "basicauth_default_user": "nonfiction",
-  "adminer_default_user": "adminer"
+  "adminer_default_user": "adminer",
+  "docker_user": "nonfiction",
+  "docker_db_image": "mariadb:11",
+  "docker_wordpress_image": "wordpress:php8.3-apache"
 }
 ```
 
@@ -439,6 +457,9 @@ nf config set-default-wp-email dev@example.com
 nf config set-default-wp-user admin
 nf config set-basicauth-default-user nonfiction
 nf config set-adminer-default-user adminer
+nf config set-docker-db-image mariadb:11
+nf config set-docker-wordpress-image wordpress:php8.3-apache
+nf config set-docker-user nonfiction
 nf config set-kinsta-default-php 8.3
 nf config set-kinsta-default-region us-central1
 nf config set-linode-default-region us-east
@@ -471,6 +492,7 @@ nf target refresh
 nf target list
 nf target show <target>
 nf target adminer show <target>
+nf target password [target] [--root|--adminer]
 nf site add <target> <site> [--with-staging] [--region region] [--php version] [--execute --yes]
 nf site refresh
 nf site list [--refresh] [--envs]
@@ -484,7 +506,7 @@ nf site snapshot <site.target:env> [--output path] [--dry-run]
 nf site snapshot list
 nf site snapshot remove <name> [--yes]
 nf site snapshot prune [--keep N] [--dry-run] [--yes]
-nf site password [site-id-or-alias]
+nf site password [site-id-or-alias-or-env-id] [--wp|--db|--basicauth]
 nf site basicauth status <site.target:env>
 nf site basicauth enable <site.target:env> [--dry-run] [--execute --yes]
 nf site basicauth disable <site.target:env> [--dry-run] [--execute --yes]
@@ -518,16 +540,18 @@ Current behavior:
 * `nf target refresh` updates target records from configured target providers so added and removed targets are reflected in `providers.json`.
 * `nf target list/show` read target records from `providers.json`, with a legacy `servers.json` fallback.
 * `nf target adminer show <target>` reads `/var/lib/nf/target.json` over SSH and prints the Adminer URL, username, and derived password. The username defaults to `adminer_default_user`; the password is derived from the target metadata identity/purpose and `NF_PASSWORD_SALT`.
+* `nf target password [target] [--root|--adminer]` prints only the derived Linode target root or Adminer password. It does not support Kinsta targets.
 * `nf site add <target> <site>` creates the live WordPress env on a target. Add `--with-staging` to create live and staging in one operation.
 * `nf site staging status/add/remove` manages an optional staging env for an existing site. `rm` is a shorthand for `remove`.
 * `nf site refresh` discovers sites from the cached target list. Remote target site discovery is not implemented yet.
 * `nf site list --envs`, `nf site show`, `nf site shell`, `nf site wp`, and `nf site snapshot` read the local disposable site cache for now.
-* `nf site password [site]` shows the derived admin password only.
+* `nf site password [site|env] [--wp|--db|--basicauth]` prints only one selected site password. `--wp` is the default. Env refs are accepted for `--db`; use a site ref for `--wp` or `--basicauth`. Linode WordPress, DB, and basic-auth passwords are derived from the site slug, purpose, `NF_PASSWORD_SALT`, and `project.password_version`; Kinsta DB password output uses the Kinsta SFTP password endpoint.
 * Linode site/env database creation grants the shared Adminer MySQL user privileges only on created site env databases and refuses to create a site DB user with the same name as the shared Adminer MySQL user. Site removal revokes per-database grants before dropping the databases.
-* `nf site basicauth ...` uses `basicauth_default_user` from `config.json` and a per-site derived password with `project.password_version` as the rotation source. Linode envs are managed over SSH by updating the env nginx vhost. Kinsta Password protection exists in MyKinsta, but currently requires manual MyKinsta use because no public API endpoint is exposed.
+* `nf site basicauth ...` uses `basicauth_default_user` from `config.json` and a per-site derived password with `project.password_version` as the rotation source. Linode envs are managed over SSH by updating the selected env nginx vhost, including multi-vhost target nginx scripts. Kinsta Password protection exists in MyKinsta, but currently requires manual MyKinsta use because no public API endpoint is exposed.
 * `nf site remove [site]` removes a whole Linode site and deletes its env data.
 * `nf remote add` validates an env ID against the cache, then repo remotes are stored in `nf.json` under `remotes` as `<site>.<target>:<env>` refs.
-* `nf site shell/wp ...` currently preflights against the cache, then stops without running remote commands.
+* `nf site shell/wp ...` validate the cache, print the SSH or wp-cli command preview, then execute the remote command.
+* `nf env logs <remote>` resolves a configured repo remote, prints the SSH command preview, ensures `wp-content/debug.log` exists, and tails it on the remote host.
 * `nf env push/pull [remote]` syncs database and mutable `wp-content` after an interactive confirmation. Omit `remote` to pick from configured repo remotes. Add `--dry-run` for a non-mutating plan, or use `--non-interactive` without `--execute` for preflight-only output.
 
 State/cache lives under:
@@ -547,6 +571,9 @@ Local state is disposable cache, not source of truth.
 nf password set-salt <salt>
 nf password show-salt
 nf password derive <scope> <value...>
+nf env password [remote] [--wp|--db|--basicauth]
+nf site password [site|env] [--wp|--db|--basicauth]
+nf target password [target] [--root|--adminer]
 ```
 
 Password derivation uses `NF_PASSWORD_SALT` from the environment or `~/.config/nf/.env`. Legacy `NF_SECRET_SALT` is accepted only as a migration fallback. Project site passwords, including provider basic-auth passwords, also include `project.password_version` from `nf.json` when it is non-zero; missing or `0` preserves the original derivation.

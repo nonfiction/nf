@@ -222,6 +222,7 @@ Rules:
 
 * `config.json` stores non-secret config.
 * `.env` stores secrets and account values.
+* Docker local env defaults in `config.json` include `docker_user`, `docker_db_image`, and `docker_wordpress_image`.
 * State cache is disposable.
 * Provider truth is canonical remotely.
 * Project repos track repo-local metadata only.
@@ -273,6 +274,7 @@ Do not add old compatibility routes unless explicitly requested.
 * [x] `nf target list`
 * [x] `nf target show <target>`
 * [x] `nf target adminer show <target>`
+* [x] `nf target password [target] [--root|--adminer]`
 * [x] `nf target add linode <name>` create/ensure target scaffold
 * [x] `nf target remove <target>` remove an empty Linode target
 * [x] `nf site add <target> <site> [--with-staging]` create live env scaffolding by default, with optional staging
@@ -282,7 +284,7 @@ Do not add old compatibility routes unless explicitly requested.
 * [x] `nf site show <site-id-or-alias-or-env-id>`
 * [x] `nf site shell <env-id>`
 * [x] `nf site wp <env-id> -- <args>`
-* [x] `nf site password [site]`
+* [x] `nf site password [site|env] [--wp|--db|--basicauth]`
 * [x] `nf site remove [site]` remove a whole site
 * [x] `nf remote add [name] [env-id]` with cache validation and prompts for omitted values
 * [x] `nf remote show <name>`
@@ -292,10 +294,11 @@ Do not add old compatibility routes unless explicitly requested.
 * [x] `nf theme tasks`
 * [x] `nf theme package`
 * [x] direct theme tasks from `nf.json`
-* [x] `nf env up`
+* [x] `nf env up [--rebuild]`
 * [x] `nf env down`
-* [x] `nf env logs`
-* [x] `nf env reset`
+* [x] `nf env password [remote] [--wp|--db|--basicauth]`
+* [x] `nf env logs [remote]`
+* [x] `nf env reset [--rebuild]`
 * [x] `nf env show`
 * [x] `nf env shell`
 * [x] `nf env wp -- <args>`
@@ -320,6 +323,9 @@ Do not add old compatibility routes unless explicitly requested.
 * [x] `nf config set-default-wp-user <user>`
 * [x] `nf config set-basicauth-default-user <user>`
 * [x] `nf config set-adminer-default-user <user>`
+* [x] `nf config set-docker-db-image <image>`
+* [x] `nf config set-docker-wordpress-image <image>`
+* [x] `nf config set-docker-user <user>`
 * [x] `nf config set-kinsta-default-php <version>`
 * [x] `nf config set-kinsta-default-region <region>`
 * [x] `nf config set-linode-default-region <region>`
@@ -337,6 +343,8 @@ These commands are implemented, but intentionally guarded because they touch rem
 
 * [x] `nf site shell <env-id>`: validates cache, previews SSH, then executes the remote shell command
 * [x] `nf site wp <env-id> -- <cmd>`: validates cache, previews SSH/wp-cli, then executes remote wp-cli
+* [x] `nf env logs <remote>`: validates repo remote/cache, previews SSH, ensures `wp-content/debug.log` exists, then tails it
+* [x] `nf env password <remote> [--wp|--db|--basicauth]`: resolves repo remote/cache and prints only the selected password
 * [x] `nf env plugins install <remote>`: validates repo remote/cache, prints a reviewable plugin plan, and asks for confirmation unless `--yes` is passed
 * [x] `nf env push <remote>`: validates repo remote/cache, prints a reviewable plan, and syncs with execute/confirmation gates
 * [x] `nf env pull <remote>`: validates repo remote/cache, prints a reviewable plan, and syncs with execute/confirmation gates
@@ -387,6 +395,8 @@ Current readers:
 * `nf remote show`
 * `nf env push/pull` guarded sync with dry-run/execute mode
 * `nf site shell/wp` remote command execution
+* `nf env logs [remote]` remote debug log tailing
+* `nf env password [remote]` local/remote password lookup
 
 Desired refresh behavior:
 
@@ -559,11 +569,16 @@ Built-in env commands come from `env` metadata in `nf.json`.
 Current built-ins:
 
 * `up`
+* `up --rebuild`
 * `down`
 * `logs`
+* `logs [remote]`
+* `password [remote] [--wp|--db|--basicauth]`
 * `reset`
+* `reset --rebuild`
 * `show`
 * `shell`
+* `sh`
 * `wp`
 * `plugins list`
 * `plugins add <plugin> [--source <source>] [--no-activate] [--no-auto-update]`
@@ -576,10 +591,23 @@ Rules:
 
 * env ports are derived deterministically from project slug
 * `env.ports.wordpress` and `env.ports.mailpit` may override individually
+* `env.ports.adminer` may override the local Adminer/AdminNeo port
 * zero or missing ports fall back to derived ports
 * `nf env up` should be idempotent
-* `nf env up` preflights WordPress and Mailpit host ports before Docker Compose starts
-* `nf env show` prints paths, compose project name, and URLs without starting Docker
+* `nf env up --rebuild` rebuilds the generated WordPress image before starting Compose
+* `nf env reset --rebuild` recreates the env after rebuilding the generated WordPress image
+* `nf env up` preflights WordPress, Mailpit, and Adminer host ports before Docker Compose starts
+* `nf env up` configures WordPress to send local mail through Mailpit
+* generated WordPress config enables `WP_DEBUG` and `WP_DEBUG_LOG` and disables debug display
+* generated local env includes WordPress, MariaDB, Mailpit, and Adminer/AdminNeo containers
+* generated local WordPress image includes useful CLI tools and wp-cli
+* Docker DB and WordPress image defaults can be overridden by `docker_db_image` and `docker_wordpress_image` in global config
+* local shell/wp-cli user defaults to `docker_user` from global config, falling back to `nonfiction`
+* `nf env show` prints paths, compose project name, Adminer URL, Mailpit URL, and WordPress URLs without starting Docker
+* `nf env logs` tails Docker logs for the local WordPress service
+* `nf env logs <remote>` resolves a repo remote and tails remote `wp-content/debug.log` over SSH after creating the file if needed
+* `nf env password [remote] [--wp|--db|--basicauth]` prints only the selected local or remote env password; `--wp` is the default
+* `nf site password [site|env] [--wp|--db|--basicauth]` accepts env refs for `--db`; site refs are required for `--wp` and `--basicauth`
 * `wordpress.plugins` is a bootstrap checklist, not a full plugin lifecycle manager
 * string plugin entries install from wordpress.org, activate, and enable auto-updates by default
 * object plugin entries require `slug`, support `source`, support `auto_update`, and default `activate` and `auto_update` to true
@@ -698,6 +726,7 @@ Status:
 
 * [x] `nf site shell`
 * [x] `nf site wp`
+* [x] `nf env logs [remote]`
 * [x] Linode SSH execution adapter
 * [x] Kinsta SSH/wp-cli execution adapter
 * [x] command previews
