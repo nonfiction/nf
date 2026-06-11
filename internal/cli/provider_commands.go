@@ -384,6 +384,7 @@ func saveProviderHealthRecord(result providerHealthResult) error {
 	replaced := false
 	for i, existing := range records {
 		if strings.EqualFold(recordValueString(existing["provider"]), result.Provider) || strings.EqualFold(recordValueString(existing["_state_key"]), result.Provider) {
+			preserveProviderTargetMetadata(result.Provider, existing, record)
 			records[i] = record
 			replaced = true
 			break
@@ -393,6 +394,113 @@ func saveProviderHealthRecord(result providerHealthResult) error {
 		records = append(records, record)
 	}
 	return state.SaveStateRecords("providers", records)
+}
+
+func preserveProviderTargetMetadata(provider string, existing, refreshed map[string]any) {
+	provider = strings.ToLower(strings.TrimSpace(provider))
+	if provider == "" {
+		provider = strings.ToLower(strings.TrimSpace(firstNonEmpty(recordValueString(refreshed["provider"]), recordValueString(existing["provider"]))))
+	}
+	if provider != "linode" {
+		return
+	}
+	existingTargets := targetMaps(existing["targets"])
+	refreshedTargets := targetMaps(refreshed["targets"])
+	if len(existingTargets) == 0 || len(refreshedTargets) == 0 {
+		return
+	}
+	mergedTargets := make([]map[string]any, 0, len(refreshedTargets))
+	for _, refreshedTarget := range refreshedTargets {
+		mergedTarget := cloneRecord(refreshedTarget)
+		if existingTarget := matchingLinodeProviderTarget(existingTargets, mergedTarget); existingTarget != nil {
+			preserveLinodeTargetMetadata(existingTarget, mergedTarget)
+		}
+		mergedTargets = append(mergedTargets, mergedTarget)
+	}
+	refreshed["targets"] = mergedTargets
+}
+
+func matchingLinodeProviderTarget(existingTargets []map[string]any, refreshed map[string]any) map[string]any {
+	refreshedValues := linodeTargetIdentitySet(refreshed)
+	if len(refreshedValues) == 0 {
+		return nil
+	}
+	for _, existing := range existingTargets {
+		for _, value := range linodeTargetIdentityValues(existing) {
+			if _, ok := refreshedValues[strings.ToLower(strings.TrimSpace(value))]; ok {
+				return existing
+			}
+		}
+	}
+	return nil
+}
+
+func linodeTargetIdentitySet(target map[string]any) map[string]struct{} {
+	values := map[string]struct{}{}
+	for _, value := range linodeTargetIdentityValues(target) {
+		value = strings.ToLower(strings.TrimSpace(value))
+		if value != "" {
+			values[value] = struct{}{}
+		}
+	}
+	return values
+}
+
+func linodeTargetIdentityValues(target map[string]any) []string {
+	return recordStringValues(target, "id", "provider_id", "linode_id", "_state_key", "name", "slug", "hostname", "host", "label")
+}
+
+func preserveLinodeTargetMetadata(existing, refreshed map[string]any) {
+	for _, key := range []string{"adminer", "credentials", "target_path", "sites_path", "health_url", "dns", "tls", "services", "php_version", "type", "linode_type", "image", "created_at", "updated_at", "ssh_user", "ssh_username", "ssh_port"} {
+		copyExistingTargetValue(existing, refreshed, key)
+	}
+	if phase := recordValueString(existing["phase"]); phase != "" {
+		refreshed["phase"] = existing["phase"]
+		if status := recordValueString(existing["status"]); status != "" {
+			refreshed["status"] = existing["status"]
+		}
+	}
+	for _, key := range []string{"provider_id", "linode_id"} {
+		if refreshedID := firstRecordString(refreshed, "id", "provider_id", "linode_id"); refreshedID != "" && recordValueString(existing[key]) == refreshedID {
+			refreshed[key] = existing[key]
+		}
+	}
+	mergeLinodeSSHMetadata(existing, refreshed)
+}
+
+func copyExistingTargetValue(existing, target map[string]any, key string) {
+	if value, ok := existing[key]; ok && value != nil {
+		target[key] = value
+	}
+}
+
+func mergeLinodeSSHMetadata(existing, refreshed map[string]any) {
+	existingSSH := mapMapAtPath(existing, "ssh")
+	refreshedSSH := mapMapAtPath(refreshed, "ssh")
+	if len(existingSSH) == 0 && len(refreshedSSH) == 0 {
+		return
+	}
+	merged := make(map[string]any, len(existingSSH)+len(refreshedSSH))
+	for key, value := range existingSSH {
+		if value != nil {
+			merged[key] = value
+		}
+	}
+	for key, value := range refreshedSSH {
+		if value == nil {
+			continue
+		}
+		if key == "host" && recordValueString(value) != "" {
+			merged[key] = value
+			continue
+		}
+		if existingValue, ok := merged[key]; !ok || recordValueString(existingValue) == "" {
+			merged[key] = value
+		}
+	}
+	if len(merged) > 0 {
+		refreshed["ssh"] = merged
+	}
 }
 
 func providerHealthContext() (context.Context, context.CancelFunc) {

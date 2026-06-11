@@ -248,7 +248,11 @@ func initGlobalConfig(settings []configInitSetting, nonInteractive bool) error {
 		}
 		if nonInteractive || !configIsInteractive() {
 			if strings.TrimSpace(setting.Default) != "" {
-				updates[setting.Key] = strings.TrimSpace(setting.Default)
+				value := strings.TrimSpace(setting.Default)
+				if err := validateConfigInitSetting(setting, value); err != nil {
+					return err
+				}
+				updates[setting.Key] = value
 				continue
 			}
 			if setting.Required {
@@ -268,6 +272,9 @@ func initGlobalConfig(settings []configInitSetting, nonInteractive bool) error {
 			return fmt.Errorf("%s is required", setting.Key)
 		}
 		if value != "" {
+			if err := validateConfigInitSetting(setting, value); err != nil {
+				return err
+			}
 			updates[setting.Key] = value
 		}
 	}
@@ -282,6 +289,13 @@ func initGlobalConfig(settings []configInitSetting, nonInteractive bool) error {
 	}
 	fmt.Printf("Updated %s\n", config.ConfigFile())
 	return nil
+}
+
+func validateConfigInitSetting(setting configInitSetting, value string) error {
+	if setting.Validate == nil {
+		return nil
+	}
+	return setting.Validate(value)
 }
 
 func cmdConfigSet(key, value string) int {

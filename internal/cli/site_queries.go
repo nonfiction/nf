@@ -469,6 +469,27 @@ func chooseTarget(action string) (string, error) {
 	if len(targets) == 0 {
 		return "", ProjectError{Msg: "No targets found."}
 	}
+	return chooseTargetFromRecords(action, targets)
+}
+
+func chooseLinodeTarget(action string) (string, error) {
+	targets, err := cachedTargets()
+	if err != nil {
+		return "", err
+	}
+	linodeTargets := make([]map[string]any, 0, len(targets))
+	for _, target := range targets {
+		if strings.EqualFold(strings.TrimSpace(recordValueString(target["provider"])), "linode") {
+			linodeTargets = append(linodeTargets, target)
+		}
+	}
+	if len(linodeTargets) == 0 {
+		return "", ProjectError{Msg: "No linode targets found."}
+	}
+	return chooseTargetFromRecords(action, linodeTargets)
+}
+
+func chooseTargetFromRecords(action string, targets []map[string]any) (string, error) {
 	options := make([]ui.SelectOption, 0, len(targets))
 	for _, target := range targets {
 		value := firstRecordString(target, "_state_key", "target_name", "target", "name", "slug", "hostname", "label", "id")

@@ -41,7 +41,7 @@ func runTargetAdminer(argv []string) int {
 			needle = argv[1]
 		}
 		if needle == "" {
-			selected, err := chooseTarget("show adminer for")
+			selected, err := chooseLinodeTarget("show adminer for")
 			if err != nil {
 				fmt.Fprintln(os.Stderr, err)
 				return 1
@@ -104,7 +104,8 @@ func cmdTargetAdminerShow(needle string) int {
 		fmt.Fprintln(os.Stderr, err)
 		return 1
 	}
-	password := passwords.DerivePassword(identity, "adminer", salt)
+	purpose := firstNonEmpty(mapStringAtPath(remote, "adminer", "auth", "password", "purpose"), "adminer")
+	password := passwords.DerivePassword(identity, purpose, salt)
 	tool := firstNonEmpty(recordValueString(adminer["tool"]), "AdminNeo")
 	version := recordValueString(adminer["version"])
 	if version != "" {

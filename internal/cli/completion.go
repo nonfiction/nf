@@ -171,7 +171,7 @@ func targetAdminerCompletionCandidates(args []string) []string {
 		return []string{"show", "help"}
 	}
 	if args[0] == "show" {
-		return cachedTargetCompletionNames()
+		return cachedLinodeTargetCompletionNames()
 	}
 	return nil
 }
@@ -381,6 +381,21 @@ func cachedTargetCompletionNames() []string {
 	}
 	values := make([]string, 0, len(targets))
 	for _, target := range targets {
+		values = append(values, firstRecordString(target, "_state_key", "target_name", "target", "name", "slug", "hostname", "label", "id"))
+	}
+	return uniqueSortedStrings(values)
+}
+
+func cachedLinodeTargetCompletionNames() []string {
+	targets, err := completionCachedTargets()
+	if err != nil {
+		return nil
+	}
+	values := make([]string, 0, len(targets))
+	for _, target := range targets {
+		if !strings.EqualFold(strings.TrimSpace(recordValueString(target["provider"])), "linode") {
+			continue
+		}
 		values = append(values, firstRecordString(target, "_state_key", "target_name", "target", "name", "slug", "hostname", "label", "id"))
 	}
 	return uniqueSortedStrings(values)
