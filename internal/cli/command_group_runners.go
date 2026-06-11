@@ -33,7 +33,7 @@ func runEnvHelp() int {
 		{"show", "show paths, ports, and URLs"},
 		{"password", "show admin password only"},
 		{"logs", "tail WordPress logs"},
-		{"shell, ssh", "open a shell in the local env"},
+		{"shell, sh [remote]", "open a local or remote shell"},
 		{"wp -- <args>", "run wp-cli in the local env"},
 		{},
 		{"plugins", "manage configured WordPress plugins"},
@@ -307,9 +307,17 @@ func runEnv(argv []string) int {
 		fmt.Fprintln(os.Stderr, "env password takes no arguments")
 		return 1
 	}
-	if name == "shell" && len(argv) != 1 {
-		fmt.Fprintln(os.Stderr, "env shell takes no arguments")
-		return 1
+	if name == "shell" {
+		for _, arg := range argv[1:] {
+			if strings.HasPrefix(arg, "-") {
+				fmt.Fprintf(os.Stderr, "unknown env shell flag: %s\n", arg)
+				return 1
+			}
+		}
+		if len(argv) > 2 {
+			fmt.Fprintln(os.Stderr, "env shell takes at most one remote")
+			return 1
+		}
 	}
 	if name == "push" || name == "pull" {
 		remoteName, opts, ok := parseEnvRemoteSyncArgs(name, argv[1:])
@@ -366,6 +374,19 @@ func runEnv(argv []string) int {
 	}
 	if name == "password" {
 		return cmdEnvPassword(cfg)
+	}
+	if name == "shell" && len(argv) == 2 {
+		remoteName := strings.TrimSpace(argv[1])
+		siteID, remoteEnv, ok, err := projectRemoteAlias(metadata, remoteName)
+		if err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			return 1
+		}
+		if !ok {
+			fmt.Fprintf(os.Stderr, "No configured remote matched %q.\n", remoteName)
+			return 1
+		}
+		return cmdSiteRemoteCommandPlan("shell", canonicalEnvID(siteID, remoteEnv), nil)
 	}
 	if name == "push" || name == "pull" {
 		remoteName, opts, ok := parseEnvRemoteSyncArgs(name, argv[1:])

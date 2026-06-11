@@ -182,7 +182,7 @@ func targetAddFlagCandidates() []string {
 
 func siteCompletionCandidates(args []string) []string {
 	if len(args) == 0 {
-		return []string{"list", "ls", "show", "shell", "ssh", "wp", "snapshot", "password", "basicauth", "refresh", "add", "staging", "remove", "rm", "help"}
+		return []string{"list", "ls", "show", "shell", "sh", "wp", "snapshot", "password", "basicauth", "refresh", "add", "staging", "remove", "rm", "help"}
 	}
 	args[0] = cliCommandAlias(args[0])
 	switch args[0] {
@@ -293,13 +293,15 @@ func remoteCompletionCandidates(args []string) []string {
 
 func envCompletionCandidates(args []string) []string {
 	if len(args) == 0 {
-		return []string{"show", "password", "up", "down", "logs", "shell", "ssh", "wp", "plugins", "snapshot", "pull", "push", "reset", "help"}
+		return []string{"show", "password", "up", "down", "logs", "shell", "sh", "wp", "plugins", "snapshot", "pull", "push", "reset", "help"}
 	}
 	args[0] = cliCommandAlias(args[0])
 	switch args[0] {
 	case "up", "reset":
 		return []string{"--rebuild"}
 	case "pull", "push":
+		return projectRemoteCompletionNames()
+	case "shell":
 		return projectRemoteCompletionNames()
 	case "plugins":
 		return envPluginsCompletionCandidates(args[1:])

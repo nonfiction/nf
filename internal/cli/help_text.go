@@ -20,7 +20,7 @@ func cliCommandAlias(name string) string {
 		return "list"
 	case "rm":
 		return "remove"
-	case "ssh":
+	case "sh":
 		return "shell"
 	default:
 		return name
@@ -88,7 +88,7 @@ func runSiteHelp() int {
 		{"show [site|env] [--json]", "show a site or remote env"},
 		{"refresh", "refresh local site cache"},
 		{},
-		{"shell, ssh <env>", "shell into a remote env"},
+		{"shell, sh <env>", "shell into a remote env"},
 		{"wp <env> -- <args>", "run wp-cli against a remote env"},
 		{"password [site]", "show admin password only"},
 		{},
