@@ -29,7 +29,10 @@ func (c envCommandRunner) ensureUpInstalledActive(envDir string) error {
 	if err := runCommandSpec(execSpec{Dir: envDir, Args: envComposeArgs(c.cfg, "up", "-d")}); err != nil {
 		return err
 	}
-	if err := runCommandSpec(execSpec{Dir: envDir, Args: envWpMailpitSMTPArgs(c.cfg)}); err != nil {
+	if err := runCommandSpecWithPreview(execSpec{Dir: envDir, Args: envWpBootstrapReadyArgs(c.cfg)}, envWpBootstrapPreviewArgs(c.cfg, "wait for WordPress files")); err != nil {
+		return err
+	}
+	if err := runCommandSpecWithPreview(execSpec{Dir: envDir, Args: envWpMailpitSMTPArgs(c.cfg)}, envWpBootstrapPreviewArgs(c.cfg, "configure Mailpit SMTP")); err != nil {
 		return err
 	}
 	if err := runCommandSpecQuiet(execSpec{Dir: envDir, Args: envWpProbeArgs(c.cfg, "core", "is-installed")}); err != nil {

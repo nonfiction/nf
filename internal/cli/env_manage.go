@@ -249,6 +249,22 @@ func envWpProbeArgs(cfg envConfig, args ...string) []string {
 	return envWpArgs(cfg, args...)
 }
 
+func envWpBootstrapReadyArgs(cfg envConfig) []string {
+	return append(envWordpressExecArgs(cfg, "sh", "-lc"), `set -eu
+for i in $(seq 1 60); do
+  if [ -f wp-config.php ] && [ -f wp-settings.php ] && grep -q "wp-settings.php" wp-config.php; then
+    exit 0
+  fi
+  sleep 1
+done
+printf '%s\n' 'WordPress files are not ready yet.' >&2
+exit 1`)
+}
+
+func envWpBootstrapPreviewArgs(cfg envConfig, label string) []string {
+	return envWordpressExecArgs(cfg, "<"+label+">")
+}
+
 func envWpThemeIsActiveArgs(cfg envConfig, slug string) []string {
 	return envWpArgs(cfg, "theme", "is-active", firstNonEmpty(slug, cfg.ThemeMountSlug, cfg.ThemeSlug, "theme"))
 }
