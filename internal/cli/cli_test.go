@@ -8719,16 +8719,23 @@ func TestEnvCommandHelpersBuildExpectedArgs(t *testing.T) {
 	if strings.Contains(joined, "wp core is-installed") {
 		t.Fatalf("envWpCoreInstallArgs() unexpectedly probes install state: %#v", installArgs)
 	}
+	mailpitArgs := envWpMailpitSMTPArgs(cfg)
+	mailpitJoined := strings.Join(mailpitArgs, " ")
+	for _, wanted := range []string{"docker compose run --rm cli sh -lc", "wp-content/mu-plugins/nf-mailpit.php", "phpmailer_init", "mailpit", "1025"} {
+		if !strings.Contains(mailpitJoined, wanted) {
+			t.Fatalf("envWpMailpitSMTPArgs() missing %q in %#v", wanted, mailpitArgs)
+		}
+	}
 	if got, want := envRepoPath("/repo", "dist/theme.zip"), filepath.Join("/repo", "dist", "theme.zip"); got != want {
 		t.Fatalf("envRepoPath() = %q, want %q", got, want)
 	}
 	if got, want := envRepoPath("/repo", "/tmp/theme.zip"), "/tmp/theme.zip"; got != want {
 		t.Fatalf("envRepoPath() = %q, want %q", got, want)
 	}
-	if got, want := (envCommandRunner{name: "up", cfg: cfg}).Render(), "docker compose up -d; install WordPress if missing and ensure the mounted theme is active"; got != want {
+	if got, want := (envCommandRunner{name: "up", cfg: cfg}).Render(), "docker compose up -d; configure Mailpit SMTP; install WordPress if missing and ensure the mounted theme is active"; got != want {
 		t.Fatalf("up Render() = %q, want %q", got, want)
 	}
-	if got, want := (envCommandRunner{name: "reset", cfg: cfg}).Render(), "docker compose down -v --remove-orphans; nuke env data and recreate it with docker compose up -d, install WordPress if missing, and ensure the mounted theme is active"; got != want {
+	if got, want := (envCommandRunner{name: "reset", cfg: cfg}).Render(), "docker compose down -v --remove-orphans; nuke env data and recreate it with docker compose up -d, configure Mailpit SMTP, install WordPress if missing, and ensure the mounted theme is active"; got != want {
 		t.Fatalf("reset Render() = %q, want %q", got, want)
 	}
 	if got, want := (envCommandRunner{name: "shell", cfg: cfg}).Render(), "docker compose exec wordpress bash"; got != want {
@@ -8850,6 +8857,8 @@ func TestRunEnvUpPrintsUnderlyingCommands(t *testing.T) {
 	})
 	for _, want := range []string{
 		"> docker compose up -d",
+		"> docker compose run --rm cli sh -lc",
+		"wp-content/mu-plugins/nf-mailpit.php",
 		"> docker compose run --rm cli wp core is-installed --allow-root",
 		"> docker compose run --rm cli sh -lc",
 	} {
@@ -8916,6 +8925,7 @@ func TestRunEnvUpActivatesThemeWhenAlreadyInstalled(t *testing.T) {
 	})
 	for _, want := range []string{
 		"> docker compose up -d",
+		"wp-content/mu-plugins/nf-mailpit.php",
 		"> docker compose run --rm cli wp core is-installed --allow-root",
 		"> docker compose run --rm cli wp theme is-active theme --allow-root",
 		"> docker compose run --rm cli wp theme activate theme --allow-root",
