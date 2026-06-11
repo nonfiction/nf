@@ -1272,6 +1272,7 @@ write_files:
       <head>
         <meta charset="utf-8">
         <meta name="viewport" content="width=device-width, initial-scale=1">
+        <link rel="icon" href="/favicon.svg">
         <title>nf target __NAME__</title>
         <style>
           :root{color-scheme:dark}*{box-sizing:border-box}body{margin:0;min-height:100vh;display:grid;place-items:center;overflow:hidden;background:radial-gradient(circle at 20% 20%,rgba(144,93,250,.22),transparent 32rem),radial-gradient(circle at 80% 10%,rgba(85,1,210,.24),transparent 28rem),linear-gradient(135deg,#09090f,#11111c 50%,#08070d);color:#f8fafc;font-family:system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif}main{width:min(92vw,34rem);padding:clamp(2rem,6vw,3.5rem);border:1px solid rgba(255,255,255,.12);border-radius:1.75rem;background:rgba(15,15,26,.78);box-shadow:0 2rem 6rem rgba(0,0,0,.45);text-align:center;backdrop-filter:blur(18px)}.logo{display:block;width:5.5rem;height:5.5rem;margin:0 auto 1.5rem;border-radius:1.25rem;box-shadow:0 1.25rem 3rem rgba(85,1,210,.35)}.pill{display:inline-block;margin-bottom:1rem;padding:.35rem .8rem;border-radius:999px;background:rgba(34,197,94,.14);color:#86efac;font-size:.875rem;font-weight:700;letter-spacing:.04em;text-transform:uppercase}h1{margin:0 0 1rem;font-size:clamp(2rem,5vw,3rem);line-height:1.1}p{margin:.5rem 0;font-size:1rem;color:#cbd5e1}.label{color:#94a3b8}
@@ -1295,6 +1296,9 @@ write_files:
         </main>
       </body>
       </html>
+      EOF
+      cat >/var/www/nf/favicon.svg <<'EOF'
+      <svg class="logo" xmlns="http://www.w3.org/2000/svg" width="400" height="400" viewBox="0 0 400 400" aria-label="Nonfiction logo"><defs><linearGradient id="a" x1="0" y1="0" x2="400" y2="0" gradientUnits="userSpaceOnUse"><stop offset="0%" stop-color="#905dfa"/><stop offset="100%" stop-color="#5501d2"/></linearGradient></defs><path fill="url(#a)" d="M0 0h400v400H0z"/><path d="M231 131c5.648 4.848 10.764 10.22 14 17v2h2v-26h21l-1 172h-21l-.06-9.955q-.102-16.303-.228-32.605-.076-9.882-.134-19.764-.056-9.54-.136-19.082-.029-3.636-.045-7.27a2335 2335 0 0 0-.078-10.205l-.007-3.018c-.07-5.953-.781-11.35-2.312-17.101l-.824-3.336c-3.601-12.676-9.913-22.907-21.281-29.973-11.719-6.187-28.054-7.31-40.817-3.816-2.928 1.153-5.435 2.424-8.078 4.125l-2.566 1.645C164.432 149.2 161.614 152.48 159 158l-1.05 1.902c-4.765 8.75-5.25 17.412-5.269 27.227l-.03 3.58c-.031 3.88-.048 7.76-.065 11.639q-.027 4.05-.059 8.1-.068 9.546-.116 19.091c-.039 7.25-.088 14.501-.138 21.752A29590 29590 0 0 0 152 296h-21q-.176-23.342-.26-46.684c-.025-7.228-.06-14.456-.117-21.683q-.076-9.465-.093-18.93-.008-4.996-.059-9.994c-.246-25.006 2.094-47.362 19.779-66.334 21.165-20.243 58.033-17.689 80.75-1.375" fill="#fff"/></svg>
       EOF
   - path: /etc/letsencrypt/renewal-hooks/deploy/reload-nginx
     permissions: '0755'
@@ -1535,22 +1539,43 @@ func renderCloudInit(plan Plan, actual bool, dnsimpleToken string, sshPublicKeys
 		}
 		replacements = cloudInitReplacements(plan, sshPublicKeys, dnsimpleToken)
 	}
-	return compactCloudInitHealthLogo(renderTemplate(cloudInitTemplate, replacements)), nil
+	return compactCloudInitHealthPage(renderTemplate(cloudInitTemplate, replacements)), nil
 }
 
-func compactCloudInitHealthLogo(rendered string) string {
-	pathStart := strings.Index(rendered, "<path d=\"M0 0 ")
-	if pathStart == -1 {
+func compactCloudInitHealthPage(rendered string) string {
+	rendered = compactCloudInitHealthStyle(rendered)
+	return compactCloudInitHealthLogo(rendered)
+}
+
+func compactCloudInitHealthStyle(rendered string) string {
+	styleStart := strings.Index(rendered, ":root{color-scheme:dark}")
+	if styleStart == -1 {
 		return rendered
 	}
-	lineStart := strings.LastIndex(rendered[:pathStart], "\n") + 1
-	lineEnd := strings.Index(rendered[pathStart:], "\n")
+	lineStart := strings.LastIndex(rendered[:styleStart], "\n") + 1
+	lineEnd := strings.Index(rendered[styleStart:], "\n")
 	if lineEnd == -1 {
 		return rendered
 	}
-	indent := rendered[lineStart:pathStart]
-	compact := indent + `<path d="M112 88h48l80 128V88h48v224h-48l-80-128v128h-48z" fill="#fff"/>`
-	return rendered[:lineStart] + compact + rendered[pathStart+lineEnd:]
+	indent := rendered[lineStart:styleStart]
+	compact := indent + `:root{color-scheme:dark}body{margin:0;min-height:100vh;display:grid;place-items:center;background:#09090f;color:#f8fafc;font-family:system-ui,sans-serif}main{width:min(92vw,32rem);padding:2rem;border-radius:1.5rem;background:#11111c;text-align:center}.logo{width:5.5rem;border-radius:1.25rem}.pill{display:inline-block;margin:1rem 0;padding:.35rem .8rem;border-radius:999px;background:#15351f;color:#86efac}`
+	return rendered[:lineStart] + compact + rendered[styleStart+lineEnd:]
+}
+
+func compactCloudInitHealthLogo(rendered string) string {
+	svgStart := strings.Index(rendered, "\n          <svg class=\"logo\"")
+	if svgStart == -1 {
+		return rendered
+	}
+	svgStart++
+	svgEnd := strings.Index(rendered[svgStart:], "</svg>")
+	if svgEnd == -1 {
+		return rendered
+	}
+	lineStart := strings.LastIndex(rendered[:svgStart], "\n") + 1
+	indent := rendered[lineStart:svgStart]
+	compact := indent + `<img class="logo" src="/favicon.svg" alt="Nonfiction logo">`
+	return rendered[:lineStart] + compact + rendered[svgStart+svgEnd+len("</svg>"):]
 }
 
 func writeText(path, content string) error {

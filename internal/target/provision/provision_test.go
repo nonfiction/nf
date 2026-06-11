@@ -1058,16 +1058,22 @@ func TestCloudInitTemplateIsServerOnly(t *testing.T) {
 		"<!doctype html>",
 		"</html>",
 		"EOF",
+		"<link rel=\"icon\" href=\"/favicon.svg\">",
 		"<title>nf target app1</title>",
 		"color-scheme:dark",
 		"background:",
-		"radial-gradient(circle at 20% 20%,rgba(144,93,250,.22),transparent 32rem)",
+		"background:#09090f",
+		"<img class=\"logo\" src=\"/favicon.svg\" alt=\"Nonfiction logo\">",
+		"/var/www/nf/favicon.svg",
+		"cat >/var/www/nf/favicon.svg <<'EOF'",
 		"<svg class=\"logo\"",
 		"aria-label=\"Nonfiction logo\"",
-		"linearGradient id=\"background\"",
-		"stop-color=\"#905DFA\"",
-		"stop-color=\"#5501D2\"",
-		"font-family:system-ui,-apple-system,BlinkMacSystemFont,\"Segoe UI\",sans-serif",
+		"linearGradient id=\"a\"",
+		"stop-color=\"#905dfa\"",
+		"stop-color=\"#5501d2\"",
+		"<path fill=\"url(#a)\" d=\"M0 0h400v400H0z\"/>",
+		"M231 131c5.648 4.848 10.764 10.22 14 17v2h2v-26h21",
+		"font-family:system-ui,sans-serif",
 		"<main>",
 		"<div class=\"pill\">ready</div>",
 		"<h1>app1</h1>",
@@ -1137,8 +1143,18 @@ func TestCloudInitTemplateIsServerOnly(t *testing.T) {
 			break
 		}
 	}
-	if openerIdx == -1 || closerIdx == -1 || openerIdx+1 >= len(lines) || closerIdx+1 >= len(lines) || lines[closerIdx+1] != "  - path: /etc/letsencrypt/renewal-hooks/deploy/reload-nginx" {
+	if openerIdx == -1 || closerIdx == -1 || openerIdx+1 >= len(lines) || closerIdx+1 >= len(lines) || lines[closerIdx+1] != "      cat >/var/www/nf/favicon.svg <<'EOF'" {
 		t.Fatalf("renderCloudInit() output missing normalized heredoc delimiters:\n%s", rendered)
+	}
+	faviconCloserIdx := -1
+	for i := closerIdx + 2; i < len(lines); i++ {
+		if lines[i] == "      EOF" {
+			faviconCloserIdx = i
+			break
+		}
+	}
+	if faviconCloserIdx == -1 || faviconCloserIdx+1 >= len(lines) || lines[faviconCloserIdx+1] != "  - path: /etc/letsencrypt/renewal-hooks/deploy/reload-nginx" {
+		t.Fatalf("renderCloudInit() output missing favicon heredoc delimiters:\n%s", rendered)
 	}
 	if got, limit := len([]byte(rendered)), 15_000; got > limit {
 		t.Fatalf("renderCloudInit() size = %d bytes, want <= %d to stay under Linode user_data limit", got, limit)
@@ -1157,6 +1173,10 @@ func TestCloudInitTemplateIsServerOnly(t *testing.T) {
 		"npx",
 		"/var/www/nf-server",
 		"color-scheme: light",
+		"linearGradient id=\"background\"",
+		"stop-color=\"#905DFA\"",
+		"stop-color=\"#5501D2\"",
+		"M112 88h48l80 128V88h48v224h-48l-80-128v128h-48z",
 	} {
 		if strings.Contains(rendered, unwanted) {
 			t.Fatalf("renderCloudInit() output unexpectedly contained %q:\n%s", unwanted, rendered)
