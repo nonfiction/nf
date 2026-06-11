@@ -448,7 +448,7 @@ Commands:
 nf provider list
 nf provider show <provider>
 nf provider check <provider>
-nf target add linode <name> [--region region] [--type type] [--image image] [--user user] [--keys all] [--execute --yes] [--wait]
+nf target add linode <name> [--region region] [--type type] [--image image] [--adminer-user user] [--user user] [--keys all] [--execute --yes] [--wait]
 nf target remove <target> [--dry-run] [--execute --yes]
 nf target refresh
 nf target list
@@ -486,6 +486,7 @@ nf target add linode app1 \
   --region ca-central \
   --type g6-standard-1 \
   --image linode/ubuntu24.04 \
+  --adminer-user nonfiction \
   --user nonfiction \
   --keys all
 ```
@@ -495,7 +496,7 @@ Current behavior:
 * `nf provider list` reports local credential status.
 * `nf provider check` calls safe read-only provider health endpoints and writes `providers.json`.
 * `nf provider show <provider>` reads cached provider metadata.
-* `nf target add linode <name>` creates a Linode target named `<name>-linode`, tags it `nf`, creates host and wildcard DNS records under `base_domain`, queues HTTPS setup on the target with a systemd retry timer, installs AdminNeo at `https://db.<target-hostname>/` behind HTTP Basic auth during target provisioning, and records the target under the Linode provider in `providers.json`. Add `--wait` to keep the CLI attached through SSH, TLS, and health checks. Existing completed targets that predate AdminNeo are not upgraded in place by provider checks or target refresh.
+* `nf target add linode <name>` creates a Linode target named `<name>-linode`, tags it `nf`, creates host and wildcard DNS records under `base_domain`, queues HTTPS setup on the target with a systemd retry timer, installs AdminNeo at `https://db.<target-hostname>/` behind HTTP Basic auth during target provisioning, and records the target under the Linode provider in `providers.json`. Add `--adminer-user` to override `adminer_default_user` for that target only. Add `--wait` to keep the CLI attached through SSH, TLS, and health checks. Existing completed targets that predate AdminNeo are not upgraded in place by provider checks or target refresh.
 * `nf target remove <target>` removes an empty Linode target.
 * `nf target refresh` updates target records from configured target providers so added and removed targets are reflected in `providers.json`.
 * `nf target list/show` read target records from `providers.json`, with a legacy `servers.json` fallback.

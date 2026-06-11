@@ -274,6 +274,9 @@ func TestBuildPlanDefaults(t *testing.T) {
 	if got, want := plan.SshUser, "nonfiction"; got != want {
 		t.Fatalf("SshUser = %q, want %q", got, want)
 	}
+	if got, want := plan.AdminerUser, "nonfiction"; got != want {
+		t.Fatalf("AdminerUser = %q, want %q", got, want)
+	}
 	if got, want := plan.SshKeySource, "linode-profile"; got != want {
 		t.Fatalf("SshKeySource = %q, want %q", got, want)
 	}
@@ -319,6 +322,7 @@ func TestBuildPlanInteractiveUsesSelectForUbuntuPHPStack(t *testing.T) {
 		Label:             "app1",
 		Region:            "ca-central",
 		Type:              "g6-standard-1",
+		AdminerUser:       "nonfiction",
 		SshUser:           "nonfiction",
 		DnsimpleAccountID: "14",
 	})
@@ -345,6 +349,74 @@ func TestBuildPlanInteractiveUsesSelectForUbuntuPHPStack(t *testing.T) {
 	}
 	if len(calls) != 1 {
 		t.Fatalf("select calls = %#v, want 1 call", calls)
+	}
+}
+
+func TestBuildPlanInteractivePromptsForAdminerUser(t *testing.T) {
+	configHome := t.TempDir()
+	t.Setenv("NF_CONFIG_HOME", configHome)
+	data, err := json.Marshal(map[string]string{"adminer_default_user": "dbadmin"})
+	if err != nil {
+		t.Fatalf("Marshal() error = %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(configHome, "config.json"), data, 0o600); err != nil {
+		t.Fatalf("WriteFile(config.json) error = %v", err)
+	}
+
+	oldPrompt := promptStringFn
+	t.Cleanup(func() { promptStringFn = oldPrompt })
+
+	var promptTitle, promptDefault string
+	promptStringFn = func(prompt, defaultValue string, allowBlank bool) (string, error) {
+		promptTitle = prompt
+		promptDefault = defaultValue
+		if allowBlank {
+			t.Fatalf("allowBlank = true, want false")
+		}
+		return "site_admin", nil
+	}
+
+	plan, err := BuildPlan(Args{
+		Provider:          "linode",
+		DnsProvider:       "dnsimple",
+		Name:              "app1",
+		Region:            "ca-central",
+		Type:              "g6-standard-1",
+		SshUser:           "nonfiction",
+		DnsimpleAccountID: "14",
+		UbuntuVersion:     "24.04",
+	})
+	if err != nil {
+		t.Fatalf("BuildPlan() error = %v", err)
+	}
+	if got, want := promptTitle, "Adminer user: "; got != want {
+		t.Fatalf("prompt title = %q, want %q", got, want)
+	}
+	if got, want := promptDefault, "dbadmin"; got != want {
+		t.Fatalf("prompt default = %q, want %q", got, want)
+	}
+	if got, want := plan.AdminerUser, "site_admin"; got != want {
+		t.Fatalf("AdminerUser = %q, want %q", got, want)
+	}
+}
+
+func TestBuildPlanAdminerUserFlagOverridesConfig(t *testing.T) {
+	configHome := t.TempDir()
+	t.Setenv("NF_CONFIG_HOME", configHome)
+	data, err := json.Marshal(map[string]string{"adminer_default_user": "dbadmin"})
+	if err != nil {
+		t.Fatalf("Marshal() error = %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(configHome, "config.json"), data, 0o600); err != nil {
+		t.Fatalf("WriteFile(config.json) error = %v", err)
+	}
+
+	plan, err := BuildPlan(Args{AdminerUser: "target_admin", NonInteractive: true})
+	if err != nil {
+		t.Fatalf("BuildPlan() error = %v", err)
+	}
+	if got, want := plan.AdminerUser, "target_admin"; got != want {
+		t.Fatalf("AdminerUser = %q, want %q", got, want)
 	}
 }
 
@@ -395,7 +467,7 @@ func TestBuildPlanTargetModeDetectsExistingLinodeBeforeCreationPrompts(t *testin
 		return false, nil
 	}
 
-	plan, err := BuildPlan(Args{Provider: "linode", DnsProvider: "dnsimple", Name: "app4", TargetMode: true})
+	plan, err := BuildPlan(Args{Provider: "linode", DnsProvider: "dnsimple", Name: "app4", AdminerUser: "nonfiction", TargetMode: true})
 	if err != nil {
 		t.Fatalf("BuildPlan() error = %v", err)
 	}
@@ -452,6 +524,7 @@ func TestBuildPlanInteractiveFileSSHSourcePromptsForKeyPath(t *testing.T) {
 		Label:             "app1",
 		Region:            "ca-central",
 		Type:              "g6-standard-1",
+		AdminerUser:       "nonfiction",
 		SshUser:           "nonfiction",
 		SshKeySource:      "file",
 		DnsimpleAccountID: "14",
@@ -529,7 +602,7 @@ func TestBuildPlanInteractiveResumeUsesSavedProvisioningRecord(t *testing.T) {
 		return "prod3", nil
 	}
 
-	plan, err := BuildPlan(Args{Execute: true})
+	plan, err := BuildPlan(Args{Execute: true, AdminerUser: "nonfiction"})
 	if err != nil {
 		t.Fatalf("BuildPlan() error = %v", err)
 	}
@@ -630,7 +703,7 @@ func TestPreparePlanInteractiveExecutePromptsForKeysBeforeConfirmAndReusesThem(t
 	secretSaltFn = func() (string, error) { return "test-salt", nil }
 	currentTime = func() time.Time { return time.Date(2026, 5, 29, 12, 0, 0, 0, time.UTC) }
 
-	plan, err := BuildPlan(Args{Execute: true, NoWait: true, Firewall: "none", Name: "app1", Region: "ca-central", Type: "g6-standard-1", SshUser: "nonfiction", DnsimpleAccountID: "14", UbuntuVersion: "24.04"})
+	plan, err := BuildPlan(Args{Execute: true, NoWait: true, Firewall: "none", Name: "app1", Region: "ca-central", Type: "g6-standard-1", AdminerUser: "nonfiction", SshUser: "nonfiction", DnsimpleAccountID: "14", UbuntuVersion: "24.04"})
 	if err != nil {
 		t.Fatalf("BuildPlan() error = %v", err)
 	}
@@ -718,7 +791,7 @@ func TestPreparePlanInteractiveDefaultPromptsForKeysBeforeConfirmAndReusesThem(t
 	secretSaltFn = func() (string, error) { return "test-salt", nil }
 	currentTime = func() time.Time { return time.Date(2026, 5, 29, 12, 0, 0, 0, time.UTC) }
 
-	plan, err := BuildPlan(Args{Execute: false, NoWait: true, Firewall: "none", Name: "app1", Region: "ca-central", Type: "g6-standard-1", SshUser: "nonfiction", DnsimpleAccountID: "14", UbuntuVersion: "24.04"})
+	plan, err := BuildPlan(Args{Execute: false, NoWait: true, Firewall: "none", Name: "app1", Region: "ca-central", Type: "g6-standard-1", AdminerUser: "nonfiction", SshUser: "nonfiction", DnsimpleAccountID: "14", UbuntuVersion: "24.04"})
 	if err != nil {
 		t.Fatalf("BuildPlan() error = %v", err)
 	}
@@ -784,6 +857,7 @@ func TestBuildPlanOverrides(t *testing.T) {
 		Region:            "us-east",
 		Type:              "g6-standard-2",
 		Image:             "linode/custom-override",
+		AdminerUser:       "dbadmin",
 		SshUser:           "ubuntu",
 		SshPublicKeyFile:  "/tmp/id.pub",
 		DnsimpleAccountID: "99",
@@ -839,6 +913,9 @@ func TestBuildPlanOverrides(t *testing.T) {
 	}
 	if got, want := plan.LinodeType, "g6-standard-2"; got != want {
 		t.Fatalf("LinodeType = %q, want %q", got, want)
+	}
+	if got, want := plan.AdminerUser, "dbadmin"; got != want {
+		t.Fatalf("AdminerUser = %q, want %q", got, want)
 	}
 	if got, want := plan.SshUser, "ubuntu"; got != want {
 		t.Fatalf("SshUser = %q, want %q", got, want)
@@ -896,7 +973,7 @@ func TestBuildPlanInfersUbuntuStackFromImage(t *testing.T) {
 		return "", nil
 	}
 
-	plan, err := BuildPlan(Args{Name: "app2", Region: "ca-central", Type: "g6-standard-1", SshUser: "nonfiction", Image: "linode/ubuntu24.04", DnsimpleAccountID: "14"})
+	plan, err := BuildPlan(Args{Name: "app2", Region: "ca-central", Type: "g6-standard-1", AdminerUser: "nonfiction", SshUser: "nonfiction", Image: "linode/ubuntu24.04", DnsimpleAccountID: "14"})
 	if err != nil {
 		t.Fatalf("BuildPlan() error = %v", err)
 	}

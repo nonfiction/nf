@@ -49,17 +49,6 @@ func printGroupHelp(title string, lines []helpLine) {
 	}
 }
 
-func runServerHelp() int {
-	printGroupHelp("server", []helpLine{
-		{"provision [flags]", "provision an infrastructure host"},
-		{"list, ls", "list servers"},
-		{"show <id-or-name>", "show a server"},
-		{"root-password <id-or-name>", "derive the Linode root password"},
-		{"delete <id-or-name> [flags]", "delete a server"},
-	})
-	return 0
-}
-
 func runProviderHelp() int {
 	printGroupHelp("provider", []helpLine{
 		{"list, ls", "list provider integrations"},

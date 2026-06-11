@@ -671,7 +671,7 @@ Status:
 * [x] Kinsta read-only healthcheck and `kinsta` target
 * [x] Linode read-only healthcheck and tagged target discovery
 * [x] `nf target list/show` from `providers.json`
-* [x] `nf target add linode <name>` creates Linode targets with DNS, queued TLS retry, Adminer/AdminNeo, and empty remote site inventory. Existing completed pre-Adminer targets are not reconciled in place by provider checks or target refresh.
+* [x] `nf target add linode <name>` creates Linode targets with DNS, queued TLS retry, Adminer/AdminNeo, a per-target `--adminer-user` override, and empty remote site inventory. Existing completed pre-Adminer targets are not reconciled in place by provider checks or target refresh.
 * [x] `nf target adminer show <target>` reads `/var/lib/nf/target.json` and derives the Adminer password locally
 * [x] legacy `servers.json` fallback during cache migration
 

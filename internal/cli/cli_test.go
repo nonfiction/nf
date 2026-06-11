@@ -480,6 +480,14 @@ func TestRunCompleteSuggestsStaticAndCachedValues(t *testing.T) {
 	if !strings.Contains(targetAdminerAllOutput, "app1-linode\n") || strings.Contains(targetAdminerAllOutput, "kinsta\n") {
 		t.Fatalf("target adminer completion = %q, want linode targets only", targetAdminerAllOutput)
 	}
+	targetAddFlagOutput := captureStdout(t, func() {
+		if got := Run([]string{"__complete", "--", "target", "add", "linode", "app1", "--"}); got != 0 {
+			t.Fatalf("Run(__complete target add linode --) = %d, want 0", got)
+		}
+	})
+	if !strings.Contains(targetAddFlagOutput, "--adminer-user\n") {
+		t.Fatalf("target add flag completion missing --adminer-user:\n%s", targetAddFlagOutput)
+	}
 
 	siteOutput := captureStdout(t, func() {
 		if got := Run([]string{"__complete", "--", "site", "show", "client"}); got != 0 {
@@ -2240,11 +2248,11 @@ func TestRunTargetAddLinodeDryRunUsesTargetNameAndConfigDefaults(t *testing.T) {
 	}
 
 	output := captureStdout(t, func() {
-		if got := Run([]string{"target", "add", "linode", "app1", "--dry-run", "--non-interactive", "--region", "ca-central", "--type", "g6-standard-1", "--image", "linode/ubuntu24.04", "--user", "nonfiction", "--keys", "all"}); got != 0 {
+		if got := Run([]string{"target", "add", "linode", "app1", "--dry-run", "--non-interactive", "--region", "ca-central", "--type", "g6-standard-1", "--image", "linode/ubuntu24.04", "--adminer-user", "dbadmin", "--user", "nonfiction", "--keys", "all"}); got != 0 {
 			t.Fatalf("Run(target add linode) = %d, want 0", got)
 		}
 	})
-	for _, want := range []string{"app1-linode", "hostname: app1-linode.nonfiction.dev", "wildcard hostname: *.app1-linode.nonfiction.dev", "region: ca-central", "type: g6-standard-1", "image: linode/ubuntu24.04", "ssh user: nonfiction", "authorized keys: all Linode profile keys", "state: not checked"} {
+	for _, want := range []string{"app1-linode", "hostname: app1-linode.nonfiction.dev", "wildcard hostname: *.app1-linode.nonfiction.dev", "region: ca-central", "type: g6-standard-1", "image: linode/ubuntu24.04", "user: dbadmin", "ssh user: nonfiction", "authorized keys: all Linode profile keys", "state: not checked"} {
 		if !strings.Contains(output, want) {
 			t.Fatalf("target add output missing %q:\n%s", want, output)
 		}

@@ -177,7 +177,7 @@ func targetAdminerCompletionCandidates(args []string) []string {
 }
 
 func targetAddFlagCandidates() []string {
-	return []string{"--region", "--type", "--image", "--ssh-user", "--execute", "--yes", "--non-interactive", "--dry-run"}
+	return []string{"--region", "--type", "--image", "--adminer-user", "--ssh-user", "--execute", "--yes", "--non-interactive", "--dry-run"}
 }
 
 func siteCompletionCandidates(args []string) []string {

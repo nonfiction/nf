@@ -44,6 +44,7 @@ type Args struct {
 	Region            string
 	Type              string
 	Image             string
+	AdminerUser       string
 	SshUser           string
 	SshKeySource      string
 	SshKeyLabel       string
@@ -325,16 +326,16 @@ func deriveAdminerURL(hostname string) string {
 func validateAdminerUser(user string) error {
 	trimmed := strings.TrimSpace(user)
 	if trimmed == "" {
-		return Error{Msg: "adminer_default_user must be a non-empty MySQL username"}
+		return Error{Msg: "Adminer user must be a non-empty MySQL username"}
 	}
 	if len(trimmed) > 32 {
-		return Error{Msg: "adminer_default_user must be 32 characters or fewer"}
+		return Error{Msg: "Adminer user must be 32 characters or fewer"}
 	}
 	for _, r := range trimmed {
 		if r >= 'a' && r <= 'z' || r >= 'A' && r <= 'Z' || r >= '0' && r <= '9' || r == '_' || r == '-' {
 			continue
 		}
-		return Error{Msg: "adminer_default_user must use only letters, numbers, underscores, and hyphens"}
+		return Error{Msg: "Adminer user must use only letters, numbers, underscores, and hyphens"}
 	}
 	return nil
 }
@@ -2611,10 +2612,7 @@ func BuildPlan(args Args) (Plan, error) {
 	defaultType := firstNonEmpty(globalConfigValue("linode_default_type"), "g6-standard-1")
 	defaultImage := globalConfigValue("linode_default_image")
 	defaultUser := firstNonEmpty(globalConfigValue("linode_default_user"), "nonfiction")
-	adminerUser := firstNonEmpty(globalConfigValue("adminer_default_user"), adminerDefaultUser)
-	if err := validateAdminerUser(adminerUser); err != nil {
-		return Plan{}, err
-	}
+	defaultAdminerUser := firstNonEmpty(globalConfigValue("adminer_default_user"), adminerDefaultUser)
 	if resumeRecord != nil {
 		status := existingProvisionStatus(resumeRecord)
 		phase := existingProvisionPhase(resumeRecord)
@@ -2654,6 +2652,13 @@ func BuildPlan(args Args) (Plan, error) {
 	}
 	sshUser, err := resolveValue(args.SshUser, "Deployment SSH user: ", defaultUser, nonInteractive, false)
 	if err != nil {
+		return Plan{}, err
+	}
+	adminerUser, err := resolveValue(args.AdminerUser, "Adminer user: ", defaultAdminerUser, nonInteractive, false)
+	if err != nil {
+		return Plan{}, err
+	}
+	if err := validateAdminerUser(adminerUser); err != nil {
 		return Plan{}, err
 	}
 	sshKeySource := firstNonEmpty(args.SshKeySource, "linode-profile")

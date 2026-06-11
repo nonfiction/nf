@@ -97,7 +97,7 @@ Local state is disposable. Provider truth is canonical remotely.
 * Password salt is `NF_PASSWORD_SALT`; legacy `NF_SECRET_SALT` is migration-only fallback.
 * `project.password_version` belongs in `nf.json`, defaults to `0`, is safe to commit, and rotates project/site derived passwords when set non-zero without changing `NF_PASSWORD_SALT`.
 * `basicauth_default_user` belongs in `config.json`, defaults to `nonfiction`, and is used with a per-site derived `basic-auth` password.
-* `adminer_default_user` belongs in `config.json`, defaults to `nonfiction`, and is used for Linode target Adminer HTTP Basic auth and the shared MySQL admin user.
+* `adminer_default_user` belongs in `config.json`, defaults to `nonfiction`, and is used for Linode target Adminer HTTP Basic auth and the shared MySQL admin user unless `nf target add linode --adminer-user` overrides it for that target.
 * DNSimple provider check validates it can read the configured `base_domain` zone and writes zero targets.
 * Kinsta provider check writes one target named `kinsta`.
 * Linode provider check discovers targets from Linode instances tagged `nf`.
