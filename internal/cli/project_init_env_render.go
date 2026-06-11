@@ -429,6 +429,7 @@ RUN apt-get update \
     dnsutils \
     iputils-ping \
     less \
+    mariadb-client \
     nano \
     procps \
     vim \
