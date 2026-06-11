@@ -12,6 +12,14 @@ For the full project model, state layout, implementation phases, and roadmap, se
 
 ## Install and run
 
+Install the latest `nf` from the GitHub flake into your Nix profile:
+
+```sh
+nix profile add github:nonfiction/nf
+```
+
+Run from a checkout during development:
+
 ```sh
 nix run .#nf -- --help
 nix develop -c nf --help
@@ -119,6 +127,15 @@ source <(nf completion zsh)
 Persistent setup depends on your shell config. Save the generated script into a file loaded by your shell, such as a bash completion directory or a zsh `$fpath` completion file.
 
 ## Quick start
+
+Configure global settings before creating or managing projects:
+
+```sh
+nf config init
+nf password set-salt <shared-salt>
+```
+
+`nf config init` walks through required settings, including provider API keys and `base_domain`. Use `nf password set-salt` with the shared team salt so derived passwords match across machines.
 
 Create repo metadata:
 
