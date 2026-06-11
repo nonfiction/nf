@@ -185,6 +185,7 @@ func renderEnvCompose(cfg envConfig) string {
 	dbImage := firstNonEmpty(cfg.DockerDBImage, defaultDockerDBImage)
 	cliImage := firstNonEmpty(cfg.DockerCLIImage, defaultDockerCLIImage)
 	wordpressImage := firstNonEmpty(cfg.DockerWPImage, defaultDockerWordpressImage)
+	dockerUser := firstNonEmpty(cfg.DockerUser, defaultDockerUser)
 	themePath := cfg.ThemePath
 	uploadsPath := firstNonEmpty(cfg.UploadsPath, "uploads")
 	return fmt.Sprintf(`services:
@@ -223,6 +224,8 @@ func renderEnvCompose(cfg envConfig) string {
       ADMIN_USER: ${ADMIN_USER}
       ADMIN_PASSWORD: ${ADMIN_PASSWORD}
       ADMIN_EMAIL: ${ADMIN_EMAIL}
+      HOME: /home/%s
+      WP_CLI_CACHE_DIR: /tmp/wp-cli-cache
       WORDPRESS_CONFIG_EXTRA: |
         define('WP_HOME', getenv('WP_URL'));
         define('WP_SITEURL', getenv('WP_URL'));
@@ -280,7 +283,7 @@ func renderEnvCompose(cfg envConfig) string {
 volumes:
   db_data:
   wp_data:
-`, dbImage, wordpressService, themePath, themeMountSlug, cliService, cliImage, wordpressService, themePath, themeMountSlug, uploadsPath, path.Join("/", "env", uploadsPath), envSnapshotComposeMount(cfg), wordpressImage)
+`, dbImage, wordpressService, dockerUser, themePath, themeMountSlug, cliService, cliImage, wordpressService, themePath, themeMountSlug, uploadsPath, path.Join("/", "env", uploadsPath), envSnapshotComposeMount(cfg), wordpressImage)
 }
 
 func renderEnvFile(cfg envConfig) string {
@@ -403,8 +406,13 @@ RUN a2enmod rewrite \
 RUN curl -fsSL -o /usr/local/bin/wp https://raw.githubusercontent.com/wp-cli/builds/gh-pages/phar/wp-cli.phar \
   && chmod +x /usr/local/bin/wp
 
+RUN useradd --create-home --shell /bin/bash --groups www-data %s \
+  && mkdir -p /tmp/wp-cli-cache /home/%s/.wp-cli \
+  && chown -R %s:www-data /home/%s /tmp/wp-cli-cache /usr/src/wordpress /var/www/html \
+  && chmod -R g+rwX /tmp/wp-cli-cache /usr/src/wordpress /var/www/html
+
 COPY wordpress/wordpress-rewrites.conf /etc/apache2/conf-enabled/wordpress-rewrites.conf
-`, firstNonEmpty(cfg.DockerWPImage, defaultDockerWordpressImage))
+`, firstNonEmpty(cfg.DockerWPImage, defaultDockerWordpressImage), firstNonEmpty(cfg.DockerUser, defaultDockerUser), firstNonEmpty(cfg.DockerUser, defaultDockerUser), firstNonEmpty(cfg.DockerUser, defaultDockerUser), firstNonEmpty(cfg.DockerUser, defaultDockerUser))
 }
 
 func renderEnvRewritesConf() string {

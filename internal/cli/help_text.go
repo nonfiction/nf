@@ -116,6 +116,7 @@ func runConfigHelp() int {
 		{"set-docker-db-image <image>", "set default Docker database image"},
 		{"set-docker-cli-image <image>", "set default Docker WP-CLI image"},
 		{"set-docker-wordpress-image <image>", "set default Docker WordPress image"},
+		{"set-docker-user <user>", "set default Docker shell user"},
 		{},
 		{"set-kinsta-default-region <region>", "set default Kinsta region"},
 		{"set-kinsta-default-php <version>", "set default Kinsta PHP version"},

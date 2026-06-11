@@ -20,6 +20,7 @@ const (
 	defaultDockerDBImage        = "mariadb:11"
 	defaultDockerCLIImage       = "wordpress:cli-php8.3"
 	defaultDockerWordpressImage = "wordpress:php8.3-apache"
+	defaultDockerUser           = "nonfiction"
 )
 
 func envCommandDir(cfg envConfig) string {
@@ -30,6 +31,9 @@ func ensureManagedEnv(cfg envConfig) error {
 	envDir := localEnvDir(cfg)
 	if strings.TrimSpace(envDir) == "" {
 		return fmt.Errorf("missing managed env directory")
+	}
+	if err := validateDockerUser(firstNonEmpty(cfg.DockerUser, defaultDockerUser)); err != nil {
+		return err
 	}
 	if err := os.MkdirAll(envDir, 0o755); err != nil {
 		return err
@@ -61,7 +65,7 @@ func envConfigWithAdminCredentials(cfg envConfig) (envConfig, error) {
 	if err != nil {
 		return cfg, err
 	}
-	cfg = envConfigWithDockerImages(cfg, values)
+	cfg = envConfigWithDockerSettings(cfg, values)
 	if cfg.AdminUser != "" && cfg.AdminEmail != "" && cfg.AdminPassword != "" && cfg.DBUser != "" && cfg.DBPassword != "" {
 		return cfg, nil
 	}
@@ -84,11 +88,37 @@ func envConfigWithAdminCredentials(cfg envConfig) (envConfig, error) {
 	return cfg, nil
 }
 
-func envConfigWithDockerImages(cfg envConfig, values map[string]string) envConfig {
+func envConfigWithDockerSettings(cfg envConfig, values map[string]string) envConfig {
 	cfg.DockerDBImage = firstNonEmpty(cfg.DockerDBImage, values["docker_db_image"], defaultDockerDBImage)
 	cfg.DockerCLIImage = firstNonEmpty(cfg.DockerCLIImage, values["docker_cli_image"], defaultDockerCLIImage)
 	cfg.DockerWPImage = firstNonEmpty(cfg.DockerWPImage, values["docker_wordpress_image"], defaultDockerWordpressImage)
+	cfg.DockerUser = firstNonEmpty(cfg.DockerUser, values["docker_user"], defaultDockerUser)
 	return cfg
+}
+
+func envConfigWithDockerConfig(cfg envConfig) (envConfig, error) {
+	values, err := loadGlobalConfig()
+	if err != nil {
+		return cfg, err
+	}
+	return envConfigWithDockerSettings(cfg, values), nil
+}
+
+func validateDockerUser(user string) error {
+	trimmed := strings.TrimSpace(user)
+	if trimmed == "" {
+		return ProjectError{Msg: "docker_user must be a non-empty Linux username"}
+	}
+	if len(trimmed) > 32 {
+		return ProjectError{Msg: "docker_user must be 32 characters or fewer"}
+	}
+	for i, r := range trimmed {
+		if r >= 'a' && r <= 'z' || r == '_' || i > 0 && r >= '0' && r <= '9' || i > 0 && r == '-' {
+			continue
+		}
+		return ProjectError{Msg: "docker_user must start with a lowercase letter or underscore and use only lowercase letters, numbers, underscores, and hyphens"}
+	}
+	return nil
 }
 
 func envConfigWithDBCredentials(cfg envConfig) (envConfig, error) {
@@ -214,7 +244,7 @@ func envWpArgs(cfg envConfig, args ...string) []string {
 }
 
 func envShellArgs(cfg envConfig) []string {
-	return envComposeArgs(cfg, "exec", firstNonEmpty(cfg.WordpressService, "wordpress"), "bash")
+	return envComposeArgs(cfg, "exec", "--user", firstNonEmpty(cfg.DockerUser, defaultDockerUser), firstNonEmpty(cfg.WordpressService, "wordpress"), "bash")
 }
 
 func envWpProbeArgs(cfg envConfig, args ...string) []string {

@@ -7248,7 +7248,7 @@ func TestRenderEnvComposeUsesMetadataDefaults(t *testing.T) {
 		t.Fatalf("loadEnvConfig() = false, want true")
 	}
 	compose := renderEnvCompose(cfg)
-	for _, want := range []string{"wp-app:", "wp-cli:", "condition: service_healthy", "depends_on:\n      wp-app:", "working_dir: /var/www/html", "HOME: /tmp", "WP_CLI_CACHE_DIR: /tmp/wp-cli-cache", filepath.Join(root, "theme-src") + ":/var/www/html/wp-content/themes/theme-slot", config.SnapshotProjectDir("client") + ":/env-snapshots"} {
+	for _, want := range []string{"wp-app:", "wp-cli:", "condition: service_healthy", "depends_on:\n      wp-app:", "working_dir: /var/www/html", "HOME: /home/nonfiction", "HOME: /tmp", "WP_CLI_CACHE_DIR: /tmp/wp-cli-cache", filepath.Join(root, "theme-src") + ":/var/www/html/wp-content/themes/theme-slot", config.SnapshotProjectDir("client") + ":/env-snapshots"} {
 		if !strings.Contains(compose, want) {
 			t.Fatalf("renderEnvCompose() missing %q:\n%s", want, compose)
 		}
@@ -7266,6 +7266,7 @@ func TestEnsureManagedEnvUsesConfiguredDockerImages(t *testing.T) {
 		"docker_db_image":        "mariadb:11.4",
 		"docker_cli_image":       "wordpress:cli-php8.3-custom",
 		"docker_wordpress_image": "wordpress:php8.3-custom-apache",
+		"docker_user":            "developer",
 	}); err != nil {
 		t.Fatalf("saveGlobalConfig() error = %v", err)
 	}
@@ -7310,7 +7311,7 @@ func TestEnsureManagedEnvUsesConfiguredDockerImages(t *testing.T) {
 	if !strings.Contains(string(dockerfileData), "FROM wordpress:php8.3-custom-apache") {
 		t.Fatalf("Dockerfile missing configured FROM:\n%s", string(dockerfileData))
 	}
-	for _, want := range []string{"apt-get install -y --no-install-recommends", "iputils-ping", "dnsutils", "nano", "vim", "wp-cli.phar", "/usr/local/bin/wp"} {
+	for _, want := range []string{"apt-get install -y --no-install-recommends", "iputils-ping", "dnsutils", "nano", "vim", "wp-cli.phar", "/usr/local/bin/wp", "useradd --create-home --shell /bin/bash --groups www-data developer", "chown -R developer:www-data"} {
 		if !strings.Contains(string(dockerfileData), want) {
 			t.Fatalf("Dockerfile missing %q:\n%s", want, string(dockerfileData))
 		}
@@ -8765,7 +8766,7 @@ func TestEnvCommandHelpersBuildExpectedArgs(t *testing.T) {
 	if got, want := envWpArgs(cfg, "plugin", "list"), []string{"docker", "compose", "run", "--rm", "cli", "wp", "plugin", "list", "--allow-root"}; !reflect.DeepEqual(got, want) {
 		t.Fatalf("envWpArgs() = %#v, want %#v", got, want)
 	}
-	if got, want := envShellArgs(cfg), []string{"docker", "compose", "exec", "wordpress", "bash"}; !reflect.DeepEqual(got, want) {
+	if got, want := envShellArgs(cfg), []string{"docker", "compose", "exec", "--user", "nonfiction", "wordpress", "bash"}; !reflect.DeepEqual(got, want) {
 		t.Fatalf("envShellArgs() = %#v, want %#v", got, want)
 	}
 	if got, want := envWpThemeIsActiveArgs(cfg, ""), []string{"docker", "compose", "run", "--rm", "cli", "wp", "theme", "is-active", "theme", "--allow-root"}; !reflect.DeepEqual(got, want) {
@@ -8819,7 +8820,7 @@ func TestEnvCommandHelpersBuildExpectedArgs(t *testing.T) {
 	if got, want := (envCommandRunner{name: "reset", cfg: cfg, rebuild: true}).Render(), "docker compose down -v --remove-orphans; nuke env data and recreate it with docker compose build, docker compose up -d, configure Mailpit SMTP, install WordPress if missing, and ensure the mounted theme is active"; got != want {
 		t.Fatalf("reset --rebuild Render() = %q, want %q", got, want)
 	}
-	if got, want := (envCommandRunner{name: "shell", cfg: cfg}).Render(), "docker compose exec wordpress bash"; got != want {
+	if got, want := (envCommandRunner{name: "shell", cfg: cfg}).Render(), "docker compose exec --user nonfiction wordpress bash"; got != want {
 		t.Fatalf("shell Render() = %q, want %q", got, want)
 	}
 }
@@ -8859,10 +8860,10 @@ func TestEnsureManagedEnvWritesManagedFiles(t *testing.T) {
 	adminPassword := passwords.DerivePassword("client", "wp-admin", "test-salt")
 	dbPassword := passwords.DerivePassword("client", "mysql", "test-salt")
 	checks := map[string][]string{
-		filepath.Join(cfg.EnvDir, "docker-compose.yml"):                   {filepath.Join(root, "theme") + ":/var/www/html/wp-content/themes/theme", "mailpit", "adminer:", "wordpress:php8.3-apache", "https://www.adminneo.org/files/5.4.1/mysql_en_default/adminneo-5.4.1.php", "${ADMINER_PORT}:80", "wordpress:cli-php8.3"},
+		filepath.Join(cfg.EnvDir, "docker-compose.yml"):                   {filepath.Join(root, "theme") + ":/var/www/html/wp-content/themes/theme", "mailpit", "adminer:", "wordpress:php8.3-apache", "https://www.adminneo.org/files/5.4.1/mysql_en_default/adminneo-5.4.1.php", "${ADMINER_PORT}:80", "wordpress:cli-php8.3", "HOME: /home/nonfiction", "WP_CLI_CACHE_DIR: /tmp/wp-cli-cache"},
 		filepath.Join(cfg.EnvDir, ".env"):                                 {"COMPOSE_PROJECT_NAME=nf_client_env", fmt.Sprintf("WP_PORT=%d", wpPort), fmt.Sprintf("MAILPIT_PORT=%d", mailpitPort), fmt.Sprintf("ADMINER_PORT=%d", adminerPort), fmt.Sprintf("WP_URL=http://localhost:%d", wpPort), "DB_USER=client", "DB_PASSWORD=" + dbPassword, "WP_TITLE=Client", "ADMIN_USER=admin", "ADMIN_PASSWORD=" + adminPassword, "ADMIN_EMAIL=web@nonfiction.ca"},
 		filepath.Join(cfg.EnvDir, "php", "uploads.ini"):                   {"upload_max_filesize=128M", "max_execution_time=120"},
-		filepath.Join(cfg.EnvDir, "wordpress", "Dockerfile"):              {"FROM wordpress:php8.3-apache", "apt-get install -y --no-install-recommends", "iputils-ping", "dnsutils", "nano", "vim", "wp-cli.phar", "/usr/local/bin/wp", "COPY wordpress/wordpress-rewrites.conf"},
+		filepath.Join(cfg.EnvDir, "wordpress", "Dockerfile"):              {"FROM wordpress:php8.3-apache", "apt-get install -y --no-install-recommends", "iputils-ping", "dnsutils", "nano", "vim", "wp-cli.phar", "/usr/local/bin/wp", "useradd --create-home --shell /bin/bash --groups www-data nonfiction", "chown -R nonfiction:www-data", "COPY wordpress/wordpress-rewrites.conf"},
 		filepath.Join(cfg.EnvDir, "wordpress", "wordpress-rewrites.conf"): {"RewriteRule . /index.php [L]"},
 	}
 	for path, wants := range checks {
@@ -9738,14 +9739,14 @@ func TestRunEnvShellExecutesWordpressShell(t *testing.T) {
 			t.Fatalf("Run(env shell) = %d, want 0", got)
 		}
 	})
-	if !strings.Contains(output, "> docker compose exec wordpress bash") {
+	if !strings.Contains(output, "> docker compose exec --user nonfiction wordpress bash") {
 		t.Fatalf("Run(shell) stdout = %q, want compose exec preview", output)
 	}
 	args, err := os.ReadFile(capturePath)
 	if err != nil {
 		t.Fatalf("ReadFile() error = %v", err)
 	}
-	if got, want := strings.Split(strings.TrimSpace(string(args)), "\n"), []string{"compose", "exec", "wordpress", "bash"}; !reflect.DeepEqual(got, want) {
+	if got, want := strings.Split(strings.TrimSpace(string(args)), "\n"), []string{"compose", "exec", "--user", "nonfiction", "wordpress", "bash"}; !reflect.DeepEqual(got, want) {
 		t.Fatalf("docker args = %#v, want %#v", got, want)
 	}
 }

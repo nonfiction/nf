@@ -62,6 +62,13 @@ func (c envCommandRunner) Execute(root string, extraArgs []string) error {
 		}
 		c.cfg = cfg
 	} else if c.name == "shell" || c.name == "wp" {
+		if c.name == "shell" {
+			cfg, err := envConfigWithDockerConfig(c.cfg)
+			if err != nil {
+				return err
+			}
+			c.cfg = cfg
+		}
 		cfg, err := envConfigWithDBCredentials(c.cfg)
 		if err != nil {
 			return err
@@ -121,7 +128,7 @@ func (c envCommandRunner) Render() string {
 		}
 		return "docker compose down -v --remove-orphans; nuke env data and recreate it with docker compose up -d, configure Mailpit SMTP, install WordPress if missing, and ensure the mounted theme is active"
 	case "shell":
-		return "docker compose exec " + firstNonEmpty(c.cfg.WordpressService, "wordpress") + " bash"
+		return "docker compose exec --user " + firstNonEmpty(c.cfg.DockerUser, defaultDockerUser) + " " + firstNonEmpty(c.cfg.WordpressService, "wordpress") + " bash"
 	case "wp":
 		return "docker compose run --rm " + c.cfg.CliService + " wp ... --allow-root"
 	default:

@@ -84,6 +84,16 @@ func runConfig(argv []string) int {
 			return 1
 		}
 		return cmdConfigSet("docker_wordpress_image", argv[1])
+	case "set-docker-user":
+		if len(argv) != 2 || strings.TrimSpace(argv[1]) == "" {
+			fmt.Fprintln(os.Stderr, "config set-docker-user takes exactly one user")
+			return 1
+		}
+		if err := validateDockerUser(argv[1]); err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			return 1
+		}
+		return cmdConfigSet("docker_user", argv[1])
 	case "set-kinsta-default-region":
 		if len(argv) != 2 || strings.TrimSpace(argv[1]) == "" {
 			fmt.Fprintln(os.Stderr, "config set-kinsta-default-region takes exactly one region")
@@ -365,6 +375,7 @@ func cmdConfigShow() int {
 	fmt.Println()
 	fmt.Println("Docker")
 	printIndentedDetailRows([]detailRow{
+		{label: "User", value: configShowValue(values, "docker_user", defaultDockerUser)},
 		{label: "DB image", value: configShowValue(values, "docker_db_image", defaultDockerDBImage)},
 		{label: "CLI image", value: configShowValue(values, "docker_cli_image", defaultDockerCLIImage)},
 		{label: "WordPress image", value: configShowValue(values, "docker_wordpress_image", defaultDockerWordpressImage)},

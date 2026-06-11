@@ -27,6 +27,7 @@ type envConfig struct {
 	DockerDBImage    string
 	DockerCLIImage   string
 	DockerWPImage    string
+	DockerUser       string
 	ThemeMountSlug   string
 	UploadsPath      string
 	ThemeSlug        string

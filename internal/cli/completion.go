@@ -106,7 +106,7 @@ func completeContextCandidates(args []string) []string {
 	case "site":
 		return siteCompletionCandidates(args[1:])
 	case "config":
-		return []string{"init", "show", "set-base-domain", "set-default-wp-email", "set-default-wp-user", "set-basicauth-default-user", "set-adminer-default-user", "set-docker-db-image", "set-docker-cli-image", "set-docker-wordpress-image", "set-kinsta-default-region", "set-kinsta-default-php", "set-linode-default-region", "set-linode-default-type", "set-linode-default-image", "set-linode-default-user", "help"}
+		return []string{"init", "show", "set-base-domain", "set-default-wp-email", "set-default-wp-user", "set-basicauth-default-user", "set-adminer-default-user", "set-docker-db-image", "set-docker-cli-image", "set-docker-wordpress-image", "set-docker-user", "set-kinsta-default-region", "set-kinsta-default-php", "set-linode-default-region", "set-linode-default-type", "set-linode-default-image", "set-linode-default-user", "help"}
 	case "password":
 		return []string{"show-salt", "set-salt", "derive", "help"}
 	case "remote":
