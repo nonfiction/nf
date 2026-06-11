@@ -1,5 +1,7 @@
 # nf
 
+<img width="150" align="right" src="nf.svg">
+
 `nf` is nonfiction’s internal CLI for agency WordPress theme work.
 
 It gives the team one command surface for project metadata, local WordPress dev envs, theme tasks, theme packaging, provider inventory, repo remotes, password derivation, and guarded future deploy/sync workflows.
