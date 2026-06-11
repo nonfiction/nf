@@ -7242,6 +7242,60 @@ func TestRenderEnvComposeUsesMetadataDefaults(t *testing.T) {
 	}
 }
 
+func TestEnsureManagedEnvUsesConfiguredDockerImages(t *testing.T) {
+	configHome := t.TempDir()
+	t.Setenv("NF_CONFIG_HOME", configHome)
+	t.Setenv("NF_DATA_HOME", configHome)
+	if err := saveGlobalConfig(map[string]string{
+		"docker_db_image":        "mariadb:11.4",
+		"docker_cli_image":       "wordpress:cli-php8.3-custom",
+		"docker_wordpress_image": "wordpress:php8.3-custom-apache",
+	}); err != nil {
+		t.Fatalf("saveGlobalConfig() error = %v", err)
+	}
+
+	root := t.TempDir()
+	metadata := map[string]any{
+		"project":   map[string]any{"slug": "client"},
+		"wordpress": map[string]any{"theme_path": "theme", "theme_slug": "theme"},
+		"env":       map[string]any{"compose": "docker compose", "wordpress_service": "wordpress", "cli_service": "cli", "theme_mount_slug": "theme", "uploads_path": "uploads"},
+	}
+	cfg, ok := loadEnvConfig(root, metadata)
+	if !ok {
+		t.Fatalf("loadEnvConfig() = false, want true")
+	}
+	cfg.AdminUser = "admin"
+	cfg.AdminEmail = "web@example.com"
+	cfg.AdminPassword = "wp-pass"
+	cfg.DBUser = "client"
+	cfg.DBPassword = "db-pass"
+	cfg, err := envConfigWithAdminCredentials(cfg)
+	if err != nil {
+		t.Fatalf("envConfigWithAdminCredentials() error = %v", err)
+	}
+	if err := ensureManagedEnv(cfg); err != nil {
+		t.Fatalf("ensureManagedEnv() error = %v", err)
+	}
+
+	composeData, err := os.ReadFile(filepath.Join(cfg.EnvDir, "docker-compose.yml"))
+	if err != nil {
+		t.Fatalf("ReadFile(docker-compose.yml) error = %v", err)
+	}
+	compose := string(composeData)
+	for _, want := range []string{"image: mariadb:11.4", "image: wordpress:cli-php8.3-custom", "image: wordpress:php8.3-custom-apache"} {
+		if !strings.Contains(compose, want) {
+			t.Fatalf("docker-compose.yml missing %q:\n%s", want, compose)
+		}
+	}
+	dockerfileData, err := os.ReadFile(filepath.Join(cfg.EnvDir, "wordpress", "Dockerfile"))
+	if err != nil {
+		t.Fatalf("ReadFile(Dockerfile) error = %v", err)
+	}
+	if !strings.Contains(string(dockerfileData), "FROM wordpress:php8.3-custom-apache") {
+		t.Fatalf("Dockerfile missing configured FROM:\n%s", string(dockerfileData))
+	}
+}
+
 func TestEnvSnapshotHelpersValidateNamesAndRenderMetadata(t *testing.T) {
 	if got, want := defaultEnvSnapshotName(time.Date(2026, 5, 28, 9, 30, 12, 0, time.UTC)), "2026-05-28-093012"; got != want {
 		t.Fatalf("defaultEnvSnapshotName() = %q, want %q", got, want)
@@ -8778,7 +8832,7 @@ func TestEnsureManagedEnvWritesManagedFiles(t *testing.T) {
 	adminPassword := passwords.DerivePassword("client", "wp-admin", "test-salt")
 	dbPassword := passwords.DerivePassword("client", "mysql", "test-salt")
 	checks := map[string][]string{
-		filepath.Join(cfg.EnvDir, "docker-compose.yml"):                   {filepath.Join(root, "theme") + ":/var/www/html/wp-content/themes/theme", "mailpit", "adminer:", "wordpress:php8.3-apache", "https://www.adminneo.org/files/5.4.1/mysql_en_default/adminneo-5.4.1.php", "${ADMINER_PORT}:80", "wordpress:cli-php8.4"},
+		filepath.Join(cfg.EnvDir, "docker-compose.yml"):                   {filepath.Join(root, "theme") + ":/var/www/html/wp-content/themes/theme", "mailpit", "adminer:", "wordpress:php8.3-apache", "https://www.adminneo.org/files/5.4.1/mysql_en_default/adminneo-5.4.1.php", "${ADMINER_PORT}:80", "wordpress:cli-php8.3"},
 		filepath.Join(cfg.EnvDir, ".env"):                                 {"COMPOSE_PROJECT_NAME=nf_client_env", fmt.Sprintf("WP_PORT=%d", wpPort), fmt.Sprintf("MAILPIT_PORT=%d", mailpitPort), fmt.Sprintf("ADMINER_PORT=%d", adminerPort), fmt.Sprintf("WP_URL=http://localhost:%d", wpPort), "DB_USER=client", "DB_PASSWORD=" + dbPassword, "WP_TITLE=Client", "ADMIN_USER=admin", "ADMIN_PASSWORD=" + adminPassword, "ADMIN_EMAIL=web@nonfiction.ca"},
 		filepath.Join(cfg.EnvDir, "php", "uploads.ini"):                   {"upload_max_filesize=128M", "max_execution_time=120"},
 		filepath.Join(cfg.EnvDir, "wordpress", "Dockerfile"):              {"FROM wordpress:php8.3-apache", "COPY wordpress/wordpress-rewrites.conf"},
