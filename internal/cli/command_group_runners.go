@@ -32,7 +32,7 @@ func runEnvHelp() int {
 		{"down", "stop the local env"},
 		{"show", "show paths, ports, and URLs"},
 		{"password [remote] [--wp|--db|--basicauth]", "show a local or remote env password only"},
-		{"logs", "tail WordPress logs"},
+		{"logs [remote]", "tail local or remote WordPress logs"},
 		{"shell, sh [remote]", "open a local or remote shell"},
 		{"wp -- <args>", "run wp-cli in the local env"},
 		{},
@@ -332,6 +332,18 @@ func runEnv(argv []string) int {
 			return 1
 		}
 	}
+	if name == "logs" {
+		for _, arg := range argv[1:] {
+			if strings.HasPrefix(arg, "-") {
+				fmt.Fprintf(os.Stderr, "unknown env logs flag: %s\n", arg)
+				return 1
+			}
+		}
+		if len(argv) > 2 {
+			fmt.Fprintln(os.Stderr, "env logs takes at most one remote")
+			return 1
+		}
+	}
 	if name == "push" || name == "pull" {
 		remoteName, opts, ok := parseEnvRemoteSyncArgs(name, argv[1:])
 		if !ok {
@@ -403,6 +415,19 @@ func runEnv(argv []string) int {
 			return 1
 		}
 		return cmdSiteRemoteCommandPlan("shell", canonicalEnvID(siteID, remoteEnv), nil)
+	}
+	if name == "logs" && len(argv) == 2 {
+		remoteName := strings.TrimSpace(argv[1])
+		siteID, remoteEnv, ok, err := projectRemoteAlias(metadata, remoteName)
+		if err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			return 1
+		}
+		if !ok {
+			fmt.Fprintf(os.Stderr, "No configured remote matched %q.\n", remoteName)
+			return 1
+		}
+		return cmdSiteRemoteCommandPlan("logs", canonicalEnvID(siteID, remoteEnv), nil)
 	}
 	if name == "push" || name == "pull" {
 		remoteName, opts, ok := parseEnvRemoteSyncArgs(name, argv[1:])

@@ -511,9 +511,16 @@ func kinstaSiteEnvSSHArgs(record map[string]any, action string, wpArgs []string)
 	}
 	path = normalizeKinstaCachedPath(path)
 	destination := user + "@" + host
-	if action != "wp" {
+	switch action {
+	case "shell":
 		remoteCommand := "cd " + shellQuoteArg(path) + " && exec ${SHELL:-/bin/bash} -i"
 		return []string{"ssh", "-t", "-p", port, destination, remoteCommand}, nil
+	case "logs":
+		remoteCommand := remoteDebugLogTailCommand(path)
+		return []string{"ssh", "-p", port, destination, remoteCommand}, nil
+	}
+	if action != "wp" {
+		return nil, ProjectError{Msg: fmt.Sprintf("unsupported remote site env command %q", action)}
 	}
 	sshArgs := []string{"ssh", "-p", port, destination}
 	remoteCommand := "cd " + shellQuoteArg(path) + " && wp --path=" + shellQuoteArg(path)
@@ -563,9 +570,16 @@ func linodeSiteEnvSSHArgs(record map[string]any, action string, wpArgs []string)
 	if path == "" {
 		return nil, ProjectError{Msg: fmt.Sprintf("Site env %q is missing path.", siteSummary(record))}
 	}
-	if action != "wp" {
+	switch action {
+	case "shell":
 		remoteCommand := "cd " + shellQuoteArg(path) + " && exec ${SHELL:-/bin/bash} -i"
 		return []string{"ssh", "-t", "-p", port, destination, remoteCommand}, nil
+	case "logs":
+		remoteCommand := remoteDebugLogTailCommand(path)
+		return []string{"ssh", "-p", port, destination, remoteCommand}, nil
+	}
+	if action != "wp" {
+		return nil, ProjectError{Msg: fmt.Sprintf("unsupported remote site env command %q", action)}
 	}
 	sshArgs := []string{"ssh", "-p", port, destination}
 	remoteCommand := "cd " + shellQuoteArg(path) + " && sudo -u www-data wp --path=" + shellQuoteArg(path)
@@ -573,4 +587,9 @@ func linodeSiteEnvSSHArgs(record map[string]any, action string, wpArgs []string)
 		remoteCommand += " " + renderCommandArgs(normalized)
 	}
 	return append(sshArgs, remoteCommand), nil
+}
+
+func remoteDebugLogTailCommand(wordPressPath string) string {
+	quotedPath := shellQuoteArg(wordPressPath)
+	return "cd " + quotedPath + " && mkdir -p wp-content && touch wp-content/debug.log && tail -f wp-content/debug.log"
 }

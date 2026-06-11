@@ -837,6 +837,16 @@ func TestRunCompleteSuggestsProjectValues(t *testing.T) {
 	if strings.TrimSpace(envShellOutput) != "production" {
 		t.Fatalf("env shell completion = %q, want production", envShellOutput)
 	}
+
+	envLogsOutput := captureStdout(t, func() {
+		if got := Run([]string{"__complete", "--", "env", "logs", ""}); got != 0 {
+			t.Fatalf("Run(__complete env logs) = %d, want 0", got)
+		}
+	})
+	if strings.TrimSpace(envLogsOutput) != "production" {
+		t.Fatalf("env logs completion = %q, want production", envLogsOutput)
+	}
+
 	envPasswordOutput := captureStdout(t, func() {
 		if got := Run([]string{"__complete", "--", "env", "password", ""}); got != 0 {
 			t.Fatalf("Run(__complete env password) = %d, want 0", got)
@@ -6268,8 +6278,8 @@ func assertProjectRemote(t *testing.T, projectPath, remoteName, wantSiteID, want
 
 func TestRunEnvHelpShowsCommandsWithoutShortcuts(t *testing.T) {
 	output := captureStdout(t, func() { _ = runEnvHelp() })
-	assertContainsInOrder(t, output, []string{"up", "down", "show", "password", "logs", "shell, sh [remote]", "wp -- <args>", "\n\n  plugins", "snapshot", "\n\n  pull [remote] [--dry-run] [--execute] [--yes]", "push [remote] [--dry-run] [--execute] [--yes]", "\n\n  reset"})
-	for _, wanted := range []string{"env\n\nCommands:\n", "show", "show paths, ports, and URLs", "password [remote] [--wp|--db|--basicauth]", "show a local or remote env password only", "up", "start the local env", "down", "stop the local env", "logs", "tail WordPress logs", "shell", "open a local or remote shell", "reset", "destroy and recreate the local env", "wp -- <args>", "run wp-cli in the local env", "plugins", "manage configured WordPress plugins", "push [remote] [--dry-run] [--execute] [--yes]", "pull [remote] [--dry-run] [--execute] [--yes]", "snapshot", "manage env snapshots"} {
+	assertContainsInOrder(t, output, []string{"up", "down", "show", "password", "logs [remote]", "shell, sh [remote]", "wp -- <args>", "\n\n  plugins", "snapshot", "\n\n  pull [remote] [--dry-run] [--execute] [--yes]", "push [remote] [--dry-run] [--execute] [--yes]", "\n\n  reset"})
+	for _, wanted := range []string{"env\n\nCommands:\n", "show", "show paths, ports, and URLs", "password [remote] [--wp|--db|--basicauth]", "show a local or remote env password only", "up", "start the local env", "down", "stop the local env", "logs [remote]", "tail local or remote WordPress logs", "shell", "open a local or remote shell", "reset", "destroy and recreate the local env", "wp -- <args>", "run wp-cli in the local env", "plugins", "manage configured WordPress plugins", "push [remote] [--dry-run] [--execute] [--yes]", "pull [remote] [--dry-run] [--execute] [--yes]", "snapshot", "manage env snapshots"} {
 		if !strings.Contains(output, wanted) {
 			t.Fatalf("runEnvHelp() output missing %q:\n%s", wanted, output)
 		}
@@ -10082,6 +10092,145 @@ func TestRunEnvShellRemoteUsesConfiguredRemote(t *testing.T) {
 	})
 	if !strings.Contains(stderr, "unsupported env command") {
 		t.Fatalf("Run(env ssh) stderr = %q, want unsupported env command", stderr)
+	}
+}
+
+func TestRunEnvLogsRemoteUsesConfiguredRemote(t *testing.T) {
+	configHome := t.TempDir()
+	stateDir := t.TempDir()
+	t.Setenv("NF_CONFIG_HOME", configHome)
+	t.Setenv("NF_STATE_HOME", stateDir)
+	t.Setenv("NF_DATA_HOME", configHome)
+	writeTestWPDefaults(t, "test-salt")
+	if err := state.SaveStateRecords("sites", []map[string]any{{"provider": "kinsta", "site_id": "client-kinsta", "env": "live", "url": "https://www.example.com/", "path": "/www/client/public", "ssh": map[string]any{"host": "203.0.113.10", "port": "12345", "user": "client"}}}); err != nil {
+		t.Fatalf("SaveStateRecords(sites) error = %v", err)
+	}
+
+	workdir := t.TempDir()
+	if err := os.Mkdir(filepath.Join(workdir, ".git"), 0o755); err != nil {
+		t.Fatalf("Mkdir(.git) error = %v", err)
+	}
+	project := map[string]any{
+		"version":   1,
+		"project":   map[string]any{"slug": "client", "name": "Client"},
+		"wordpress": map[string]any{"theme_path": "theme", "theme_slug": "theme"},
+		"env":       map[string]any{"compose": "docker compose", "wordpress_service": "wordpress", "theme_mount_slug": "theme", "uploads_path": "uploads"},
+		"remotes":   map[string]any{"production": "client-kinsta:live"},
+	}
+	projectData, err := json.MarshalIndent(project, "", "  ")
+	if err != nil {
+		t.Fatalf("MarshalIndent(project) error = %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(workdir, "nf.json"), append(projectData, '\n'), 0o644); err != nil {
+		t.Fatalf("WriteFile(nf.json) error = %v", err)
+	}
+	oldRunSSHCommand := runSSHCommandFn
+	var sshArgs []string
+	runSSHCommandFn = func(args []string) error {
+		sshArgs = append([]string(nil), args...)
+		return nil
+	}
+	t.Cleanup(func() { runSSHCommandFn = oldRunSSHCommand })
+	oldwd, err := os.Getwd()
+	if err != nil {
+		t.Fatalf("Getwd() error = %v", err)
+	}
+	if err := os.Chdir(workdir); err != nil {
+		t.Fatalf("Chdir() error = %v", err)
+	}
+	t.Cleanup(func() { _ = os.Chdir(oldwd) })
+
+	output := captureStdout(t, func() {
+		if got := Run([]string{"env", "logs", "production"}); got != 0 {
+			t.Fatalf("Run(env logs production) = %d, want 0", got)
+		}
+	})
+	for _, want := range []string{"Site logs preflight:", "site:     client-kinsta", "env:      live", "provider: kinsta", "> ssh -p 12345 client@203.0.113.10", "cd /www/client/public", "touch wp-content/debug.log", "tail -f wp-content/debug.log"} {
+		if !strings.Contains(output, want) {
+			t.Fatalf("env logs remote output missing %q:\n%s", want, output)
+		}
+	}
+	if got, want := sshArgs, []string{"ssh", "-p", "12345", "client@203.0.113.10", "cd /www/client/public && mkdir -p wp-content && touch wp-content/debug.log && tail -f wp-content/debug.log"}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("ssh args = %#v, want %#v", got, want)
+	}
+
+	stderr := captureStderr(t, func() {
+		if got := Run([]string{"env", "logs", "missing"}); got != 1 {
+			t.Fatalf("Run(env logs missing) = %d, want 1", got)
+		}
+	})
+	if !strings.Contains(stderr, "No configured remote matched \"missing\".") {
+		t.Fatalf("Run(env logs missing) stderr = %q, want missing remote", stderr)
+	}
+	stderr = captureStderr(t, func() {
+		if got := Run([]string{"env", "logs", "production", "extra"}); got != 1 {
+			t.Fatalf("Run(env logs production extra) = %d, want 1", got)
+		}
+	})
+	if !strings.Contains(stderr, "env logs takes at most one remote") {
+		t.Fatalf("Run(env logs extra) stderr = %q, want too many args", stderr)
+	}
+	stderr = captureStderr(t, func() {
+		if got := Run([]string{"env", "logs", "--bad"}); got != 1 {
+			t.Fatalf("Run(env logs --bad) = %d, want 1", got)
+		}
+	})
+	if !strings.Contains(stderr, "unknown env logs flag: --bad") {
+		t.Fatalf("Run(env logs --bad) stderr = %q, want unknown flag", stderr)
+	}
+}
+
+func TestRunEnvLogsExecutesLocalComposeLogs(t *testing.T) {
+	configHome := t.TempDir()
+	t.Setenv("NF_CONFIG_HOME", configHome)
+	t.Setenv("NF_DATA_HOME", configHome)
+	t.Setenv("NF_PASSWORD_SALT", "test-salt")
+
+	workdir := t.TempDir()
+	if err := os.Mkdir(filepath.Join(workdir, ".git"), 0o755); err != nil {
+		t.Fatalf("Mkdir(.git) error = %v", err)
+	}
+	project := map[string]any{"version": 1, "project": map[string]any{"slug": "client", "name": "Client"}, "wordpress": map[string]any{"theme_path": "theme", "theme_slug": "theme"}, "env": map[string]any{"compose": "docker compose", "wordpress_service": "wordpress", "theme_mount_slug": "theme", "uploads_path": "uploads"}}
+	projectData, err := json.MarshalIndent(project, "", "  ")
+	if err != nil {
+		t.Fatalf("MarshalIndent() error = %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(workdir, "nf.json"), append(projectData, '\n'), 0o644); err != nil {
+		t.Fatalf("WriteFile() error = %v", err)
+	}
+
+	binDir := t.TempDir()
+	capturePath := filepath.Join(t.TempDir(), "docker-args.txt")
+	script := "#!/bin/sh\nprintf '%s\n' \"$@\" > \"$CAPTURE_FILE\"\n"
+	if err := os.WriteFile(filepath.Join(binDir, "docker"), []byte(script), 0o755); err != nil {
+		t.Fatalf("WriteFile() error = %v", err)
+	}
+	t.Setenv("CAPTURE_FILE", capturePath)
+	t.Setenv("PATH", binDir+string(os.PathListSeparator)+os.Getenv("PATH"))
+
+	oldwd, err := os.Getwd()
+	if err != nil {
+		t.Fatalf("Getwd() error = %v", err)
+	}
+	if err := os.Chdir(workdir); err != nil {
+		t.Fatalf("Chdir() error = %v", err)
+	}
+	t.Cleanup(func() { _ = os.Chdir(oldwd) })
+
+	output := captureStdout(t, func() {
+		if got := Run([]string{"env", "logs"}); got != 0 {
+			t.Fatalf("Run(env logs) = %d, want 0", got)
+		}
+	})
+	if !strings.Contains(output, "> docker compose logs -f wordpress") {
+		t.Fatalf("Run(env logs) stdout = %q, want compose logs preview", output)
+	}
+	args, err := os.ReadFile(capturePath)
+	if err != nil {
+		t.Fatalf("ReadFile() error = %v", err)
+	}
+	if got, want := strings.Split(strings.TrimSpace(string(args)), "\n"), []string{"compose", "logs", "-f", "wordpress"}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("docker args = %#v, want %#v", got, want)
 	}
 }
 

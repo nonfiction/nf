@@ -303,7 +303,7 @@ func envCompletionCandidates(args []string) []string {
 		return append(projectRemoteCompletionNames(), "--wp", "--db", "--basicauth")
 	case "up", "reset":
 		return []string{"--rebuild"}
-	case "pull", "push":
+	case "logs", "pull", "push":
 		return projectRemoteCompletionNames()
 	case "shell":
 		return projectRemoteCompletionNames()
