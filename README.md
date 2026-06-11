@@ -35,24 +35,39 @@ Always available:
 nf
 
 Commands:
-  init        initialize project metadata
   provider    manage provider integrations
   target      manage deployable targets
   site        manage remote sites and envs
-  config      manage global config
   password    derive passwords
+
+  init        initialize project metadata
+  config      manage global config
   completion  print shell completion scripts
   version     show nf version
   help        show help
 ```
 
-Inside an `nf` project repo with `nf.json` next to `.git`, help also shows:
+Inside an `nf` project repo with `nf.json` next to `.git`:
 
 ```text
+nf
+
+Commands:
+  provider    manage provider integrations
+  target      manage deployable targets
+  site        manage remote sites and envs
+  password    derive passwords
+
   remote      manage repo remotes
   env         manage the local development env
   theme       package clean artifacts and run theme tasks
   public      deploy static public paths
+
+  init        initialize project metadata
+  config      manage global config
+  completion  print shell completion scripts
+  version     show nf version
+  help        show help
 ```
 
 ## Versioning and releases
