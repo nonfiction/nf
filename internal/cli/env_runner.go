@@ -334,8 +334,13 @@ func envFinalizeLocalRestore(cfg envConfig, sourceURL string) error {
 			return err
 		}
 	}
-	if err := runCommandSpec(execSpec{Dir: localEnvDir(cfg), Args: envWpThemeActivateArgs(cfg, cfg.ThemeMountSlug)}); err != nil {
-		return err
+	themeSlug := firstNonEmpty(cfg.ThemeMountSlug, cfg.ThemeSlug, "theme")
+	if err := runCommandSpecQuiet(execSpec{Dir: localEnvDir(cfg), Args: envWpThemeIsInstalledArgs(cfg, themeSlug)}); err == nil {
+		if err := runCommandSpec(execSpec{Dir: localEnvDir(cfg), Args: envWpThemeActivateArgs(cfg, themeSlug)}); err != nil {
+			return err
+		}
+	} else {
+		fmt.Fprintf(os.Stderr, "Warning: theme %q is not installed locally; skipping theme activation.\n", themeSlug)
 	}
 	return runCommandSpec(execSpec{Dir: localEnvDir(cfg), Args: envWpArgs(cfg, "cache", "flush")})
 }

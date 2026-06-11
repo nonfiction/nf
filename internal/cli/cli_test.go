@@ -6874,6 +6874,48 @@ func TestExecuteEnvPullFinalizesLocalDestinationThemeAndCache(t *testing.T) {
 	}
 }
 
+func TestExecuteEnvPullSkipsMissingLocalDestinationTheme(t *testing.T) {
+	configHome := t.TempDir()
+	t.Setenv("NF_CONFIG_HOME", configHome)
+	t.Setenv("NF_DATA_HOME", configHome)
+	dockerDir := t.TempDir()
+	logPath := filepath.Join(dockerDir, "docker-args.txt")
+	dockerScript := []byte("#!/bin/sh\nprintf '%s\\n' \"$@\" >> \"$DOCKER_LOG\"\ncase \"$*\" in\n  *'theme is-installed local-theme'*) exit 1 ;;\nesac\nexit 0\n")
+	if err := os.WriteFile(filepath.Join(dockerDir, "docker"), dockerScript, 0o755); err != nil {
+		t.Fatalf("WriteFile(docker) error = %v", err)
+	}
+	t.Setenv("DOCKER_LOG", logPath)
+	t.Setenv("PATH", dockerDir+string(os.PathListSeparator)+os.Getenv("PATH"))
+	cfg := envConfig{ProjectSlug: "client", EnvDir: config.EnvDir("client"), Compose: "docker compose", WordpressService: "wordpress", DockerUser: "nonfiction", ThemeMountSlug: "local-theme", ThemeSlug: "remote-theme", UploadsPath: "uploads", WordpressPort: 18432}
+	target := envRemoteSyncTarget{RemoteName: "live", Provider: "linode", SiteID: "client.app1-linode", Env: "live", URL: "https://client.app1-linode.nonfiction.dev/", SSHUser: "nonfiction", SSHHost: "app1-linode.nonfiction.dev", SSHPort: "22", WordPressPath: "/var/www/sites/client/public", WPCommand: "sudo -u www-data wp", SudoFileOps: true}
+	oldRunSSH := runSSHCommandFn
+	runSSHCommandFn = func(args []string) error { return nil }
+	t.Cleanup(func() { runSSHCommandFn = oldRunSSH })
+	oldRunRsync := runRsyncCommandFn
+	runRsyncCommandFn = func(args []string) error { return nil }
+	t.Cleanup(func() { runRsyncCommandFn = oldRunRsync })
+
+	stderr := captureStderr(t, func() {
+		captureStdout(t, func() {
+			if got := executeEnvPull(cfg, target); got != 0 {
+				t.Fatalf("executeEnvPull() = %d, want 0", got)
+			}
+		})
+	})
+	if !strings.Contains(stderr, `Warning: theme "local-theme" is not installed locally; skipping theme activation.`) {
+		t.Fatalf("stderr missing missing-theme warning:\n%s", stderr)
+	}
+	logData, err := os.ReadFile(logPath)
+	if err != nil {
+		t.Fatalf("ReadFile(docker log) error = %v", err)
+	}
+	logText := string(logData)
+	assertContainsInOrder(t, logText, []string{"wp db import", "wp\ntheme\nis-installed\nlocal-theme", "wp\ncache\nflush"})
+	if strings.Contains(logText, "wp\ntheme\nactivate\nlocal-theme") {
+		t.Fatalf("pull activated missing local theme:\n%s", logText)
+	}
+}
+
 func TestExecuteEnvPushFinalizesRemoteDestinationThemeAndCache(t *testing.T) {
 	configHome := t.TempDir()
 	t.Setenv("NF_CONFIG_HOME", configHome)
@@ -6910,7 +6952,10 @@ func TestExecuteEnvPushFinalizesRemoteDestinationThemeAndCache(t *testing.T) {
 	if !strings.Contains(importScript, "db import") {
 		t.Fatalf("remote import script missing db import:\n%s", importScript)
 	}
-	assertContainsInOrder(t, finalizeScript, []string{"search-replace http://localhost:18432 https://client.app1-linode.nonfiction.dev --all-tables-with-prefix --skip-columns=guid", "theme activate remote-theme", "cache flush"})
+	assertContainsInOrder(t, finalizeScript, []string{"search-replace http://localhost:18432 https://client.app1-linode.nonfiction.dev --all-tables-with-prefix --skip-columns=guid", "theme is-installed remote-theme", "theme activate remote-theme", "cache flush"})
+	if !strings.Contains(finalizeScript, "skipping theme activation") {
+		t.Fatalf("remote finalize script missing missing-theme warning:\n%s", finalizeScript)
+	}
 	if strings.Contains(finalizeScript, "theme activate local-theme") {
 		t.Fatalf("push activated local theme mount slug remotely:\n%s", finalizeScript)
 	}

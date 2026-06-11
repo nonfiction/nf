@@ -269,6 +269,10 @@ func envWpThemeIsActiveArgs(cfg envConfig, slug string) []string {
 	return envWpArgs(cfg, "theme", "is-active", firstNonEmpty(slug, cfg.ThemeMountSlug, cfg.ThemeSlug, "theme"))
 }
 
+func envWpThemeIsInstalledArgs(cfg envConfig, slug string) []string {
+	return envWpArgs(cfg, "theme", "is-installed", firstNonEmpty(slug, cfg.ThemeMountSlug, cfg.ThemeSlug, "theme"))
+}
+
 func envWpCoreInstallArgs(cfg envConfig) []string {
 	slug := firstNonEmpty(cfg.ThemeMountSlug, cfg.ThemeSlug, "theme")
 	return append(envWordpressExecArgs(cfg, "sh", "-lc"), `wp core install --url="$WP_URL" --title="$WP_TITLE" --admin_user="$ADMIN_USER" --admin_password="$ADMIN_PASSWORD" --admin_email="$ADMIN_EMAIL" --skip-email && wp theme activate `+slug)

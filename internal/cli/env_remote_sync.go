@@ -249,9 +249,13 @@ func remoteWPSearchReplaceLine(target envRemoteSyncTarget, sourceURL, destinatio
 
 func remoteFinalizeImportScript(target envRemoteSyncTarget, themeSlug, sourceURL, destinationURL string) string {
 	return fmt.Sprintf(`set -eu
-%s%s --path=%s theme activate %s
+%sif %s --path=%s theme is-installed %s >/dev/null 2>&1; then
+  %s --path=%s theme activate %s
+else
+  printf 'Warning: theme %s is not installed on the remote; skipping theme activation.\n' >&2
+fi
 %s --path=%s cache flush
-`, remoteWPSearchReplaceLine(target, sourceURL, destinationURL), target.WPCommand, shellQuoteArg(target.WordPressPath), shellQuoteArg(themeSlug), target.WPCommand, shellQuoteArg(target.WordPressPath))
+`, remoteWPSearchReplaceLine(target, sourceURL, destinationURL), target.WPCommand, shellQuoteArg(target.WordPressPath), shellQuoteArg(themeSlug), target.WPCommand, shellQuoteArg(target.WordPressPath), shellQuoteArg(themeSlug), shellQuoteArg(themeSlug), target.WPCommand, shellQuoteArg(target.WordPressPath))
 }
 
 func remoteSSHArgs(target envRemoteSyncTarget, script string) []string {
