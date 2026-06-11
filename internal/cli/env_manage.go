@@ -216,6 +216,23 @@ func envWpCoreInstallArgs(cfg envConfig) []string {
 	return append(envComposeArgs(cfg, "run", "--rm", firstNonEmpty(cfg.CliService, "cli"), "sh", "-lc"), `wp core install --url="$WP_URL" --title="$WP_TITLE" --admin_user="$ADMIN_USER" --admin_password="$ADMIN_PASSWORD" --admin_email="$ADMIN_EMAIL" --skip-email --allow-root && wp theme activate `+slug+` --allow-root`)
 }
 
+func envWpMailpitSMTPArgs(cfg envConfig) []string {
+	return append(envComposeArgs(cfg, "run", "--rm", firstNonEmpty(cfg.CliService, "cli"), "sh", "-lc"), `set -eu
+mkdir -p wp-content/mu-plugins
+cat > wp-content/mu-plugins/nf-mailpit.php <<'PHP'
+<?php
+/**
+ * Route local WordPress email through Mailpit.
+ */
+add_action('phpmailer_init', static function ($phpmailer) {
+    $phpmailer->isSMTP();
+    $phpmailer->Host = 'mailpit';
+    $phpmailer->Port = 1025;
+    $phpmailer->SMTPAuth = false;
+});
+PHP`)
+}
+
 func envWpThemeActivateArgs(cfg envConfig, slug string) []string {
 	return envWpArgs(cfg, "theme", "activate", firstNonEmpty(slug, cfg.ThemeMountSlug, cfg.ThemeSlug, "theme"))
 }

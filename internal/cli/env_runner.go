@@ -23,6 +23,9 @@ func (c envCommandRunner) ensureUpInstalledActive(envDir string) error {
 	if err := runCommandSpec(execSpec{Dir: envDir, Args: envComposeArgs(c.cfg, "up", "-d")}); err != nil {
 		return err
 	}
+	if err := runCommandSpec(execSpec{Dir: envDir, Args: envWpMailpitSMTPArgs(c.cfg)}); err != nil {
+		return err
+	}
 	if err := runCommandSpecQuiet(execSpec{Dir: envDir, Args: envWpProbeArgs(c.cfg, "core", "is-installed")}); err != nil {
 		if err := runCommandSpec(execSpec{Dir: envDir, Args: envWpCoreInstallArgs(c.cfg)}); err != nil {
 			return err
@@ -98,13 +101,13 @@ func (c envCommandRunner) Execute(root string, extraArgs []string) error {
 func (c envCommandRunner) Render() string {
 	switch c.name {
 	case "up":
-		return "docker compose up -d; install WordPress if missing and ensure the mounted theme is active"
+		return "docker compose up -d; configure Mailpit SMTP; install WordPress if missing and ensure the mounted theme is active"
 	case "down":
 		return "docker compose down"
 	case "logs":
 		return "docker compose logs -f " + c.cfg.WordpressService
 	case "reset":
-		return "docker compose down -v --remove-orphans; nuke env data and recreate it with docker compose up -d, install WordPress if missing, and ensure the mounted theme is active"
+		return "docker compose down -v --remove-orphans; nuke env data and recreate it with docker compose up -d, configure Mailpit SMTP, install WordPress if missing, and ensure the mounted theme is active"
 	case "shell":
 		return "docker compose exec " + firstNonEmpty(c.cfg.WordpressService, "wordpress") + " bash"
 	case "wp":
