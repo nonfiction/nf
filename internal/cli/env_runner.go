@@ -52,6 +52,12 @@ func (c envCommandRunner) Execute(root string, extraArgs []string) error {
 			return err
 		}
 		c.cfg = cfg
+	} else if c.name == "shell" || c.name == "wp" {
+		cfg, err := envConfigWithDBCredentials(c.cfg)
+		if err != nil {
+			return err
+		}
+		c.cfg = cfg
 	}
 	if err := ensureManagedEnv(c.cfg); err != nil {
 		return err

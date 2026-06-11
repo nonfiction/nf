@@ -20,12 +20,15 @@ type envConfig struct {
 	EnvDir           string
 	WordpressPort    int
 	MailpitPort      int
+	AdminerPort      int
 	Compose          string
 	WordpressService string
 	CliService       string
 	ThemeMountSlug   string
 	UploadsPath      string
 	ThemeSlug        string
+	DBUser           string
+	DBPassword       string
 	AdminUser        string
 	AdminEmail       string
 	AdminPassword    string

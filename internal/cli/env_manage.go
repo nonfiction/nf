@@ -51,7 +51,7 @@ func ensureManagedEnv(cfg envConfig) error {
 }
 
 func envConfigWithAdminCredentials(cfg envConfig) (envConfig, error) {
-	if cfg.AdminUser != "" && cfg.AdminEmail != "" && cfg.AdminPassword != "" {
+	if cfg.AdminUser != "" && cfg.AdminEmail != "" && cfg.AdminPassword != "" && cfg.DBUser != "" && cfg.DBPassword != "" {
 		return cfg, nil
 	}
 	values, err := loadGlobalConfig()
@@ -67,9 +67,26 @@ func envConfigWithAdminCredentials(cfg envConfig) (envConfig, error) {
 	if err != nil {
 		return cfg, err
 	}
+	cfg, err = envConfigWithDBCredentials(cfg)
+	if err != nil {
+		return cfg, err
+	}
 	cfg.AdminUser = adminUser
 	cfg.AdminEmail = adminEmail
 	cfg.AdminPassword = adminPassword
+	return cfg, nil
+}
+
+func envConfigWithDBCredentials(cfg envConfig) (envConfig, error) {
+	if cfg.DBUser != "" && cfg.DBPassword != "" {
+		return cfg, nil
+	}
+	dbPassword, err := envDBPassword(cfg)
+	if err != nil {
+		return cfg, err
+	}
+	cfg.DBUser = firstNonEmpty(cfg.DBUser, cfg.ProjectSlug)
+	cfg.DBPassword = dbPassword
 	return cfg, nil
 }
 
@@ -78,6 +95,13 @@ func envAdminPassword(cfg envConfig) (string, error) {
 		return cfg.AdminPassword, nil
 	}
 	return deriveProjectPassword(cfg.ProjectSlug, "wp-admin", cfg.PasswordVersion)
+}
+
+func envDBPassword(cfg envConfig) (string, error) {
+	if cfg.DBPassword != "" {
+		return cfg.DBPassword, nil
+	}
+	return deriveProjectPassword(cfg.ProjectSlug, "mysql", cfg.PasswordVersion)
 }
 
 func writeManagedFile(path, contents string, mode os.FileMode) error {
@@ -110,8 +134,8 @@ func envPortInUse(port int) bool {
 }
 
 func envPortsInUse(cfg envConfig) []int {
-	occupied := make([]int, 0, 2)
-	for _, port := range []int{cfg.WordpressPort, cfg.MailpitPort} {
+	occupied := make([]int, 0, 3)
+	for _, port := range []int{cfg.WordpressPort, cfg.MailpitPort, cfg.AdminerPort} {
 		if envPortInUse(port) {
 			occupied = append(occupied, port)
 		}
@@ -126,7 +150,7 @@ func envPortCollisionMessage(cfg envConfig, occupied []int) string {
 	ports := append([]int(nil), occupied...)
 	sort.Ints(ports)
 	projectLabel := firstNonEmpty(cfg.ProjectSlug, "project")
-	block := fmt.Sprintf("The %s env wants:\n  WordPress: http://localhost:%d\n  Mailpit:   http://localhost:%d\n\nSet env.ports.wordpress and env.ports.mailpit in nf.json to override.", projectLabel, cfg.WordpressPort, cfg.MailpitPort)
+	block := fmt.Sprintf("The %s env wants:\n  WordPress: http://localhost:%d\n  Mailpit:   http://localhost:%d\n  Adminer:   http://localhost:%d\n\nSet env.ports.wordpress, env.ports.mailpit, and env.ports.adminer in nf.json to override.", projectLabel, cfg.WordpressPort, cfg.MailpitPort, cfg.AdminerPort)
 	if len(ports) == 1 {
 		return fmt.Sprintf("Port %d is already in use.\n\n%s", ports[0], block)
 	}

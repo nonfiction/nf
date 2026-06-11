@@ -167,9 +167,9 @@ func envPortBlockStart(projectSlug string) int {
 	return 18000 + int(h.Sum32()%1000)*4
 }
 
-func envDerivedPorts(projectSlug string) (int, int) {
+func envDerivedPorts(projectSlug string) (int, int, int) {
 	base := envPortBlockStart(projectSlug)
-	return base, base + 1
+	return base, base + 1, base + 2
 }
 
 func cleanEnvSlug(projectSlug string) string {

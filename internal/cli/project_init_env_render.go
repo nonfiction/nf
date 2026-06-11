@@ -261,6 +261,18 @@ func renderEnvCompose(cfg envConfig) string {
     ports:
       - "${MAILPIT_PORT}:8025"
 
+  adminer:
+    image: wordpress:php8.3-apache
+    depends_on:
+      db:
+        condition: service_healthy
+    command: >
+      sh -lc "mkdir -p /var/www/html
+      && php -r 'copy(\"https://www.adminneo.org/files/5.4.1/mysql_en_default/adminneo-5.4.1.php\", \"/var/www/html/index.php\");'
+      && php -S 0.0.0.0:80 -t /var/www/html"
+    ports:
+      - "${ADMINER_PORT}:80"
+
 volumes:
   db_data:
   wp_data:
@@ -269,22 +281,25 @@ volumes:
 
 func renderEnvFile(cfg envConfig) string {
 	wpTitle := slugToTitle(cfg.ProjectSlug)
+	dbUser := firstNonEmpty(cfg.DBUser, cfg.ProjectSlug)
+	dbPassword := firstNonEmpty(cfg.DBPassword, "wordpress")
 	adminUser := firstNonEmpty(cfg.AdminUser, "admin")
 	adminPassword := firstNonEmpty(cfg.AdminPassword, "admin")
 	adminEmail := firstNonEmpty(cfg.AdminEmail, "web@nonfiction.ca")
 	return fmt.Sprintf(`COMPOSE_PROJECT_NAME=%s
 WP_PORT=%d
 MAILPIT_PORT=%d
+ADMINER_PORT=%d
 DB_NAME=%s
 DB_USER=%s
-DB_PASSWORD=wordpress
+DB_PASSWORD=%s
 DB_ROOT_PASSWORD=root
 WP_URL=http://localhost:%d
 WP_TITLE=%s
 ADMIN_USER=%s
 ADMIN_PASSWORD=%s
 ADMIN_EMAIL=%s
-`, envComposeProjectName(cfg.ProjectSlug), cfg.WordpressPort, cfg.MailpitPort, cfg.ProjectSlug, cfg.ProjectSlug, cfg.WordpressPort, wpTitle, adminUser, adminPassword, adminEmail)
+`, envComposeProjectName(cfg.ProjectSlug), cfg.WordpressPort, cfg.MailpitPort, cfg.AdminerPort, cfg.ProjectSlug, dbUser, dbPassword, cfg.WordpressPort, wpTitle, adminUser, adminPassword, adminEmail)
 }
 
 func envComposeProjectName(projectSlug string) string {
@@ -294,6 +309,8 @@ func envComposeProjectName(projectSlug string) string {
 func renderEnvInfo(cfg envConfig, includeURLs bool) string {
 	title := cfg.ProjectSlug + ":local"
 	siteURL := fmt.Sprintf("http://localhost:%d", cfg.WordpressPort)
+	adminerURL := fmt.Sprintf("http://localhost:%d", cfg.AdminerPort)
+	mailpitURL := fmt.Sprintf("http://localhost:%d", cfg.MailpitPort)
 	lines := []string{title, strings.Repeat("─", len(title))}
 	rows := []detailRow{
 		{label: "Site", value: cfg.ProjectSlug},
@@ -302,24 +319,37 @@ func renderEnvInfo(cfg envConfig, includeURLs bool) string {
 	rows = append(rows,
 		detailRow{label: "Path", value: localEnvDir(cfg)},
 		detailRow{label: "PHP", value: localEnvPHPVersion()},
-		detailRow{label: "Database", value: cfg.ProjectSlug},
 		detailRow{label: "Compose", value: envComposeProjectName(cfg.ProjectSlug)},
 	)
-	if includeURLs {
-		rows = append(rows,
-			detailRow{label: "URL", value: siteURL},
-			detailRow{label: "Mailpit", value: fmt.Sprintf("http://localhost:%d", cfg.MailpitPort)},
-		)
-	}
 	lines = append(lines, detailRowLines(rows, 0)...)
-	accessRows := []detailRow{
-		{label: "Admin URL", value: siteURL + "/wp-login.php"},
-		{label: "Admin user", value: cfg.AdminUser},
-		{label: "Admin pass", value: cfg.AdminPassword},
+	if !includeURLs {
+		return strings.Join(lines, "\n")
 	}
-	if includeURLs && hasDetailRows(accessRows) {
-		lines = append(lines, "", "Access")
-		lines = append(lines, detailRowLines(accessRows, 2)...)
+	dbRows := []detailRow{
+		{label: "Adminer URL", value: adminerURL},
+		{label: "DB user", value: firstNonEmpty(cfg.DBUser, cfg.ProjectSlug)},
+		{label: "DB pass", value: cfg.DBPassword},
+	}
+	if hasDetailRows(dbRows) {
+		lines = append(lines, "", "Database")
+		lines = append(lines, detailRowLines(dbRows, 2)...)
+	}
+	emailRows := []detailRow{
+		{label: "Mailpit URL", value: mailpitURL},
+	}
+	if hasDetailRows(emailRows) {
+		lines = append(lines, "", "Email")
+		lines = append(lines, detailRowLines(emailRows, 2)...)
+	}
+	wordpressRows := []detailRow{
+		{label: "Site URL", value: siteURL},
+		{label: "Admin URL", value: siteURL + "/wp-login.php"},
+		{label: "WP user", value: cfg.AdminUser},
+		{label: "WP pass", value: cfg.AdminPassword},
+	}
+	if hasDetailRows(wordpressRows) {
+		lines = append(lines, "", "WordPress")
+		lines = append(lines, detailRowLines(wordpressRows, 2)...)
 	}
 	return strings.Join(lines, "\n")
 }

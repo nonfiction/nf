@@ -257,6 +257,7 @@ func loadEnvConfig(root string, metadata map[string]any) (envConfig, bool) {
 		EnvDir:           config.EnvDir(projectSlug),
 		WordpressPort:    firstEnvPort(raw, "wordpress", projectSlug),
 		MailpitPort:      firstEnvPort(raw, "mailpit", projectSlug),
+		AdminerPort:      firstEnvPort(raw, "adminer", projectSlug),
 		Compose:          firstNonEmpty(mapStringAtPath(raw, "compose"), "docker compose"),
 		WordpressService: firstNonEmpty(mapStringAtPath(raw, "wordpress_service"), "wordpress"),
 		CliService:       firstNonEmpty(mapStringAtPath(raw, "cli_service"), "cli"),
@@ -267,10 +268,13 @@ func loadEnvConfig(root string, metadata map[string]any) (envConfig, bool) {
 }
 
 func firstEnvPort(raw map[string]any, name, projectSlug string) int {
-	derivedWordpress, derivedMailpit := envDerivedPorts(projectSlug)
+	derivedWordpress, derivedMailpit, derivedAdminer := envDerivedPorts(projectSlug)
 	derived := derivedWordpress
-	if name == "mailpit" {
+	switch name {
+	case "mailpit":
 		derived = derivedMailpit
+	case "adminer":
+		derived = derivedAdminer
 	}
 	ports := mapMapAtPath(raw, "ports")
 	if ports == nil {
