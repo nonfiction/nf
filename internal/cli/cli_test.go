@@ -7462,16 +7462,19 @@ func TestEnvComposeProjectName(t *testing.T) {
 }
 
 func TestEnvDerivedPortsUseCleanedSlug(t *testing.T) {
-	wpA, mailpitA := envDerivedPorts(" Client Site ")
-	wpB, mailpitB := envDerivedPorts("client_site")
-	if wpA != wpB || mailpitA != mailpitB {
-		t.Fatalf("envDerivedPorts() = (%d, %d) and (%d, %d), want matching ports", wpA, mailpitA, wpB, mailpitB)
+	wpA, mailpitA, adminerA := envDerivedPorts(" Client Site ")
+	wpB, mailpitB, adminerB := envDerivedPorts("client_site")
+	if wpA != wpB || mailpitA != mailpitB || adminerA != adminerB {
+		t.Fatalf("envDerivedPorts() = (%d, %d, %d) and (%d, %d, %d), want matching ports", wpA, mailpitA, adminerA, wpB, mailpitB, adminerB)
 	}
 	if mailpitA != wpA+1 {
 		t.Fatalf("envDerivedPorts() mailpit = %d, want wordpress+1 (%d)", mailpitA, wpA+1)
 	}
-	if wpA < 18000 || mailpitA > 21999 {
-		t.Fatalf("envDerivedPorts() = (%d, %d), want ports in 18000-21999 block", wpA, mailpitA)
+	if adminerA != wpA+2 {
+		t.Fatalf("envDerivedPorts() adminer = %d, want wordpress+2 (%d)", adminerA, wpA+2)
+	}
+	if wpA < 18000 || adminerA > 21999 {
+		t.Fatalf("envDerivedPorts() = (%d, %d, %d), want ports in 18000-21999 block", wpA, mailpitA, adminerA)
 	}
 }
 
@@ -7484,9 +7487,9 @@ func writeTestWPDefaults(t *testing.T, salt string) {
 }
 
 func TestRenderEnvFileUsesComposeProjectName(t *testing.T) {
-	wpPort, mailpitPort := envDerivedPorts("client")
-	cfg := envConfig{ProjectSlug: "client", WordpressPort: wpPort, MailpitPort: mailpitPort}
-	want := fmt.Sprintf("COMPOSE_PROJECT_NAME=nf_client_env\nWP_PORT=%d\nMAILPIT_PORT=%d\nDB_NAME=client\nDB_USER=client\nDB_PASSWORD=wordpress\nDB_ROOT_PASSWORD=root\nWP_URL=http://localhost:%d\nWP_TITLE=Client\nADMIN_USER=admin\nADMIN_PASSWORD=admin\nADMIN_EMAIL=web@nonfiction.ca\n", wpPort, mailpitPort, wpPort)
+	wpPort, mailpitPort, adminerPort := envDerivedPorts("client")
+	cfg := envConfig{ProjectSlug: "client", WordpressPort: wpPort, MailpitPort: mailpitPort, AdminerPort: adminerPort, DBUser: "client", DBPassword: "db-pass"}
+	want := fmt.Sprintf("COMPOSE_PROJECT_NAME=nf_client_env\nWP_PORT=%d\nMAILPIT_PORT=%d\nADMINER_PORT=%d\nDB_NAME=client\nDB_USER=client\nDB_PASSWORD=db-pass\nDB_ROOT_PASSWORD=root\nWP_URL=http://localhost:%d\nWP_TITLE=Client\nADMIN_USER=admin\nADMIN_PASSWORD=admin\nADMIN_EMAIL=web@nonfiction.ca\n", wpPort, mailpitPort, adminerPort, wpPort)
 	if got := renderEnvFile(cfg); got != want {
 		t.Fatalf("renderEnvFile() = %q, want %q", got, want)
 	}
@@ -8480,12 +8483,12 @@ func TestRunEnvPluginsInstallRemotePromptsBeforeExecution(t *testing.T) {
 }
 
 func TestRenderEnvInfoUsesEffectivePorts(t *testing.T) {
-	cfg := envConfig{ProjectSlug: "client", EnvDir: filepath.Join("/data", "envs", "client"), WordpressPort: 18432, MailpitPort: 18433}
-	want := "client:local\n────────────\nSite       client\nEnv        local\nPath       /data/envs/client\nPHP        8.3\nDatabase   client\nCompose    nf_client_env\nURL        http://localhost:18432\nMailpit    http://localhost:18433\n\nAccess\n  Admin URL   http://localhost:18432/wp-login.php"
+	cfg := envConfig{ProjectSlug: "client", EnvDir: filepath.Join("/data", "envs", "client"), WordpressPort: 18432, MailpitPort: 18433, AdminerPort: 18434, DBUser: "client", DBPassword: "db-pass", AdminUser: "admin", AdminPassword: "wp-pass"}
+	want := "client:local\n────────────\nSite      client\nEnv       local\nPath      /data/envs/client\nPHP       8.3\nCompose   nf_client_env\n\nDatabase\n  Adminer URL   http://localhost:18434\n  DB user       client\n  DB pass       db-pass\n\nEmail\n  Mailpit URL   http://localhost:18433\n\nWordPress\n  Site URL    http://localhost:18432\n  Admin URL   http://localhost:18432/wp-login.php\n  WP user     admin\n  WP pass     wp-pass"
 	if got := renderEnvInfo(cfg, true); got != want {
 		t.Fatalf("renderEnvInfo(full) = %q, want %q", got, want)
 	}
-	want = "client:local\n────────────\nSite       client\nEnv        local\nPath       /data/envs/client\nPHP        8.3\nDatabase   client\nCompose    nf_client_env"
+	want = "client:local\n────────────\nSite      client\nEnv       local\nPath      /data/envs/client\nPHP       8.3\nCompose   nf_client_env"
 	if got := renderEnvInfo(cfg, false); got != want {
 		t.Fatalf("renderEnvInfo(short) = %q, want %q", got, want)
 	}
@@ -8515,8 +8518,8 @@ func TestLoadEnvConfigAppliesPortOverrides(t *testing.T) {
 	if !ok {
 		t.Fatalf("loadEnvConfig() = false, want true")
 	}
-	if cfg.WordpressPort != 19111 || cfg.MailpitPort != 19112 {
-		t.Fatalf("effective ports = (%d, %d), want overrides (19111, 19112)", cfg.WordpressPort, cfg.MailpitPort)
+	if cfg.WordpressPort != 19111 || cfg.MailpitPort != 19112 || cfg.AdminerPort == 0 {
+		t.Fatalf("effective ports = (%d, %d, %d), want overrides (19111, 19112, derived)", cfg.WordpressPort, cfg.MailpitPort, cfg.AdminerPort)
 	}
 }
 
@@ -8525,7 +8528,7 @@ func TestLoadEnvConfigFallsBackPerPortIndependently(t *testing.T) {
 	if err := os.MkdirAll(filepath.Join(root, "theme"), 0o755); err != nil {
 		t.Fatalf("MkdirAll() error = %v", err)
 	}
-	derivedWordpress, derivedMailpit := envDerivedPorts("client")
+	derivedWordpress, derivedMailpit, _ := envDerivedPorts("client")
 	for _, tc := range []struct {
 		name          string
 		envPorts      map[string]any
@@ -8578,20 +8581,20 @@ func openAdjacentPortPair(t *testing.T) (int, net.Listener, net.Listener) {
 }
 
 func TestPreflightEnvPortsDetectsSingleCollision(t *testing.T) {
-	wpPort, mailpitPort := envDerivedPorts("client")
+	wpPort, mailpitPort, adminerPort := envDerivedPorts("client")
 	listener, err := net.Listen("tcp", fmt.Sprintf(":%d", wpPort))
 	if err != nil {
 		t.Fatalf("net.Listen() error = %v", err)
 	}
 	t.Cleanup(func() { _ = listener.Close() })
 
-	cfg := envConfig{ProjectSlug: "client", EnvDir: filepath.Join("/data", "envs", "client"), WordpressPort: wpPort, MailpitPort: mailpitPort}
+	cfg := envConfig{ProjectSlug: "client", EnvDir: filepath.Join("/data", "envs", "client"), WordpressPort: wpPort, MailpitPort: mailpitPort, AdminerPort: adminerPort}
 	err = preflightEnvPorts(cfg)
 	if err == nil {
 		t.Fatal("preflightEnvPorts() error = nil, want collision")
 	}
 	message := err.Error()
-	for _, want := range []string{fmt.Sprintf("Port %d is already in use.", wpPort), fmt.Sprintf("WordPress: http://localhost:%d", wpPort), fmt.Sprintf("Mailpit:   http://localhost:%d", mailpitPort)} {
+	for _, want := range []string{fmt.Sprintf("Port %d is already in use.", wpPort), fmt.Sprintf("WordPress: http://localhost:%d", wpPort), fmt.Sprintf("Mailpit:   http://localhost:%d", mailpitPort), fmt.Sprintf("Adminer:   http://localhost:%d", adminerPort)} {
 		if !strings.Contains(message, want) {
 			t.Fatalf("preflightEnvPorts() error = %q, want %q", message, want)
 		}
@@ -8601,14 +8604,14 @@ func TestPreflightEnvPortsDetectsSingleCollision(t *testing.T) {
 func TestPreflightEnvPortsAllowsExistingManagedEnv(t *testing.T) {
 	configHome := t.TempDir()
 	t.Setenv("NF_DATA_HOME", configHome)
-	wpPort, mailpitPort := envDerivedPorts("client")
+	wpPort, mailpitPort, adminerPort := envDerivedPorts("client")
 	listener, err := net.Listen("tcp", fmt.Sprintf(":%d", wpPort))
 	if err != nil {
 		t.Fatalf("net.Listen() error = %v", err)
 	}
 	t.Cleanup(func() { _ = listener.Close() })
 
-	cfg := envConfig{ProjectSlug: "client", EnvDir: config.EnvDir("client"), WordpressPort: wpPort, MailpitPort: mailpitPort}
+	cfg := envConfig{ProjectSlug: "client", EnvDir: config.EnvDir("client"), WordpressPort: wpPort, MailpitPort: mailpitPort, AdminerPort: adminerPort}
 	if err := os.MkdirAll(cfg.EnvDir, 0o755); err != nil {
 		t.Fatalf("MkdirAll() error = %v", err)
 	}
@@ -8631,13 +8634,13 @@ func TestPreflightEnvPortsDetectsBothCollisions(t *testing.T) {
 		_ = second.Close()
 	})
 
-	cfg := envConfig{ProjectSlug: "client", EnvDir: filepath.Join("/data", "envs", "client"), WordpressPort: wpPort, MailpitPort: wpPort + 1}
+	cfg := envConfig{ProjectSlug: "client", EnvDir: filepath.Join("/data", "envs", "client"), WordpressPort: wpPort, MailpitPort: wpPort + 1, AdminerPort: wpPort + 2}
 	err := preflightEnvPorts(cfg)
 	if err == nil {
 		t.Fatal("preflightEnvPorts() error = nil, want collision")
 	}
 	message := err.Error()
-	for _, want := range []string{fmt.Sprintf("Ports %d and %d are already in use.", wpPort, wpPort+1), fmt.Sprintf("WordPress: http://localhost:%d", wpPort), fmt.Sprintf("Mailpit:   http://localhost:%d", wpPort+1)} {
+	for _, want := range []string{fmt.Sprintf("Ports %d and %d are already in use.", wpPort, wpPort+1), fmt.Sprintf("WordPress: http://localhost:%d", wpPort), fmt.Sprintf("Mailpit:   http://localhost:%d", wpPort+1), fmt.Sprintf("Adminer:   http://localhost:%d", wpPort+2)} {
 		if !strings.Contains(message, want) {
 			t.Fatalf("preflightEnvPorts() error = %q, want %q", message, want)
 		}
@@ -8734,7 +8737,7 @@ func TestEnsureManagedEnvWritesManagedFiles(t *testing.T) {
 	if got, want := cfg.EnvDir, config.EnvDir("client"); got != want {
 		t.Fatalf("EnvDir = %q, want %q", got, want)
 	}
-	wpPort, mailpitPort := envDerivedPorts("client")
+	wpPort, mailpitPort, adminerPort := envDerivedPorts("client")
 	credentialCfg, err := envConfigWithAdminCredentials(cfg)
 	if err != nil {
 		t.Fatalf("envConfigWithAdminCredentials() error = %v", err)
@@ -8743,9 +8746,10 @@ func TestEnsureManagedEnvWritesManagedFiles(t *testing.T) {
 		t.Fatalf("ensureManagedInstance() error = %v", err)
 	}
 	adminPassword := passwords.DerivePassword("client", "wp-admin", "test-salt")
+	dbPassword := passwords.DerivePassword("client", "mysql", "test-salt")
 	checks := map[string][]string{
-		filepath.Join(cfg.EnvDir, "docker-compose.yml"):                   {filepath.Join(root, "theme") + ":/var/www/html/wp-content/themes/theme", "mailpit", "wordpress:cli-php8.4"},
-		filepath.Join(cfg.EnvDir, ".env"):                                 {"COMPOSE_PROJECT_NAME=nf_client_env", fmt.Sprintf("WP_PORT=%d", wpPort), fmt.Sprintf("MAILPIT_PORT=%d", mailpitPort), fmt.Sprintf("WP_URL=http://localhost:%d", wpPort), "WP_TITLE=Client", "ADMIN_USER=admin", "ADMIN_PASSWORD=" + adminPassword, "ADMIN_EMAIL=web@nonfiction.ca"},
+		filepath.Join(cfg.EnvDir, "docker-compose.yml"):                   {filepath.Join(root, "theme") + ":/var/www/html/wp-content/themes/theme", "mailpit", "adminer:", "wordpress:php8.3-apache", "https://www.adminneo.org/files/5.4.1/mysql_en_default/adminneo-5.4.1.php", "${ADMINER_PORT}:80", "wordpress:cli-php8.4"},
+		filepath.Join(cfg.EnvDir, ".env"):                                 {"COMPOSE_PROJECT_NAME=nf_client_env", fmt.Sprintf("WP_PORT=%d", wpPort), fmt.Sprintf("MAILPIT_PORT=%d", mailpitPort), fmt.Sprintf("ADMINER_PORT=%d", adminerPort), fmt.Sprintf("WP_URL=http://localhost:%d", wpPort), "DB_USER=client", "DB_PASSWORD=" + dbPassword, "WP_TITLE=Client", "ADMIN_USER=admin", "ADMIN_PASSWORD=" + adminPassword, "ADMIN_EMAIL=web@nonfiction.ca"},
 		filepath.Join(cfg.EnvDir, "php", "uploads.ini"):                   {"upload_max_filesize=128M", "max_execution_time=120"},
 		filepath.Join(cfg.EnvDir, "wordpress", "Dockerfile"):              {"FROM wordpress:php8.3-apache", "COPY wordpress/wordpress-rewrites.conf"},
 		filepath.Join(cfg.EnvDir, "wordpress", "wordpress-rewrites.conf"): {"RewriteRule . /index.php [L]"},
@@ -9548,19 +9552,25 @@ func TestRunEnvShowPrintsEnvInfo(t *testing.T) {
 			t.Fatalf("Run(env show) = %d, want 0", got)
 		}
 	})
-	wpPort, mailpitPort := envDerivedPorts("client")
+	wpPort, mailpitPort, adminerPort := envDerivedPorts("client")
 	adminPassword := passwords.DerivePassword("client", "wp-admin", "test-salt")
+	dbPassword := passwords.DerivePassword("client", "mysql", "test-salt")
 	assertContainsInOrder(t, output, []string{
 		"client:local\n",
-		"Site       client\n",
-		"Env        local\n",
-		"Compose    nf_client_env\n",
-		fmt.Sprintf("URL        http://localhost:%d\n", wpPort),
-		fmt.Sprintf("Mailpit    http://localhost:%d", mailpitPort),
-		"Access\n",
-		fmt.Sprintf("  Admin URL    http://localhost:%d/wp-login.php\n", wpPort),
-		"  Admin user   admin\n",
-		"  Admin pass   " + adminPassword,
+		"Site      client\n",
+		"Env       local\n",
+		"Compose   nf_client_env\n",
+		"Database\n",
+		fmt.Sprintf("  Adminer URL   http://localhost:%d\n", adminerPort),
+		"  DB user       client\n",
+		"  DB pass       " + dbPassword,
+		"Email\n",
+		fmt.Sprintf("  Mailpit URL   http://localhost:%d", mailpitPort),
+		"WordPress\n",
+		fmt.Sprintf("  Site URL    http://localhost:%d\n", wpPort),
+		fmt.Sprintf("  Admin URL   http://localhost:%d/wp-login.php\n", wpPort),
+		"  WP user     admin\n",
+		"  WP pass     " + adminPassword,
 	})
 }
 
@@ -9568,6 +9578,7 @@ func TestRunEnvShellExecutesWordpressShell(t *testing.T) {
 	configHome := t.TempDir()
 	t.Setenv("NF_CONFIG_HOME", configHome)
 	t.Setenv("NF_DATA_HOME", configHome)
+	t.Setenv("NF_PASSWORD_SALT", "test-salt")
 
 	workdir := t.TempDir()
 	if err := os.Mkdir(filepath.Join(workdir, ".git"), 0o755); err != nil {
