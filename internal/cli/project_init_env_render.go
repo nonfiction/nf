@@ -386,8 +386,22 @@ func renderEnvUploadsINI() string {
 func renderEnvDockerfile(cfg envConfig) string {
 	return fmt.Sprintf(`FROM %s
 
+RUN apt-get update \
+  && apt-get install -y --no-install-recommends \
+    curl \
+    dnsutils \
+    iputils-ping \
+    less \
+    nano \
+    procps \
+    vim \
+  && rm -rf /var/lib/apt/lists/*
+
 RUN a2enmod rewrite \
   && sed -ri 's/AllowOverride None/AllowOverride All/g' /etc/apache2/apache2.conf
+
+RUN curl -fsSL -o /usr/local/bin/wp https://raw.githubusercontent.com/wp-cli/builds/gh-pages/phar/wp-cli.phar \
+  && chmod +x /usr/local/bin/wp
 
 COPY wordpress/wordpress-rewrites.conf /etc/apache2/conf-enabled/wordpress-rewrites.conf
 `, firstNonEmpty(cfg.DockerWPImage, defaultDockerWordpressImage))
