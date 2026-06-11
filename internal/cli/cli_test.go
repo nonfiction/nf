@@ -7294,6 +7294,11 @@ func TestEnsureManagedEnvUsesConfiguredDockerImages(t *testing.T) {
 	if !strings.Contains(string(dockerfileData), "FROM wordpress:php8.3-custom-apache") {
 		t.Fatalf("Dockerfile missing configured FROM:\n%s", string(dockerfileData))
 	}
+	for _, want := range []string{"apt-get install -y --no-install-recommends", "iputils-ping", "dnsutils", "nano", "vim", "wp-cli.phar", "/usr/local/bin/wp"} {
+		if !strings.Contains(string(dockerfileData), want) {
+			t.Fatalf("Dockerfile missing %q:\n%s", want, string(dockerfileData))
+		}
+	}
 }
 
 func TestEnvSnapshotHelpersValidateNamesAndRenderMetadata(t *testing.T) {
@@ -8835,7 +8840,7 @@ func TestEnsureManagedEnvWritesManagedFiles(t *testing.T) {
 		filepath.Join(cfg.EnvDir, "docker-compose.yml"):                   {filepath.Join(root, "theme") + ":/var/www/html/wp-content/themes/theme", "mailpit", "adminer:", "wordpress:php8.3-apache", "https://www.adminneo.org/files/5.4.1/mysql_en_default/adminneo-5.4.1.php", "${ADMINER_PORT}:80", "wordpress:cli-php8.3"},
 		filepath.Join(cfg.EnvDir, ".env"):                                 {"COMPOSE_PROJECT_NAME=nf_client_env", fmt.Sprintf("WP_PORT=%d", wpPort), fmt.Sprintf("MAILPIT_PORT=%d", mailpitPort), fmt.Sprintf("ADMINER_PORT=%d", adminerPort), fmt.Sprintf("WP_URL=http://localhost:%d", wpPort), "DB_USER=client", "DB_PASSWORD=" + dbPassword, "WP_TITLE=Client", "ADMIN_USER=admin", "ADMIN_PASSWORD=" + adminPassword, "ADMIN_EMAIL=web@nonfiction.ca"},
 		filepath.Join(cfg.EnvDir, "php", "uploads.ini"):                   {"upload_max_filesize=128M", "max_execution_time=120"},
-		filepath.Join(cfg.EnvDir, "wordpress", "Dockerfile"):              {"FROM wordpress:php8.3-apache", "COPY wordpress/wordpress-rewrites.conf"},
+		filepath.Join(cfg.EnvDir, "wordpress", "Dockerfile"):              {"FROM wordpress:php8.3-apache", "apt-get install -y --no-install-recommends", "iputils-ping", "dnsutils", "nano", "vim", "wp-cli.phar", "/usr/local/bin/wp", "COPY wordpress/wordpress-rewrites.conf"},
 		filepath.Join(cfg.EnvDir, "wordpress", "wordpress-rewrites.conf"): {"RewriteRule . /index.php [L]"},
 	}
 	for path, wants := range checks {
