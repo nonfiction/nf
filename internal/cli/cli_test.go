@@ -4840,6 +4840,142 @@ func TestRunSiteBasicAuthKinstaStatusUnsupported(t *testing.T) {
 	}
 }
 
+func TestRunSiteBasicAuthActionsUseEnvPicker(t *testing.T) {
+	configDir := t.TempDir()
+	stateDir := t.TempDir()
+	t.Setenv("NF_CONFIG_HOME", configDir)
+	t.Setenv("NF_STATE_HOME", stateDir)
+	if err := saveGlobalConfig(map[string]string{"basicauth_default_user": "preview", "linode_default_user": "nonfiction"}); err != nil {
+		t.Fatalf("saveGlobalConfig() error = %v", err)
+	}
+	if err := state.SaveStateRecords("providers", []map[string]any{{"provider": "linode", "targets": []map[string]any{{"name": "app1-linode", "provider": "linode", "hostname": "app1-linode.nonfiction.dev", "ssh": map[string]any{"user": "nonfiction", "host": "app1-linode.nonfiction.dev"}}}}}); err != nil {
+		t.Fatalf("SaveStateRecords(providers) error = %v", err)
+	}
+	if err := state.SaveStateRecords("sites", []map[string]any{
+		{"provider": "linode", "site_id": "foobar.app1-linode", "env_id": "foobar.app1-linode:live", "name": "foobar", "env": "live", "target": "app1-linode", "hostname": "foobar.app1-linode.nonfiction.dev", "url": "https://foobar.app1-linode.nonfiction.dev", "path": "/var/www/sites/foobar/public", "ssh": map[string]any{"user": "nonfiction", "host": "app1-linode.nonfiction.dev", "port": "22"}},
+		{"provider": "linode", "site_id": "foobar.app1-linode", "env_id": "foobar.app1-linode:staging", "name": "foobar", "env": "staging", "target": "app1-linode", "hostname": "foobar-staging.app1-linode.nonfiction.dev", "url": "https://foobar-staging.app1-linode.nonfiction.dev", "path": "/var/www/sites/foobar_staging/public", "ssh": map[string]any{"user": "nonfiction", "host": "app1-linode.nonfiction.dev", "port": "22"}},
+	}); err != nil {
+		t.Fatalf("SaveStateRecords(sites) error = %v", err)
+	}
+	oldSelect := siteSelectFn
+	oldRunSSHOutput := runSSHOutputFn
+	var selectTitle string
+	var selectOptions []ui.SelectOption
+	siteSelectFn = func(title string, options []ui.SelectOption) (string, error) {
+		selectTitle = title
+		selectOptions = append([]ui.SelectOption(nil), options...)
+		return "foobar.app1-linode:staging", nil
+	}
+	runSSHOutputFn = func(args []string) ([]byte, error) {
+		return []byte("  status:   disabled\n"), nil
+	}
+	t.Cleanup(func() {
+		siteSelectFn = oldSelect
+		runSSHOutputFn = oldRunSSHOutput
+	})
+
+	output := captureStdout(t, func() {
+		if got := Run([]string{"site", "basicauth", "status"}); got != 0 {
+			t.Fatalf("Run(site basicauth status) = %d, want 0", got)
+		}
+	})
+	if selectTitle != "Choose a remote env to basic-auth status" {
+		t.Fatalf("select title = %q", selectTitle)
+	}
+	if len(selectOptions) != 2 || selectOptions[0].Value != "foobar.app1-linode:live" || selectOptions[1].Value != "foobar.app1-linode:staging" {
+		t.Fatalf("select options = %#v", selectOptions)
+	}
+	if !strings.Contains(output, "env:      foobar.app1-linode:staging") || !strings.Contains(output, "status:   disabled") {
+		t.Fatalf("site basicauth status output = %q, want picked staging status", output)
+	}
+
+	selectTitle = ""
+	selectOptions = nil
+	output = captureStdout(t, func() {
+		if got := Run([]string{"site", "basicauth", "status", "foobar.app1-linode"}); got != 0 {
+			t.Fatalf("Run(site basicauth status site) = %d, want 0", got)
+		}
+	})
+	if selectTitle != "Choose a remote env to basic-auth status" {
+		t.Fatalf("site-filtered select title = %q", selectTitle)
+	}
+	if len(selectOptions) != 2 || selectOptions[0].Value != "foobar.app1-linode:live" || selectOptions[1].Value != "foobar.app1-linode:staging" {
+		t.Fatalf("site-filtered select options = %#v", selectOptions)
+	}
+	if !strings.Contains(output, "env:      foobar.app1-linode:staging") {
+		t.Fatalf("site basicauth site-filtered status output = %q, want picked staging", output)
+	}
+}
+
+func TestRunSiteBasicAuthEnableDisablePickerAndNonInteractiveErrors(t *testing.T) {
+	configDir := t.TempDir()
+	stateDir := t.TempDir()
+	t.Setenv("NF_CONFIG_HOME", configDir)
+	t.Setenv("NF_STATE_HOME", stateDir)
+	t.Setenv("NF_PASSWORD_SALT", "test-salt")
+	if err := saveGlobalConfig(map[string]string{"basicauth_default_user": "preview", "linode_default_user": "nonfiction"}); err != nil {
+		t.Fatalf("saveGlobalConfig() error = %v", err)
+	}
+	if err := state.SaveStateRecords("providers", []map[string]any{{"provider": "linode", "targets": []map[string]any{{"name": "app1-linode", "provider": "linode", "hostname": "app1-linode.nonfiction.dev", "ssh": map[string]any{"user": "nonfiction", "host": "app1-linode.nonfiction.dev"}}}}}); err != nil {
+		t.Fatalf("SaveStateRecords(providers) error = %v", err)
+	}
+	if err := state.SaveStateRecords("sites", []map[string]any{{"provider": "linode", "site_id": "foobar.app1-linode", "env_id": "foobar.app1-linode:staging", "name": "foobar", "env": "staging", "target": "app1-linode", "hostname": "foobar-staging.app1-linode.nonfiction.dev", "url": "https://foobar-staging.app1-linode.nonfiction.dev", "path": "/var/www/sites/foobar_staging/public", "ssh": map[string]any{"user": "nonfiction", "host": "app1-linode.nonfiction.dev", "port": "22"}}}); err != nil {
+		t.Fatalf("SaveStateRecords(sites) error = %v", err)
+	}
+	oldSelect := siteSelectFn
+	var selectTitles []string
+	siteSelectFn = func(title string, options []ui.SelectOption) (string, error) {
+		selectTitles = append(selectTitles, title)
+		return "foobar.app1-linode:staging", nil
+	}
+	t.Cleanup(func() { siteSelectFn = oldSelect })
+
+	for _, action := range []string{"enable", "disable"} {
+		output := captureStdout(t, func() {
+			if got := Run([]string{"site", "basicauth", action, "--dry-run"}); got != 0 {
+				t.Fatalf("Run(site basicauth %s --dry-run) = %d, want 0", action, got)
+			}
+		})
+		if !strings.Contains(output, "env:      foobar.app1-linode:staging") || !strings.Contains(output, "mode:     dry-run") {
+			t.Fatalf("site basicauth %s output = %q, want picked dry-run plan", action, output)
+		}
+	}
+	if got, want := selectTitles, []string{"Choose a remote env to basic-auth enable", "Choose a remote env to basic-auth disable"}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("select titles = %#v, want %#v", got, want)
+	}
+
+	stderr := captureStderr(t, func() {
+		if got := Run([]string{"site", "basicauth", "disable", "--execute", "--yes", "--non-interactive"}); got != 1 {
+			t.Fatalf("Run(site basicauth disable non-interactive no ref) = %d, want 1", got)
+		}
+	})
+	if !strings.Contains(stderr, "site basicauth disable requires an explicit env ref in non-interactive mode") {
+		t.Fatalf("non-interactive stderr = %q, want explicit env ref error", stderr)
+	}
+}
+
+func TestRenderLinodeBasicAuthDisableAndStatusCheckAllCandidateVhosts(t *testing.T) {
+	plan := siteBasicAuthPlan{Action: "disable", EnvID: "foobar.app1-linode:staging", FileSlugs: []string{"foobar.app1-linode.staging", "foobar-staging.app1-linode"}}
+	disableScript := renderLinodeBasicAuthScript(plan)
+	for _, want := range []string{"vhosts=()", "snippets=()", "htpasswds=()", "for vhost in \"${vhosts[@]}\"", "for snippet in \"${snippets[@]}\"", "rm -f \"${snippets[@]}\" \"${htpasswds[@]}\"", "nginx -t", "systemctl reload nginx"} {
+		if !strings.Contains(disableScript, want) {
+			t.Fatalf("disable script missing %q:\n%s", want, disableScript)
+		}
+	}
+	for _, notWant := range []string{"selected_file_slug", "break; fi"} {
+		if strings.Contains(disableScript, notWant) {
+			t.Fatalf("disable script contained obsolete first-match behavior %q:\n%s", notWant, disableScript)
+		}
+	}
+
+	statusScript := renderLinodeBasicAuthStatusScript(plan)
+	for _, want := range []string{"vhosts=()", "snippets=()", "for vhost in \"${vhosts[@]}\"", "for snippet in \"${snippets[@]}\"", "grep -Fxq \"    include $snippet;\" \"$vhost\""} {
+		if !strings.Contains(statusScript, want) {
+			t.Fatalf("status script missing %q:\n%s", want, statusScript)
+		}
+	}
+}
+
 func TestRunSiteListEnvsWithoutSiteListsAll(t *testing.T) {
 	stateDir := t.TempDir()
 	t.Setenv("NF_STATE_HOME", stateDir)

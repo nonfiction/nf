@@ -40,20 +40,11 @@ func runSiteBasicAuth(argv []string) int {
 	if action == "password" {
 		return runSiteBasicAuthPassword(argv[1:])
 	}
-	if len(argv) < 2 {
-		fmt.Fprintln(os.Stderr, "site basicauth requires an action and env ref: status, enable, or disable")
-		return 1
-	}
 	if action != "status" && action != "enable" && action != "disable" {
 		fmt.Fprintf(os.Stderr, "unsupported site basicauth action: %s\n", action)
 		return 1
 	}
-	envRef := strings.TrimSpace(argv[1])
-	if _, _, ok := splitSiteEnvRef(envRef); !ok {
-		fmt.Fprintln(os.Stderr, "site basicauth requires an explicit env ref like site.target:staging")
-		return 1
-	}
-	opts, ok := parseSiteBasicAuthOptions(argv[2:])
+	envRef, opts, ok := parseSiteBasicAuthActionArgs(action, argv[1:])
 	if !ok {
 		return 1
 	}
@@ -71,8 +62,9 @@ func runSiteBasicAuthHelp() int {
 	return 0
 }
 
-func parseSiteBasicAuthOptions(argv []string) (siteBasicAuthOptions, bool) {
+func parseSiteBasicAuthActionArgs(action string, argv []string) (string, siteBasicAuthOptions, bool) {
 	var opts siteBasicAuthOptions
+	ref := ""
 	for _, arg := range argv {
 		switch arg {
 		case "--dry-run":
@@ -86,13 +78,30 @@ func parseSiteBasicAuthOptions(argv []string) (siteBasicAuthOptions, bool) {
 		default:
 			if strings.HasPrefix(arg, "-") {
 				fmt.Fprintf(os.Stderr, "unknown site basicauth flag: %s\n", arg)
-				return opts, false
+				return "", opts, false
 			}
-			fmt.Fprintf(os.Stderr, "unexpected site basicauth argument: %s\n", arg)
-			return opts, false
+			if ref != "" {
+				fmt.Fprintf(os.Stderr, "site basicauth %s takes at most one env ref\n", action)
+				return "", opts, false
+			}
+			ref = arg
 		}
 	}
-	return opts, true
+	if opts.nonInteractive && strings.TrimSpace(ref) == "" {
+		fmt.Fprintf(os.Stderr, "site basicauth %s requires an explicit env ref in non-interactive mode\n", action)
+		return "", opts, false
+	}
+	if opts.nonInteractive {
+		if _, _, ok := splitSiteEnvRef(ref); !ok {
+			fmt.Fprintf(os.Stderr, "site basicauth %s requires an explicit env ref in non-interactive mode\n", action)
+			return "", opts, false
+		}
+	}
+	envRef, ok := resolveSiteCommandEnvRef("basic-auth "+action, ref)
+	if !ok {
+		return "", opts, false
+	}
+	return envRef, opts, true
 }
 
 func runSiteBasicAuthPassword(argv []string) int {
@@ -364,20 +373,31 @@ func renderLinodeBasicAuthScript(plan siteBasicAuthPlan) string {
 	if plan.Action == "disable" {
 		return fmt.Sprintf(`set -euo pipefail
 file_slugs=(%s)
-selected_file_slug=""
-vhost=""
+vhosts=()
+snippets=()
+htpasswds=()
 for file_slug in "${file_slugs[@]}"; do
-  candidate="/etc/nginx/sites-available/nf-site-$file_slug"
-  if [ -f "$candidate" ]; then selected_file_slug="$file_slug"; vhost="$candidate"; break; fi
+  vhost="/etc/nginx/sites-available/nf-site-$file_slug"
+  snippet="/etc/nginx/snippets/nf-basic-auth-$file_slug.conf"
+  htpasswd="/var/lib/nf/basic-auth/$file_slug.htpasswd"
+  snippets+=("$snippet")
+  htpasswds+=("$htpasswd")
+  if [ -f "$vhost" ]; then vhosts+=("$vhost"); fi
 done
-if [ -z "$vhost" ]; then echo "missing nginx vhost for any of: ${file_slugs[*]}" >&2; exit 1; fi
-snippet="/etc/nginx/snippets/nf-basic-auth-$selected_file_slug.conf"
-htpasswd="/var/lib/nf/basic-auth/$selected_file_slug.htpasswd"
-tmp=$(mktemp)
-awk -v inc="    include $snippet;" '$0 != inc { print }' "$vhost" >"$tmp"
-install -m 0644 "$tmp" "$vhost"
-rm -f "$tmp"
-rm -f "$snippet" "$htpasswd"
+if [ "${#vhosts[@]}" -eq 0 ]; then echo "missing nginx vhost for any of: ${file_slugs[*]}" >&2; exit 1; fi
+for vhost in "${vhosts[@]}"; do
+  tmp=$(mktemp)
+  cp "$vhost" "$tmp"
+  for snippet in "${snippets[@]}"; do
+    next=$(mktemp)
+    awk -v inc="    include $snippet;" '$0 != inc { print }' "$tmp" >"$next"
+    rm -f "$tmp"
+    tmp="$next"
+  done
+  install -m 0644 "$tmp" "$vhost"
+  rm -f "$tmp"
+done
+rm -f "${snippets[@]}" "${htpasswds[@]}"
 nginx -t
 systemctl reload nginx
 `, fileSlugs)
@@ -418,16 +438,25 @@ func renderLinodeBasicAuthStatusScript(plan siteBasicAuthPlan) string {
 	return fmt.Sprintf(`set -eu
 status="disabled"
 remote_user=""
-for file_slug in %s; do
+file_slugs=(%s)
+vhosts=()
+snippets=()
+for file_slug in "${file_slugs[@]}"; do
   vhost="/etc/nginx/sites-available/nf-site-$file_slug"
   snippet="/etc/nginx/snippets/nf-basic-auth-$file_slug.conf"
   htpasswd="/var/lib/nf/basic-auth/$file_slug.htpasswd"
-  if [ -f "$snippet" ] && [ -f "$vhost" ] && grep -Fxq "    include $snippet;" "$vhost"; then
-    status="enabled"
-  fi
+  snippets+=("$snippet")
+  if [ -f "$vhost" ]; then vhosts+=("$vhost"); fi
   if [ -z "$remote_user" ] && [ -f "$htpasswd" ]; then
     remote_user=$(cut -d: -f1 "$htpasswd" | head -n 1)
   fi
+done
+for vhost in "${vhosts[@]}"; do
+  for snippet in "${snippets[@]}"; do
+    if [ -f "$snippet" ] && grep -Fxq "    include $snippet;" "$vhost"; then
+      status="enabled"
+    fi
+  done
 done
 echo "  status:   $status"
 if [ -n "$remote_user" ]; then echo "  remote user: $remote_user"; fi
