@@ -410,6 +410,11 @@ func cmdEnvSnapshotRestore(cfg envConfig, name string, nonInteractive bool, yes 
 		fmt.Fprintln(os.Stderr, err)
 		return 1
 	}
+	sourceMeta, err := envSnapshotMetadataFromFile(envSnapshotMetadataPath(cfg, normalized))
+	if err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		return 1
+	}
 	if !yes && (nonInteractive || !envSnapshotIsInteractive()) {
 		fmt.Fprintln(os.Stderr, "env snapshot use requires an interactive terminal for confirmation")
 		return 1
@@ -449,6 +454,10 @@ func cmdEnvSnapshotRestore(cfg envConfig, name string, nonInteractive bool, yes 
 		return 1
 	}
 	if err := envSnapshotRestoreArchives(cfg, normalized); err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		return 1
+	}
+	if err := envFinalizeLocalRestore(cfg, sourceMeta.WordpressURL); err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		return 1
 	}

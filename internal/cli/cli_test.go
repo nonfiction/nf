@@ -6034,7 +6034,7 @@ func writeTestRemoteSnapshot(t *testing.T, name, envID, createdAt string, dbSize
 	if !ok {
 		t.Fatalf("invalid test envID %q", envID)
 	}
-	meta := remoteSnapshotMetadata{Schema: 1, Source: "remote", EnvID: envID, SiteID: siteID, Env: env, Provider: "kinsta", CreatedAt: createdAt, Path: dir, Contents: envSnapshotContents{Database: "database.sql.gz", WpContent: "wp-content.tar.gz", WpContentPaths: envSnapshotContentPaths()}}
+	meta := remoteSnapshotMetadata{Schema: 1, Source: "remote", EnvID: envID, SiteID: siteID, Env: env, Provider: "kinsta", URL: "https://" + strings.ReplaceAll(envID, ":", ".") + ".example.test", CreatedAt: createdAt, Path: dir, Contents: envSnapshotContents{Database: "database.sql.gz", WpContent: "wp-content.tar.gz", WpContentPaths: envSnapshotContentPaths()}}
 	data, err := json.MarshalIndent(meta, "", "  ")
 	if err != nil {
 		t.Fatalf("MarshalIndent(remote snapshot) error = %v", err)
@@ -6612,7 +6612,7 @@ func TestRunEnvSnapshotImportCopiesRemoteSnapshot(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ReadFile(imported snapshot.json) error = %v", err)
 	}
-	for _, want := range []string{`"name": "imported-live"`, `"project_slug": "client"`, `"database": "database.sql.gz"`, `"wp_content": "wp-content.tar.gz"`} {
+	for _, want := range []string{`"name": "imported-live"`, `"project_slug": "client"`, `"wordpress_url": "https://client-kinsta.live.example.test"`, `"database": "database.sql.gz"`, `"wp_content": "wp-content.tar.gz"`} {
 		if !strings.Contains(string(metaData), want) {
 			t.Fatalf("imported metadata missing %q:\n%s", want, metaData)
 		}
@@ -6679,7 +6679,7 @@ func TestRunEnvSnapshotUseSkipsComposeUpWhenReady(t *testing.T) {
 		CreatedAt:      "2026-05-28T09:30:12Z",
 		EnvPath:        filepath.Join(config.DataHome(), "envs", "client"),
 		ComposeProject: "nf_client_env",
-		WordpressURL:   "http://localhost:18432",
+		WordpressURL:   "https://source.example.test",
 		Contents:       envSnapshotContents{Database: "database.sql.gz", WpContent: "wp-content.tar.gz", WpContentPaths: envSnapshotContentPaths()},
 	}
 	sourceMetaJSON, err := envSnapshotMetadataJSON(sourceMeta)
@@ -6741,9 +6741,7 @@ func TestRunEnvSnapshotUseSkipsComposeUpWhenReady(t *testing.T) {
 		t.Fatalf("ReadFile(docker log) error = %v", err)
 	}
 	logText := string(logData)
-	if strings.Index(logText, "wp db export") == -1 || strings.Index(logText, "wp db import") == -1 || strings.Index(logText, "wp db export") > strings.Index(logText, "wp db import") {
-		t.Fatalf("restore command order looks wrong:\n%s", logText)
-	}
+	assertContainsInOrder(t, logText, []string{"wp db export", "wp db import", "wp\nsearch-replace\nhttps://source.example.test\nhttp://localhost:18440\n--all-tables-with-prefix\n--skip-columns=guid", "wp\ntheme\nactivate\ntheme", "wp\ncache\nflush"})
 }
 
 func TestRunEnvSnapshotUseYesSkipsInteractiveConfirmation(t *testing.T) {
@@ -6787,9 +6785,7 @@ func TestRunEnvSnapshotUseYesSkipsInteractiveConfirmation(t *testing.T) {
 		t.Fatalf("ReadFile(docker log) error = %v", err)
 	}
 	logText := string(logData)
-	if strings.Index(logText, "wp db export") == -1 || strings.Index(logText, "wp db import") == -1 || strings.Index(logText, "wp db export") > strings.Index(logText, "wp db import") {
-		t.Fatalf("restore command order looks wrong:\n%s", logText)
-	}
+	assertContainsInOrder(t, logText, []string{"wp db export", "wp db import", "wp\ntheme\nactivate\ntheme", "wp\ncache\nflush"})
 }
 
 func TestRunEnvSnapshotUseRemoteImportsThenRestores(t *testing.T) {
@@ -6838,8 +6834,85 @@ func TestRunEnvSnapshotUseRemoteImportsThenRestores(t *testing.T) {
 		t.Fatalf("ReadFile(docker log) error = %v", err)
 	}
 	logText := string(logData)
-	if strings.Index(logText, "wp db export") == -1 || strings.Index(logText, "wp db import") == -1 || strings.Index(logText, "wp db export") > strings.Index(logText, "wp db import") {
-		t.Fatalf("restore command order looks wrong:\n%s", logText)
+	assertContainsInOrder(t, logText, []string{"wp db export", "wp db import", "wp\nsearch-replace\nhttps://client-kinsta.live.example.test\nhttp://localhost:18440\n--all-tables-with-prefix\n--skip-columns=guid", "wp\ntheme\nactivate\ntheme", "wp\ncache\nflush"})
+}
+
+func TestExecuteEnvPullFinalizesLocalDestinationThemeAndCache(t *testing.T) {
+	configHome := t.TempDir()
+	t.Setenv("NF_CONFIG_HOME", configHome)
+	t.Setenv("NF_DATA_HOME", configHome)
+	dockerDir := t.TempDir()
+	logPath := filepath.Join(dockerDir, "docker-args.txt")
+	dockerScript := []byte("#!/bin/sh\nprintf '%s\\n' \"$@\" >> \"$DOCKER_LOG\"\nexit 0\n")
+	if err := os.WriteFile(filepath.Join(dockerDir, "docker"), dockerScript, 0o755); err != nil {
+		t.Fatalf("WriteFile(docker) error = %v", err)
+	}
+	t.Setenv("DOCKER_LOG", logPath)
+	t.Setenv("PATH", dockerDir+string(os.PathListSeparator)+os.Getenv("PATH"))
+	cfg := envConfig{ProjectSlug: "client", EnvDir: config.EnvDir("client"), Compose: "docker compose", WordpressService: "wordpress", DockerUser: "nonfiction", ThemeMountSlug: "local-theme", ThemeSlug: "remote-theme", UploadsPath: "uploads", WordpressPort: 18432}
+	target := envRemoteSyncTarget{RemoteName: "live", Provider: "linode", SiteID: "client.app1-linode", Env: "live", URL: "https://client.app1-linode.nonfiction.dev/", SSHUser: "nonfiction", SSHHost: "app1-linode.nonfiction.dev", SSHPort: "22", WordPressPath: "/var/www/sites/client/public", WPCommand: "sudo -u www-data wp", SudoFileOps: true}
+	oldRunSSH := runSSHCommandFn
+	runSSHCommandFn = func(args []string) error { return nil }
+	t.Cleanup(func() { runSSHCommandFn = oldRunSSH })
+	oldRunRsync := runRsyncCommandFn
+	runRsyncCommandFn = func(args []string) error { return nil }
+	t.Cleanup(func() { runRsyncCommandFn = oldRunRsync })
+
+	captureStdout(t, func() {
+		if got := executeEnvPull(cfg, target); got != 0 {
+			t.Fatalf("executeEnvPull() = %d, want 0", got)
+		}
+	})
+	logData, err := os.ReadFile(logPath)
+	if err != nil {
+		t.Fatalf("ReadFile(docker log) error = %v", err)
+	}
+	logText := string(logData)
+	assertContainsInOrder(t, logText, []string{"wp db export", "wp db import", "wp\nsearch-replace\nhttps://client.app1-linode.nonfiction.dev\nhttp://localhost:18432\n--all-tables-with-prefix\n--skip-columns=guid", "wp\ntheme\nactivate\nlocal-theme", "wp\ncache\nflush"})
+	if strings.Contains(logText, "wp\ntheme\nactivate\nremote-theme") {
+		t.Fatalf("pull activated remote theme slug locally:\n%s", logText)
+	}
+}
+
+func TestExecuteEnvPushFinalizesRemoteDestinationThemeAndCache(t *testing.T) {
+	configHome := t.TempDir()
+	t.Setenv("NF_CONFIG_HOME", configHome)
+	t.Setenv("NF_DATA_HOME", configHome)
+	dockerDir := t.TempDir()
+	dockerScript := []byte("#!/bin/sh\nexit 0\n")
+	if err := os.WriteFile(filepath.Join(dockerDir, "docker"), dockerScript, 0o755); err != nil {
+		t.Fatalf("WriteFile(docker) error = %v", err)
+	}
+	t.Setenv("PATH", dockerDir+string(os.PathListSeparator)+os.Getenv("PATH"))
+	cfg := envConfig{ProjectSlug: "client", EnvDir: config.EnvDir("client"), Compose: "docker compose", WordpressService: "wordpress", DockerUser: "nonfiction", ThemeMountSlug: "local-theme", ThemeSlug: "remote-theme", UploadsPath: "uploads", WordpressPort: 18432}
+	target := envRemoteSyncTarget{RemoteName: "live", Provider: "linode", SiteID: "client.app1-linode", Env: "live", URL: "https://client.app1-linode.nonfiction.dev/", SSHUser: "nonfiction", SSHHost: "app1-linode.nonfiction.dev", SSHPort: "22", WordPressPath: "/var/www/sites/client/public", WPCommand: "sudo -u www-data wp", SudoFileOps: true}
+	oldRunRsync := runRsyncCommandFn
+	runRsyncCommandFn = func(args []string) error { return nil }
+	t.Cleanup(func() { runRsyncCommandFn = oldRunRsync })
+	oldRunSSH := runSSHCommandFn
+	var sshCommands [][]string
+	runSSHCommandFn = func(args []string) error {
+		sshCommands = append(sshCommands, append([]string(nil), args...))
+		return nil
+	}
+	t.Cleanup(func() { runSSHCommandFn = oldRunSSH })
+
+	captureStdout(t, func() {
+		if got := executeEnvPush(cfg, target); got != 0 {
+			t.Fatalf("executeEnvPush() = %d, want 0", got)
+		}
+	})
+	if len(sshCommands) != 4 {
+		t.Fatalf("ssh commands len = %d, want mkdir/export/import/finalize: %#v", len(sshCommands), sshCommands)
+	}
+	importScript := sshCommands[2][len(sshCommands[2])-1]
+	finalizeScript := sshCommands[3][len(sshCommands[3])-1]
+	if !strings.Contains(importScript, "db import") {
+		t.Fatalf("remote import script missing db import:\n%s", importScript)
+	}
+	assertContainsInOrder(t, finalizeScript, []string{"search-replace http://localhost:18432 https://client.app1-linode.nonfiction.dev --all-tables-with-prefix --skip-columns=guid", "theme activate remote-theme", "cache flush"})
+	if strings.Contains(finalizeScript, "theme activate local-theme") {
+		t.Fatalf("push activated local theme mount slug remotely:\n%s", finalizeScript)
 	}
 }
 

@@ -238,6 +238,22 @@ gzip -cd %s/database.sql.gz > "$tmp_sql"
 %s`, shellQuoteArg(remoteTmp), shellQuoteArg(remoteTmp), target.WPCommand, shellQuoteArg(target.WordPressPath), fileOp, shellQuoteArg(target.WordPressPath), shellQuoteArg(target.WordPressPath), shellQuoteArg(target.WordPressPath), shellQuoteArg(target.WordPressPath), fileOp, shellQuoteArg(remoteTmp), shellQuoteArg(target.WordPressPath), chown)
 }
 
+func remoteWPSearchReplaceLine(target envRemoteSyncTarget, sourceURL, destinationURL string) string {
+	sourceURL = normalizeWordPressURL(sourceURL, false)
+	destinationURL = normalizeWordPressURL(destinationURL, true)
+	if sourceURL == "" || destinationURL == "" || sourceURL == destinationURL {
+		return ""
+	}
+	return fmt.Sprintf("%s --path=%s search-replace %s %s --all-tables-with-prefix --skip-columns=guid\n", target.WPCommand, shellQuoteArg(target.WordPressPath), shellQuoteArg(sourceURL), shellQuoteArg(destinationURL))
+}
+
+func remoteFinalizeImportScript(target envRemoteSyncTarget, themeSlug, sourceURL, destinationURL string) string {
+	return fmt.Sprintf(`set -eu
+%s%s --path=%s theme activate %s
+%s --path=%s cache flush
+`, remoteWPSearchReplaceLine(target, sourceURL, destinationURL), target.WPCommand, shellQuoteArg(target.WordPressPath), shellQuoteArg(themeSlug), target.WPCommand, shellQuoteArg(target.WordPressPath))
+}
+
 func remoteSSHArgs(target envRemoteSyncTarget, script string) []string {
 	return []string{"ssh", "-p", target.SSHPort, target.SSHUser + "@" + target.SSHHost, script}
 }
@@ -387,6 +403,10 @@ func executeEnvPull(cfg envConfig, target envRemoteSyncTarget) int {
 		fmt.Fprintln(os.Stderr, err)
 		return 1
 	}
+	if err := envFinalizeLocalRestore(cfg, normalizeWordPressURL(target.URL, true)); err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		return 1
+	}
 	fmt.Printf("Env pulled.\n\nRestored snapshot: %s\nSafety snapshot: %s\n", name, safetyName)
 	return 0
 }
@@ -421,6 +441,10 @@ func executeEnvPush(cfg envConfig, target envRemoteSyncTarget) int {
 		return 1
 	}
 	if err := runSSHCommandFn(remoteSSHArgs(target, remoteImportScript(target, remoteTmp))); err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		return 1
+	}
+	if err := runSSHCommandFn(remoteSSHArgs(target, remoteFinalizeImportScript(target, firstNonEmpty(cfg.ThemeSlug, cfg.ProjectSlug, cfg.ThemeMountSlug, "theme"), envLocalWordPressURL(cfg), target.URL))); err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		return 1
 	}

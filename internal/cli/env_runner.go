@@ -307,6 +307,39 @@ func envSnapshotRestoreArchives(cfg envConfig, name string) error {
 	return nil
 }
 
+func normalizeWordPressURL(value string, assumeHTTPS bool) string {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return ""
+	}
+	if assumeHTTPS && !strings.Contains(value, "://") {
+		value = "https://" + value
+	}
+	return strings.TrimRight(value, "/")
+}
+
+func envLocalWordPressURL(cfg envConfig) string {
+	return envSnapshotWordPressURL(cfg)
+}
+
+func envWpSearchReplaceArgs(cfg envConfig, sourceURL, destinationURL string) []string {
+	return envWpArgs(cfg, "search-replace", sourceURL, destinationURL, "--all-tables-with-prefix", "--skip-columns=guid")
+}
+
+func envFinalizeLocalRestore(cfg envConfig, sourceURL string) error {
+	sourceURL = normalizeWordPressURL(sourceURL, false)
+	destinationURL := normalizeWordPressURL(envLocalWordPressURL(cfg), false)
+	if sourceURL != "" && destinationURL != "" && sourceURL != destinationURL {
+		if err := runCommandSpec(execSpec{Dir: localEnvDir(cfg), Args: envWpSearchReplaceArgs(cfg, sourceURL, destinationURL)}); err != nil {
+			return err
+		}
+	}
+	if err := runCommandSpec(execSpec{Dir: localEnvDir(cfg), Args: envWpThemeActivateArgs(cfg, cfg.ThemeMountSlug)}); err != nil {
+		return err
+	}
+	return runCommandSpec(execSpec{Dir: localEnvDir(cfg), Args: envWpArgs(cfg, "cache", "flush")})
+}
+
 func envSnapshotMetadataFromFile(path string) (envSnapshotMetadata, error) {
 	data, err := os.ReadFile(path)
 	if err != nil {

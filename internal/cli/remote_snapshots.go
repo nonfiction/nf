@@ -227,6 +227,7 @@ func createEnvSnapshotFromRemote(cfg envConfig, record remoteSnapshotRecord, loc
 		return "", err
 	}
 	meta := newEnvSnapshotMetadata(cfg, normalizedLocalName, time.Now())
+	meta.WordpressURL = firstNonEmpty(normalizeWordPressURL(record.Metadata.URL, true), meta.WordpressURL)
 	jsonText, err := envSnapshotMetadataJSON(meta)
 	if err != nil {
 		return "", err
