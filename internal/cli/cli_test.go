@@ -308,7 +308,7 @@ func TestRunProviderHelpShowsCommands(t *testing.T) {
 
 func TestRunTargetHelpShowsRefresh(t *testing.T) {
 	output := captureStdout(t, func() { _ = runTargetHelp() })
-	assertContainsInOrder(t, output, []string{"list, ls", "show <target>", "refresh", "\n\n  add linode <name> [flags]", "remove, rm <target>"})
+	assertContainsInOrder(t, output, []string{"list, ls", "show <target>", "adminer show <target>", "refresh", "\n\n  add linode <name> [flags]", "remove, rm <target>"})
 	for _, wanted := range []string{"target\n\nCommands:\n", "\n  list, ls                   list deployable targets\n", "\n  refresh                    refresh targets from providers\n"} {
 		if !strings.Contains(output, wanted) {
 			t.Fatalf("runTargetHelp() output missing %q:\n%s", wanted, output)
@@ -335,7 +335,7 @@ func TestGroupedHelpScreensUseIntendedOrder(t *testing.T) {
 		{
 			name:   "config",
 			render: func() string { return captureStdout(t, func() { _ = runConfigHelp() }) },
-			values: []string{"show", "init", "\n\n  set-base-domain <domain>", "set-default-wp-email <email>", "set-default-wp-user <user>", "set-basicauth-default-user <user>", "\n\n  set-kinsta-default-region <region>", "set-kinsta-default-php <version>", "\n\n  set-linode-default-region <region>", "set-linode-default-type <type>", "set-linode-default-image <image>", "set-linode-default-user <user>"},
+			values: []string{"show", "init", "\n\n  set-base-domain <domain>", "set-default-wp-email <email>", "set-default-wp-user <user>", "set-basicauth-default-user <user>", "set-adminer-default-user <user>", "\n\n  set-kinsta-default-region <region>", "set-kinsta-default-php <version>", "\n\n  set-linode-default-region <region>", "set-linode-default-type <type>", "set-linode-default-image <image>", "set-linode-default-user <user>"},
 		},
 		{
 			name:   "password",
@@ -460,6 +460,14 @@ func TestRunCompleteSuggestsStaticAndCachedValues(t *testing.T) {
 	})
 	if strings.TrimSpace(targetOutput) != "app1-linode" {
 		t.Fatalf("target completion = %q, want app1-linode only", targetOutput)
+	}
+	targetAdminerOutput := captureStdout(t, func() {
+		if got := Run([]string{"__complete", "--", "target", "adminer", "show", "app"}); got != 0 {
+			t.Fatalf("Run(__complete target adminer show) = %d, want 0", got)
+		}
+	})
+	if strings.TrimSpace(targetAdminerOutput) != "app1-linode" {
+		t.Fatalf("target adminer completion = %q, want app1-linode only", targetAdminerOutput)
 	}
 
 	siteOutput := captureStdout(t, func() {
@@ -620,6 +628,14 @@ func TestRunCompleteSuggestsStaticAndCachedValues(t *testing.T) {
 	})
 	if strings.TrimSpace(configOutput) != "set-basicauth-default-user" {
 		t.Fatalf("config completion = %q, want set-basicauth-default-user", configOutput)
+	}
+	configAdminerOutput := captureStdout(t, func() {
+		if got := Run([]string{"__complete", "--", "config", "set-admin"}); got != 0 {
+			t.Fatalf("Run(__complete config set-admin) = %d, want 0", got)
+		}
+	})
+	if strings.TrimSpace(configAdminerOutput) != "set-adminer-default-user" {
+		t.Fatalf("config adminer completion = %q, want set-adminer-default-user", configAdminerOutput)
 	}
 
 	remoteAddOutput := captureStdout(t, func() {
@@ -907,6 +923,7 @@ func TestInitGlobalConfigPromptsForMissingSettings(t *testing.T) {
 		"Default WordPress email: ":    "web@nonfiction.ca",
 		"Default WordPress user: ":     "admin",
 		"Basic auth default user: ":    "nonfiction",
+		"Adminer default user: ":       "nonfiction",
 		"Kinsta default PHP version: ": "8.3",
 		"Linode default region: ":      "ca-central",
 		"Linode default SSH user: ":    "nonfiction",
@@ -933,6 +950,7 @@ func TestInitGlobalConfigPromptsForMissingSettings(t *testing.T) {
 		"default_wp_email":       "web@nonfiction.ca",
 		"default_wp_user":        "admin",
 		"basicauth_default_user": "nonfiction",
+		"adminer_default_user":   "nonfiction",
 		"kinsta_default_php":     "8.3",
 		"linode_default_region":  "ca-central",
 		"linode_default_user":    "nonfiction",
@@ -1019,6 +1037,27 @@ func TestRunConfigSetBasicAuthDefaultUser(t *testing.T) {
 	}
 }
 
+func TestRunConfigSetAdminerDefaultUser(t *testing.T) {
+	configDir := t.TempDir()
+	t.Setenv("NF_CONFIG_HOME", configDir)
+
+	output := captureStdout(t, func() {
+		if got := Run([]string{"config", "set-adminer-default-user", "dbadmin"}); got != 0 {
+			t.Fatalf("Run(config set-adminer-default-user) = %d, want 0", got)
+		}
+	})
+	if !strings.Contains(output, "Set adminer_default_user") {
+		t.Fatalf("output = %q, want set message", output)
+	}
+	values, err := loadGlobalConfig()
+	if err != nil {
+		t.Fatalf("loadGlobalConfig() error = %v", err)
+	}
+	if got := values["adminer_default_user"]; got != "dbadmin" {
+		t.Fatalf("adminer_default_user = %q, want dbadmin", got)
+	}
+}
+
 func TestRunConfigShowGroupsSettings(t *testing.T) {
 	configDir := t.TempDir()
 	t.Setenv("NF_CONFIG_HOME", configDir)
@@ -1028,6 +1067,7 @@ func TestRunConfigShowGroupsSettings(t *testing.T) {
 		"default_wp_email":       "web@nonfiction.ca",
 		"default_wp_user":        "admin",
 		"basicauth_default_user": "nonfiction",
+		"adminer_default_user":   "dbadmin",
 		"dnsimple_account_id":    "14",
 		"kinsta_default_php":     "8.3",
 		"linode_default_region":  "ca-central",
@@ -1053,6 +1093,8 @@ func TestRunConfigShowGroupsSettings(t *testing.T) {
 		"  Admin email       web@nonfiction.ca\n",
 		"  Admin user        admin\n",
 		"  Basic auth user   nonfiction\n",
+		"Adminer\n",
+		"  User   dbadmin\n",
 		"DNSimple\n",
 		"  Account ID   14\n",
 		"Kinsta\n",
@@ -1095,6 +1137,8 @@ func TestRunConfigShowMarksFallbackDefaults(t *testing.T) {
 		"  Admin email       web@nonfiction.ca\n",
 		"  Admin user        admin (default)\n",
 		"  Basic auth user   nonfiction (default)\n",
+		"Adminer\n",
+		"  User   nonfiction (default)\n",
 		"DNSimple\n",
 		"  Account ID   unset\n",
 		"Kinsta\n",
@@ -1860,6 +1904,84 @@ func TestRunTargetShowWithoutTargetPromptsPicker(t *testing.T) {
 		if strings.Contains(output, notWant) {
 			t.Fatalf("target show output contains %q:\n%s", notWant, output)
 		}
+	}
+}
+
+func TestRunTargetShowDisplaysCachedAdminerURL(t *testing.T) {
+	stateDir := t.TempDir()
+	t.Setenv("NF_STATE_HOME", stateDir)
+	if err := state.SaveStateRecords("providers", []map[string]any{{"provider": "linode", "targets": []map[string]any{{
+		"name":     "app1-linode",
+		"provider": "linode",
+		"hostname": "app1-linode.nonfiction.dev",
+		"ssh":      map[string]any{"user": "nonfiction", "host": "app1-linode.nonfiction.dev"},
+		"adminer":  map[string]any{"url": "https://db.app1-linode.nonfiction.dev/"},
+	}}}}); err != nil {
+		t.Fatalf("SaveStateRecords(providers) error = %v", err)
+	}
+	oldSSH := targetSSHReachableFn
+	targetSSHReachableFn = func(record map[string]any) bool { return true }
+	t.Cleanup(func() { targetSSHReachableFn = oldSSH })
+
+	output := captureStdout(t, func() {
+		if got := Run([]string{"target", "show", "app1-linode"}); got != 0 {
+			t.Fatalf("Run(target show) = %d, want 0", got)
+		}
+	})
+	assertContainsInOrder(t, output, []string{
+		"Access\n",
+		"  SSH       ssh nonfiction@app1-linode.nonfiction.dev\n",
+		"  Adminer   https://db.app1-linode.nonfiction.dev/",
+	})
+}
+
+func TestRunTargetAdminerShowReadsTargetMetadataAndDerivesPassword(t *testing.T) {
+	stateDir := t.TempDir()
+	t.Setenv("NF_STATE_HOME", stateDir)
+	t.Setenv("NF_PASSWORD_SALT", "test-salt")
+	if err := state.SaveStateRecords("providers", []map[string]any{{"provider": "linode", "targets": []map[string]any{{
+		"name":     "app1-linode",
+		"provider": "linode",
+		"hostname": "app1-linode.nonfiction.dev",
+		"ssh":      map[string]any{"user": "nonfiction", "host": "app1-linode.nonfiction.dev"},
+	}}}}); err != nil {
+		t.Fatalf("SaveStateRecords(providers) error = %v", err)
+	}
+	var sshArgs []string
+	oldSSHOutput := runSSHOutputFn
+	runSSHOutputFn = func(args []string) ([]byte, error) {
+		sshArgs = append([]string(nil), args...)
+		return []byte(`{
+  "hostname": "app1-linode.nonfiction.dev",
+  "adminer": {
+    "tool": "AdminNeo",
+    "version": "5.4.1",
+    "hostname": "db.app1-linode.nonfiction.dev",
+    "url": "https://db.app1-linode.nonfiction.dev/",
+    "user": "nonfiction",
+    "auth": {"password": {"identity": "app1-linode.nonfiction.dev", "purpose": "adminer", "stored": false}},
+    "database": {"host": "localhost", "user": "nonfiction", "grants": "site-env-databases"}
+  }
+}`), nil
+	}
+	t.Cleanup(func() { runSSHOutputFn = oldSSHOutput })
+
+	output := captureStdout(t, func() {
+		if got := Run([]string{"target", "adminer", "show", "app1-linode"}); got != 0 {
+			t.Fatalf("Run(target adminer show) = %d, want 0", got)
+		}
+	})
+	password := passwords.DerivePassword("app1-linode.nonfiction.dev", "adminer", "test-salt")
+	assertContainsInOrder(t, output, []string{
+		"Adminer:\n",
+		"  url: https://db.app1-linode.nonfiction.dev/\n",
+		"  user: nonfiction\n",
+		"  password: " + password + "\n",
+		"  database host: localhost\n",
+		"  engine: AdminNeo 5.4.1",
+	})
+	if got := strings.Join(sshArgs, " "); !strings.Contains(got, "nonfiction@app1-linode.nonfiction.dev") || !strings.Contains(got, "/var/lib/nf/target.json") {
+		t.Fatalf("ssh args = %#v, want target.json read", sshArgs)
 	}
 }
 
@@ -2800,7 +2922,7 @@ func TestRunSiteAddLinodeExecuteRunsSSHAndCachesEnvs(t *testing.T) {
 	if sshUser != "nonfiction" || sshHost != "app1-linode.nonfiction.dev" {
 		t.Fatalf("ssh target = %s@%s, want nonfiction@app1-linode.nonfiction.dev", sshUser, sshHost)
 	}
-	for _, want := range []string{"/var/www/sites/foobar/public", "/var/www/sites/foobar_staging/public", "CREATE DATABASE IF NOT EXISTS", "wp core install", "foobar.app1-linode.nonfiction.dev", "foobar-staging.app1-linode.nonfiction.dev", "/var/lib/nf/sites.json", "/etc/nginx/conf.d/nf-server-names-hash.conf", "server_names_hash_bucket_size 128;", "server_names_hash_max_size 4096;"} {
+	for _, want := range []string{"/var/www/sites/foobar/public", "/var/www/sites/foobar_staging/public", "CREATE DATABASE IF NOT EXISTS", "wp core install", "foobar.app1-linode.nonfiction.dev", "foobar-staging.app1-linode.nonfiction.dev", "/var/lib/nf/sites.json", "/etc/nginx/conf.d/nf-server-names-hash.conf", "server_names_hash_bucket_size 128;", "server_names_hash_max_size 4096;", ".adminer.user // .adminer.database.user", "SELECT COUNT(*) FROM mysql.user WHERE User='$adminer_user' AND Host='localhost';", "GRANT ALL PRIVILEGES ON \\`$db_name\\`.* TO '$adminer_user'@'localhost';"} {
 		if !strings.Contains(sshScript, want) {
 			t.Fatalf("ssh script missing %q:\n%s", want, sshScript)
 		}
@@ -3778,7 +3900,7 @@ func TestRunSiteRemoveLinodeExecuteRunsSSHAndRemovesCache(t *testing.T) {
 	if sshUser != "nonfiction" || sshHost != "app1-linode.nonfiction.dev" {
 		t.Fatalf("ssh target = %s@%s, want nonfiction@app1-linode.nonfiction.dev", sshUser, sshHost)
 	}
-	for _, want := range []string{"rm -rf -- \"$site_path\"", "DROP DATABASE IF EXISTS \\`$db_name\\`;", "DROP USER IF EXISTS '$db_name'@'localhost';", "remove_env foobar.app1-linode:live foobar.app1-linode.live /var/www/sites/foobar/public foobar", "remove_env foobar.app1-linode:staging foobar.app1-linode.staging /var/www/sites/foobar_staging/public foobar_staging", "nf-site-$file_slug", "nf-site-$env_id", "$file_slug.access.log", "$env_id.access.log", "jq --arg site_id foobar.app1-linode", "nginx -t", "systemctl reload nginx"} {
+	for _, want := range []string{"rm -rf -- \"$site_path\"", ".adminer.user // .adminer.database.user", "REVOKE ALL PRIVILEGES ON \\`$db_name\\`.* FROM '$adminer_user'@'localhost';", "DROP DATABASE IF EXISTS \\`$db_name\\`;", "DROP USER IF EXISTS '$db_name'@'localhost';", "remove_env foobar.app1-linode:live foobar.app1-linode.live /var/www/sites/foobar/public foobar", "remove_env foobar.app1-linode:staging foobar.app1-linode.staging /var/www/sites/foobar_staging/public foobar_staging", "nf-site-$file_slug", "nf-site-$env_id", "$file_slug.access.log", "$env_id.access.log", "jq --arg site_id foobar.app1-linode", "nginx -t", "systemctl reload nginx"} {
 		if !strings.Contains(sshScript, want) {
 			t.Fatalf("ssh script missing %q:\n%s", want, sshScript)
 		}

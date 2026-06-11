@@ -79,7 +79,7 @@ func printTargetDetails(record map[string]any) {
 		{label: "Type", value: firstRecordString(record, "type", "linode_type")},
 		{label: "Image", value: firstRecordString(record, "image")},
 	}, 0)...)
-	accessRows := []detailRow{{label: "SSH", value: targetSSHCommand(record)}}
+	accessRows := []detailRow{{label: "SSH", value: targetSSHCommand(record)}, {label: "Adminer", value: targetAdminerURL(record)}}
 	if hasDetailRows(accessRows) {
 		lines = append(lines, "", "Access")
 		lines = append(lines, detailRowLines(accessRows, 2)...)

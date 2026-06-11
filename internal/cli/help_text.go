@@ -73,6 +73,7 @@ func runTargetHelp() int {
 	printGroupHelp("target", []helpLine{
 		{"list, ls", "list deployable targets"},
 		{"show <target>", "show a deployable target"},
+		{"adminer show <target>", "show target Adminer access"},
 		{"refresh", "refresh targets from providers"},
 		{},
 		{"add linode <name> [flags]", "create a Linode target"},
@@ -121,6 +122,7 @@ func runConfigHelp() int {
 		{"set-default-wp-email <email>", "set default WordPress email"},
 		{"set-default-wp-user <user>", "set default WordPress user"},
 		{"set-basicauth-default-user <user>", "set default basic-auth user"},
+		{"set-adminer-default-user <user>", "set default Adminer user"},
 		{},
 		{"set-kinsta-default-region <region>", "set default Kinsta region"},
 		{"set-kinsta-default-php <version>", "set default Kinsta PHP version"},
@@ -129,6 +131,13 @@ func runConfigHelp() int {
 		{"set-linode-default-type <type>", "set default Linode type"},
 		{"set-linode-default-image <image>", "set default Linode image"},
 		{"set-linode-default-user <user>", "set default Linode SSH user"},
+	})
+	return 0
+}
+
+func runTargetAdminerHelp() int {
+	printGroupHelp("target adminer", []helpLine{
+		{"show [target]", "show target Adminer URL and credentials"},
 	})
 	return 0
 }

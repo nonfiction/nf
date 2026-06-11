@@ -174,6 +174,14 @@ Linode-hosted site/env truth is intended to live on each target at:
 
 `nf site refresh` should discover sites by reading that file over SSH as the standard user.
 
+Linode targets also write non-secret target metadata to:
+
+```text
+/var/lib/nf/target.json
+```
+
+That file includes Adminer/AdminNeo metadata such as URL, username, engine version, and derived credential identity/purpose, but never the raw password. Adminer is exposed at `https://db.<target-hostname>/` through the target wildcard certificate. The shared Adminer MySQL user is created during target provisioning and granted privileges per site-env database during site creation.
+
 ## State and config layout
 
 Config root:
@@ -264,6 +272,7 @@ Do not add old compatibility routes unless explicitly requested.
 * [x] `nf target refresh` refreshes target provider metadata
 * [x] `nf target list`
 * [x] `nf target show <target>`
+* [x] `nf target adminer show <target>`
 * [x] `nf target add linode <name>` create/ensure target scaffold
 * [x] `nf target remove <target>` remove an empty Linode target
 * [x] `nf site add <target> <site> [--with-staging]` create live env scaffolding by default, with optional staging
@@ -309,6 +318,8 @@ Do not add old compatibility routes unless explicitly requested.
 * [x] `nf config set-base-domain <domain>`
 * [x] `nf config set-default-wp-email <email>`
 * [x] `nf config set-default-wp-user <user>`
+* [x] `nf config set-basicauth-default-user <user>`
+* [x] `nf config set-adminer-default-user <user>`
 * [x] `nf config set-kinsta-default-php <version>`
 * [x] `nf config set-kinsta-default-region <region>`
 * [x] `nf config set-linode-default-region <region>`
@@ -660,7 +671,8 @@ Status:
 * [x] Kinsta read-only healthcheck and `kinsta` target
 * [x] Linode read-only healthcheck and tagged target discovery
 * [x] `nf target list/show` from `providers.json`
-* [x] `nf target add linode <name>` create/ensure Linode target with DNS, queued TLS retry, and empty remote site inventory
+* [x] `nf target add linode <name>` create/ensure Linode target with DNS, queued TLS retry, Adminer/AdminNeo, and empty remote site inventory
+* [x] `nf target adminer show <target>` reads `/var/lib/nf/target.json` and derives the Adminer password locally
 * [x] legacy `servers.json` fallback during cache migration
 
 ### Phase 4: Site/env inventory

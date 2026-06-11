@@ -381,6 +381,8 @@ func renderSiteRemoveScript(plan siteRemovePlan) string {
 	q := shellQuoteArg
 	var b strings.Builder
 	b.WriteString("set -euo pipefail\n")
+	b.WriteString("adminer_user=$(jq -r '.adminer.user // .adminer.database.user // \"\"' /var/lib/nf/target.json 2>/dev/null || true)\n")
+	b.WriteString("if [[ ! \"$adminer_user\" =~ ^[A-Za-z0-9_-]{1,32}$ ]]; then adminer_user=\"\"; fi\n")
 	b.WriteString("remove_env() {\n")
 	b.WriteString("  env_id=$1 file_slug=$2 site_path=$3 db_name=$4\n")
 	b.WriteString("  rm -f /etc/nginx/sites-enabled/nf-site-$file_slug /etc/nginx/sites-available/nf-site-$file_slug\n")
@@ -392,6 +394,12 @@ func renderSiteRemoveScript(plan siteRemovePlan) string {
 	b.WriteString("  rm -rf -- \"$site_path\"\n")
 	b.WriteString("  parent=$(dirname \"$site_path\")\n")
 	b.WriteString("  if [ \"$parent\" != /var/www/sites ]; then rmdir --ignore-fail-on-non-empty -- \"$parent\" 2>/dev/null || true; fi\n")
+	b.WriteString("  if [ -n \"$adminer_user\" ]; then\n")
+	b.WriteString("    mariadb -uroot <<SQL || true\n")
+	b.WriteString("REVOKE ALL PRIVILEGES ON \\`$db_name\\`.* FROM '$adminer_user'@'localhost';\n")
+	b.WriteString("FLUSH PRIVILEGES;\n")
+	b.WriteString("SQL\n")
+	b.WriteString("  fi\n")
 	b.WriteString("  mariadb -uroot <<SQL\n")
 	b.WriteString("DROP DATABASE IF EXISTS \\`$db_name\\`;\n")
 	b.WriteString("DROP USER IF EXISTS '$db_name'@'localhost';\n")

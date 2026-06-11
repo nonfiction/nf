@@ -397,7 +397,8 @@ Non-secret config goes in `config.json`:
 {
   "base_domain": "nonfiction.dev",
   "dnsimple_account_id": "14",
-  "basicauth_default_user": "nonfiction"
+  "basicauth_default_user": "nonfiction",
+  "adminer_default_user": "nonfiction"
 }
 ```
 
@@ -420,6 +421,7 @@ nf config set-base-domain nonfiction.dev
 nf config set-default-wp-email dev@example.com
 nf config set-default-wp-user admin
 nf config set-basicauth-default-user nonfiction
+nf config set-adminer-default-user nonfiction
 nf config set-kinsta-default-php 8.3
 nf config set-kinsta-default-region us-central1
 nf config set-linode-default-region us-east
@@ -451,6 +453,7 @@ nf target remove <target> [--dry-run] [--execute --yes]
 nf target refresh
 nf target list
 nf target show <target>
+nf target adminer show <target>
 nf site add <target> <site> [--with-staging] [--region region] [--php version] [--execute --yes]
 nf site refresh
 nf site list [--refresh] [--envs]
@@ -492,15 +495,17 @@ Current behavior:
 * `nf provider list` reports local credential status.
 * `nf provider check` calls safe read-only provider health endpoints and writes `providers.json`.
 * `nf provider show <provider>` reads cached provider metadata.
-* `nf target add linode <name>` creates or ensures a Linode target named `<name>-linode`, tags it `nf`, creates host and wildcard DNS records under `base_domain`, queues HTTPS setup on the target with a systemd retry timer, and records the target under the Linode provider in `providers.json`. Add `--wait` to keep the CLI attached through SSH, TLS, and health checks.
+* `nf target add linode <name>` creates or ensures a Linode target named `<name>-linode`, tags it `nf`, creates host and wildcard DNS records under `base_domain`, queues HTTPS setup on the target with a systemd retry timer, installs AdminNeo at `https://db.<target-hostname>/` behind HTTP Basic auth, and records the target under the Linode provider in `providers.json`. Add `--wait` to keep the CLI attached through SSH, TLS, and health checks.
 * `nf target remove <target>` removes an empty Linode target.
 * `nf target refresh` updates target records from configured target providers so added and removed targets are reflected in `providers.json`.
 * `nf target list/show` read target records from `providers.json`, with a legacy `servers.json` fallback.
+* `nf target adminer show <target>` reads `/var/lib/nf/target.json` over SSH and prints the Adminer URL, username, and derived password. The username defaults to `adminer_default_user`; the password is derived from the target hostname, purpose `adminer`, and `NF_PASSWORD_SALT`.
 * `nf site add <target> <site>` creates the live WordPress env on a target. Add `--with-staging` to create live and staging in one operation.
 * `nf site staging status/add/remove` manages an optional staging env for an existing site. `rm` is a shorthand for `remove`.
 * `nf site refresh` discovers sites from the cached target list. Remote target site discovery is not implemented yet.
 * `nf site list --envs`, `nf site show`, `nf site shell`, `nf site wp`, and `nf site snapshot` read the local disposable site cache for now.
 * `nf site password [site]` shows the derived admin password only.
+* Linode site/env database creation grants the shared Adminer MySQL user privileges only on created site env databases. Site removal revokes those per-database grants before dropping the databases.
 * `nf site basicauth ...` uses `basicauth_default_user` from `config.json` and a per-site derived password with `project.password_version` as the rotation source. Linode envs are managed over SSH by updating the env nginx vhost. Kinsta Password protection exists in MyKinsta, but currently requires manual MyKinsta use because no public API endpoint is exposed.
 * `nf site remove [site]` removes a whole Linode site and deletes its env data.
 * `nf remote add` validates an env ID against the cache, then repo remotes are stored in `nf.json` under `remotes` as `<site>.<target>:<env>` refs.

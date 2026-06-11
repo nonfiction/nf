@@ -51,6 +51,8 @@ func runTarget(argv []string) int {
 			needle = selected
 		}
 		return cmdShowTarget(needle, jsonOutput)
+	case "adminer":
+		return runTargetAdminer(argv[1:])
 	case "add":
 		return runTargetAdd(argv[1:])
 	case "remove":

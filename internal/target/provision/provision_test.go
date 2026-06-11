@@ -1021,6 +1021,14 @@ func TestCloudInitTemplateIsServerOnly(t *testing.T) {
 		"certbot certonly --non-interactive --agree-tos --dns-dnsimple --dns-dnsimple-credentials /root/.secrets/certbot/dnsimple.ini -m web@nonfiction.ca -d app1.nonfiction.dev -d \"*.app1.nonfiction.dev\"",
 		"listen 443 ssl http2;",
 		"include /etc/nginx/snippets/nf-wildcard-cert.conf;",
+		"/usr/local/bin/nf-install-adminer",
+		"https://www.adminneo.org/files/5.4.1/mysql_en_default/adminneo-5.4.1.php",
+		"/var/www/shared/adminer/index.php",
+		"/var/lib/nf/adminer.htpasswd",
+		"server_name db.app1.nonfiction.dev;",
+		"auth_basic \"nf adminer\";",
+		"CREATE USER IF NOT EXISTS 'nonfiction'@'localhost' IDENTIFIED BY PASSWORD '<adminer mysql password hash>';",
+		`"purpose":"adminer"`,
 	} {
 		if !strings.Contains(rendered, want) {
 			t.Fatalf("renderCloudInit() output missing %q:\n%s", want, rendered)
@@ -1054,7 +1062,6 @@ func TestCloudInitTemplateIsServerOnly(t *testing.T) {
 		"xdebug",
 		"client.app1.nonfiction.dev",
 		"server_name *.app1.nonfiction.dev",
-		"CREATE USER",
 		"GRANT ALL PRIVILEGES",
 		"composer install",
 		"npm install",
@@ -1221,7 +1228,7 @@ func TestServerStateRecordShapeDoesNotContainSecrets(t *testing.T) {
 	if phpBlock, ok := record["php"].(map[string]any); !ok || phpBlock["version"] != "8.3" || phpBlock["service"] != "php8.3-fpm" || phpBlock["socket"] != filepath.Clean("/run/php/php8.3-fpm.sock") || phpBlock["package_source"] != packageSourceUbuntuNative {
 		t.Fatalf("php block = %#v, want php metadata", record["php"])
 	}
-	if services, ok := record["services"].(map[string]any); !ok || services["nginx"] != true || services["mariadb"] != true || services["php_fpm"] != "php8.3-fpm" || services["wp_cli"] != "/usr/local/bin/wp" {
+	if services, ok := record["services"].(map[string]any); !ok || services["nginx"] != true || services["mariadb"] != true || services["adminer"] != adminerToolName || services["php_fpm"] != "php8.3-fpm" || services["wp_cli"] != "/usr/local/bin/wp" {
 		t.Fatalf("services block = %#v, want nginx/mariadb/php_fpm/wp_cli", record["services"])
 	}
 	if credentials, ok := record["credentials"].(map[string]any); !ok {
@@ -1230,6 +1237,15 @@ func TestServerStateRecordShapeDoesNotContainSecrets(t *testing.T) {
 		t.Fatalf("credentials.root = %#v, want derived metadata", credentials["root"])
 	} else if _, ok := root["password"]; ok {
 		t.Fatalf("credentials.root unexpectedly stored a password: %#v", root)
+	} else if adminer, ok := credentials["adminer"].(map[string]any); !ok || adminer["derived"] != true || adminer["identity"] != "app1.nonfiction.dev" || adminer["purpose"] != "adminer" || adminer["stored"] != false || adminer["user"] != "nonfiction" {
+		t.Fatalf("credentials.adminer = %#v, want derived metadata", credentials["adminer"])
+	} else if _, ok := adminer["password"]; ok {
+		t.Fatalf("credentials.adminer unexpectedly stored a password: %#v", adminer)
+	}
+	if adminer, ok := record["adminer"].(map[string]any); !ok || adminer["tool"] != adminerToolName || adminer["version"] != adminerVersion || adminer["hostname"] != "db.app1.nonfiction.dev" || adminer["url"] != "https://db.app1.nonfiction.dev/" || adminer["user"] != "nonfiction" {
+		t.Fatalf("adminer block = %#v, want AdminNeo metadata", record["adminer"])
+	} else if password, ok := adminer["auth"].(map[string]any)["password"].(map[string]any); !ok || password["purpose"] != "adminer" || password["stored"] != false {
+		t.Fatalf("adminer auth password = %#v, want derived metadata", adminer["auth"])
 	}
 	if firewall, ok := record["firewall"].(map[string]any); !ok || firewall["mode"] != "managed" || firewall["id"] != "fw-123" {
 		t.Fatalf("firewall block = %#v, want managed firewall metadata", record["firewall"])

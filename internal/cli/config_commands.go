@@ -56,6 +56,16 @@ func runConfig(argv []string) int {
 			return 1
 		}
 		return cmdConfigSet("basicauth_default_user", argv[1])
+	case "set-adminer-default-user":
+		if len(argv) != 2 || strings.TrimSpace(argv[1]) == "" {
+			fmt.Fprintln(os.Stderr, "config set-adminer-default-user takes exactly one user")
+			return 1
+		}
+		if err := validateAdminerDefaultUser(argv[1]); err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			return 1
+		}
+		return cmdConfigSet("adminer_default_user", argv[1])
 	case "set-kinsta-default-region":
 		if len(argv) != 2 || strings.TrimSpace(argv[1]) == "" {
 			fmt.Fprintln(os.Stderr, "config set-kinsta-default-region takes exactly one region")
@@ -314,6 +324,11 @@ func cmdConfigShow() int {
 		{label: "Admin email", value: configShowValue(values, "default_wp_email", "")},
 		{label: "Admin user", value: configShowValue(values, "default_wp_user", "admin")},
 		{label: "Basic auth user", value: configShowValue(values, "basicauth_default_user", "nonfiction")},
+	}, 2)
+	fmt.Println()
+	fmt.Println("Adminer")
+	printIndentedDetailRows([]detailRow{
+		{label: "User", value: configShowValue(values, "adminer_default_user", "nonfiction")},
 	}, 2)
 	fmt.Println()
 	fmt.Println("DNSimple")

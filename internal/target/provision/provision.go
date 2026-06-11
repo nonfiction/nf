@@ -3,6 +3,7 @@ package provision
 import (
 	"bytes"
 	"context"
+	"crypto/sha1"
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
@@ -111,6 +112,11 @@ type Plan struct {
 	Label             string
 	WildcardHostname  string
 	HealthURL         string
+	AdminerUser       string
+	AdminerHostname   string
+	AdminerURL        string
+	AdminerHTPasswd   string
+	AdminerMySQLHash  string
 	Region            string
 	LinodeType        string
 	Image             string
@@ -158,6 +164,10 @@ const packageSourceUbuntuNative = "ubuntu-native"
 const firewallManagedLabel = "nf-web"
 const firewallInboundPolicy = "DROP"
 const firewallOutboundPolicy = "ACCEPT"
+const adminerToolName = "AdminNeo"
+const adminerVersion = "5.4.1"
+const adminerDownloadURL = "https://www.adminneo.org/files/5.4.1/mysql_en_default/adminneo-5.4.1.php"
+const adminerDefaultUser = "nonfiction"
 
 var firewallInboundPorts = []string{"22", "80", "443"}
 
@@ -273,6 +283,60 @@ func rootCredentialState(hostname string) map[string]any {
 		"purpose":  "linode-root",
 		"stored":   false,
 	}
+}
+
+func adminerCredentialState(plan Plan) map[string]any {
+	return map[string]any{
+		"derived":  true,
+		"identity": plan.Hostname,
+		"purpose":  "adminer",
+		"stored":   false,
+		"user":     plan.AdminerUser,
+	}
+}
+
+func adminerHtpasswdHash(password string) string {
+	sum := sha1.Sum([]byte(password))
+	return "{SHA}" + base64.StdEncoding.EncodeToString(sum[:])
+}
+
+func adminerMySQLPasswordHash(password string) string {
+	first := sha1.Sum([]byte(password))
+	second := sha1.Sum(first[:])
+	return "*" + strings.ToUpper(fmt.Sprintf("%x", second[:]))
+}
+
+func deriveAdminerHostname(hostname string) string {
+	hostname = strings.TrimSpace(hostname)
+	if hostname == "" {
+		return ""
+	}
+	return "db." + hostname
+}
+
+func deriveAdminerURL(hostname string) string {
+	adminerHostname := deriveAdminerHostname(hostname)
+	if adminerHostname == "" {
+		return ""
+	}
+	return "https://" + adminerHostname + "/"
+}
+
+func validateAdminerUser(user string) error {
+	trimmed := strings.TrimSpace(user)
+	if trimmed == "" {
+		return Error{Msg: "adminer_default_user must be a non-empty MySQL username"}
+	}
+	if len(trimmed) > 32 {
+		return Error{Msg: "adminer_default_user must be 32 characters or fewer"}
+	}
+	for _, r := range trimmed {
+		if r >= 'a' && r <= 'z' || r >= 'A' && r <= 'Z' || r >= '0' && r <= '9' || r == '_' || r == '-' {
+			continue
+		}
+		return Error{Msg: "adminer_default_user must use only letters, numbers, underscores, and hyphens"}
+	}
+	return nil
 }
 
 func phpReleaseForUbuntu(version string) (PHPPlan, error) {
@@ -1175,6 +1239,24 @@ write_files:
           }
           location / { try_files $uri $uri/ /index.html; }
       }
+  - path: /usr/local/bin/nf-install-adminer
+    permissions: '0755'
+    content: |
+      #!/usr/bin/env bash
+      set -euo pipefail
+      install -d -o root -g www-data -m 0750 /var/www/shared/adminer /var/lib/nf
+      curl -fsSL __ADMINER_DOWNLOAD_URL__ -o /var/www/shared/adminer/index.php
+      cat >/var/www/shared/adminer/adminneo-config.php <<'EOF'
+      <?php return ["defaultDriver"=>"mysql","defaultServer"=>"localhost","navigationMode"=>"dual","preferSelection"=>true,"hiddenDatabases"=>["__system"]];
+      EOF
+      printf '%s:%s\n' '__ADMINER_USER__' '__ADMINER_HTPASSWD__' >/var/lib/nf/adminer.htpasswd
+      chown -R root:www-data /var/www/shared/adminer /var/lib/nf/adminer.htpasswd
+      chmod 0640 /var/www/shared/adminer/index.php /var/www/shared/adminer/adminneo-config.php /var/lib/nf/adminer.htpasswd
+      mariadb -uroot <<SQL
+      CREATE USER IF NOT EXISTS '__ADMINER_USER__'@'localhost' IDENTIFIED BY PASSWORD '__ADMINER_MYSQL_HASH__';
+      ALTER USER '__ADMINER_USER__'@'localhost' IDENTIFIED BY PASSWORD '__ADMINER_MYSQL_HASH__';
+      FLUSH PRIVILEGES;
+      SQL
   - path: /usr/local/bin/nf-write-server-health-page
     permissions: '0755'
     content: |
@@ -1256,6 +1338,11 @@ write_files:
       }
       EOF
 
+      cat >/etc/nginx/sites-available/nf-adminer <<'EOF'
+      server { listen 80; listen [::]:80; server_name __ADMINER_HOSTNAME__; return 301 https://__ADMINER_HOSTNAME__$request_uri; }
+      server { listen 443 ssl http2; listen [::]:443 ssl http2; server_name __ADMINER_HOSTNAME__; include /etc/nginx/snippets/nf-wildcard-cert.conf; include /etc/nginx/snippets/nf-security-headers.conf; root /var/www/shared/adminer; index index.php; access_log /var/log/nginx/sites/adminer.access.log; error_log /var/log/nginx/sites/adminer.error.log; auth_basic "nf adminer"; auth_basic_user_file /var/lib/nf/adminer.htpasswd; location / { try_files $uri $uri/ /index.php?$args; } location ~ \.php$ { include /etc/nginx/snippets/nf-fastcgi-php.conf; fastcgi_pass unix:__PHP_FPM_SOCKET__; } }
+      EOF
+      ln -sf /etc/nginx/sites-available/nf-adminer /etc/nginx/sites-enabled/nf-adminer
       nginx -t
       systemctl reload nginx
       systemctl disable --now nf-wildcard-tls.timer || true
@@ -1319,6 +1406,7 @@ write_files:
         "php_version": "__PHP_VERSION__",
         "php_service": "__PHP_FPM_SERVICE__",
         "php_socket": "__PHP_FPM_SOCKET__",
+        "adminer": {"tool":"__ADMINER_TOOL__","version":"__ADMINER_VERSION__","hostname":"__ADMINER_HOSTNAME__","url":"__ADMINER_URL__","path":"/var/www/shared/adminer/index.php","config_path":"/var/www/shared/adminer/adminneo-config.php","download_url":"__ADMINER_DOWNLOAD_URL__","user":"__ADMINER_USER__","auth":{"type":"basic","user":"__ADMINER_USER__","password":{"derived":true,"identity":"__HOSTNAME__","purpose":"adminer","stored":false}},"database":{"host":"localhost","user":"__ADMINER_USER__","grants":"site-env-databases"}},
         "sites_path": "/var/lib/nf/sites.json",
         "created_at": "${created_at}"
       }
@@ -1329,6 +1417,7 @@ write_files:
       chown -R __SSH_USER__:www-data /var/lib/nf
       chmod 2775 /var/lib/nf
       chmod 0664 /var/lib/nf/sites.json /var/lib/nf/target.json
+      if [ -f /var/lib/nf/adminer.htpasswd ]; then chown root:www-data /var/lib/nf/adminer.htpasswd && chmod 0640 /var/lib/nf/adminer.htpasswd; fi
   - path: /etc/update-motd.d/99-nf
     permissions: '0755'
     content: |
@@ -1358,6 +1447,7 @@ runcmd:
   - rm -f /etc/nginx/sites-enabled/default
   - ln -sf /etc/nginx/sites-available/nf-server /etc/nginx/sites-enabled/nf-server
   - /usr/local/bin/nf-write-server-health-page
+  - /usr/local/bin/nf-install-adminer
   - nginx -t
   - systemctl enable nginx
   - systemctl restart nginx
@@ -1401,20 +1491,28 @@ func cloudInitPackageBlock(plan Plan) string {
 
 func cloudInitReplacements(plan Plan, sshPublicKeys []string, dnsimpleToken string) map[string]string {
 	return map[string]string{
-		"__PACKAGE_LIST__":        cloudInitPackageBlock(plan),
-		"__SHORT_HOSTNAME__":      shortHostname(plan.Hostname),
-		"__SSH_USER__":            plan.SshUser,
-		"__NAME__":                plan.Name,
-		"__HOSTNAME__":            plan.Hostname,
-		"__DNSIMPLE_TOKEN__":      dnsimpleToken,
-		"__DNSIMPLE_ACCOUNT_ID__": plan.DnsimpleAccountID,
-		"__SERVER_PROVIDER__":     plan.Provider,
-		"__DNS_PROVIDER__":        plan.DnsProvider,
-		"__UBUNTU_VERSION__":      plan.UbuntuVersion,
-		"__IMAGE__":               plan.Image,
-		"__PHP_FPM_SERVICE__":     plan.PHP.Service,
-		"__PHP_FPM_SOCKET__":      plan.PHP.Socket,
-		"__PHP_VERSION__":         plan.PHP.Version,
+		"__PACKAGE_LIST__":         cloudInitPackageBlock(plan),
+		"__SHORT_HOSTNAME__":       shortHostname(plan.Hostname),
+		"__SSH_USER__":             plan.SshUser,
+		"__NAME__":                 plan.Name,
+		"__HOSTNAME__":             plan.Hostname,
+		"__ADMINER_HOSTNAME__":     plan.AdminerHostname,
+		"__ADMINER_URL__":          plan.AdminerURL,
+		"__ADMINER_USER__":         plan.AdminerUser,
+		"__ADMINER_TOOL__":         adminerToolName,
+		"__ADMINER_VERSION__":      adminerVersion,
+		"__ADMINER_DOWNLOAD_URL__": adminerDownloadURL,
+		"__ADMINER_HTPASSWD__":     firstNonEmpty(plan.AdminerHTPasswd, "<adminer htpasswd hash>"),
+		"__ADMINER_MYSQL_HASH__":   firstNonEmpty(plan.AdminerMySQLHash, "<adminer mysql password hash>"),
+		"__DNSIMPLE_TOKEN__":       dnsimpleToken,
+		"__DNSIMPLE_ACCOUNT_ID__":  plan.DnsimpleAccountID,
+		"__SERVER_PROVIDER__":      plan.Provider,
+		"__DNS_PROVIDER__":         plan.DnsProvider,
+		"__UBUNTU_VERSION__":       plan.UbuntuVersion,
+		"__IMAGE__":                plan.Image,
+		"__PHP_FPM_SERVICE__":      plan.PHP.Service,
+		"__PHP_FPM_SOCKET__":       plan.PHP.Socket,
+		"__PHP_VERSION__":          plan.PHP.Version,
 	}
 }
 
@@ -1427,13 +1525,30 @@ func ubuntuDisplayLabel(plan Plan) string {
 }
 
 func renderCloudInit(plan Plan, actual bool, dnsimpleToken string, sshPublicKeys []string) (string, error) {
+	plan = normalizePlan(plan)
+	replacements := cloudInitReplacements(plan, sshPublicKeys, "<dnsimple token>")
 	if actual {
 		if dnsimpleToken == "" {
 			return "", Error{Msg: "Missing secrets for cloud-init rendering."}
 		}
-		return renderTemplate(cloudInitTemplate, cloudInitReplacements(plan, sshPublicKeys, dnsimpleToken)), nil
+		replacements = cloudInitReplacements(plan, sshPublicKeys, dnsimpleToken)
 	}
-	return renderTemplate(cloudInitTemplate, cloudInitReplacements(plan, sshPublicKeys, "<dnsimple token>")), nil
+	return compactCloudInitHealthLogo(renderTemplate(cloudInitTemplate, replacements)), nil
+}
+
+func compactCloudInitHealthLogo(rendered string) string {
+	pathStart := strings.Index(rendered, "<path d=\"M0 0 ")
+	if pathStart == -1 {
+		return rendered
+	}
+	lineStart := strings.LastIndex(rendered[:pathStart], "\n") + 1
+	lineEnd := strings.Index(rendered[pathStart:], "\n")
+	if lineEnd == -1 {
+		return rendered
+	}
+	indent := rendered[lineStart:pathStart]
+	compact := indent + `<path d="M112 88h48l80 128V88h48v224h-48l-80-128v128h-48z" fill="#fff"/>`
+	return rendered[:lineStart] + compact + rendered[pathStart+lineEnd:]
 }
 
 func writeText(path, content string) error {
@@ -1707,6 +1822,19 @@ func phpBaselinePlanBlock(plan Plan) []string {
 	}
 }
 
+func adminerPlanBlock(plan Plan) []string {
+	return []string{
+		"Adminer",
+		"  tool: " + adminerToolName + " " + adminerVersion,
+		"  url: " + plan.AdminerURL,
+		"  hostname: " + plan.AdminerHostname,
+		"  user: " + plan.AdminerUser,
+		"  password: derived from hostname + purpose adminer",
+		"  reveal: nf target adminer show " + plan.Name,
+		"  mysql grants: site env databases only",
+	}
+}
+
 func healthPlanBlock(plan Plan) []string {
 	return []string{
 		"Server health URL: " + plan.HealthURL,
@@ -1762,7 +1890,10 @@ func sshStateBlock(plan Plan, keys []SSHAuthorizedKey) map[string]any {
 }
 
 func credentialsStateBlock(plan Plan) map[string]any {
-	return map[string]any{"root": rootCredentialState(plan.Hostname)}
+	return map[string]any{
+		"root":    rootCredentialState(plan.Hostname),
+		"adminer": adminerCredentialState(plan),
+	}
 }
 
 func firewallPlanBlock(plan Plan) []string {
@@ -2131,6 +2262,7 @@ func serverStateRecord(plan Plan, created CreatedServer, dns DNSState, tls TLSSt
 }
 
 func serverStateRecordWithStatus(plan Plan, created CreatedServer, dns DNSState, tls TLSState, createdAt, updatedAt, status, phase string) map[string]any {
+	plan = normalizePlan(plan)
 	sshState := sshStateBlock(plan, plan.AuthorizedKeys)
 	record := map[string]any{
 		"provider":          plan.Provider,
@@ -2202,8 +2334,29 @@ func serverStateRecordWithStatus(plan Plan, created CreatedServer, dns DNSState,
 	record["services"] = map[string]any{
 		"nginx":   true,
 		"mariadb": true,
+		"adminer": adminerToolName,
 		"php_fpm": plan.PHP.Service,
 		"wp_cli":  "/usr/local/bin/wp",
+	}
+	record["adminer"] = map[string]any{
+		"tool":         adminerToolName,
+		"version":      adminerVersion,
+		"hostname":     plan.AdminerHostname,
+		"url":          plan.AdminerURL,
+		"path":         "/var/www/shared/adminer/index.php",
+		"config_path":  "/var/www/shared/adminer/adminneo-config.php",
+		"download_url": adminerDownloadURL,
+		"user":         plan.AdminerUser,
+		"auth": map[string]any{
+			"type":     "basic",
+			"user":     plan.AdminerUser,
+			"password": adminerCredentialState(plan),
+		},
+		"database": map[string]any{
+			"host":   "localhost",
+			"user":   plan.AdminerUser,
+			"grants": "site-env-databases",
+		},
 	}
 	if created.ProviderID != "" {
 		record["id"] = created.ProviderID
@@ -2241,6 +2394,7 @@ func planLines(plan Plan, cloudInitPath string) []string {
 	lines = append(lines, ubuntuFirewallPlanBlock()...)
 	lines = append(lines, firewallPlanBlock(plan)...)
 	lines = append(lines, phpBaselinePlanBlock(plan)...)
+	lines = append(lines, adminerPlanBlock(plan)...)
 	lines = append(lines,
 		"DNS",
 		"  provider: "+plan.DnsProvider,
@@ -2393,6 +2547,15 @@ func normalizePlan(plan Plan) Plan {
 	if strings.TrimSpace(plan.HealthURL) == "" {
 		plan.HealthURL = deriveHealthURL(plan.Hostname)
 	}
+	if strings.TrimSpace(plan.AdminerUser) == "" {
+		plan.AdminerUser = firstNonEmpty(globalConfigValue("adminer_default_user"), adminerDefaultUser)
+	}
+	if strings.TrimSpace(plan.AdminerHostname) == "" {
+		plan.AdminerHostname = deriveAdminerHostname(plan.Hostname)
+	}
+	if strings.TrimSpace(plan.AdminerURL) == "" {
+		plan.AdminerURL = deriveAdminerURL(plan.Hostname)
+	}
 	if strings.TrimSpace(plan.DnsimpleAccountID) == "" {
 		plan.DnsimpleAccountID = firstNonEmpty(dnsimpleAccountIDConfigValue(), "14")
 	}
@@ -2448,6 +2611,10 @@ func BuildPlan(args Args) (Plan, error) {
 	defaultType := firstNonEmpty(globalConfigValue("linode_default_type"), "g6-standard-1")
 	defaultImage := globalConfigValue("linode_default_image")
 	defaultUser := firstNonEmpty(globalConfigValue("linode_default_user"), "nonfiction")
+	adminerUser := firstNonEmpty(globalConfigValue("adminer_default_user"), adminerDefaultUser)
+	if err := validateAdminerUser(adminerUser); err != nil {
+		return Plan{}, err
+	}
 	if resumeRecord != nil {
 		status := existingProvisionStatus(resumeRecord)
 		phase := existingProvisionPhase(resumeRecord)
@@ -2535,6 +2702,9 @@ func BuildPlan(args Args) (Plan, error) {
 		Label:             label,
 		WildcardHostname:  wildcardHostname,
 		HealthURL:         healthURL,
+		AdminerUser:       adminerUser,
+		AdminerHostname:   deriveAdminerHostname(hostname),
+		AdminerURL:        deriveAdminerURL(hostname),
 		Region:            firstNonEmpty(region, defaultRegion),
 		LinodeType:        firstNonEmpty(linodeType, defaultType),
 		Image:             osPlan.Image,
@@ -2594,6 +2764,7 @@ func renderProvisionSuccess(plan Plan, created CreatedServer, dns DNSState, tls 
 	lines = append(lines, ubuntuFirewallPlanBlock()...)
 	lines = append(lines, firewallPlanBlock(plan)...)
 	lines = append(lines, phpBaselinePlanBlock(plan)...)
+	lines = append(lines, adminerPlanBlock(plan)...)
 	lines = append(lines,
 		"DNS",
 		"  provider: "+dns.Provider,
@@ -2635,6 +2806,7 @@ func renderProvisionPaused(plan Plan, created CreatedServer, dns DNSState, state
 	lines = append(lines, ubuntuFirewallPlanBlock()...)
 	lines = append(lines, firewallPlanBlock(plan)...)
 	lines = append(lines, phpBaselinePlanBlock(plan)...)
+	lines = append(lines, adminerPlanBlock(plan)...)
 	lines = append(lines,
 		"DNS",
 		"  provider: "+dns.Provider,
@@ -2687,6 +2859,7 @@ func renderProvisionHealthFailure(plan Plan, created CreatedServer, dns DNSState
 	lines = append(lines, ubuntuFirewallPlanBlock()...)
 	lines = append(lines, firewallPlanBlock(plan)...)
 	lines = append(lines, phpBaselinePlanBlock(plan)...)
+	lines = append(lines, adminerPlanBlock(plan)...)
 	lines = append(lines,
 		"DNS",
 		"  provider: "+dns.Provider,
@@ -2911,6 +3084,9 @@ func ProvisionServer(plan Plan) (*ServerCreateResult, error) {
 		return nil, err
 	}
 	rootPass := passwords.DerivePassword(effectivePlan.Hostname, "linode-root", salt)
+	adminerPass := passwords.DerivePassword(effectivePlan.Hostname, "adminer", salt)
+	effectivePlan.AdminerHTPasswd = adminerHtpasswdHash(adminerPass)
+	effectivePlan.AdminerMySQLHash = adminerMySQLPasswordHash(adminerPass)
 	dnsimpleToken, err := requiredEnv("DNSIMPLE_TOKEN")
 	if err != nil {
 		return nil, err
