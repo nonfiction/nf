@@ -28,7 +28,7 @@ func runInitHelp() int {
 
 func runEnvHelp() int {
 	printGroupHelp("env", []helpLine{
-		{"up", "start the local env"},
+		{"up [--rebuild]", "start the local env"},
 		{"down", "stop the local env"},
 		{"show", "show paths, ports, and URLs"},
 		{"password", "show admin password only"},
@@ -42,7 +42,7 @@ func runEnvHelp() int {
 		{"pull [remote] [--dry-run] [--execute] [--yes]", "pull database and mutable wp-content from a remote env"},
 		{"push [remote] [--dry-run] [--execute] [--yes]", "push database and mutable wp-content to a remote env"},
 		{},
-		{"reset", "destroy and recreate the local env"},
+		{"reset [--rebuild]", "destroy and recreate the local env"},
 	})
 	return 0
 }
@@ -282,6 +282,27 @@ func runEnv(argv []string) int {
 		fmt.Fprintln(os.Stderr, "env show takes no arguments")
 		return 1
 	}
+	rebuild := false
+	if name == "up" || name == "reset" {
+		positionals := []string{}
+		for _, arg := range argv[1:] {
+			switch arg {
+			case "--rebuild":
+				rebuild = true
+			default:
+				if strings.HasPrefix(arg, "-") {
+					fmt.Fprintf(os.Stderr, "unknown env %s flag: %s\n", name, arg)
+					return 1
+				}
+				positionals = append(positionals, arg)
+			}
+		}
+		if len(positionals) > 0 {
+			fmt.Fprintf(os.Stderr, "env %s takes no arguments\n", name)
+			return 1
+		}
+		argv = []string{name}
+	}
 	if name == "password" && len(argv) != 1 {
 		fmt.Fprintln(os.Stderr, "env password takes no arguments")
 		return 1
@@ -363,7 +384,7 @@ func runEnv(argv []string) int {
 	if name == "wp" {
 		extraArgs = normalizePassthroughArgs(extraArgs)
 	}
-	if err := (envCommandRunner{name: name, cfg: cfg}).Execute(root, extraArgs); err != nil {
+	if err := (envCommandRunner{name: name, cfg: cfg, rebuild: rebuild}).Execute(root, extraArgs); err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		return 1
 	}

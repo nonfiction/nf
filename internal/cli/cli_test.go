@@ -656,6 +656,22 @@ func TestRunCompleteSuggestsStaticAndCachedValues(t *testing.T) {
 	if strings.TrimSpace(configAdminerOutput) != "set-adminer-default-user" {
 		t.Fatalf("config adminer completion = %q, want set-adminer-default-user", configAdminerOutput)
 	}
+	envUpFlagOutput := captureStdout(t, func() {
+		if got := Run([]string{"__complete", "--", "env", "up", "--"}); got != 0 {
+			t.Fatalf("Run(__complete env up --) = %d, want 0", got)
+		}
+	})
+	if strings.TrimSpace(envUpFlagOutput) != "--rebuild" {
+		t.Fatalf("env up completion = %q, want --rebuild", envUpFlagOutput)
+	}
+	envResetFlagOutput := captureStdout(t, func() {
+		if got := Run([]string{"__complete", "--", "env", "reset", "--"}); got != 0 {
+			t.Fatalf("Run(__complete env reset --) = %d, want 0", got)
+		}
+	})
+	if strings.TrimSpace(envResetFlagOutput) != "--rebuild" {
+		t.Fatalf("env reset completion = %q, want --rebuild", envResetFlagOutput)
+	}
 
 	remoteAddOutput := captureStdout(t, func() {
 		if got := Run([]string{"__complete", "--", "remote", "add", "production", "client"}); got != 0 {
@@ -8794,8 +8810,14 @@ func TestEnvCommandHelpersBuildExpectedArgs(t *testing.T) {
 	if got, want := (envCommandRunner{name: "up", cfg: cfg}).Render(), "docker compose up -d; configure Mailpit SMTP; install WordPress if missing and ensure the mounted theme is active"; got != want {
 		t.Fatalf("up Render() = %q, want %q", got, want)
 	}
+	if got, want := (envCommandRunner{name: "up", cfg: cfg, rebuild: true}).Render(), "docker compose build; docker compose up -d; configure Mailpit SMTP; install WordPress if missing and ensure the mounted theme is active"; got != want {
+		t.Fatalf("up --rebuild Render() = %q, want %q", got, want)
+	}
 	if got, want := (envCommandRunner{name: "reset", cfg: cfg}).Render(), "docker compose down -v --remove-orphans; nuke env data and recreate it with docker compose up -d, configure Mailpit SMTP, install WordPress if missing, and ensure the mounted theme is active"; got != want {
 		t.Fatalf("reset Render() = %q, want %q", got, want)
+	}
+	if got, want := (envCommandRunner{name: "reset", cfg: cfg, rebuild: true}).Render(), "docker compose down -v --remove-orphans; nuke env data and recreate it with docker compose build, docker compose up -d, configure Mailpit SMTP, install WordPress if missing, and ensure the mounted theme is active"; got != want {
+		t.Fatalf("reset --rebuild Render() = %q, want %q", got, want)
 	}
 	if got, want := (envCommandRunner{name: "shell", cfg: cfg}).Render(), "docker compose exec wordpress bash"; got != want {
 		t.Fatalf("shell Render() = %q, want %q", got, want)
@@ -8910,11 +8932,12 @@ func TestRunEnvUpPrintsUnderlyingCommands(t *testing.T) {
 	t.Cleanup(func() { _ = os.Chdir(oldwd) })
 
 	output := captureStdout(t, func() {
-		if got := Run([]string{"env", "up"}); got != 0 {
+		if got := Run([]string{"env", "up", "--rebuild"}); got != 0 {
 			t.Fatalf("Run() = %d, want 0", got)
 		}
 	})
 	for _, want := range []string{
+		"> docker compose build",
 		"> docker compose up -d",
 		"> docker compose run --rm cli sh -lc",
 		"wp-content/mu-plugins/nf-mailpit.php",
@@ -9119,13 +9142,14 @@ func TestRunEnvResetPrintsUnderlyingCommands(t *testing.T) {
 	t.Cleanup(func() { _ = os.Chdir(oldwd) })
 
 	output := captureStdout(t, func() {
-		if got := Run([]string{"env", "reset"}); got != 0 {
+		if got := Run([]string{"env", "reset", "--rebuild"}); got != 0 {
 			t.Fatalf("Run() = %d, want 0", got)
 		}
 	})
 	for _, want := range []string{
 		"Safety snapshot:",
 		"> docker compose down -v --remove-orphans",
+		"> docker compose build",
 		"> docker compose up -d",
 		"> docker compose run --rm cli wp core is-installed --allow-root",
 		"> docker compose run --rm cli sh -lc",

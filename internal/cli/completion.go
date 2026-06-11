@@ -297,6 +297,8 @@ func envCompletionCandidates(args []string) []string {
 	}
 	args[0] = cliCommandAlias(args[0])
 	switch args[0] {
+	case "up", "reset":
+		return []string{"--rebuild"}
 	case "pull", "push":
 		return projectRemoteCompletionNames()
 	case "plugins":
