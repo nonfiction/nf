@@ -299,7 +299,7 @@ func envComposeProjectName(projectSlug string) string {
 	return "nf_" + cleanEnvSlug(projectSlug) + "_env"
 }
 
-func renderEnvInfo(cfg envConfig, includeURLs bool) string {
+func renderEnvInfo(cfg envConfig, includeURLs bool, remoteRows ...detailRow) string {
 	title := cfg.ProjectSlug + ":local"
 	siteURL := fmt.Sprintf("http://localhost:%d", cfg.WordpressPort)
 	adminerURL := localEnvAdminerURL(cfg)
@@ -332,7 +332,7 @@ func renderEnvInfo(cfg envConfig, includeURLs bool) string {
 		{label: "WP user", value: cfg.AdminUser},
 		{label: "WP pass", value: cfg.AdminPassword},
 	}
-	sectionWidth := detailRowsWidth(dbRows, emailRows, wordpressRows)
+	sectionWidth := detailRowsWidth(dbRows, emailRows, wordpressRows, remoteRows)
 	if hasDetailRows(dbRows) {
 		lines = append(lines, "", "Database")
 		lines = append(lines, detailRowLinesWithWidth(dbRows, 2, sectionWidth)...)
@@ -345,7 +345,67 @@ func renderEnvInfo(cfg envConfig, includeURLs bool) string {
 		lines = append(lines, "", "WordPress")
 		lines = append(lines, detailRowLinesWithWidth(wordpressRows, 2, sectionWidth)...)
 	}
+	if hasDetailRows(remoteRows) {
+		lines = append(lines, "", "Remotes")
+		lines = append(lines, detailRowLinesWithWidth(remoteRows, 2, sectionWidth)...)
+	}
 	return strings.Join(lines, "\n")
+}
+
+func envRemoteURLRows(metadata map[string]any) ([]detailRow, error) {
+	remotes, err := projectRemotes(metadata, false)
+	if err != nil {
+		return nil, err
+	}
+	if len(remotes) == 0 {
+		return nil, nil
+	}
+	names := make([]string, 0, len(remotes))
+	for name := range remotes {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	rows := make([]detailRow, 0, len(names))
+	for _, name := range names {
+		siteID, remoteEnv, ok, err := projectRemoteAlias(metadata, name)
+		if err != nil {
+			return nil, err
+		}
+		if !ok {
+			continue
+		}
+		record, _, err := cachedSiteEnv(siteID, remoteEnv)
+		if err != nil {
+			return nil, err
+		}
+		if record == nil {
+			continue
+		}
+		remoteURL := firstRecordString(record, "url", "site_url", "home_url", "hostname")
+		if remoteURL == "" {
+			continue
+		}
+		rows = append(rows, detailRow{label: envRemoteURLLabel(name), value: remoteURL})
+	}
+	return rows, nil
+}
+
+func envRemoteURLLabel(remoteName string) string {
+	parts := strings.FieldsFunc(strings.TrimSpace(remoteName), func(r rune) bool {
+		return r == '-' || r == '_' || r == '.' || r == ' '
+	})
+	for i, part := range parts {
+		part = strings.ToLower(part)
+		if part == "" {
+			continue
+		}
+		parts[i] = strings.ToUpper(part[:1]) + part[1:]
+	}
+	label := strings.Join(parts, " ")
+	if label == "" {
+		label = strings.TrimSpace(remoteName)
+	}
+	return label + " URL"
 }
 
 func localEnvAdminerURL(cfg envConfig) string {

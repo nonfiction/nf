@@ -9054,6 +9054,11 @@ func TestRenderEnvInfoUsesEffectivePorts(t *testing.T) {
 	if got := renderEnvInfo(cfg, false); got != want {
 		t.Fatalf("renderEnvInfo(short) = %q, want %q", got, want)
 	}
+	want = "client:local\n────────────\nSite      client\nEnv       local\nPath      /data/envs/client\nPHP       8.3\nCompose   nf_client_env\n\nDatabase\n  Adminer URL   http://localhost:18434/?mysql=db&username=client&db=client\n  DB user       client\n  DB pass       db-pass\n\nEmail\n  Mailpit URL   http://localhost:18433\n\nWordPress\n  Site URL      http://localhost:18432\n  Admin URL     http://localhost:18432/wp-login.php\n  WP user       admin\n  WP pass       wp-pass\n\nRemotes\n  Live URL      https://client.example.com\n  Staging URL   https://staging.client.example.com"
+	remoteRows := []detailRow{{label: "Live URL", value: "https://client.example.com"}, {label: "Staging URL", value: "https://staging.client.example.com"}}
+	if got := renderEnvInfo(cfg, true, remoteRows...); got != want {
+		t.Fatalf("renderEnvInfo(full with remotes) = %q, want %q", got, want)
+	}
 }
 
 func TestLocalEnvAdminerURLPrefillsConnectionWithoutPassword(t *testing.T) {
@@ -10172,6 +10177,66 @@ func TestRunEnvShowPrintsEnvInfo(t *testing.T) {
 		fmt.Sprintf("  Admin URL     http://localhost:%d/wp-login.php\n", wpPort),
 		"  WP user       admin\n",
 		"  WP pass       " + adminPassword,
+	})
+	if strings.Contains(output, "Remotes\n") {
+		t.Fatalf("Run(env show) output = %q, did not expect remotes section without nf.json remotes", output)
+	}
+}
+
+func TestRunEnvShowPrintsConfiguredRemoteURLs(t *testing.T) {
+	configHome := t.TempDir()
+	stateDir := t.TempDir()
+	t.Setenv("NF_CONFIG_HOME", configHome)
+	t.Setenv("NF_STATE_HOME", stateDir)
+	t.Setenv("NF_DATA_HOME", configHome)
+	writeTestWPDefaults(t, "test-salt")
+	if err := state.SaveStateRecords("sites", []map[string]any{
+		{"provider": "linode", "site_id": "client-app1-linode", "env": "staging", "url": "https://client-staging.app1-linode.nonfiction.dev"},
+		{"provider": "linode", "site_id": "client-app1-linode", "env": "live", "url": "https://client.app1-linode.nonfiction.dev"},
+	}); err != nil {
+		t.Fatalf("SaveStateRecords(sites) error = %v", err)
+	}
+
+	workdir := t.TempDir()
+	if err := os.Mkdir(filepath.Join(workdir, ".git"), 0o755); err != nil {
+		t.Fatalf("Mkdir() error = %v", err)
+	}
+	project := map[string]any{
+		"version": 1,
+		"project": map[string]any{"slug": "client", "name": "Client"},
+		"env":     map[string]any{"compose": "docker compose", "wordpress_service": "wordpress", "cli_service": "cli", "theme_mount_slug": "theme", "uploads_path": "uploads"},
+		"remotes": map[string]any{
+			"staging": "client-app1-linode:staging",
+			"live":    "client-app1-linode:live",
+		},
+	}
+	projectData, err := json.MarshalIndent(project, "", "  ")
+	if err != nil {
+		t.Fatalf("MarshalIndent() error = %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(workdir, "nf.json"), append(projectData, '\n'), 0o644); err != nil {
+		t.Fatalf("WriteFile() error = %v", err)
+	}
+
+	oldwd, err := os.Getwd()
+	if err != nil {
+		t.Fatalf("Getwd() error = %v", err)
+	}
+	if err := os.Chdir(workdir); err != nil {
+		t.Fatalf("Chdir() error = %v", err)
+	}
+	t.Cleanup(func() { _ = os.Chdir(oldwd) })
+
+	output := captureStdout(t, func() {
+		if got := Run([]string{"env", "show"}); got != 0 {
+			t.Fatalf("Run(env show) = %d, want 0", got)
+		}
+	})
+	assertContainsInOrder(t, output, []string{
+		"WordPress\n",
+		"Remotes\n",
+		"  Live URL      https://client.app1-linode.nonfiction.dev\n",
+		"  Staging URL   https://client-staging.app1-linode.nonfiction.dev",
 	})
 }
 

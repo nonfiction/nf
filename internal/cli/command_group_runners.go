@@ -394,7 +394,12 @@ func runEnv(argv []string) int {
 			fmt.Fprintln(os.Stderr, err)
 			return 1
 		}
-		fmt.Println(renderEnvInfo(credentialCfg, true))
+		remoteRows, err := envRemoteURLRows(metadata)
+		if err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			return 1
+		}
+		fmt.Println(renderEnvInfo(credentialCfg, true, remoteRows...))
 		return 0
 	}
 	if name == "password" {
@@ -459,7 +464,12 @@ func runEnv(argv []string) int {
 			fmt.Fprintln(os.Stderr, err)
 			return 1
 		}
-		fmt.Println(renderEnvInfo(credentialCfg, true))
+		remoteRows, err := envRemoteURLRows(metadata)
+		if err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			return 1
+		}
+		fmt.Println(renderEnvInfo(credentialCfg, true, remoteRows...))
 	case "reset":
 		fmt.Println("Env reset.")
 		fmt.Println()
@@ -468,7 +478,12 @@ func runEnv(argv []string) int {
 			fmt.Fprintln(os.Stderr, err)
 			return 1
 		}
-		fmt.Println(renderEnvInfo(credentialCfg, true))
+		remoteRows, err := envRemoteURLRows(metadata)
+		if err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			return 1
+		}
+		fmt.Println(renderEnvInfo(credentialCfg, true, remoteRows...))
 	case "down":
 		fmt.Println("Env stopped.")
 		fmt.Println()
