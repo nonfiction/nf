@@ -5,6 +5,7 @@ package cli
 import (
 	"encoding/json"
 	"fmt"
+	"net/url"
 	"os"
 	"path"
 	"path/filepath"
@@ -321,7 +322,7 @@ func envComposeProjectName(projectSlug string) string {
 func renderEnvInfo(cfg envConfig, includeURLs bool) string {
 	title := cfg.ProjectSlug + ":local"
 	siteURL := fmt.Sprintf("http://localhost:%d", cfg.WordpressPort)
-	adminerURL := fmt.Sprintf("http://localhost:%d", cfg.AdminerPort)
+	adminerURL := localEnvAdminerURL(cfg)
 	mailpitURL := fmt.Sprintf("http://localhost:%d", cfg.MailpitPort)
 	lines := []string{title, strings.Repeat("─", len(title))}
 	rows := []detailRow{
@@ -365,6 +366,12 @@ func renderEnvInfo(cfg envConfig, includeURLs bool) string {
 		lines = append(lines, detailRowLinesWithWidth(wordpressRows, 2, sectionWidth)...)
 	}
 	return strings.Join(lines, "\n")
+}
+
+func localEnvAdminerURL(cfg envConfig) string {
+	dbName := cfg.ProjectSlug
+	dbUser := firstNonEmpty(cfg.DBUser, cfg.ProjectSlug)
+	return fmt.Sprintf("http://localhost:%d/?mysql=db&username=%s&db=%s", cfg.AdminerPort, url.QueryEscape(dbUser), url.QueryEscape(dbName))
 }
 
 func localEnvPHPVersion() string { return "8.3" }

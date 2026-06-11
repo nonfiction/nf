@@ -8499,13 +8499,21 @@ func TestRunEnvPluginsInstallRemotePromptsBeforeExecution(t *testing.T) {
 
 func TestRenderEnvInfoUsesEffectivePorts(t *testing.T) {
 	cfg := envConfig{ProjectSlug: "client", EnvDir: filepath.Join("/data", "envs", "client"), WordpressPort: 18432, MailpitPort: 18433, AdminerPort: 18434, DBUser: "client", DBPassword: "db-pass", AdminUser: "admin", AdminPassword: "wp-pass"}
-	want := "client:local\n────────────\nSite      client\nEnv       local\nPath      /data/envs/client\nPHP       8.3\nCompose   nf_client_env\n\nDatabase\n  Adminer URL   http://localhost:18434\n  DB user       client\n  DB pass       db-pass\n\nEmail\n  Mailpit URL   http://localhost:18433\n\nWordPress\n  Site URL      http://localhost:18432\n  Admin URL     http://localhost:18432/wp-login.php\n  WP user       admin\n  WP pass       wp-pass"
+	want := "client:local\n────────────\nSite      client\nEnv       local\nPath      /data/envs/client\nPHP       8.3\nCompose   nf_client_env\n\nDatabase\n  Adminer URL   http://localhost:18434/?mysql=db&username=client&db=client\n  DB user       client\n  DB pass       db-pass\n\nEmail\n  Mailpit URL   http://localhost:18433\n\nWordPress\n  Site URL      http://localhost:18432\n  Admin URL     http://localhost:18432/wp-login.php\n  WP user       admin\n  WP pass       wp-pass"
 	if got := renderEnvInfo(cfg, true); got != want {
 		t.Fatalf("renderEnvInfo(full) = %q, want %q", got, want)
 	}
 	want = "client:local\n────────────\nSite      client\nEnv       local\nPath      /data/envs/client\nPHP       8.3\nCompose   nf_client_env"
 	if got := renderEnvInfo(cfg, false); got != want {
 		t.Fatalf("renderEnvInfo(short) = %q, want %q", got, want)
+	}
+}
+
+func TestLocalEnvAdminerURLPrefillsConnectionWithoutPassword(t *testing.T) {
+	cfg := envConfig{ProjectSlug: "client-site", AdminerPort: 18434, DBUser: "client user"}
+	want := "http://localhost:18434/?mysql=db&username=client+user&db=client-site"
+	if got := localEnvAdminerURL(cfg); got != want {
+		t.Fatalf("localEnvAdminerURL() = %q, want %q", got, want)
 	}
 }
 
@@ -9576,7 +9584,7 @@ func TestRunEnvShowPrintsEnvInfo(t *testing.T) {
 		"Env       local\n",
 		"Compose   nf_client_env\n",
 		"Database\n",
-		fmt.Sprintf("  Adminer URL   http://localhost:%d\n", adminerPort),
+		fmt.Sprintf("  Adminer URL   http://localhost:%d/?mysql=db&username=client&db=client\n", adminerPort),
 		"  DB user       client\n",
 		"  DB pass       " + dbPassword,
 		"Email\n",
