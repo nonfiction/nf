@@ -130,7 +130,7 @@ func (c envCommandRunner) Render() string {
 	case "shell":
 		return "docker compose exec --user " + firstNonEmpty(c.cfg.DockerUser, defaultDockerUser) + " " + firstNonEmpty(c.cfg.WordpressService, "wordpress") + " bash"
 	case "wp":
-		return "docker compose run --rm " + c.cfg.CliService + " wp ... --allow-root"
+		return "docker compose exec --user " + firstNonEmpty(c.cfg.DockerUser, defaultDockerUser) + " " + firstNonEmpty(c.cfg.WordpressService, "wordpress") + " wp ..."
 	default:
 		return c.name
 	}
@@ -181,7 +181,7 @@ func envSnapshotCreateScript(name string) string {
 	wpContentArchive := envSnapshotContainerWpContentArchive(name)
 	return fmt.Sprintf(`set -eu
 mkdir -p "%s"
-wp db export "%s/database.sql" --allow-root
+wp db export "%s/database.sql"
 gzip -f "%s/database.sql"
 dirs=""
 for dir in wp-content/uploads wp-content/plugins wp-content/mu-plugins wp-content/languages; do
@@ -205,7 +205,7 @@ func envSnapshotRestoreScript(name string) string {
 tmpdir="$(mktemp -d)"
 trap 'rm -rf "$tmpdir"' EXIT
 gzip -cd "%s" > "$tmpdir/database.sql"
-wp db import "$tmpdir/database.sql" --allow-root
+wp db import "$tmpdir/database.sql"
 if [ -f "%s" ]; then
   rm -rf /var/www/html/wp-content/uploads /var/www/html/wp-content/plugins /var/www/html/wp-content/mu-plugins /var/www/html/wp-content/languages
   tar -xzf "%s" -C /var/www/html
@@ -214,7 +214,7 @@ fi
 }
 
 func envSnapshotComposeArgs(cfg envConfig, args ...string) []string {
-	return append(envComposeArgs(cfg, "run", "--rm", firstNonEmpty(cfg.CliService, "cli"), "sh", "-lc"), args...)
+	return append(envWordpressExecArgs(cfg, "sh", "-lc"), args...)
 }
 
 type exactLineFilterWriter struct {

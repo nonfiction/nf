@@ -531,8 +531,8 @@ type envPluginInstaller struct {
 
 func (i envPluginInstaller) Install(plugins []wordpressPluginSpec) error {
 	envDir := localEnvDir(i.cfg)
-	args := envCliArgs(i.cfg, "sh", "-lc", localPluginInstallScript(plugins))
-	preview := envCliArgs(i.cfg, "<wp plugin bootstrap script>")
+	args := envWordpressExecArgs(i.cfg, "sh", "-lc", localPluginInstallScript(plugins))
+	preview := envWordpressExecArgs(i.cfg, "<wp plugin bootstrap script>")
 	return runCommandSpecWithPreview(execSpec{Dir: envDir, Args: args}, preview)
 }
 
@@ -541,7 +541,7 @@ type envPluginStatusChecker struct {
 }
 
 func (c envPluginStatusChecker) statuses(plugins []wordpressPluginSpec, includeExtras bool) ([]wordpressPluginStatus, bool, error) {
-	output, err := runCommandSpecOutputSilent(execSpec{Dir: localEnvDir(c.cfg), Args: envCliArgs(c.cfg, "sh", "-lc", localPluginStatusScript(plugins))})
+	output, err := runCommandSpecOutputSilent(execSpec{Dir: localEnvDir(c.cfg), Args: envWordpressExecArgs(c.cfg, "sh", "-lc", localPluginStatusScript(plugins))})
 	if err != nil {
 		return nil, false, err
 	}
@@ -810,20 +810,20 @@ func remotePluginInstallScript(target envRemoteSyncTarget, plugins []remotePlugi
 func localPluginStatusScript(plugins []wordpressPluginSpec) string {
 	var builder strings.Builder
 	builder.WriteString("set -eu\n")
-	builder.WriteString("if ! wp core is-installed --allow-root >/dev/null 2>&1; then printf '__NF_NOT_READY__\\n'; exit 0; fi\n")
+	builder.WriteString("if ! wp core is-installed >/dev/null 2>&1; then printf '__NF_NOT_READY__\\n'; exit 0; fi\n")
 	for _, plugin := range plugins {
 		slug := shellQuoteArg(plugin.Slug)
 		builder.WriteString("installed=no active=no auto_update=no\n")
 		builder.WriteString("if wp plugin is-installed ")
 		builder.WriteString(slug)
-		builder.WriteString(" --allow-root >/dev/null 2>&1; then\n")
+		builder.WriteString(" >/dev/null 2>&1; then\n")
 		builder.WriteString("  installed=yes\n")
 		builder.WriteString("  if wp plugin is-active ")
 		builder.WriteString(slug)
-		builder.WriteString(" --allow-root >/dev/null 2>&1; then active=yes; fi\n")
+		builder.WriteString(" >/dev/null 2>&1; then active=yes; fi\n")
 		builder.WriteString("  if wp plugin auto-updates status ")
 		builder.WriteString(slug)
-		builder.WriteString(" --enabled-only --field=name --allow-root 2>/dev/null | grep -qx ")
+		builder.WriteString(" --enabled-only --field=name 2>/dev/null | grep -qx ")
 		builder.WriteString(slug)
 		builder.WriteString("; then auto_update=yes; fi\n")
 		builder.WriteString("fi\n")
@@ -831,7 +831,7 @@ func localPluginStatusScript(plugins []wordpressPluginSpec) string {
 		builder.WriteString(slug)
 		builder.WriteString(" \"$installed\" \"$active\" \"$auto_update\"\n")
 	}
-	writeExtraPluginStatusScript(&builder, plugins, "wp", true)
+	writeExtraPluginStatusScript(&builder, plugins, "wp", false)
 	return builder.String()
 }
 
@@ -843,31 +843,31 @@ func localPluginInstallScript(plugins []wordpressPluginSpec) string {
 		source := shellQuoteArg(pluginInstallSource(plugin))
 		builder.WriteString("if ! wp plugin is-installed ")
 		builder.WriteString(slug)
-		builder.WriteString(" --allow-root; then\n")
+		builder.WriteString("; then\n")
 		builder.WriteString("  wp plugin install ")
 		builder.WriteString(source)
 		if plugin.Activate {
 			builder.WriteString(" --activate")
 		}
-		builder.WriteString(" --allow-root\n")
+		builder.WriteString("\n")
 		if plugin.Activate {
 			builder.WriteString("elif ! wp plugin is-active ")
 			builder.WriteString(slug)
-			builder.WriteString(" --allow-root; then\n")
+			builder.WriteString("; then\n")
 			builder.WriteString("  wp plugin activate ")
 			builder.WriteString(slug)
-			builder.WriteString(" --allow-root\n")
+			builder.WriteString("\n")
 		}
 		builder.WriteString("fi\n")
 		if plugin.AutoUpdate {
 			builder.WriteString("if ! wp plugin auto-updates status ")
 			builder.WriteString(slug)
-			builder.WriteString(" --enabled-only --field=name --allow-root 2>/dev/null | grep -qx ")
+			builder.WriteString(" --enabled-only --field=name 2>/dev/null | grep -qx ")
 			builder.WriteString(slug)
 			builder.WriteString("; then\n")
 			builder.WriteString("  wp plugin auto-updates enable ")
 			builder.WriteString(slug)
-			builder.WriteString(" --allow-root\n")
+			builder.WriteString("\n")
 			builder.WriteString("fi\n")
 		}
 	}

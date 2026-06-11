@@ -18,7 +18,6 @@ import (
 
 const (
 	defaultDockerDBImage        = "mariadb:11"
-	defaultDockerCLIImage       = "wordpress:cli-php8.3"
 	defaultDockerWordpressImage = "wordpress:php8.3-apache"
 	defaultDockerUser           = "nonfiction"
 )
@@ -90,7 +89,6 @@ func envConfigWithAdminCredentials(cfg envConfig) (envConfig, error) {
 
 func envConfigWithDockerSettings(cfg envConfig, values map[string]string) envConfig {
 	cfg.DockerDBImage = firstNonEmpty(cfg.DockerDBImage, values["docker_db_image"], defaultDockerDBImage)
-	cfg.DockerCLIImage = firstNonEmpty(cfg.DockerCLIImage, values["docker_cli_image"], defaultDockerCLIImage)
 	cfg.DockerWPImage = firstNonEmpty(cfg.DockerWPImage, values["docker_wordpress_image"], defaultDockerWordpressImage)
 	cfg.DockerUser = firstNonEmpty(cfg.DockerUser, values["docker_user"], defaultDockerUser)
 	return cfg
@@ -235,12 +233,12 @@ func envComposeArgs(cfg envConfig, args ...string) []string {
 	return append(fields, args...)
 }
 
-func envCliArgs(cfg envConfig, args ...string) []string {
-	return append(envComposeArgs(cfg, "run", "--rm", firstNonEmpty(cfg.CliService, "cli")), args...)
+func envWordpressExecArgs(cfg envConfig, args ...string) []string {
+	return append(envComposeArgs(cfg, "exec", "--user", firstNonEmpty(cfg.DockerUser, defaultDockerUser), firstNonEmpty(cfg.WordpressService, "wordpress")), args...)
 }
 
 func envWpArgs(cfg envConfig, args ...string) []string {
-	return append(envCliArgs(cfg, "wp"), append(args, "--allow-root")...)
+	return append(envWordpressExecArgs(cfg, "wp"), args...)
 }
 
 func envShellArgs(cfg envConfig) []string {
@@ -257,11 +255,11 @@ func envWpThemeIsActiveArgs(cfg envConfig, slug string) []string {
 
 func envWpCoreInstallArgs(cfg envConfig) []string {
 	slug := firstNonEmpty(cfg.ThemeMountSlug, cfg.ThemeSlug, "theme")
-	return append(envComposeArgs(cfg, "run", "--rm", firstNonEmpty(cfg.CliService, "cli"), "sh", "-lc"), `wp core install --url="$WP_URL" --title="$WP_TITLE" --admin_user="$ADMIN_USER" --admin_password="$ADMIN_PASSWORD" --admin_email="$ADMIN_EMAIL" --skip-email --allow-root && wp theme activate `+slug+` --allow-root`)
+	return append(envWordpressExecArgs(cfg, "sh", "-lc"), `wp core install --url="$WP_URL" --title="$WP_TITLE" --admin_user="$ADMIN_USER" --admin_password="$ADMIN_PASSWORD" --admin_email="$ADMIN_EMAIL" --skip-email && wp theme activate `+slug)
 }
 
 func envWpMailpitSMTPArgs(cfg envConfig) []string {
-	return append(envComposeArgs(cfg, "run", "--rm", firstNonEmpty(cfg.CliService, "cli"), "sh", "-lc"), `set -eu
+	return append(envWordpressExecArgs(cfg, "sh", "-lc"), `set -eu
 mkdir -p wp-content/mu-plugins
 cat > wp-content/mu-plugins/nf-mailpit.php <<'PHP'
 <?php

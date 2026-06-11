@@ -6123,7 +6123,7 @@ func TestRunEnvSnapshotAddSkipsComposeUpWhenReady(t *testing.T) {
 			t.Fatalf("Run() = %d, want 0", got)
 		}
 	})
-	for _, want := range []string{"Snapshot created.", "project: client", "name: demo-snapshot", "> docker compose run --rm cli wp core is-installed --allow-root", "> docker compose run --rm cli wp theme is-active theme --allow-root"} {
+	for _, want := range []string{"Snapshot created.", "project: client", "name: demo-snapshot", "> docker compose exec --user nonfiction wordpress wp core is-installed", "> docker compose exec --user nonfiction wordpress wp theme is-active theme"} {
 		if !strings.Contains(output, want) {
 			t.Fatalf("Run() output missing %q:\n%s", want, output)
 		}
@@ -6131,7 +6131,7 @@ func TestRunEnvSnapshotAddSkipsComposeUpWhenReady(t *testing.T) {
 	if strings.Contains(output, "> docker compose up -d") {
 		t.Fatalf("Run() output unexpectedly included compose up:\n%s", output)
 	}
-	if strings.Contains(output, "> docker compose run --rm cli sh -lc") {
+	if strings.Contains(output, "> docker compose exec --user nonfiction wordpress sh -lc") {
 		t.Fatalf("Run() output unexpectedly exposed snapshot shell script preview:\n%s", output)
 	}
 	if _, err := os.Stat(filepath.Join(snapshotDir, "snapshot.json")); err != nil {
@@ -6364,7 +6364,7 @@ func TestRunEnvSnapshotUseSkipsComposeUpWhenReady(t *testing.T) {
 			t.Fatalf("Run() = %d, want 0", got)
 		}
 	})
-	for _, want := range []string{"Snapshot restored.", "name: restore-source", "Safety snapshot:", "> docker compose run --rm cli wp core is-installed --allow-root", "> docker compose run --rm cli wp theme is-active theme --allow-root"} {
+	for _, want := range []string{"Snapshot restored.", "name: restore-source", "Safety snapshot:", "> docker compose exec --user nonfiction wordpress wp core is-installed", "> docker compose exec --user nonfiction wordpress wp theme is-active theme"} {
 		if !strings.Contains(output, want) {
 			t.Fatalf("Run() output missing %q:\n%s", want, output)
 		}
@@ -6372,7 +6372,7 @@ func TestRunEnvSnapshotUseSkipsComposeUpWhenReady(t *testing.T) {
 	if strings.Contains(output, "> docker compose up -d") {
 		t.Fatalf("Run() output unexpectedly included compose up:\n%s", output)
 	}
-	if strings.Contains(output, "> docker compose run --rm cli sh -lc") {
+	if strings.Contains(output, "> docker compose exec --user nonfiction wordpress sh -lc") {
 		t.Fatalf("Run() output unexpectedly exposed snapshot shell script preview:\n%s", output)
 	}
 	logData, err := os.ReadFile(logPath)
@@ -7043,7 +7043,7 @@ func TestRunInitWritesPortableMetadataShape(t *testing.T) {
 	if env, ok := metadata["env"].(map[string]any); !ok {
 		t.Fatalf("env block = %#v, want env config", metadata["env"])
 	} else {
-		for key, want := range map[string]string{"compose": "docker compose", "wordpress_service": "wordpress", "cli_service": "cli", "theme_mount_slug": "theme", "uploads_path": "uploads"} {
+		for key, want := range map[string]string{"compose": "docker compose", "wordpress_service": "wordpress", "theme_mount_slug": "theme", "uploads_path": "uploads"} {
 			if got := env[key]; got != want {
 				t.Fatalf("env.%s = %#v, want %q", key, got, want)
 			}
@@ -7241,14 +7241,14 @@ func TestRenderEnvComposeUsesMetadataDefaults(t *testing.T) {
 	metadata := map[string]any{
 		"project":   map[string]any{"slug": "client"},
 		"wordpress": map[string]any{"theme_path": "theme-src"},
-		"env":       map[string]any{"compose": "docker compose", "wordpress_service": "wp-app", "cli_service": "wp-cli", "theme_mount_slug": "theme-slot", "uploads_path": "uploads"},
+		"env":       map[string]any{"compose": "docker compose", "wordpress_service": "wp-app", "theme_mount_slug": "theme-slot", "uploads_path": "uploads"},
 	}
 	cfg, ok := loadEnvConfig(root, metadata)
 	if !ok {
 		t.Fatalf("loadEnvConfig() = false, want true")
 	}
 	compose := renderEnvCompose(cfg)
-	for _, want := range []string{"wp-app:", "wp-cli:", "condition: service_healthy", "depends_on:\n      wp-app:", "working_dir: /var/www/html", "HOME: /home/nonfiction", "HOME: /tmp", "WP_CLI_CACHE_DIR: /tmp/wp-cli-cache", filepath.Join(root, "theme-src") + ":/var/www/html/wp-content/themes/theme-slot", config.SnapshotProjectDir("client") + ":/env-snapshots"} {
+	for _, want := range []string{"wp-app:", "condition: service_healthy", "HOME: /home/nonfiction", "WP_CLI_CACHE_DIR: /tmp/wp-cli-cache", filepath.Join(root, "theme-src") + ":/var/www/html/wp-content/themes/theme-slot", "./uploads:/env/uploads", config.SnapshotProjectDir("client") + ":/env-snapshots"} {
 		if !strings.Contains(compose, want) {
 			t.Fatalf("renderEnvCompose() missing %q:\n%s", want, compose)
 		}
@@ -7264,7 +7264,6 @@ func TestEnsureManagedEnvUsesConfiguredDockerImages(t *testing.T) {
 	t.Setenv("NF_DATA_HOME", configHome)
 	if err := saveGlobalConfig(map[string]string{
 		"docker_db_image":        "mariadb:11.4",
-		"docker_cli_image":       "wordpress:cli-php8.3-custom",
 		"docker_wordpress_image": "wordpress:php8.3-custom-apache",
 		"docker_user":            "developer",
 	}); err != nil {
@@ -7299,7 +7298,7 @@ func TestEnsureManagedEnvUsesConfiguredDockerImages(t *testing.T) {
 		t.Fatalf("ReadFile(docker-compose.yml) error = %v", err)
 	}
 	compose := string(composeData)
-	for _, want := range []string{"image: mariadb:11.4", "image: wordpress:cli-php8.3-custom", "image: wordpress:php8.3-custom-apache"} {
+	for _, want := range []string{"image: mariadb:11.4", "image: wordpress:php8.3-custom-apache"} {
 		if !strings.Contains(compose, want) {
 			t.Fatalf("docker-compose.yml missing %q:\n%s", want, compose)
 		}
@@ -7398,8 +7397,8 @@ func TestRunEnvUpAutoInitializesProjectMetadata(t *testing.T) {
 	for _, want := range []string{
 		"Wrote " + projectPath,
 		"> docker compose up -d",
-		"> docker compose run --rm cli wp core is-installed --allow-root",
-		"> docker compose run --rm cli sh -lc",
+		"> docker compose exec --user nonfiction wordpress wp core is-installed",
+		"> docker compose exec --user nonfiction wordpress sh -lc",
 	} {
 		if !strings.Contains(output, want) {
 			t.Fatalf("Run() output missing %q:\n%s", want, output)
@@ -8013,9 +8012,9 @@ func TestRunEnvPluginsInstallInstallsMissingAndActivatesInstalled(t *testing.T) 
 		}
 	})
 	for _, want := range []string{
-		"> docker compose run --rm cli wp core is-installed --allow-root",
-		"> docker compose run --rm cli wp theme is-active theme --allow-root",
-		"> docker compose run --rm cli '<wp plugin bootstrap script>'",
+		"> docker compose exec --user nonfiction wordpress wp core is-installed",
+		"> docker compose exec --user nonfiction wordpress wp theme is-active theme",
+		"> docker compose exec --user nonfiction wordpress '<wp plugin bootstrap script>'",
 		"WordPress plugins installed.",
 	} {
 		if !strings.Contains(output, want) {
@@ -8027,7 +8026,7 @@ func TestRunEnvPluginsInstallInstallsMissingAndActivatesInstalled(t *testing.T) 
 		t.Fatalf("ReadFile(log) error = %v", err)
 	}
 	logText := string(logData)
-	for _, want := range []string{"wp plugin install stream --activate --allow-root", "wp plugin auto-updates enable stream --allow-root", "wp plugin is-active acf-pro --allow-root", "wp plugin auto-updates enable acf-pro --allow-root", "https://plugins.example.test/acf-pro.zip"} {
+	for _, want := range []string{"wp plugin install stream --activate", "wp plugin auto-updates enable stream", "wp plugin is-active acf-pro", "wp plugin auto-updates enable acf-pro", "https://plugins.example.test/acf-pro.zip"} {
 		if !strings.Contains(logText, want) {
 			t.Fatalf("plugin install script missing %q:\n%s", want, logText)
 		}
@@ -8076,7 +8075,7 @@ func TestRunEnvPluginsInstallSkipsSatisfiedPlugins(t *testing.T) {
 		}
 	})
 	for _, want := range []string{
-		"> docker compose run --rm cli '<wp plugin bootstrap script>'",
+		"> docker compose exec --user nonfiction wordpress '<wp plugin bootstrap script>'",
 		"WordPress plugins installed.",
 	} {
 		if !strings.Contains(output, want) {
@@ -8088,7 +8087,7 @@ func TestRunEnvPluginsInstallSkipsSatisfiedPlugins(t *testing.T) {
 		t.Fatalf("ReadFile(log) error = %v", err)
 	}
 	logText := string(logData)
-	for _, want := range []string{"wp plugin is-installed stream --allow-root", "wp plugin is-active stream --allow-root", "wp plugin auto-updates status stream --enabled-only --field=name --allow-root", "wp plugin auto-updates enable stream --allow-root"} {
+	for _, want := range []string{"wp plugin is-installed stream", "wp plugin is-active stream", "wp plugin auto-updates status stream --enabled-only --field=name", "wp plugin auto-updates enable stream"} {
 		if !strings.Contains(logText, want) {
 			t.Fatalf("plugin install script missing %q:\n%s", want, logText)
 		}
@@ -8763,13 +8762,13 @@ func TestEnvCommandHelpersBuildExpectedArgs(t *testing.T) {
 	if got, want := envComposeArgs(cfg, "up", "-d"), []string{"docker", "compose", "up", "-d"}; !reflect.DeepEqual(got, want) {
 		t.Fatalf("envComposeArgs() = %#v, want %#v", got, want)
 	}
-	if got, want := envWpArgs(cfg, "plugin", "list"), []string{"docker", "compose", "run", "--rm", "cli", "wp", "plugin", "list", "--allow-root"}; !reflect.DeepEqual(got, want) {
+	if got, want := envWpArgs(cfg, "plugin", "list"), []string{"docker", "compose", "exec", "--user", "nonfiction", "wordpress", "wp", "plugin", "list"}; !reflect.DeepEqual(got, want) {
 		t.Fatalf("envWpArgs() = %#v, want %#v", got, want)
 	}
 	if got, want := envShellArgs(cfg), []string{"docker", "compose", "exec", "--user", "nonfiction", "wordpress", "bash"}; !reflect.DeepEqual(got, want) {
 		t.Fatalf("envShellArgs() = %#v, want %#v", got, want)
 	}
-	if got, want := envWpThemeIsActiveArgs(cfg, ""), []string{"docker", "compose", "run", "--rm", "cli", "wp", "theme", "is-active", "theme", "--allow-root"}; !reflect.DeepEqual(got, want) {
+	if got, want := envWpThemeIsActiveArgs(cfg, ""), []string{"docker", "compose", "exec", "--user", "nonfiction", "wordpress", "wp", "theme", "is-active", "theme"}; !reflect.DeepEqual(got, want) {
 		t.Fatalf("envWpThemeIsActiveArgs() = %#v, want %#v", got, want)
 	}
 	hostPath, containerPath := envThemeArchivePaths(cfg, "/tmp/theme.zip")
@@ -8779,15 +8778,15 @@ func TestEnvCommandHelpersBuildExpectedArgs(t *testing.T) {
 	if got, want := envCommandDir(cfg), cfg.EnvDir; got != want {
 		t.Fatalf("envCommandDir() = %q, want %q", got, want)
 	}
-	if got, want := envWpThemeActivateArgs(cfg, ""), []string{"docker", "compose", "run", "--rm", "cli", "wp", "theme", "activate", "theme", "--allow-root"}; !reflect.DeepEqual(got, want) {
+	if got, want := envWpThemeActivateArgs(cfg, ""), []string{"docker", "compose", "exec", "--user", "nonfiction", "wordpress", "wp", "theme", "activate", "theme"}; !reflect.DeepEqual(got, want) {
 		t.Fatalf("envWpThemeActivateArgs() = %#v, want %#v", got, want)
 	}
-	if got, want := envWpThemeActivateArgs(cfg, "custom-slug"), []string{"docker", "compose", "run", "--rm", "cli", "wp", "theme", "activate", "custom-slug", "--allow-root"}; !reflect.DeepEqual(got, want) {
+	if got, want := envWpThemeActivateArgs(cfg, "custom-slug"), []string{"docker", "compose", "exec", "--user", "nonfiction", "wordpress", "wp", "theme", "activate", "custom-slug"}; !reflect.DeepEqual(got, want) {
 		t.Fatalf("envWpThemeActivateArgs(explicit) = %#v, want %#v", got, want)
 	}
 	installArgs := envWpCoreInstallArgs(cfg)
 	joined := strings.Join(installArgs, " ")
-	for _, wanted := range []string{"docker compose run --rm cli sh -lc", "WP_URL", "WP_TITLE", "ADMIN_USER", "ADMIN_PASSWORD", "ADMIN_EMAIL", "wp theme activate theme --allow-root"} {
+	for _, wanted := range []string{"docker compose exec --user nonfiction wordpress sh -lc", "WP_URL", "WP_TITLE", "ADMIN_USER", "ADMIN_PASSWORD", "ADMIN_EMAIL", "wp theme activate theme"} {
 		if !strings.Contains(joined, wanted) {
 			t.Fatalf("envWpCoreInstallArgs() missing %q in %#v", wanted, installArgs)
 		}
@@ -8797,7 +8796,7 @@ func TestEnvCommandHelpersBuildExpectedArgs(t *testing.T) {
 	}
 	mailpitArgs := envWpMailpitSMTPArgs(cfg)
 	mailpitJoined := strings.Join(mailpitArgs, " ")
-	for _, wanted := range []string{"docker compose run --rm cli sh -lc", "wp-content/mu-plugins/nf-mailpit.php", "phpmailer_init", "mailpit", "1025"} {
+	for _, wanted := range []string{"docker compose exec --user nonfiction wordpress sh -lc", "wp-content/mu-plugins/nf-mailpit.php", "phpmailer_init", "mailpit", "1025"} {
 		if !strings.Contains(mailpitJoined, wanted) {
 			t.Fatalf("envWpMailpitSMTPArgs() missing %q in %#v", wanted, mailpitArgs)
 		}
@@ -8860,7 +8859,7 @@ func TestEnsureManagedEnvWritesManagedFiles(t *testing.T) {
 	adminPassword := passwords.DerivePassword("client", "wp-admin", "test-salt")
 	dbPassword := passwords.DerivePassword("client", "mysql", "test-salt")
 	checks := map[string][]string{
-		filepath.Join(cfg.EnvDir, "docker-compose.yml"):                   {filepath.Join(root, "theme") + ":/var/www/html/wp-content/themes/theme", "mailpit", "adminer:", "wordpress:php8.3-apache", "https://www.adminneo.org/files/5.4.1/mysql_en_default/adminneo-5.4.1.php", "${ADMINER_PORT}:80", "wordpress:cli-php8.3", "HOME: /home/nonfiction", "WP_CLI_CACHE_DIR: /tmp/wp-cli-cache"},
+		filepath.Join(cfg.EnvDir, "docker-compose.yml"):                   {filepath.Join(root, "theme") + ":/var/www/html/wp-content/themes/theme", "mailpit", "adminer:", "wordpress:php8.3-apache", "https://www.adminneo.org/files/5.4.1/mysql_en_default/adminneo-5.4.1.php", "${ADMINER_PORT}:80", "HOME: /home/nonfiction", "WP_CLI_CACHE_DIR: /tmp/wp-cli-cache", "./uploads:/env/uploads", ":/env-snapshots"},
 		filepath.Join(cfg.EnvDir, ".env"):                                 {"COMPOSE_PROJECT_NAME=nf_client_env", fmt.Sprintf("WP_PORT=%d", wpPort), fmt.Sprintf("MAILPIT_PORT=%d", mailpitPort), fmt.Sprintf("ADMINER_PORT=%d", adminerPort), fmt.Sprintf("WP_URL=http://localhost:%d", wpPort), "DB_USER=client", "DB_PASSWORD=" + dbPassword, "WP_TITLE=Client", "ADMIN_USER=admin", "ADMIN_PASSWORD=" + adminPassword, "ADMIN_EMAIL=web@nonfiction.ca"},
 		filepath.Join(cfg.EnvDir, "php", "uploads.ini"):                   {"upload_max_filesize=128M", "max_execution_time=120"},
 		filepath.Join(cfg.EnvDir, "wordpress", "Dockerfile"):              {"FROM wordpress:php8.3-apache", "apt-get install -y --no-install-recommends", "iputils-ping", "dnsutils", "nano", "vim", "wp-cli.phar", "/usr/local/bin/wp", "useradd --create-home --shell /bin/bash --groups www-data nonfiction", "chown -R nonfiction:www-data", "COPY wordpress/wordpress-rewrites.conf"},
@@ -8940,10 +8939,10 @@ func TestRunEnvUpPrintsUnderlyingCommands(t *testing.T) {
 	for _, want := range []string{
 		"> docker compose build",
 		"> docker compose up -d",
-		"> docker compose run --rm cli sh -lc",
+		"> docker compose exec --user nonfiction wordpress sh -lc",
 		"wp-content/mu-plugins/nf-mailpit.php",
-		"> docker compose run --rm cli wp core is-installed --allow-root",
-		"> docker compose run --rm cli sh -lc",
+		"> docker compose exec --user nonfiction wordpress wp core is-installed",
+		"> docker compose exec --user nonfiction wordpress sh -lc",
 	} {
 		if !strings.Contains(output, want) {
 			t.Fatalf("Run() output = %q, want %q", output, want)
@@ -9009,9 +9008,9 @@ func TestRunEnvUpActivatesThemeWhenAlreadyInstalled(t *testing.T) {
 	for _, want := range []string{
 		"> docker compose up -d",
 		"wp-content/mu-plugins/nf-mailpit.php",
-		"> docker compose run --rm cli wp core is-installed --allow-root",
-		"> docker compose run --rm cli wp theme is-active theme --allow-root",
-		"> docker compose run --rm cli wp theme activate theme --allow-root",
+		"> docker compose exec --user nonfiction wordpress wp core is-installed",
+		"> docker compose exec --user nonfiction wordpress wp theme is-active theme",
+		"> docker compose exec --user nonfiction wordpress wp theme activate theme",
 	} {
 		if !strings.Contains(output, want) {
 			t.Fatalf("Run() output = %q, want %q", output, want)
@@ -9152,8 +9151,8 @@ func TestRunEnvResetPrintsUnderlyingCommands(t *testing.T) {
 		"> docker compose down -v --remove-orphans",
 		"> docker compose build",
 		"> docker compose up -d",
-		"> docker compose run --rm cli wp core is-installed --allow-root",
-		"> docker compose run --rm cli sh -lc",
+		"> docker compose exec --user nonfiction wordpress wp core is-installed",
+		"> docker compose exec --user nonfiction wordpress sh -lc",
 	} {
 		if !strings.Contains(output, want) {
 			t.Fatalf("Run() output = %q, want %q", output, want)

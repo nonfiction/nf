@@ -72,12 +72,6 @@ func runConfig(argv []string) int {
 			return 1
 		}
 		return cmdConfigSet("docker_db_image", argv[1])
-	case "set-docker-cli-image":
-		if len(argv) != 2 || strings.TrimSpace(argv[1]) == "" {
-			fmt.Fprintln(os.Stderr, "config set-docker-cli-image takes exactly one image")
-			return 1
-		}
-		return cmdConfigSet("docker_cli_image", argv[1])
 	case "set-docker-wordpress-image":
 		if len(argv) != 2 || strings.TrimSpace(argv[1]) == "" {
 			fmt.Fprintln(os.Stderr, "config set-docker-wordpress-image takes exactly one image")
@@ -377,7 +371,6 @@ func cmdConfigShow() int {
 	printIndentedDetailRows([]detailRow{
 		{label: "User", value: configShowValue(values, "docker_user", defaultDockerUser)},
 		{label: "DB image", value: configShowValue(values, "docker_db_image", defaultDockerDBImage)},
-		{label: "CLI image", value: configShowValue(values, "docker_cli_image", defaultDockerCLIImage)},
 		{label: "WordPress image", value: configShowValue(values, "docker_wordpress_image", defaultDockerWordpressImage)},
 	}, 2)
 	fmt.Println()

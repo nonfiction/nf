@@ -97,7 +97,6 @@ func projectInitMetadata(args projectInitArgs) map[string]any {
 		"env": map[string]any{
 			"compose":           "docker compose",
 			"wordpress_service": "wordpress",
-			"cli_service":       "cli",
 			"theme_mount_slug":  "theme",
 			"uploads_path":      "uploads",
 		},
@@ -181,9 +180,7 @@ func (o orderedObject) MarshalJSON() ([]byte, error) {
 func renderEnvCompose(cfg envConfig) string {
 	themeMountSlug := firstNonEmpty(cfg.ThemeMountSlug, "theme")
 	wordpressService := firstNonEmpty(cfg.WordpressService, "wordpress")
-	cliService := firstNonEmpty(cfg.CliService, "cli")
 	dbImage := firstNonEmpty(cfg.DockerDBImage, defaultDockerDBImage)
-	cliImage := firstNonEmpty(cfg.DockerCLIImage, defaultDockerCLIImage)
 	wordpressImage := firstNonEmpty(cfg.DockerWPImage, defaultDockerWordpressImage)
 	dockerUser := firstNonEmpty(cfg.DockerUser, defaultDockerUser)
 	themePath := cfg.ThemePath
@@ -237,29 +234,6 @@ func renderEnvCompose(cfg envConfig) string {
       - wp_data:/var/www/html
       - %s:/var/www/html/wp-content/themes/%s
       - ./php/uploads.ini:/usr/local/etc/php/conf.d/uploads.ini:ro
-
-  %s:
-    image: %s
-    depends_on:
-      %s:
-        condition: service_started
-    working_dir: /var/www/html
-    user: "33:33"
-    environment:
-      WORDPRESS_DB_HOST: db:3306
-      WORDPRESS_DB_NAME: ${DB_NAME}
-      WORDPRESS_DB_USER: ${DB_USER}
-      WORDPRESS_DB_PASSWORD: ${DB_PASSWORD}
-      WP_URL: ${WP_URL}
-      WP_TITLE: ${WP_TITLE}
-      ADMIN_USER: ${ADMIN_USER}
-      ADMIN_PASSWORD: ${ADMIN_PASSWORD}
-      ADMIN_EMAIL: ${ADMIN_EMAIL}
-      HOME: /tmp
-      WP_CLI_CACHE_DIR: /tmp/wp-cli-cache
-    volumes:
-      - wp_data:/var/www/html
-      - %s:/var/www/html/wp-content/themes/%s
       - ./%s:%s
       - %s:/env-snapshots
 
@@ -283,7 +257,7 @@ func renderEnvCompose(cfg envConfig) string {
 volumes:
   db_data:
   wp_data:
-`, dbImage, wordpressService, dockerUser, themePath, themeMountSlug, cliService, cliImage, wordpressService, themePath, themeMountSlug, uploadsPath, path.Join("/", "env", uploadsPath), envSnapshotComposeMount(cfg), wordpressImage)
+`, dbImage, wordpressService, dockerUser, themePath, themeMountSlug, uploadsPath, path.Join("/", "env", uploadsPath), envSnapshotComposeMount(cfg), wordpressImage)
 }
 
 func renderEnvFile(cfg envConfig) string {

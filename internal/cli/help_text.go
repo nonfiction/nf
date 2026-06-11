@@ -114,7 +114,6 @@ func runConfigHelp() int {
 		{"set-adminer-default-user <user>", "set default Adminer user"},
 		{},
 		{"set-docker-db-image <image>", "set default Docker database image"},
-		{"set-docker-cli-image <image>", "set default Docker WP-CLI image"},
 		{"set-docker-wordpress-image <image>", "set default Docker WordPress image"},
 		{"set-docker-user <user>", "set default Docker shell user"},
 		{},
