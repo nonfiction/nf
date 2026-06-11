@@ -7502,6 +7502,14 @@ func TestRenderEnvFileUsesComposeProjectName(t *testing.T) {
 	}
 }
 
+func TestRenderEnvFileQuotesTitleWithSpaces(t *testing.T) {
+	wpPort, mailpitPort, adminerPort := envDerivedPorts("theme-starter")
+	cfg := envConfig{ProjectSlug: "theme-starter", WordpressPort: wpPort, MailpitPort: mailpitPort, AdminerPort: adminerPort}
+	if got := renderEnvFile(cfg); !strings.Contains(got, "WP_TITLE='Theme Starter'\n") {
+		t.Fatalf("renderEnvFile() missing shell-quoted title:\n%s", got)
+	}
+}
+
 func TestEnvConfigWithAdminCredentialsUsesGlobalDefaultsAndProjectSlug(t *testing.T) {
 	configHome := t.TempDir()
 	t.Setenv("NF_CONFIG_HOME", configHome)
@@ -8491,7 +8499,7 @@ func TestRunEnvPluginsInstallRemotePromptsBeforeExecution(t *testing.T) {
 
 func TestRenderEnvInfoUsesEffectivePorts(t *testing.T) {
 	cfg := envConfig{ProjectSlug: "client", EnvDir: filepath.Join("/data", "envs", "client"), WordpressPort: 18432, MailpitPort: 18433, AdminerPort: 18434, DBUser: "client", DBPassword: "db-pass", AdminUser: "admin", AdminPassword: "wp-pass"}
-	want := "client:local\n────────────\nSite      client\nEnv       local\nPath      /data/envs/client\nPHP       8.3\nCompose   nf_client_env\n\nDatabase\n  Adminer URL   http://localhost:18434\n  DB user       client\n  DB pass       db-pass\n\nEmail\n  Mailpit URL   http://localhost:18433\n\nWordPress\n  Site URL    http://localhost:18432\n  Admin URL   http://localhost:18432/wp-login.php\n  WP user     admin\n  WP pass     wp-pass"
+	want := "client:local\n────────────\nSite      client\nEnv       local\nPath      /data/envs/client\nPHP       8.3\nCompose   nf_client_env\n\nDatabase\n  Adminer URL   http://localhost:18434\n  DB user       client\n  DB pass       db-pass\n\nEmail\n  Mailpit URL   http://localhost:18433\n\nWordPress\n  Site URL      http://localhost:18432\n  Admin URL     http://localhost:18432/wp-login.php\n  WP user       admin\n  WP pass       wp-pass"
 	if got := renderEnvInfo(cfg, true); got != want {
 		t.Fatalf("renderEnvInfo(full) = %q, want %q", got, want)
 	}
@@ -9574,10 +9582,10 @@ func TestRunEnvShowPrintsEnvInfo(t *testing.T) {
 		"Email\n",
 		fmt.Sprintf("  Mailpit URL   http://localhost:%d", mailpitPort),
 		"WordPress\n",
-		fmt.Sprintf("  Site URL    http://localhost:%d\n", wpPort),
-		fmt.Sprintf("  Admin URL   http://localhost:%d/wp-login.php\n", wpPort),
-		"  WP user     admin\n",
-		"  WP pass     " + adminPassword,
+		fmt.Sprintf("  Site URL      http://localhost:%d\n", wpPort),
+		fmt.Sprintf("  Admin URL     http://localhost:%d/wp-login.php\n", wpPort),
+		"  WP user       admin\n",
+		"  WP pass       " + adminPassword,
 	})
 }
 

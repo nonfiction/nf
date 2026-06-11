@@ -299,7 +299,19 @@ WP_TITLE=%s
 ADMIN_USER=%s
 ADMIN_PASSWORD=%s
 ADMIN_EMAIL=%s
-`, envComposeProjectName(cfg.ProjectSlug), cfg.WordpressPort, cfg.MailpitPort, cfg.AdminerPort, cfg.ProjectSlug, dbUser, dbPassword, cfg.WordpressPort, wpTitle, adminUser, adminPassword, adminEmail)
+`, envComposeProjectName(cfg.ProjectSlug), cfg.WordpressPort, cfg.MailpitPort, cfg.AdminerPort, cfg.ProjectSlug, envFileValue(dbUser), envFileValue(dbPassword), cfg.WordpressPort, envFileValue(wpTitle), envFileValue(adminUser), envFileValue(adminPassword), envFileValue(adminEmail))
+}
+
+func envFileValue(value string) string {
+	if value == "" {
+		return "''"
+	}
+	if strings.IndexFunc(value, func(r rune) bool {
+		return (r < 'A' || r > 'Z') && (r < 'a' || r > 'z') && (r < '0' || r > '9') && !strings.ContainsRune("_./:@%+-", r)
+	}) == -1 {
+		return value
+	}
+	return "'" + strings.ReplaceAll(value, "'", "'\\''") + "'"
 }
 
 func envComposeProjectName(projectSlug string) string {
@@ -330,16 +342,8 @@ func renderEnvInfo(cfg envConfig, includeURLs bool) string {
 		{label: "DB user", value: firstNonEmpty(cfg.DBUser, cfg.ProjectSlug)},
 		{label: "DB pass", value: cfg.DBPassword},
 	}
-	if hasDetailRows(dbRows) {
-		lines = append(lines, "", "Database")
-		lines = append(lines, detailRowLines(dbRows, 2)...)
-	}
 	emailRows := []detailRow{
 		{label: "Mailpit URL", value: mailpitURL},
-	}
-	if hasDetailRows(emailRows) {
-		lines = append(lines, "", "Email")
-		lines = append(lines, detailRowLines(emailRows, 2)...)
 	}
 	wordpressRows := []detailRow{
 		{label: "Site URL", value: siteURL},
@@ -347,9 +351,18 @@ func renderEnvInfo(cfg envConfig, includeURLs bool) string {
 		{label: "WP user", value: cfg.AdminUser},
 		{label: "WP pass", value: cfg.AdminPassword},
 	}
+	sectionWidth := detailRowsWidth(dbRows, emailRows, wordpressRows)
+	if hasDetailRows(dbRows) {
+		lines = append(lines, "", "Database")
+		lines = append(lines, detailRowLinesWithWidth(dbRows, 2, sectionWidth)...)
+	}
+	if hasDetailRows(emailRows) {
+		lines = append(lines, "", "Email")
+		lines = append(lines, detailRowLinesWithWidth(emailRows, 2, sectionWidth)...)
+	}
 	if hasDetailRows(wordpressRows) {
 		lines = append(lines, "", "WordPress")
-		lines = append(lines, detailRowLines(wordpressRows, 2)...)
+		lines = append(lines, detailRowLinesWithWidth(wordpressRows, 2, sectionWidth)...)
 	}
 	return strings.Join(lines, "\n")
 }

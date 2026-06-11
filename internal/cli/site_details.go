@@ -261,6 +261,10 @@ func printIndentedDetailRows(rows []detailRow, indent int) {
 }
 
 func detailRowLines(rows []detailRow, indent int) []string {
+	return detailRowLinesWithWidth(rows, indent, 0)
+}
+
+func detailRowLinesWithWidth(rows []detailRow, indent, minWidth int) []string {
 	width := 0
 	for _, row := range rows {
 		if strings.TrimSpace(row.value) == "" {
@@ -269,6 +273,9 @@ func detailRowLines(rows []detailRow, indent int) []string {
 		if len(row.label) > width {
 			width = len(row.label)
 		}
+	}
+	if minWidth > width {
+		width = minWidth
 	}
 	if width == 0 {
 		return nil
@@ -282,6 +289,21 @@ func detailRowLines(rows []detailRow, indent int) []string {
 		lines = append(lines, fmt.Sprintf("%s%-*s   %s", prefix, width, row.label, row.value))
 	}
 	return lines
+}
+
+func detailRowsWidth(rows ...[]detailRow) int {
+	width := 0
+	for _, group := range rows {
+		for _, row := range group {
+			if strings.TrimSpace(row.value) == "" {
+				continue
+			}
+			if len(row.label) > width {
+				width = len(row.label)
+			}
+		}
+	}
+	return width
 }
 
 type siteEnvSSHInfoValue struct {
