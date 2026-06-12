@@ -237,6 +237,10 @@ func envWordpressExecArgs(cfg envConfig, args ...string) []string {
 	return append(envComposeArgs(cfg, "exec", "--user", firstNonEmpty(cfg.DockerUser, defaultDockerUser), firstNonEmpty(cfg.WordpressService, "wordpress")), args...)
 }
 
+func envWordpressRootExecArgs(cfg envConfig, args ...string) []string {
+	return append(envComposeArgs(cfg, "exec", "--user", "root", firstNonEmpty(cfg.WordpressService, "wordpress")), args...)
+}
+
 func envWpArgs(cfg envConfig, args ...string) []string {
 	return append(envWordpressExecArgs(cfg, "wp"), args...)
 }
@@ -293,6 +297,20 @@ add_action('phpmailer_init', static function ($phpmailer) {
     $phpmailer->SMTPAuth = false;
 });
 PHP`)
+}
+
+func envWpContentPermissionsArgs(cfg envConfig) []string {
+	dockerUser := firstNonEmpty(cfg.DockerUser, defaultDockerUser)
+	return append(envWordpressRootExecArgs(cfg, "sh", "-lc"), fmt.Sprintf(`set -eu
+cd /var/www/html
+mkdir -p wp-content/uploads
+for dir in wp-content/uploads wp-content/plugins wp-content/mu-plugins wp-content/languages; do
+  if [ -e "$dir" ]; then
+    chown -R %s:www-data "$dir"
+    chmod -R u+rwX,g+rwX,o-rwx "$dir"
+    find "$dir" -type d -exec chmod g+s {} +
+  fi
+done`, dockerUser))
 }
 
 func envWpThemeActivateArgs(cfg envConfig, slug string) []string {

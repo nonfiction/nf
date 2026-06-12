@@ -32,6 +32,9 @@ func (c envCommandRunner) ensureUpInstalledActive(envDir string) error {
 	if err := runCommandSpecWithPreview(execSpec{Dir: envDir, Args: envWpBootstrapReadyArgs(c.cfg)}, envWpBootstrapPreviewArgs(c.cfg, "wait for WordPress files")); err != nil {
 		return err
 	}
+	if err := runCommandSpecWithPreview(execSpec{Dir: envDir, Args: envWpContentPermissionsArgs(c.cfg)}, envWpBootstrapPreviewArgs(c.cfg, "fix WordPress content permissions")); err != nil {
+		return err
+	}
 	if err := runCommandSpecWithPreview(execSpec{Dir: envDir, Args: envWpMailpitSMTPArgs(c.cfg)}, envWpBootstrapPreviewArgs(c.cfg, "configure Mailpit SMTP")); err != nil {
 		return err
 	}
@@ -327,6 +330,9 @@ func envWpSearchReplaceArgs(cfg envConfig, sourceURL, destinationURL string) []s
 }
 
 func envFinalizeLocalRestore(cfg envConfig, sourceURL string) error {
+	if err := runCommandSpecWithPreview(execSpec{Dir: localEnvDir(cfg), Args: envWpContentPermissionsArgs(cfg)}, envWpBootstrapPreviewArgs(cfg, "fix WordPress content permissions")); err != nil {
+		return err
+	}
 	sourceURL = normalizeWordPressURL(sourceURL, false)
 	destinationURL := normalizeWordPressURL(envLocalWordPressURL(cfg), false)
 	if sourceURL != "" && destinationURL != "" && sourceURL != destinationURL {
