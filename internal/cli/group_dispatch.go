@@ -234,6 +234,13 @@ func runSite(argv []string) int {
 			return 1
 		}
 		return cmdSiteRemoteCommandPlan("wp", envRef, command)
+	case "export":
+		envRef, opts, err := parseSiteExportArgs(argv[1:])
+		if err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			return 1
+		}
+		return cmdSiteExport(envRef, opts)
 	case "snapshot":
 		if len(argv) == 2 && (argv[1] == "list" || argv[1] == "ls") {
 			return cmdSiteSnapshotList()

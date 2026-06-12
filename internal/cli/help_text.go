@@ -94,6 +94,7 @@ func runSiteHelp() int {
 		{"password [site|env] [--wp|--db|--basicauth]", "show a site password only"},
 		{},
 		{"snapshot [env|list|remove|prune] [flags]", "manage remote snapshots"},
+		{"export [env] [--output path] [--dry-run]", "create a full WordPress handoff export"},
 		{"basicauth <action> [site|env]", "manage provider basic auth"},
 		{},
 		{"add <target> <site> [flags]", "create a live env"},

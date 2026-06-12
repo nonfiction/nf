@@ -132,6 +132,35 @@ type siteSnapshotOptions struct {
 	dryRun bool
 }
 
+type siteExportOptions struct {
+	output string
+	dryRun bool
+}
+
+type siteExportManifest struct {
+	Schema        int    `json:"schema"`
+	Source        string `json:"source"`
+	EnvID         string `json:"env_id"`
+	SiteID        string `json:"site_id"`
+	Env           string `json:"env"`
+	Provider      string `json:"provider"`
+	Target        string `json:"target,omitempty"`
+	URL           string `json:"url,omitempty"`
+	CreatedAt     string `json:"created_at"`
+	WordPressPath string `json:"wordpress_path,omitempty"`
+	Files         string `json:"files"`
+	Database      string `json:"database"`
+}
+
+type envImportOptions struct {
+	source    string
+	database  string
+	sourceURL string
+	name      string
+	dryRun    bool
+	yes       bool
+}
+
 const envSnapshotSchema = 1
 
 const wpCLIPasswordlessLoginWarning = "WARNING: option --ssl-verify-server-cert is disabled, because of an insecure passwordless login."

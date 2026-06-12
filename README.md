@@ -430,6 +430,30 @@ nf env snapshot use --remote <remote-snapshot-name> --name live-copy --yes
 
 This imports the remote snapshot into the current project's local snapshots, restores it, creates the normal pre-restore safety snapshot first, and keeps the imported local snapshot for audit/reuse.
 
+## WordPress handoff export/import
+
+```sh
+nf site export <site.target:env> [--output path] [--dry-run]
+nf env import <source> [--db path] [--source-url url] [--name name] [--dry-run] [--yes]
+```
+
+`nf site export` creates a full handoff copy of a managed remote WordPress env. It is different from snapshots: export includes the full WordPress filesystem, including core files, themes, plugins, uploads, mu-plugins, languages, and `wp-config.php`, plus a compressed database dump.
+
+Default exports live under:
+
+```text
+~/.local/share/nf/exports/<env-id-slug>-YYYY-MM-DD-HHMMSS/
+```
+
+Each export contains:
+
+* `files/`
+* `database.sql.gz`
+* `manifest.json`
+* `README.txt`
+
+`nf env import` is the inbound onboarding workflow. It imports into the current project's local env only. It accepts an `nf site export` directory, or a generic WordPress filesystem directory when paired with `--db`. It creates an import snapshot, creates the normal pre-restore safety snapshot, restores the database plus `wp-content/uploads`, `plugins`, `mu-plugins`, and `languages`, runs URL search-replace when a source URL is known, activates the configured local theme when installed, and flushes cache. It does not import WordPress core or `wp-config.php` into the local env.
+
 ## Config and secrets
 
 Config lives under:
@@ -519,6 +543,7 @@ nf site staging add <site-id-or-alias> [--dry-run] [--execute --yes]
 nf site staging remove <site-id-or-alias> [--dry-run] [--execute --yes]
 nf site shell <site.target:env>
 nf site wp <site.target:env> -- <cmd>
+nf site export <site.target:env> [--output path] [--dry-run]
 nf site snapshot <site.target:env> [--output path] [--dry-run]
 nf site snapshot list
 nf site snapshot remove <name> [--yes]
@@ -561,7 +586,7 @@ Current behavior:
 * `nf site add <target> <site>` creates the live WordPress env on a target. Add `--with-staging` to create live and staging in one operation.
 * `nf site staging status/add/remove` manages an optional staging env for an existing site. `rm` is a shorthand for `remove`.
 * `nf site refresh` discovers sites from the cached target list. Remote target site discovery is not implemented yet.
-* `nf site list --envs`, `nf site show`, `nf site shell`, `nf site wp`, and `nf site snapshot` read the local disposable site cache for now.
+* `nf site list --envs`, `nf site show`, `nf site shell`, `nf site wp`, `nf site snapshot`, and `nf site export` read the local disposable site cache for now.
 * `nf site password [site|env] [--wp|--db|--basicauth]` prints only one selected site password. `--wp` is the default. Env refs are accepted for `--db`; use a site ref for `--wp` or `--basicauth`. Linode WordPress, DB, and basic-auth passwords are derived from the site slug, purpose, `NF_PASSWORD_SALT`, and `project.password_version`; Kinsta DB password output uses the Kinsta SFTP password endpoint.
 * Linode site/env database creation grants the shared Adminer MySQL user privileges only on created site env databases and refuses to create a site DB user with the same name as the shared Adminer MySQL user. Site removal revokes per-database grants before dropping the databases.
 * `nf site basicauth ...` uses `basicauth_default_user` from `config.json` and a per-site derived password with `project.password_version` as the rotation source. Linode envs are managed over SSH by updating the selected env nginx vhost, including multi-vhost target nginx scripts. Kinsta Password protection exists in MyKinsta, but currently requires manual MyKinsta use because no public API endpoint is exposed.
@@ -569,6 +594,7 @@ Current behavior:
 * `nf remote add` validates an env ID against the cache, then repo remotes are stored in `nf.json` under `remotes` as `<site>.<target>:<env>` refs.
 * `nf site shell/wp ...` validate the cache, print the SSH or wp-cli command preview, then execute the remote command.
 * `nf env logs <remote>` resolves a configured repo remote, prints the SSH command preview, ensures `wp-content/debug.log` exists, and tails it on the remote host.
+* `nf env import <source>` imports external WordPress data into the local env after creating a safety snapshot. It never writes directly to a remote env.
 * `nf env push/pull [remote]` syncs database and mutable `wp-content` after an interactive confirmation. Omit `remote` to pick from configured repo remotes. Add `--dry-run` for a non-mutating plan, or use `--non-interactive` without `--execute` for preflight-only output.
 
 State/cache lives under:

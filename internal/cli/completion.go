@@ -184,7 +184,7 @@ func targetAddFlagCandidates() []string {
 
 func siteCompletionCandidates(args []string) []string {
 	if len(args) == 0 {
-		return []string{"list", "ls", "show", "shell", "sh", "wp", "snapshot", "password", "basicauth", "refresh", "add", "staging", "remove", "rm", "help"}
+		return []string{"list", "ls", "show", "shell", "sh", "wp", "export", "snapshot", "password", "basicauth", "refresh", "add", "staging", "remove", "rm", "help"}
 	}
 	args[0] = cliCommandAlias(args[0])
 	switch args[0] {
@@ -197,7 +197,7 @@ func siteCompletionCandidates(args []string) []string {
 		return []string{"--envs"}
 	case "show":
 		return cachedSiteAndEnvCompletionNames()
-	case "shell", "wp":
+	case "shell", "wp", "export":
 		return cachedSiteEnvCompletionNames()
 	case "snapshot":
 		if len(args) == 1 {
@@ -295,7 +295,7 @@ func remoteCompletionCandidates(args []string) []string {
 
 func envCompletionCandidates(args []string) []string {
 	if len(args) == 0 {
-		return []string{"show", "password", "up", "down", "logs", "shell", "sh", "wp", "plugins", "snapshot", "pull", "push", "reset", "help"}
+		return []string{"show", "password", "up", "down", "logs", "shell", "sh", "wp", "plugins", "snapshot", "import", "pull", "push", "reset", "help"}
 	}
 	args[0] = cliCommandAlias(args[0])
 	switch args[0] {
@@ -311,6 +311,8 @@ func envCompletionCandidates(args []string) []string {
 		return envPluginsCompletionCandidates(args[1:])
 	case "snapshot":
 		return envSnapshotCompletionCandidates(args[1:])
+	case "import":
+		return []string{"--db", "--source-url", "--name", "--dry-run", "--yes"}
 	default:
 		return nil
 	}

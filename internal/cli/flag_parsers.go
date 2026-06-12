@@ -101,6 +101,43 @@ func parseSiteSnapshotArgs(argv []string) (string, siteSnapshotOptions, error) {
 	return positionals[0], opts, nil
 }
 
+func parseSiteExportArgs(argv []string) (string, siteExportOptions, error) {
+	var opts siteExportOptions
+	positionals := make([]string, 0, 1)
+	for i := 0; i < len(argv); i++ {
+		arg := argv[i]
+		switch arg {
+		case "--dry-run":
+			opts.dryRun = true
+		case "--output":
+			if i+1 >= len(argv) || strings.TrimSpace(argv[i+1]) == "" {
+				return "", opts, fmt.Errorf("site export --output requires a path")
+			}
+			i++
+			opts.output = argv[i]
+		default:
+			if strings.HasPrefix(arg, "--output=") {
+				opts.output = strings.TrimPrefix(arg, "--output=")
+				if strings.TrimSpace(opts.output) == "" {
+					return "", opts, fmt.Errorf("site export --output requires a path")
+				}
+				continue
+			}
+			if strings.HasPrefix(arg, "-") {
+				return "", opts, fmt.Errorf("unsupported flag %s", arg)
+			}
+			positionals = append(positionals, arg)
+		}
+	}
+	if len(positionals) > 1 {
+		return "", opts, fmt.Errorf("site export takes at most one env ref")
+	}
+	if len(positionals) == 0 {
+		return "", opts, nil
+	}
+	return positionals[0], opts, nil
+}
+
 func parseSiteSnapshotRemoveArgs(argv []string) (string, bool, error) {
 	name := ""
 	yes := false

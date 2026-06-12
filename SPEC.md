@@ -317,6 +317,8 @@ Do not add old compatibility routes unless explicitly requested.
 * [x] `nf env snapshot prune [--keep N] [--dry-run] [--yes]`
 * [x] `nf site snapshot <env> [--output path] [--dry-run]`
 * [x] `nf site snapshot list/remove/prune`
+* [x] `nf site export <env> [--output path] [--dry-run]`
+* [x] `nf env import <source> [--db path] [--source-url url] [--name name] [--dry-run] [--yes]`
 * [x] `nf config init`
 * [x] `nf config set-base-domain <domain>`
 * [x] `nf config set-default-wp-email <email>`
@@ -346,6 +348,8 @@ These commands are implemented, but intentionally guarded because they touch rem
 * [x] `nf env logs <remote>`: validates repo remote/cache, previews SSH, ensures `wp-content/debug.log` exists, then tails it
 * [x] `nf env password <remote> [--wp|--db|--basicauth]`: resolves repo remote/cache and prints only the selected password
 * [x] `nf env plugins install <remote>`: validates repo remote/cache, prints a reviewable plugin plan, and asks for confirmation unless `--yes` is passed
+* [x] `nf site export <env-id>`: validates cache, exports full remote WordPress filesystem plus database dump as a portable handoff directory
+* [x] `nf env import <source>`: creates a local import snapshot, creates a pre-restore safety snapshot, and restores external WordPress data into the local env only
 * [x] `nf env push <remote>`: validates repo remote/cache, prints a reviewable plan, and syncs with execute/confirmation gates
 * [x] `nf env pull <remote>`: validates repo remote/cache, prints a reviewable plan, and syncs with execute/confirmation gates
 

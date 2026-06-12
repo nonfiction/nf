@@ -67,6 +67,8 @@ func EnvsDir() string { return filepath.Join(DataHome(), "envs") }
 
 func SnapshotsDir() string { return filepath.Join(DataHome(), "snapshots") }
 
+func ExportsDir() string { return filepath.Join(DataHome(), "exports") }
+
 func LocalSnapshotsDir() string { return filepath.Join(SnapshotsDir(), "local") }
 
 func RemoteSnapshotsDir() string { return filepath.Join(SnapshotsDir(), "remote") }
@@ -97,6 +99,14 @@ func RemoteSnapshotDir(snapshotName string) string {
 		snapshotName = "snapshot"
 	}
 	return filepath.Join(RemoteSnapshotsDir(), snapshotName)
+}
+
+func ExportDir(exportName string) string {
+	exportName = strings.TrimSpace(exportName)
+	if exportName == "" {
+		exportName = "export"
+	}
+	return filepath.Join(ExportsDir(), exportName)
 }
 
 func ProjectFile(root string) string {

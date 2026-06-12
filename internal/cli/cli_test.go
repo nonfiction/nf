@@ -698,6 +698,14 @@ func TestRunCompleteSuggestsStaticAndCachedValues(t *testing.T) {
 	if strings.TrimSpace(siteSnapshotOutput) != "client-app1-linode:live" {
 		t.Fatalf("site snapshot completion = %q, want env id only", siteSnapshotOutput)
 	}
+	siteExportOutput := captureStdout(t, func() {
+		if got := Run([]string{"__complete", "--", "site", "export", "client"}); got != 0 {
+			t.Fatalf("Run(__complete site export) = %d, want 0", got)
+		}
+	})
+	if strings.TrimSpace(siteExportOutput) != "client-app1-linode:live" {
+		t.Fatalf("site export completion = %q, want env id only", siteExportOutput)
+	}
 	siteSnapshotListOutput := captureStdout(t, func() {
 		if got := Run([]string{"__complete", "--", "site", "snapshot", "l"}); got != 0 {
 			t.Fatalf("Run(__complete site snapshot list) = %d, want 0", got)
@@ -724,6 +732,16 @@ func TestRunCompleteSuggestsStaticAndCachedValues(t *testing.T) {
 	})
 	if strings.TrimSpace(envSnapshotImportOutput) != "client-kinsta.live-2026-06-04-120000" {
 		t.Fatalf("env snapshot import completion = %q, want remote snapshot name", envSnapshotImportOutput)
+	}
+	envImportOutput := captureStdout(t, func() {
+		if got := Run([]string{"__complete", "--", "env", "import", "--"}); got != 0 {
+			t.Fatalf("Run(__complete env import) = %d, want 0", got)
+		}
+	})
+	for _, want := range []string{"--db\n", "--source-url\n", "--name\n", "--dry-run\n", "--yes\n"} {
+		if !strings.Contains(envImportOutput, want) {
+			t.Fatalf("env import completion missing %q:\n%s", want, envImportOutput)
+		}
 	}
 	siteSnapshotPruneOutput := captureStdout(t, func() {
 		if got := Run([]string{"__complete", "--", "site", "snapshot", "prune", "--"}); got != 0 {
@@ -5860,6 +5878,91 @@ func TestRunSiteSnapshotDownloadsRemoteEnvSnapshot(t *testing.T) {
 	}
 }
 
+func TestRunSiteExportCreatesFullHandoffExport(t *testing.T) {
+	stateDir := t.TempDir()
+	t.Setenv("NF_STATE_HOME", stateDir)
+	t.Setenv("NF_DATA_HOME", t.TempDir())
+	if err := state.SaveStateRecords("sites", []map[string]any{{"provider": "kinsta", "site_id": "client-kinsta", "env": "live", "url": "https://www.example.com/", "path": "/www/client/public", "ssh": map[string]any{"host": "203.0.113.10", "port": "12345", "user": "client"}}}); err != nil {
+		t.Fatalf("SaveStateRecords(sites) error = %v", err)
+	}
+	outputDir := filepath.Join(t.TempDir(), "client-export")
+	oldRunSSH := runSSHCommandFn
+	var sshCommands [][]string
+	runSSHCommandFn = func(args []string) error {
+		sshCommands = append(sshCommands, append([]string(nil), args...))
+		return nil
+	}
+	t.Cleanup(func() { runSSHCommandFn = oldRunSSH })
+	oldRunRsync := runRsyncCommandFn
+	var rsyncCommands [][]string
+	runRsyncCommandFn = func(args []string) error {
+		rsyncCommands = append(rsyncCommands, append([]string(nil), args...))
+		return nil
+	}
+	t.Cleanup(func() { runRsyncCommandFn = oldRunRsync })
+
+	stdout := captureStdout(t, func() {
+		if got := Run([]string{"site", "export", "client-kinsta:live", "--output", outputDir}); got != 0 {
+			t.Fatalf("Run(site export) = %d, want 0", got)
+		}
+	})
+	for _, want := range []string{"Site export plan:", "env:           client-kinsta:live", "provider:      kinsta", "environment ssh: client@203.0.113.10", "includes:      full WordPress filesystem, database.sql.gz", "Site export created.", "files: files/", "database: database.sql.gz"} {
+		if !strings.Contains(stdout, want) {
+			t.Fatalf("site export stdout missing %q:\n%s", want, stdout)
+		}
+	}
+	if len(sshCommands) != 2 {
+		t.Fatalf("ssh commands len = %d, want export and cleanup: %#v", len(sshCommands), sshCommands)
+	}
+	if !strings.Contains(sshCommands[0][len(sshCommands[0])-1], "wp --path=/www/client/public db export") {
+		t.Fatalf("export ssh command = %#v", sshCommands[0])
+	}
+	if len(rsyncCommands) != 2 {
+		t.Fatalf("rsync commands len = %d, want database and files downloads: %#v", len(rsyncCommands), rsyncCommands)
+	}
+	if got, want := rsyncCommands[0][3], "ssh -p 12345"; got != want {
+		t.Fatalf("database rsync ssh option = %q, want %q", got, want)
+	}
+	if got, want := rsyncCommands[1][len(rsyncCommands[1])-1], siteExportFilesDir(outputDir)+string(filepath.Separator); got != want {
+		t.Fatalf("files rsync output = %q, want %q", got, want)
+	}
+	data, err := os.ReadFile(siteExportManifestPath(outputDir))
+	if err != nil {
+		t.Fatalf("ReadFile(manifest.json) error = %v", err)
+	}
+	for _, want := range []string{`"source": "remote-site-export"`, `"env_id": "client-kinsta:live"`, `"files": "files"`, `"database": "database.sql.gz"`} {
+		if !strings.Contains(string(data), want) {
+			t.Fatalf("export manifest missing %q:\n%s", want, data)
+		}
+	}
+	if _, err := os.Stat(filepath.Join(outputDir, "README.txt")); err != nil {
+		t.Fatalf("README.txt missing: %v", err)
+	}
+}
+
+func TestRunSiteExportDryRunDoesNotCallRemoteCommands(t *testing.T) {
+	stateDir := t.TempDir()
+	t.Setenv("NF_STATE_HOME", stateDir)
+	if err := state.SaveStateRecords("sites", []map[string]any{{"provider": "kinsta", "site_id": "client-kinsta", "env": "live", "path": "/www/client/public", "ssh": map[string]any{"host": "203.0.113.10", "port": "12345", "user": "client"}}}); err != nil {
+		t.Fatalf("SaveStateRecords(sites) error = %v", err)
+	}
+	oldRunSSH := runSSHCommandFn
+	runSSHCommandFn = func(args []string) error { t.Fatalf("runSSHCommandFn called during dry-run: %#v", args); return nil }
+	t.Cleanup(func() { runSSHCommandFn = oldRunSSH })
+	oldRunRsync := runRsyncCommandFn
+	runRsyncCommandFn = func(args []string) error { t.Fatalf("runRsyncCommandFn called during dry-run: %#v", args); return nil }
+	t.Cleanup(func() { runRsyncCommandFn = oldRunRsync })
+
+	stdout := captureStdout(t, func() {
+		if got := Run([]string{"site", "export", "client-kinsta:live", "--dry-run"}); got != 0 {
+			t.Fatalf("Run(site export --dry-run) = %d, want 0", got)
+		}
+	})
+	if !strings.Contains(stdout, "mode:          dry-run") || !strings.Contains(stdout, "No data was changed") {
+		t.Fatalf("site export dry-run output = %q", stdout)
+	}
+}
+
 func TestRunSiteSnapshotWithoutEnvPromptsPicker(t *testing.T) {
 	stateDir := t.TempDir()
 	t.Setenv("NF_STATE_HOME", stateDir)
@@ -6853,6 +6956,127 @@ func TestRunEnvSnapshotUseRemoteImportsThenRestores(t *testing.T) {
 	}
 	logText := string(logData)
 	assertContainsInOrder(t, logText, []string{"wp db export", "wp db import", "wp\nsearch-replace\nhttps://client-kinsta.live.example.test\nhttp://localhost:18440\n--all-tables-with-prefix\n--skip-columns=guid", "wp\ntheme\nactivate\ntheme", "wp\ncache\nflush"})
+}
+
+func TestRunEnvImportRestoresSiteExportIntoLocalEnv(t *testing.T) {
+	repoRoot, cfg := writeTestEnvProject(t)
+	exportDir := filepath.Join(t.TempDir(), "client-export")
+	for _, dir := range []string{
+		filepath.Join(exportDir, "files", "wp-content", "uploads"),
+		filepath.Join(exportDir, "files", "wp-content", "plugins", "demo"),
+		filepath.Join(exportDir, "files", "wp-content", "themes", "remote-theme"),
+	} {
+		if err := os.MkdirAll(dir, 0o755); err != nil {
+			t.Fatalf("MkdirAll(%s) error = %v", dir, err)
+		}
+	}
+	if err := os.WriteFile(filepath.Join(exportDir, "files", "wp-content", "uploads", "image.jpg"), []byte("image"), 0o644); err != nil {
+		t.Fatalf("WriteFile(upload) error = %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(exportDir, "files", "wp-content", "plugins", "demo", "demo.php"), []byte("<?php\n"), 0o644); err != nil {
+		t.Fatalf("WriteFile(plugin) error = %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(exportDir, "files", "wp-content", "themes", "remote-theme", "style.css"), []byte("/* theme */\n"), 0o644); err != nil {
+		t.Fatalf("WriteFile(theme) error = %v", err)
+	}
+	if err := os.WriteFile(siteExportDatabasePath(exportDir), []byte("db"), 0o644); err != nil {
+		t.Fatalf("WriteFile(database.sql.gz) error = %v", err)
+	}
+	manifest := siteExportManifest{Schema: siteExportSchema, Source: "remote-site-export", EnvID: "client-kinsta:live", SiteID: "client-kinsta", Env: "live", Provider: "kinsta", URL: "https://www.example.com/", CreatedAt: "2026-06-12T12:00:00Z", Files: "files", Database: "database.sql.gz"}
+	if err := writeSiteExportManifest(exportDir, manifest); err != nil {
+		t.Fatalf("writeSiteExportManifest() error = %v", err)
+	}
+	dockerDir := t.TempDir()
+	logPath := filepath.Join(dockerDir, "docker-args.txt")
+	dockerScript := []byte("#!/bin/sh\nprintf '%s\\n' \"$@\" >> \"$DOCKER_LOG\"\nexit 0\n")
+	if err := os.WriteFile(filepath.Join(dockerDir, "docker"), dockerScript, 0o755); err != nil {
+		t.Fatalf("WriteFile(docker) error = %v", err)
+	}
+	t.Setenv("DOCKER_LOG", logPath)
+	t.Setenv("PATH", dockerDir+string(os.PathListSeparator)+os.Getenv("PATH"))
+	oldConfirm := envSnapshotConfirm
+	envSnapshotConfirm = func(prompt string, defaultYes bool) (bool, error) {
+		t.Fatalf("envSnapshotConfirm called with %q", prompt)
+		return false, nil
+	}
+	t.Cleanup(func() { envSnapshotConfirm = oldConfirm })
+	oldwd, err := os.Getwd()
+	if err != nil {
+		t.Fatalf("Getwd() error = %v", err)
+	}
+	if err := os.Chdir(repoRoot); err != nil {
+		t.Fatalf("Chdir() error = %v", err)
+	}
+	t.Cleanup(func() { _ = os.Chdir(oldwd) })
+
+	stdout := captureStdout(t, func() {
+		if got := Run([]string{"env", "import", exportDir, "--name", "client-handoff", "--yes"}); got != 0 {
+			t.Fatalf("Run(env import) = %d, want 0", got)
+		}
+	})
+	for _, want := range []string{"Env import plan:", "source type:   nf site export", "snapshot:      client-handoff", "WordPress import restored.", "Imported snapshot:", "Safety snapshot:"} {
+		if !strings.Contains(stdout, want) {
+			t.Fatalf("env import stdout missing %q:\n%s", want, stdout)
+		}
+	}
+	importedDir := envSnapshotDir(cfg, "client-handoff")
+	if _, err := os.Stat(envSnapshotMetadataPath(cfg, "client-handoff")); err != nil {
+		t.Fatalf("imported snapshot metadata missing: %v", err)
+	}
+	extracted := filepath.Join(t.TempDir(), "extracted")
+	if err := extractTarGzArchive(envSnapshotHostWpContentArchive(cfg, "client-handoff"), extracted); err != nil {
+		t.Fatalf("extractTarGzArchive(imported wp-content) error = %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(extracted, "wp-content", "uploads", "image.jpg")); err != nil {
+		t.Fatalf("imported uploads missing: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(extracted, "wp-content", "plugins", "demo", "demo.php")); err != nil {
+		t.Fatalf("imported plugins missing: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(extracted, "wp-content", "themes", "remote-theme", "style.css")); !os.IsNotExist(err) {
+		t.Fatalf("remote theme should not be imported into env snapshot: %v", err)
+	}
+	logData, err := os.ReadFile(logPath)
+	if err != nil {
+		t.Fatalf("ReadFile(docker log) error = %v", err)
+	}
+	logText := string(logData)
+	assertContainsInOrder(t, logText, []string{"wp db export", "wp db import", "wp\nsearch-replace\nhttps://www.example.com\nhttp://localhost:18440\n--all-tables-with-prefix\n--skip-columns=guid", "wp\ntheme\nactivate\ntheme", "wp\ncache\nflush"})
+	if !strings.Contains(stdout, "path: "+importedDir) {
+		t.Fatalf("env import stdout missing imported path %s:\n%s", importedDir, stdout)
+	}
+}
+
+func TestRunEnvImportDryRunDoesNotCreateSnapshot(t *testing.T) {
+	repoRoot, cfg := writeTestEnvProject(t)
+	sourceDir := filepath.Join(t.TempDir(), "wordpress")
+	if err := os.MkdirAll(filepath.Join(sourceDir, "wp-content", "uploads"), 0o755); err != nil {
+		t.Fatalf("MkdirAll(source) error = %v", err)
+	}
+	dbPath := filepath.Join(t.TempDir(), "database.sql")
+	if err := os.WriteFile(dbPath, []byte("db"), 0o644); err != nil {
+		t.Fatalf("WriteFile(database.sql) error = %v", err)
+	}
+	oldwd, err := os.Getwd()
+	if err != nil {
+		t.Fatalf("Getwd() error = %v", err)
+	}
+	if err := os.Chdir(repoRoot); err != nil {
+		t.Fatalf("Chdir() error = %v", err)
+	}
+	t.Cleanup(func() { _ = os.Chdir(oldwd) })
+
+	stdout := captureStdout(t, func() {
+		if got := Run([]string{"env", "import", sourceDir, "--db", dbPath, "--name", "dry-run-import", "--dry-run"}); got != 0 {
+			t.Fatalf("Run(env import --dry-run) = %d, want 0", got)
+		}
+	})
+	if !strings.Contains(stdout, "mode:          dry-run") || !strings.Contains(stdout, "No data was changed") {
+		t.Fatalf("env import dry-run output = %q", stdout)
+	}
+	if _, err := os.Stat(envSnapshotDir(cfg, "dry-run-import")); !os.IsNotExist(err) {
+		t.Fatalf("dry-run import created snapshot: %v", err)
+	}
 }
 
 func TestExecuteEnvPullFinalizesLocalDestinationThemeAndCache(t *testing.T) {

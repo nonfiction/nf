@@ -9,7 +9,7 @@ Use this file for repo shortcuts and learned implementation gotchas. Put durable
 * CLI dispatcher: `internal/cli.Run`.
 * Primary always-visible command groups: `init`, `provider`, `target`, `site`, `config`, `password`.
 * Project-only command groups: `remote`, `theme`, `env`, `public`. They appear only when the current repo has `nf.json` next to `.git`.
-* Remote env operations live under `site` (`site list --envs`, `site show <site:env>`, `site shell`, `site wp`, `site snapshot`), not as a separate `site env` group.
+* Remote env operations live under `site` (`site list --envs`, `site show <site:env>`, `site shell`, `site wp`, `site snapshot`, `site export`), not as a separate `site env` group.
 * Do not re-add public `nf server ...`, `nf instance ...`, or top-level local env aliases (`nf up/down/logs/reset/info/shell/wp`) unless explicitly requested.
 
 ## Fast checks
@@ -117,6 +117,7 @@ Local state is disposable. Provider truth is canonical remotely.
 * Linode site add grants the shared Adminer MySQL user privileges only on created site/env databases; site remove revokes those per-database grants before dropping DBs.
 * `nf remote add` validates the requested site/env exists in local cache before writing `nf.json`.
 * `nf site shell/wp` validate the cache, preview the SSH or wp-cli command, then execute the remote command.
+* `nf site export <site:env>` creates a full WordPress handoff export under `NF_DATA_HOME/exports/<env-id-slug>-YYYY-MM-DD-HHMMSS/` by default. It writes `files/` with the full WordPress filesystem, `database.sql.gz`, `manifest.json`, and `README.txt`. This is distinct from snapshots and includes themes, core files, plugins, uploads, and `wp-config.php`.
 * `nf env logs [remote]` tails local Docker WordPress logs with no remote, or tails remote `wp-content/debug.log` over SSH for a configured repo remote.
 * `nf env password [remote] [--wp|--db|--basicauth]` prints only one selected local or remote env password. `--wp` is the default.
 * `nf env push/pull [remote]` defaults to an interactive confirmation before executing remote sync. Use `--dry-run` or `--non-interactive` without `--execute` for preflight-only output. Non-interactive execution requires `--execute --yes`.
@@ -157,6 +158,7 @@ Local state is disposable. Provider truth is canonical remotely.
 * Snapshot archives include uploads/plugins/mu-plugins/languages, not themes.
 * `nf env snapshot use` creates a safety snapshot named `YYYY-MM-DD-HHMMSS-pre-restore` before restore.
 * `nf env snapshot use --remote <name>` imports the remote snapshot into local snapshots, then restores the local copy.
+* `nf env import <source>` imports an external WordPress handoff into the local env only. It accepts `nf site export` directories or generic WordPress filesystem directories with `--db`, creates an import snapshot, creates a pre-restore safety snapshot, restores database plus uploads/plugins/mu-plugins/languages, optionally search-replaces from `--source-url` or export manifest URL, activates the configured local theme when installed, and flushes cache. It intentionally does not import WordPress core or `wp-config.php` into the local env.
 
 ## Safety rules
 

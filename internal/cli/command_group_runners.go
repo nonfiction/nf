@@ -41,6 +41,7 @@ func runEnvHelp() int {
 		{},
 		{"pull [remote] [--dry-run] [--execute] [--yes]", "pull database and mutable wp-content from a remote env"},
 		{"push [remote] [--dry-run] [--execute] [--yes]", "push database and mutable wp-content to a remote env"},
+		{"import <source> [--db path] [--source-url url] [--dry-run] [--yes]", "import an external WordPress site into local env"},
 		{},
 		{"reset [--rebuild]", "destroy and recreate the local env"},
 	})
@@ -267,7 +268,7 @@ func runEnv(argv []string) int {
 	name := argv[0]
 	name = cliCommandAlias(name)
 	switch name {
-	case "show", "password", "up", "down", "logs", "reset", "shell", "wp", "push", "pull", "plugins", "snapshot":
+	case "show", "password", "up", "down", "logs", "reset", "shell", "wp", "push", "pull", "plugins", "snapshot", "import":
 	default:
 		fmt.Fprintln(os.Stderr, "unsupported env command")
 		return 1
@@ -277,6 +278,15 @@ func runEnv(argv []string) int {
 	}
 	if name == "plugins" {
 		return runEnvPlugins(argv[1:])
+	}
+	var envImportOpts envImportOptions
+	if name == "import" {
+		var err error
+		envImportOpts, err = parseEnvImportArgs(argv[1:])
+		if err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			return 1
+		}
 	}
 	if name == "show" && len(argv) != 1 {
 		fmt.Fprintln(os.Stderr, "env show takes no arguments")
@@ -440,6 +450,9 @@ func runEnv(argv []string) int {
 			return 1
 		}
 		return cmdEnvRemoteSyncPlan(name, remoteName, cfg, metadata, opts)
+	}
+	if name == "import" {
+		return cmdEnvImport(cfg, envImportOpts)
 	}
 	if name == "up" {
 		if err := preflightEnvPorts(cfg); err != nil {
