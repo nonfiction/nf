@@ -5963,6 +5963,25 @@ func TestRunSiteExportDryRunDoesNotCallRemoteCommands(t *testing.T) {
 	}
 }
 
+func TestRemoteSiteExportScriptAllowsLinodeWPUserToWriteDatabase(t *testing.T) {
+	target := envRemoteSyncTarget{WordPressPath: "/var/www/sites/client/public", WPCommand: "sudo -u www-data wp", SudoFileOps: true}
+	script := remoteSiteExportScript(target, "/tmp/nf-export-client")
+	for _, want := range []string{
+		"chmod 777 /tmp/nf-export-client",
+		"sudo -u www-data wp --path=/var/www/sites/client/public db export /tmp/nf-export-client/database.sql",
+		"sudo gzip -f /tmp/nf-export-client/database.sql",
+		"sudo chmod 644 /tmp/nf-export-client/database.sql.gz",
+		"sudo tar -C /var/www/sites/client/public -czf /tmp/nf-export-client/files.tar.gz .",
+	} {
+		if !strings.Contains(script, want) {
+			t.Fatalf("Linode site export script missing %q:\n%s", want, script)
+		}
+	}
+	if strings.Contains(script, "chmod 755 /tmp/nf-export-client") {
+		t.Fatalf("Linode site export script should not make temp dir read-only to www-data:\n%s", script)
+	}
+}
+
 func TestRunSiteSnapshotWithoutEnvPromptsPicker(t *testing.T) {
 	stateDir := t.TempDir()
 	t.Setenv("NF_STATE_HOME", stateDir)

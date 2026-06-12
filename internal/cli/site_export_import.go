@@ -44,12 +44,12 @@ func remoteSiteExportScript(target envRemoteSyncTarget, remoteTmp string) string
 	return fmt.Sprintf(`set -eu
 rm -rf %s
 mkdir -p %s
-chmod 755 %s
+chmod 777 %s
 cd %s
 %s --path=%s db export %s/database.sql
-gzip -f %s/database.sql
+%sgzip -f %s/database.sql
 %schmod 644 %s/database.sql.gz
-%s`, shellQuoteArg(remoteTmp), shellQuoteArg(remoteTmp), shellQuoteArg(remoteTmp), shellQuoteArg(target.WordPressPath), target.WPCommand, shellQuoteArg(target.WordPressPath), shellQuoteArg(remoteTmp), shellQuoteArg(remoteTmp), fileOp, shellQuoteArg(remoteTmp), filesArchive)
+%s`, shellQuoteArg(remoteTmp), shellQuoteArg(remoteTmp), shellQuoteArg(remoteTmp), shellQuoteArg(target.WordPressPath), target.WPCommand, shellQuoteArg(target.WordPressPath), shellQuoteArg(remoteTmp), fileOp, shellQuoteArg(remoteTmp), fileOp, shellQuoteArg(remoteTmp), filesArchive)
 }
 
 func remoteRsyncSource(target envRemoteSyncTarget, remotePath string) string {
