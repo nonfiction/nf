@@ -6570,6 +6570,24 @@ func TestRunEnvSnapshotListShowsSnapshots(t *testing.T) {
 	}
 }
 
+func TestFormatEnvSnapshotSizeUsesCorrectUnits(t *testing.T) {
+	tests := []struct {
+		size int64
+		want string
+	}{
+		{size: -1, want: "-"},
+		{size: 2, want: "2 B"},
+		{size: 65 * 1024, want: "65 KiB"},
+		{size: 2 * 1024 * 1024, want: "2.0 MiB"},
+		{size: 19 * 1024 * 1024 / 10, want: "1.9 MiB"},
+	}
+	for _, tt := range tests {
+		if got := formatEnvSnapshotSize(tt.size); got != tt.want {
+			t.Fatalf("formatEnvSnapshotSize(%d) = %q, want %q", tt.size, got, tt.want)
+		}
+	}
+}
+
 func TestRunEnvSnapshotImportCopiesRemoteSnapshot(t *testing.T) {
 	remoteName := "client-kinsta.live-2026-06-04-120000"
 	repoRoot, _ := writeTestEnvProject(t)

@@ -436,7 +436,7 @@ func formatEnvSnapshotSize(size int64) string {
 	if size < 1024 {
 		return fmt.Sprintf("%d B", size)
 	}
-	units := []string{"KiB", "MiB", "GiB", "TiB"}
+	units := []string{"B", "KiB", "MiB", "GiB", "TiB"}
 	value := float64(size)
 	unit := 0
 	for value >= 1024 && unit < len(units)-1 {
