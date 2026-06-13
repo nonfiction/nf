@@ -6,6 +6,8 @@ package cli
 // network, SSH, provider, and prompt behavior without global monkey patches.
 
 import (
+	"net"
+
 	"github.com/nonfiction/nf/internal/envwizard"
 	"github.com/nonfiction/nf/internal/target/provision"
 	"github.com/nonfiction/nf/internal/ui"
@@ -29,6 +31,11 @@ var (
 	kinstaRemoveSiteFn       = removeKinstaSite
 	kinstaPrepareDomainFn    = prepareKinstaSiteDomain
 	kinstaPrimaryDomainFn    = primaryKinstaSiteDomain
+	siteDomainLookupHostFn   = net.LookupHost
+	siteDomainLookupTXTFn    = net.LookupTXT
+	siteDomainLookupCNAMEFn  = net.LookupCNAME
+	siteDomainHTTPStatusFn   = checkSiteDomainHTTP
+	siteDomainTLSStatusFn    = checkSiteDomainTLS
 	targetSSHReachableFn     = targetSSHReachable
 	runSSHScriptFn           = runSSHScript
 	runSSHCommandFn          = runSSHCommand

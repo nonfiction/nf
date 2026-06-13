@@ -232,11 +232,14 @@ func siteCompletionCandidates(args []string) []string {
 
 func siteDomainCompletionCandidates(args []string) []string {
 	if len(args) == 0 {
-		return []string{"prepare", "primary", "help"}
+		return []string{"prepare", "check", "primary", "help"}
 	}
 	switch args[0] {
-	case "prepare", "primary":
+	case "prepare", "primary", "check":
 		flags := []string{"--canonical", "--alias", "--setup", "--dry-run", "--execute", "--yes", "--non-interactive"}
+		if args[0] == "check" {
+			flags = []string{"--canonical", "--alias", "--non-interactive"}
+		}
 		if args[0] == "primary" {
 			flags = append(flags, "--search-replace")
 		}

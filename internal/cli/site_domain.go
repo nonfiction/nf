@@ -75,7 +75,7 @@ func runSiteDomain(argv []string) int {
 		return runSiteDomainHelp()
 	}
 	action := strings.TrimSpace(argv[0])
-	if action != "prepare" && action != "primary" {
+	if action != "prepare" && action != "primary" && action != "check" {
 		fmt.Fprintf(os.Stderr, "unsupported site domain action: %s\n", action)
 		return 1
 	}
@@ -89,16 +89,17 @@ func runSiteDomain(argv []string) int {
 func runSiteDomainHelp() int {
 	printGroupHelp("site domain", []helpLine{
 		{"prepare <env|remote> <domain> [flags]", "make a provider/env ready for a public domain"},
+		{"check <env|remote> <domain> [flags]", "check DNS, provider, HTTP, and HTTPS readiness"},
 		{"primary <env|remote> <domain> [flags]", "launch a canonical public domain"},
 		{},
 		{"--canonical <domain>", "canonical public hostname"},
 		{"--alias <domain>", "redirect/alternate hostname; repeatable"},
-		{"--setup <type>", "Kinsta setup type: avoid-downtime or quick"},
+		{"--setup <type>", "Kinsta setup type for prepare/primary: avoid-downtime or quick"},
 		{"--search-replace", "run provider/wp search-replace during primary"},
 		{},
-		{"--dry-run", "show the plan only"},
-		{"--execute", "execute the plan"},
-		{"--yes", "confirm execution"},
+		{"--dry-run", "show the prepare/primary plan only"},
+		{"--execute", "execute the prepare/primary plan"},
+		{"--yes", "confirm prepare/primary execution"},
 		{"--non-interactive", "fail instead of prompting"},
 	})
 	return 0
@@ -178,6 +179,12 @@ func parseSiteDomainActionArgs(action string, argv []string) (string, siteDomain
 		fmt.Fprintln(os.Stderr, "site domain prepare does not run search-replace")
 		return "", opts, false
 	}
+	if action == "check" {
+		if opts.dryRun || opts.execute || opts.yes || opts.searchReplace || strings.TrimSpace(opts.setupType) != "" {
+			fmt.Fprintln(os.Stderr, "site domain check is read-only; use only --canonical, --alias, and --non-interactive")
+			return "", opts, false
+		}
+	}
 	if len(positionals) > 2 {
 		fmt.Fprintf(os.Stderr, "site domain %s takes at most env and canonical domain\n", action)
 		return "", opts, false
@@ -222,6 +229,9 @@ func cmdSiteDomain(envRef, action string, opts siteDomainOptions) int {
 	if err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		return 1
+	}
+	if action == "check" {
+		return cmdSiteDomainCheck(plan)
 	}
 	willExecute := opts.execute || (!opts.dryRun && !opts.nonInteractive)
 	mode := "dry-run"

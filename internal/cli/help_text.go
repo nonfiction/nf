@@ -96,7 +96,7 @@ func runSiteHelp() int {
 		{"snapshot [env|list|remove|prune] [flags]", "manage remote snapshots"},
 		{"export [env] [--output path] [--dry-run]", "create a full WordPress handoff export"},
 		{"basicauth <action> [site|env]", "manage provider basic auth"},
-		{"domain <action> <env> <domain>", "prepare or launch public domains"},
+		{"domain <action> <env> <domain>", "prepare, check, or launch public domains"},
 		{},
 		{"add <target> <site> [flags]", "create a live env"},
 		{"staging <action> <site> [flags]", "manage staging env lifecycle"},

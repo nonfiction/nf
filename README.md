@@ -554,6 +554,7 @@ nf site basicauth enable <site.target:env> [--dry-run] [--execute --yes]
 nf site basicauth disable <site.target:env> [--dry-run] [--execute --yes]
 nf site basicauth password [site-id-or-alias]
 nf site domain prepare <site.target:env|remote> <domain> [--alias domain] [--setup avoid-downtime|quick] [--dry-run] [--execute --yes]
+nf site domain check <site.target:env|remote> <domain> [--alias domain]
 nf site domain primary <site.target:env|remote> <domain> [--alias domain] [--setup avoid-downtime|quick] [--search-replace] [--dry-run] [--execute --yes]
 nf site remove [site-id-or-alias] [--dry-run] [--execute --yes]
 nf remote add [name] [site.target:env]
@@ -593,6 +594,7 @@ Current behavior:
 * Linode site/env database creation grants the shared Adminer MySQL user privileges only on created site env databases and refuses to create a site DB user with the same name as the shared Adminer MySQL user. Site removal revokes per-database grants before dropping the databases.
 * `nf site basicauth ...` uses `basicauth_default_user` from `config.json` and a per-site derived password with `project.password_version` as the rotation source. Linode envs are managed over SSH by updating the selected env nginx vhost, including multi-vhost target nginx scripts. Kinsta Password protection exists in MyKinsta, but currently requires manual MyKinsta use because no public API endpoint is exposed.
 * `nf site domain prepare ...` makes the provider/env ready to answer a public hostname and prints the DNS records the client must create. It never mutates public/client DNS. Kinsta domains are added through the Kinsta API and Kinsta-provided verification/pointing records are printed. Linode domains update nginx on the target and install a certbot HTTP-01 retry timer so HTTPS is issued after client DNS points at the target.
+* `nf site domain check ...` is read-only and reports provider/server readiness, expected public DNS, HTTP reachability, HTTPS certificate status, and whether the domain is already primary. It exits `0` when public checks are ready and `2` when DNS, HTTP, HTTPS, or provider readiness is still pending.
 * `nf site domain primary ...` launches the canonical public hostname for the env. Pass aliases explicitly, for example `--alias client.com` when `www.client.com` should be canonical. Repo remotes in `nf.json` continue to point at env IDs, not domains.
 * `nf site remove [site]` removes a whole Linode site and deletes its env data.
 * `nf remote add` validates an env ID against the cache, then repo remotes are stored in `nf.json` under `remotes` as `<site>.<target>:<env>` refs.
@@ -611,6 +613,40 @@ State/cache lives under:
 ```
 
 Local state is disposable cache, not source of truth.
+
+### Public domain launch checklist
+
+Use this checklist when launching a remote env on a client-owned public domain. Public DNS remains the client's responsibility; `nf` prepares the provider/env, prints DNS instructions, verifies readiness, and performs the canonical cutover.
+
+1. Confirm the env identity. Repo remotes should still point at env IDs, for example `production -> client.kinsta:live` or `production -> client.app1-linode:live`.
+
+2. Choose the canonical hostname and explicit aliases. Use `www.client.com --alias client.com` for www-primary launches, `client.com --alias www.client.com` for apex-primary launches, and just `reports.client.com` for a subdomain launch with no apex/www pairing.
+
+3. Prepare the provider/env as soon as the launch domain and target are stable. Days or weeks ahead is fine. Do not run this before the domain choice or target/env might still change.
+
+```sh
+nf site domain prepare production www.client.com --alias client.com
+```
+
+4. Send the printed DNS records to the client. Kinsta records come from the Kinsta API. Linode records point the public hostnames at the target IPs. `nf` does not create or change public DNS records.
+
+5. Check readiness after the client says DNS has changed, or periodically if they might change DNS early.
+
+```sh
+nf site domain check production www.client.com --alias client.com
+```
+
+6. Wait for `check` to report ready before planned cutover when possible. If the client points DNS early, the prepared domain may already reach the site, but WordPress/provider canonical state remains unchanged until `primary`; run `primary` as soon as the launch is approved.
+
+7. Launch the canonical public hostname at the cutover window.
+
+```sh
+nf site domain primary production www.client.com --alias client.com --search-replace
+```
+
+8. Run `check` again after `primary`. Confirm the domain is primary, DNS is still correct, HTTP does not redirect to the generated internal hostname, HTTPS is valid, and aliases behave as expected.
+
+9. Keep the generated internal hostname as fallback metadata. Do not change `nf.json` remotes from env IDs to public domains.
 
 ## Password derivation
 

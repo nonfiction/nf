@@ -563,7 +563,7 @@ func TestRunCompleteSuggestsStaticAndCachedValues(t *testing.T) {
 			t.Fatalf("Run(__complete site domain actions) = %d, want 0", got)
 		}
 	})
-	for _, want := range []string{"prepare\n", "primary\n", "help\n"} {
+	for _, want := range []string{"prepare\n", "check\n", "primary\n", "help\n"} {
 		if !strings.Contains(siteDomainActionsOutput, want) {
 			t.Fatalf("site domain action completion missing %q:\n%s", want, siteDomainActionsOutput)
 		}
@@ -586,6 +586,22 @@ func TestRunCompleteSuggestsStaticAndCachedValues(t *testing.T) {
 	for _, want := range []string{"--alias\n", "--canonical\n", "--setup\n", "--search-replace\n", "--dry-run\n", "--execute\n", "--yes\n", "--non-interactive\n"} {
 		if !strings.Contains(siteDomainPrimaryFlagOutput, want) {
 			t.Fatalf("site domain primary flag completion missing %q:\n%s", want, siteDomainPrimaryFlagOutput)
+		}
+	}
+
+	siteDomainCheckFlagOutput := captureStdout(t, func() {
+		if got := Run([]string{"__complete", "--", "site", "domain", "check", "client-app1-linode:live", "www.client.com", "--"}); got != 0 {
+			t.Fatalf("Run(__complete site domain check --) = %d, want 0", got)
+		}
+	})
+	for _, want := range []string{"--alias\n", "--canonical\n", "--non-interactive\n"} {
+		if !strings.Contains(siteDomainCheckFlagOutput, want) {
+			t.Fatalf("site domain check flag completion missing %q:\n%s", want, siteDomainCheckFlagOutput)
+		}
+	}
+	for _, unwanted := range []string{"--execute\n", "--yes\n", "--dry-run\n", "--setup\n", "--search-replace\n"} {
+		if strings.Contains(siteDomainCheckFlagOutput, unwanted) {
+			t.Fatalf("site domain check flag completion unexpectedly contains %q:\n%s", unwanted, siteDomainCheckFlagOutput)
 		}
 	}
 
@@ -3747,6 +3763,154 @@ func TestRunSiteDomainLinodePrimaryExecuteConfiguresVhostAndCachesPrimary(t *tes
 	}
 	if recordValueString(alias["name"]) != "client.com" || recordValueString(alias["role"]) != "redirect" {
 		t.Fatalf("alias domain = %#v", alias)
+	}
+}
+
+func TestRunSiteDomainKinstaCheckReportsReady(t *testing.T) {
+	stateDir := t.TempDir()
+	t.Setenv("NF_STATE_HOME", stateDir)
+	t.Setenv("KINSTA_API_KEY", "test-token")
+	if err := state.SaveStateRecords("sites", []map[string]any{{
+		"provider": "kinsta",
+		"site_id":  "client.kinsta",
+		"env_id":   "client.kinsta:live",
+		"name":     "client",
+		"env":      "live",
+		"target":   "kinsta",
+		"hostname": "client.kinsta.nonfiction.dev",
+		"url":      "https://client.kinsta.nonfiction.dev",
+		"path":     "/www/client/public",
+		"ssh":      map[string]any{"host": "203.0.113.10", "port": "12345", "user": "client"},
+		"kinsta":   map[string]any{"site_id": "ksite123", "environment_id": "kenv-live", "domain_id": "kdom-internal"},
+	}}); err != nil {
+		t.Fatalf("SaveStateRecords(sites) error = %v", err)
+	}
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.Method + " " + r.URL.Path {
+		case "GET /sites/environments/kenv-live/domains":
+			_ = json.NewEncoder(w).Encode(map[string]any{"environment": map[string]any{"site_domains": []map[string]any{{"id": "kdom-www", "name": "www.client.com", "is_primary": true}, {"id": "kdom-apex", "name": "client.com"}}}})
+		case "GET /sites/environments/domains/kdom-www/verification-records":
+			_ = json.NewEncoder(w).Encode(map[string]any{"site_domain": map[string]any{"verification_records": []map[string]any{{"name": "_kinsta.www.client.com", "type": "TXT", "content": "verify-token"}}, "pointing_records": []map[string]any{{"name": "www.client.com", "type": "CNAME", "content": "hosting.kinsta.cloud"}}}})
+		case "GET /sites/environments/domains/kdom-apex/verification-records":
+			_ = json.NewEncoder(w).Encode(map[string]any{"site_domain": map[string]any{"pointing_records": []map[string]any{{"name": "client.com", "type": "A", "content": "203.0.113.20"}}}})
+		default:
+			t.Fatalf("unexpected Kinsta request: %s %s", r.Method, r.URL.Path)
+		}
+	}))
+	t.Cleanup(server.Close)
+	t.Setenv("KINSTA_BASE_URL", server.URL)
+
+	oldLookupHost := siteDomainLookupHostFn
+	oldLookupTXT := siteDomainLookupTXTFn
+	oldLookupCNAME := siteDomainLookupCNAMEFn
+	oldHTTP := siteDomainHTTPStatusFn
+	oldTLS := siteDomainTLSStatusFn
+	siteDomainLookupHostFn = func(host string) ([]string, error) {
+		if host == "client.com" {
+			return []string{"203.0.113.20"}, nil
+		}
+		return nil, fmt.Errorf("unexpected host lookup %s", host)
+	}
+	siteDomainLookupTXTFn = func(host string) ([]string, error) {
+		if host == "_kinsta.www.client.com" {
+			return []string{"verify-token"}, nil
+		}
+		return nil, fmt.Errorf("unexpected TXT lookup %s", host)
+	}
+	siteDomainLookupCNAMEFn = func(host string) (string, error) {
+		if host == "www.client.com" {
+			return "hosting.kinsta.cloud.", nil
+		}
+		return "", fmt.Errorf("unexpected CNAME lookup %s", host)
+	}
+	siteDomainHTTPStatusFn = func(domain string) siteDomainHTTPCheckResult {
+		if domain == "client.com" {
+			return siteDomainHTTPCheckResult{StatusCode: 301, Location: "https://www.client.com/"}
+		}
+		return siteDomainHTTPCheckResult{StatusCode: 200}
+	}
+	siteDomainTLSStatusFn = func(domain string) siteDomainTLSCheckResult {
+		return siteDomainTLSCheckResult{OK: true, NotAfter: time.Date(2026, 12, 31, 0, 0, 0, 0, time.UTC), Issuer: "Let's Encrypt"}
+	}
+	t.Cleanup(func() {
+		siteDomainLookupHostFn = oldLookupHost
+		siteDomainLookupTXTFn = oldLookupTXT
+		siteDomainLookupCNAMEFn = oldLookupCNAME
+		siteDomainHTTPStatusFn = oldHTTP
+		siteDomainTLSStatusFn = oldTLS
+	})
+
+	output := captureStdout(t, func() {
+		if got := Run([]string{"site", "domain", "check", "client.kinsta:live", "www.client.com", "--alias", "client.com", "--non-interactive"}); got != 0 {
+			t.Fatalf("Run(site domain check kinsta) = %d, want 0", got)
+		}
+	})
+	for _, want := range []string{"Public domain check:", "provider:  kinsta", "fallback:  https://client.kinsta.nonfiction.dev", "canonical: www.client.com", "Kinsta:", "domain www.client.com (canonical): present, primary", "domain client.com (redirect): present", "TXT _kinsta.www.client.com -> verify-token: ok", "CNAME www.client.com -> hosting.kinsta.cloud: ok", "A client.com -> 203.0.113.20: ok", "http://client.com: ok (status 301 -> https://www.client.com/)", "https://www.client.com: ok expires 2026-12-31 issuer Let's Encrypt", "domain is primary and public checks passed", "Overall: ready"} {
+		if !strings.Contains(output, want) {
+			t.Fatalf("site domain kinsta check output missing %q:\n%s", want, output)
+		}
+	}
+}
+
+func TestRunSiteDomainLinodeCheckReportsPending(t *testing.T) {
+	configDir := t.TempDir()
+	stateDir := t.TempDir()
+	t.Setenv("NF_CONFIG_HOME", configDir)
+	t.Setenv("NF_STATE_HOME", stateDir)
+	if err := saveGlobalConfig(map[string]string{"linode_default_user": "nonfiction"}); err != nil {
+		t.Fatalf("saveGlobalConfig() error = %v", err)
+	}
+	if err := state.SaveStateRecords("providers", []map[string]any{{"provider": "linode", "targets": []map[string]any{{"name": "app1-linode", "provider": "linode", "hostname": "app1-linode.nonfiction.dev", "public_ipv4": "203.0.113.10", "ssh": map[string]any{"user": "nonfiction", "host": "app1-linode.nonfiction.dev"}}}}}); err != nil {
+		t.Fatalf("SaveStateRecords(providers) error = %v", err)
+	}
+	if err := state.SaveStateRecords("sites", []map[string]any{{"provider": "linode", "site_id": "client.app1-linode", "env_id": "client.app1-linode:live", "name": "client", "env": "live", "target": "app1-linode", "path": "/var/www/sites/client/public", "database": "client", "hostname": "client.app1-linode.nonfiction.dev", "url": "https://client.app1-linode.nonfiction.dev", "php_version": "8.3"}}); err != nil {
+		t.Fatalf("SaveStateRecords(sites) error = %v", err)
+	}
+
+	var sshArgs []string
+	oldRunSSHOutput := runSSHOutputFn
+	oldLookupHost := siteDomainLookupHostFn
+	oldHTTP := siteDomainHTTPStatusFn
+	oldTLS := siteDomainTLSStatusFn
+	runSSHOutputFn = func(args []string) ([]byte, error) {
+		sshArgs = append([]string{}, args...)
+		return []byte("vhost=present\nenabled=present\ntimer=active\nservice=failed\ncert=missing\n"), nil
+	}
+	siteDomainLookupHostFn = func(host string) ([]string, error) {
+		return []string{"198.51.100.9"}, nil
+	}
+	siteDomainHTTPStatusFn = func(domain string) siteDomainHTTPCheckResult {
+		if domain == "www.client.com" {
+			return siteDomainHTTPCheckResult{StatusCode: 301, Location: "https://client.app1-linode.nonfiction.dev/"}
+		}
+		return siteDomainHTTPCheckResult{StatusCode: 200}
+	}
+	siteDomainTLSStatusFn = func(domain string) siteDomainTLSCheckResult {
+		return siteDomainTLSCheckResult{Error: "certificate is not ready"}
+	}
+	t.Cleanup(func() {
+		runSSHOutputFn = oldRunSSHOutput
+		siteDomainLookupHostFn = oldLookupHost
+		siteDomainHTTPStatusFn = oldHTTP
+		siteDomainTLSStatusFn = oldTLS
+	})
+
+	output := captureStdout(t, func() {
+		if got := Run([]string{"site", "domain", "check", "client.app1-linode:live", "www.client.com", "--alias", "client.com", "--non-interactive"}); got != 2 {
+			t.Fatalf("Run(site domain check linode) = %d, want 2", got)
+		}
+	})
+	for _, want := range []string{"Public domain check:", "provider:  linode", "target:    app1-linode", "Linode target:", "nginx vhost: present", "certbot timer: active", "certificate: missing", "A www.client.com -> 203.0.113.10: pending (got 198.51.100.9)", "http://www.client.com: pending (redirects to internal hostname client.app1-linode.nonfiction.dev)", "https://www.client.com: pending (certificate is not ready)", "wait for pending checks", "Overall: pending"} {
+		if !strings.Contains(output, want) {
+			t.Fatalf("site domain linode check output missing %q:\n%s", want, output)
+		}
+	}
+	joinedArgs := strings.Join(sshArgs, " ")
+	for _, want := range []string{"ssh", "nonfiction@app1-linode.nonfiction.dev", "nf-site-public-client.app1-linode.live", "nf-public-domain-client.app1-linode.live-tls.timer"} {
+		if !strings.Contains(joinedArgs, want) {
+			t.Fatalf("ssh args missing %q:\n%#v", want, sshArgs)
+		}
 	}
 }
 
