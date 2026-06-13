@@ -33,6 +33,7 @@ type themeDeployTarget struct {
 	WordPressPath  string
 	RemoteThemeDir string
 	WPCommand      string
+	PHPVersion     string
 }
 
 type themeDeployArtifact struct {
@@ -120,7 +121,7 @@ func cmdThemeDeploy(remoteName string, dryRun bool) int {
 	activateArgs := themeDeployActivateArgs(target, themeSlug)
 	releaseScript := themeDeployReleaseScript(target, themeSlug, artifact, remoteArtifact, releaseBase, releaseDir, activateArgs[len(activateArgs)-1])
 	releaseArgs := themeRemoteScriptCommandArgs(target, "nf-theme-deploy-release")
-	fmt.Println("  remote script: extract release, switch active theme, activate, record metadata, prune old releases")
+	fmt.Println("  remote script: extract release, switch active theme, refresh runtime mtimes, activate, record metadata, prune old releases")
 	printCommandArgs(releaseArgs)
 	if !dryRun {
 		if err := runSSHCommandFn(mkdirArgs); err != nil {
@@ -190,7 +191,7 @@ func cmdThemeRollback(remoteName string, dryRun bool) int {
 	if dryRun {
 		fmt.Println("  mode:        dry-run")
 	}
-	fmt.Println("  remote script: select previous release, switch active theme, activate, record rollback")
+	fmt.Println("  remote script: select previous release, switch active theme, refresh runtime mtimes, activate, record rollback")
 	printCommandArgs(rollbackArgs)
 	if !dryRun {
 		if err := runSSHStdinCommandFn(rollbackArgs, rollbackScript); err != nil {
@@ -225,7 +226,7 @@ func resolveThemeDeployTarget(remoteName, themeSlug string, metadata map[string]
 		return themeDeployTarget{}, err
 	}
 	provider := strings.ToLower(strings.TrimSpace(recordValueString(record["provider"])))
-	target := themeDeployTarget{Provider: provider, RemoteName: remoteName, SiteID: siteID, Env: remoteEnv, URL: firstRecordString(record, "url", "site_url", "home_url", "hostname")}
+	target := themeDeployTarget{Provider: provider, RemoteName: remoteName, SiteID: siteID, Env: remoteEnv, URL: firstRecordString(record, "url", "site_url", "home_url", "hostname"), PHPVersion: sitePHPVersion(record)}
 	switch provider {
 	case "kinsta":
 		target.SSHHost = firstNonEmpty(mapStringAtPath(record, "ssh", "host"), mapStringAtPath(record, "kinsta", "ssh", "host"), firstRecordString(record, "ssh_host"))
@@ -391,6 +392,39 @@ func themeDeployActivateArgs(target themeDeployTarget, themeSlug string) []strin
 	return []string{"ssh", "-p", target.SSHPort, target.SSHUser + "@" + target.SSHHost, remoteCommand}
 }
 
+func themeRuntimeMtimeRefreshCommand() string {
+	return `find "$active_dir" -type f \( -name '*.php' -o -name '*.twig' -o -name '*.json' -o -name '*.css' -o -name '*.js' -o -name '*.mjs' -o -name '*.map' \) -exec touch {} +`
+}
+
+func themeRuntimeOpcacheResetCommand() string {
+	return `php -r 'if (function_exists("opcache_reset")) { @opcache_reset(); }'`
+}
+
+func themeRuntimeFPMReloadCommand(target themeDeployTarget) string {
+	if target.Provider != "linode" {
+		return "true"
+	}
+	service := safePHPFPMService(firstNonEmpty(target.PHPVersion, "8.3"))
+	if service == "" {
+		return "true"
+	}
+	quotedService := shellQuoteArg(service)
+	return "if command -v systemctl >/dev/null 2>&1; then sudo -n systemctl reload " + quotedService + " >/dev/null 2>&1 || sudo -n systemctl restart " + quotedService + " >/dev/null 2>&1 || true; fi"
+}
+
+func safePHPFPMService(version string) string {
+	version = strings.TrimSpace(version)
+	if version == "" {
+		return ""
+	}
+	for _, r := range version {
+		if (r < '0' || r > '9') && r != '.' {
+			return ""
+		}
+	}
+	return "php" + version + "-fpm"
+}
+
 func themeDeployReleaseScript(target themeDeployTarget, themeSlug string, artifact themeDeployArtifact, remoteArtifact, releaseBase, releaseDir, activateCommand string) string {
 	activeDir := target.RemoteThemeDir
 	metadata := map[string]any{
@@ -436,7 +470,10 @@ func themeDeployReleaseScript(target themeDeployTarget, themeSlug string, artifa
 		"rm -rf \"$old_active\"",
 		"if [ -e \"$active_dir\" ] || [ -L \"$active_dir\" ]; then mv \"$active_dir\" \"$old_active\"; fi",
 		"if mv \"$active_tmp\" \"$active_dir\"; then :; else if [ -e \"$old_active\" ] || [ -L \"$old_active\" ]; then mv \"$old_active\" \"$active_dir\"; fi; exit 1; fi",
+		themeRuntimeMtimeRefreshCommand(),
 		"if " + activateCommand + "; then rm -rf \"$old_active\"; else rm -rf \"$active_dir\"; if [ -e \"$old_active\" ] || [ -L \"$old_active\" ]; then mv \"$old_active\" \"$active_dir\"; fi; exit 1; fi",
+		themeRuntimeOpcacheResetCommand(),
+		themeRuntimeFPMReloadCommand(target),
 		"php -r " + shellQuoteArg(phpAppend) + " " + shellQuoteArg(string(metadataJSON)) + " " + shellQuoteArg(metadataFile) + " \"$previous\"",
 		"php -r " + shellQuoteArg(phpPrune) + " " + shellQuoteArg(releaseBase) + " " + shellQuoteArg(metadataFile) + " " + strconv.Itoa(themeReleaseKeep),
 		"rm -rf \"$extract_tmp\"",
@@ -466,7 +503,10 @@ func themeRollbackScript(target themeDeployTarget, themeSlug, releaseBase, metad
 		"cp -a \"$release_dir\" \"$active_tmp\"",
 		"if [ -e \"$active_dir\" ] || [ -L \"$active_dir\" ]; then mv \"$active_dir\" \"$old_active\"; fi",
 		"if mv \"$active_tmp\" \"$active_dir\"; then :; else if [ -e \"$old_active\" ] || [ -L \"$old_active\" ]; then mv \"$old_active\" \"$active_dir\"; fi; exit 1; fi",
+		themeRuntimeMtimeRefreshCommand(),
 		"if " + activateCommand + "; then rm -rf \"$old_active\"; else rm -rf \"$active_dir\"; if [ -e \"$old_active\" ] || [ -L \"$old_active\" ]; then mv \"$old_active\" \"$active_dir\"; fi; exit 1; fi",
+		themeRuntimeOpcacheResetCommand(),
+		themeRuntimeFPMReloadCommand(target),
 		"php -r " + shellQuoteArg(appendPHP) + " \"$metadata_file\" \"$target_release\" \"$current_release\" " + shellQuoteArg(themeSlug) + " " + shellQuoteArg(target.Provider) + " " + shellQuoteArg(target.SiteID) + " " + shellQuoteArg(target.Env) + " " + shellQuoteArg(target.RemoteName),
 	}, " && ")
 	return script
