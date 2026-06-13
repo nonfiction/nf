@@ -18,6 +18,7 @@ import (
 
 	"github.com/linode/linodego"
 	"github.com/nonfiction/nf/internal/config"
+	"github.com/nonfiction/nf/internal/kinsta"
 	"github.com/nonfiction/nf/internal/passwords"
 	"github.com/nonfiction/nf/internal/state"
 	"github.com/nonfiction/nf/internal/ui"
@@ -546,6 +547,46 @@ func TestRunCompleteSuggestsStaticAndCachedValues(t *testing.T) {
 	})
 	if strings.TrimSpace(siteStagingOutput) != "staging" {
 		t.Fatalf("site staging command completion = %q, want staging", siteStagingOutput)
+	}
+
+	siteDomainOutput := captureStdout(t, func() {
+		if got := Run([]string{"__complete", "--", "site", "do"}); got != 0 {
+			t.Fatalf("Run(__complete site do) = %d, want 0", got)
+		}
+	})
+	if strings.TrimSpace(siteDomainOutput) != "domain" {
+		t.Fatalf("site domain command completion = %q, want domain", siteDomainOutput)
+	}
+
+	siteDomainActionsOutput := captureStdout(t, func() {
+		if got := Run([]string{"__complete", "--", "site", "domain", ""}); got != 0 {
+			t.Fatalf("Run(__complete site domain actions) = %d, want 0", got)
+		}
+	})
+	for _, want := range []string{"prepare\n", "primary\n", "help\n"} {
+		if !strings.Contains(siteDomainActionsOutput, want) {
+			t.Fatalf("site domain action completion missing %q:\n%s", want, siteDomainActionsOutput)
+		}
+	}
+
+	siteDomainEnvOutput := captureStdout(t, func() {
+		if got := Run([]string{"__complete", "--", "site", "domain", "prepare", "client"}); got != 0 {
+			t.Fatalf("Run(__complete site domain prepare client) = %d, want 0", got)
+		}
+	})
+	if strings.TrimSpace(siteDomainEnvOutput) != "client-app1-linode:live" {
+		t.Fatalf("site domain env completion = %q, want env id only", siteDomainEnvOutput)
+	}
+
+	siteDomainPrimaryFlagOutput := captureStdout(t, func() {
+		if got := Run([]string{"__complete", "--", "site", "domain", "primary", "client-app1-linode:live", "www.client.com", "--"}); got != 0 {
+			t.Fatalf("Run(__complete site domain primary --) = %d, want 0", got)
+		}
+	})
+	for _, want := range []string{"--alias\n", "--canonical\n", "--setup\n", "--search-replace\n", "--dry-run\n", "--execute\n", "--yes\n", "--non-interactive\n"} {
+		if !strings.Contains(siteDomainPrimaryFlagOutput, want) {
+			t.Fatalf("site domain primary flag completion missing %q:\n%s", want, siteDomainPrimaryFlagOutput)
+		}
 	}
 
 	siteStagingActionsOutput := captureStdout(t, func() {
@@ -3523,6 +3564,189 @@ func TestRunSiteAddKinstaExecuteCachesEnvs(t *testing.T) {
 		if strings.Contains(showOutput, notWant) {
 			t.Fatalf("site show kinsta output contains %q:\n%s", notWant, showOutput)
 		}
+	}
+}
+
+func TestRunSiteDomainKinstaPrepareExecutePrintsDNSAndCachesDomains(t *testing.T) {
+	stateDir := t.TempDir()
+	t.Setenv("NF_STATE_HOME", stateDir)
+	if err := state.SaveStateRecords("sites", []map[string]any{{
+		"provider": "kinsta",
+		"site_id":  "client.kinsta",
+		"env_id":   "client.kinsta:live",
+		"name":     "client",
+		"env":      "live",
+		"target":   "kinsta",
+		"hostname": "client.kinsta.nonfiction.dev",
+		"url":      "https://client.kinsta.nonfiction.dev",
+		"path":     "/www/client/public",
+		"ssh":      map[string]any{"host": "203.0.113.10", "port": "12345", "user": "client"},
+		"kinsta":   map[string]any{"site_id": "ksite123", "environment_id": "kenv-live", "domain_id": "kdom-internal"},
+	}}); err != nil {
+		t.Fatalf("SaveStateRecords(sites) error = %v", err)
+	}
+
+	var capturedPlan siteDomainPlan
+	oldPrepare := kinstaPrepareDomainFn
+	kinstaPrepareDomainFn = func(plan siteDomainPlan) (siteDomainProviderResult, error) {
+		capturedPlan = plan
+		return siteDomainProviderResult{Domains: []siteDomainProviderDomain{
+			{
+				Name:     "www.client.com",
+				Role:     "canonical",
+				DomainID: "kdom-www",
+				Records: kinsta.DomainRecords{
+					Verification: []kinsta.DNSRecord{{Type: "TXT", Name: "_kinsta.www.client.com", Content: "verify-token"}},
+					Pointing:     []kinsta.DNSRecord{{Type: "CNAME", Name: "www.client.com", Content: "hosting.kinsta.cloud", TTL: 300}},
+				},
+			},
+			{Name: "client.com", Role: "redirect", DomainID: "kdom-apex", Records: kinsta.DomainRecords{Pointing: []kinsta.DNSRecord{{Type: "A", Name: "client.com", Content: "203.0.113.20"}}}},
+		}}, nil
+	}
+	t.Cleanup(func() { kinstaPrepareDomainFn = oldPrepare })
+
+	output := captureStdout(t, func() {
+		if got := Run([]string{"site", "domain", "prepare", "client.kinsta:live", "www.client.com", "--alias", "client.com", "--execute", "--yes", "--non-interactive"}); got != 0 {
+			t.Fatalf("Run(site domain prepare kinsta) = %d, want 0", got)
+		}
+	})
+	for _, want := range []string{"Prepare public domain plan:", "provider:  kinsta", "fallback:  https://client.kinsta.nonfiction.dev", "canonical: www.client.com", "aliases:   client.com", "kinsta setup: avoid-downtime", "public DNS: no DNS records will be changed by nf", "DNS records for client DNS:", "www.client.com (canonical):", "TXT  _kinsta.www.client.com  verify-token", "CNAME  www.client.com  hosting.kinsta.cloud  TTL 300", "client.com (redirect):", "A  client.com  203.0.113.20", "Site domain prepared."} {
+		if !strings.Contains(output, want) {
+			t.Fatalf("site domain kinsta output missing %q:\n%s", want, output)
+		}
+	}
+	if capturedPlan.KinstaEnvID != "kenv-live" || capturedPlan.SetupType != "avoid_downtime" || capturedPlan.Canonical != "www.client.com" || !reflect.DeepEqual(capturedPlan.Aliases, []string{"client.com"}) {
+		t.Fatalf("captured plan = %#v, want kinsta env, setup, canonical, aliases", capturedPlan)
+	}
+
+	records, err := state.LoadStateRecords("sites")
+	if err != nil {
+		t.Fatalf("LoadStateRecords(sites) error = %v", err)
+	}
+	if len(records) != 1 {
+		t.Fatalf("site records len = %d, want 1: %#v", len(records), records)
+	}
+	record := records[0]
+	if got := recordValueString(record["hostname"]); got != "client.kinsta.nonfiction.dev" {
+		t.Fatalf("hostname = %q, want internal hostname during prepare", got)
+	}
+	if got := recordValueString(record["url"]); got != "https://client.kinsta.nonfiction.dev" {
+		t.Fatalf("url = %q, want internal url during prepare", got)
+	}
+	if got := recordValueString(record["internal_hostname"]); got != "client.kinsta.nonfiction.dev" {
+		t.Fatalf("internal_hostname = %q, want client.kinsta.nonfiction.dev", got)
+	}
+	if got := recordValueString(record["internal_url"]); got != "https://client.kinsta.nonfiction.dev" {
+		t.Fatalf("internal_url = %q, want internal url", got)
+	}
+	if got := recordValueString(record["domain_state"]); got != "prepared" {
+		t.Fatalf("domain_state = %q, want prepared", got)
+	}
+	domains, ok := record["domains"].([]any)
+	if !ok || len(domains) != 2 {
+		t.Fatalf("domains = %#v, want two domain entries", record["domains"])
+	}
+	canonical, _ := domains[0].(map[string]any)
+	alias, _ := domains[1].(map[string]any)
+	if recordValueString(canonical["name"]) != "www.client.com" || recordValueString(canonical["role"]) != "canonical" || recordValueString(canonical["domain_id"]) != "kdom-www" {
+		t.Fatalf("canonical domain = %#v", canonical)
+	}
+	if recordValueString(alias["name"]) != "client.com" || recordValueString(alias["role"]) != "redirect" || recordValueString(alias["domain_id"]) != "kdom-apex" {
+		t.Fatalf("alias domain = %#v", alias)
+	}
+	if got := mapStringAtPath(record, "kinsta", "domain_id"); got != "kdom-internal" {
+		t.Fatalf("kinsta.domain_id = %q, want unchanged internal domain id during prepare", got)
+	}
+}
+
+func TestRunSiteDomainLinodePrimaryExecuteConfiguresVhostAndCachesPrimary(t *testing.T) {
+	configDir := t.TempDir()
+	stateDir := t.TempDir()
+	t.Setenv("NF_CONFIG_HOME", configDir)
+	t.Setenv("NF_STATE_HOME", stateDir)
+	if err := saveGlobalConfig(map[string]string{"linode_default_user": "nonfiction"}); err != nil {
+		t.Fatalf("saveGlobalConfig() error = %v", err)
+	}
+	if err := state.SaveStateRecords("providers", []map[string]any{{"provider": "linode", "targets": []map[string]any{{"name": "app1-linode", "provider": "linode", "hostname": "app1-linode.nonfiction.dev", "public_ipv4": "203.0.113.10", "public_ipv6": "2001:db8::10", "ssh": map[string]any{"user": "nonfiction", "host": "app1-linode.nonfiction.dev"}}}}}); err != nil {
+		t.Fatalf("SaveStateRecords(providers) error = %v", err)
+	}
+	if err := state.SaveStateRecords("sites", []map[string]any{{"provider": "linode", "site_id": "client.app1-linode", "env_id": "client.app1-linode:live", "name": "client", "env": "live", "target": "app1-linode", "path": "/var/www/sites/client/public", "database": "client", "hostname": "client.app1-linode.nonfiction.dev", "url": "https://client.app1-linode.nonfiction.dev", "php_version": "8.3"}}); err != nil {
+		t.Fatalf("SaveStateRecords(sites) error = %v", err)
+	}
+
+	plan, err := buildSiteDomainPlan("client.app1-linode", "live", "primary", siteDomainOptions{canonical: "www.client.com", aliases: []string{"client.com"}, searchReplace: true})
+	if err != nil {
+		t.Fatalf("buildSiteDomainPlan() error = %v", err)
+	}
+	script := renderLinodeDomainScript(plan)
+	for _, want := range []string{"/usr/local/bin/nf-refresh-public-domain-client.app1-linode.live", "/etc/nginx/sites-available/nf-site-public-client.app1-linode.live", "server_name $server_names;", "return 301 https://$canonical\\$request_uri;", "certbot certonly --non-interactive --agree-tos --webroot", "nf-public-domain-client.app1-linode.live-tls.timer", "option update home https://www.client.com", "option update siteurl https://www.client.com", "search-replace \"$old_url\" https://www.client.com --all-tables --skip-columns=guid", ".domains = $domains", ".hostname = $canonical | .url = $url | .primary_domain = $canonical", "client.com", "www.client.com"} {
+		if !strings.Contains(script, want) {
+			t.Fatalf("linode domain script missing %q:\n%s", want, script)
+		}
+	}
+
+	var sshArgs []string
+	oldRunSSH := runSSHCommandFn
+	runSSHCommandFn = func(args []string) error {
+		sshArgs = append([]string{}, args...)
+		return nil
+	}
+	t.Cleanup(func() { runSSHCommandFn = oldRunSSH })
+
+	output := captureStdout(t, func() {
+		if got := Run([]string{"site", "domain", "primary", "client.app1-linode:live", "www.client.com", "--alias", "client.com", "--search-replace", "--execute", "--yes", "--non-interactive"}); got != 0 {
+			t.Fatalf("Run(site domain primary linode) = %d, want 0", got)
+		}
+	})
+	for _, want := range []string{"Launch primary domain plan:", "provider:  linode", "target:    app1-linode", "fallback:  https://client.app1-linode.nonfiction.dev", "canonical: www.client.com", "aliases:   client.com", "public DNS: no DNS records will be changed by nf", "A     www.client.com -> 203.0.113.10", "AAAA  client.com -> 2001:db8::10", "search-replace: true", "TLS: HTTP-01 certbot retry timer", "Site domain launched as primary."} {
+		if !strings.Contains(output, want) {
+			t.Fatalf("site domain linode output missing %q:\n%s", want, output)
+		}
+	}
+	joinedArgs := strings.Join(sshArgs, " ")
+	for _, want := range []string{"ssh", "-p 22", "nonfiction@app1-linode.nonfiction.dev", "sudo bash -c", "nf-refresh-public-domain-client.app1-linode.live", "nf-issue-public-domain-cert-client.app1-linode.live"} {
+		if !strings.Contains(joinedArgs, want) {
+			t.Fatalf("ssh args missing %q:\n%#v", want, sshArgs)
+		}
+	}
+
+	records, err := state.LoadStateRecords("sites")
+	if err != nil {
+		t.Fatalf("LoadStateRecords(sites) error = %v", err)
+	}
+	if len(records) != 1 {
+		t.Fatalf("site records len = %d, want 1: %#v", len(records), records)
+	}
+	record := records[0]
+	if got := recordValueString(record["hostname"]); got != "www.client.com" {
+		t.Fatalf("hostname = %q, want canonical public hostname", got)
+	}
+	if got := recordValueString(record["url"]); got != "https://www.client.com" {
+		t.Fatalf("url = %q, want canonical public URL", got)
+	}
+	if got := recordValueString(record["primary_domain"]); got != "www.client.com" {
+		t.Fatalf("primary_domain = %q, want www.client.com", got)
+	}
+	if got := recordValueString(record["internal_hostname"]); got != "client.app1-linode.nonfiction.dev" {
+		t.Fatalf("internal_hostname = %q, want internal fallback hostname", got)
+	}
+	if got := recordValueString(record["internal_url"]); got != "https://client.app1-linode.nonfiction.dev" {
+		t.Fatalf("internal_url = %q, want internal fallback URL", got)
+	}
+	if got := recordValueString(record["domain_state"]); got != "primary" {
+		t.Fatalf("domain_state = %q, want primary", got)
+	}
+	domains, ok := record["domains"].([]any)
+	if !ok || len(domains) != 2 {
+		t.Fatalf("domains = %#v, want two domain entries", record["domains"])
+	}
+	canonical, _ := domains[0].(map[string]any)
+	alias, _ := domains[1].(map[string]any)
+	if recordValueString(canonical["name"]) != "www.client.com" || recordValueString(canonical["role"]) != "canonical" {
+		t.Fatalf("canonical domain = %#v", canonical)
+	}
+	if recordValueString(alias["name"]) != "client.com" || recordValueString(alias["role"]) != "redirect" {
+		t.Fatalf("alias domain = %#v", alias)
 	}
 }
 

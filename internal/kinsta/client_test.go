@@ -35,6 +35,24 @@ func TestClientSiteEnvironmentDomainFlow(t *testing.T) {
 			_ = json.NewEncoder(w).Encode(map[string]any{"environment": map[string]any{"site_domains": []map[string]any{{"id": "kdom-live", "name": "foobar.kinsta.nonfiction.dev", "is_primary": true}}}})
 		case "GET /sites/environments/domains/kdom-live/verification-records":
 			_ = json.NewEncoder(w).Encode(map[string]any{"site_domain": map[string]any{"verification_records": []map[string]any{{"name": "_acme-challenge.foobar.kinsta.nonfiction.dev", "type": "TXT", "content": "token"}}, "pointing_records": []map[string]any{{"name": "foobar.kinsta.nonfiction.dev", "type": "A", "content": "203.0.113.10", "ttl": 300}}}})
+		case "POST /sites/environments/kenv-live/domains":
+			var payload map[string]any
+			if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
+				t.Fatalf("add domain decode error = %v", err)
+			}
+			if payload["domain_name"] != "www.client.com" || payload["setup_type"] != "avoid_downtime" || payload["is_wildcardless"] != false || payload["add_with_www_subdomain"] != false {
+				t.Fatalf("add domain payload = %#v", payload)
+			}
+			_ = json.NewEncoder(w).Encode(map[string]any{"operation_id": "op-add-domain"})
+		case "PUT /sites/environments/kenv-live/change-primary-domain":
+			var payload map[string]any
+			if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
+				t.Fatalf("primary domain decode error = %v", err)
+			}
+			if payload["domain_id"] != "kdom-live" || payload["run_search_and_replace"] != true {
+				t.Fatalf("primary domain payload = %#v", payload)
+			}
+			_ = json.NewEncoder(w).Encode(map[string]any{"operation_id": "op-primary-domain"})
 		case "GET /operations/op123":
 			_ = json.NewEncoder(w).Encode(map[string]any{"operation": map[string]any{"id": "op123", "status": "complete"}})
 		case "PUT /sites/tools/modify-php-version":
@@ -111,6 +129,12 @@ func TestClientSiteEnvironmentDomainFlow(t *testing.T) {
 	}
 	if len(records.Verification) != 1 || records.Verification[0].RecordContent() != "token" || len(records.Pointing) != 1 || records.Pointing[0].Content != "203.0.113.10" {
 		t.Fatalf("records = %#v, want verification and pointing", records)
+	}
+	if opID, err := client.AddDomain(ctx, "kenv-live", AddDomainRequest{DomainName: "www.client.com", SetupType: "avoid_downtime"}); err != nil || opID != "op-add-domain" {
+		t.Fatalf("AddDomain() = %q, %v; want op-add-domain", opID, err)
+	}
+	if opID, err := client.ChangePrimaryDomain(ctx, "kenv-live", "kdom-live", true); err != nil || opID != "op-primary-domain" {
+		t.Fatalf("ChangePrimaryDomain() = %q, %v; want op-primary-domain", opID, err)
 	}
 	if err := client.WaitOperation(ctx, "op123", 0); err != nil {
 		t.Fatalf("WaitOperation() error = %v", err)

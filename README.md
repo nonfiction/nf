@@ -553,6 +553,8 @@ nf site basicauth status <site.target:env>
 nf site basicauth enable <site.target:env> [--dry-run] [--execute --yes]
 nf site basicauth disable <site.target:env> [--dry-run] [--execute --yes]
 nf site basicauth password [site-id-or-alias]
+nf site domain prepare <site.target:env|remote> <domain> [--alias domain] [--setup avoid-downtime|quick] [--dry-run] [--execute --yes]
+nf site domain primary <site.target:env|remote> <domain> [--alias domain] [--setup avoid-downtime|quick] [--search-replace] [--dry-run] [--execute --yes]
 nf site remove [site-id-or-alias] [--dry-run] [--execute --yes]
 nf remote add [name] [site.target:env]
 nf remote show <name>
@@ -590,6 +592,8 @@ Current behavior:
 * `nf site password [site|env] [--wp|--db|--basicauth]` prints only one selected site password. `--wp` is the default. Env refs are accepted for `--db`; use a site ref for `--wp` or `--basicauth`. Linode WordPress, DB, and basic-auth passwords are derived from the site slug, purpose, `NF_PASSWORD_SALT`, and `project.password_version`; Kinsta DB password output uses the Kinsta SFTP password endpoint.
 * Linode site/env database creation grants the shared Adminer MySQL user privileges only on created site env databases and refuses to create a site DB user with the same name as the shared Adminer MySQL user. Site removal revokes per-database grants before dropping the databases.
 * `nf site basicauth ...` uses `basicauth_default_user` from `config.json` and a per-site derived password with `project.password_version` as the rotation source. Linode envs are managed over SSH by updating the selected env nginx vhost, including multi-vhost target nginx scripts. Kinsta Password protection exists in MyKinsta, but currently requires manual MyKinsta use because no public API endpoint is exposed.
+* `nf site domain prepare ...` makes the provider/env ready to answer a public hostname and prints the DNS records the client must create. It never mutates public/client DNS. Kinsta domains are added through the Kinsta API and Kinsta-provided verification/pointing records are printed. Linode domains update nginx on the target and install a certbot HTTP-01 retry timer so HTTPS is issued after client DNS points at the target.
+* `nf site domain primary ...` launches the canonical public hostname for the env. Pass aliases explicitly, for example `--alias client.com` when `www.client.com` should be canonical. Repo remotes in `nf.json` continue to point at env IDs, not domains.
 * `nf site remove [site]` removes a whole Linode site and deletes its env data.
 * `nf remote add` validates an env ID against the cache, then repo remotes are stored in `nf.json` under `remotes` as `<site>.<target>:<env>` refs.
 * `nf site shell/wp ...` validate the cache, print the SSH or wp-cli command preview, then execute the remote command.

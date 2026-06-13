@@ -27,6 +27,8 @@ var (
 	kinstaProvisionSiteFn    = provisionKinstaSite
 	kinstaProvisionStagingFn = provisionKinstaStaging
 	kinstaRemoveSiteFn       = removeKinstaSite
+	kinstaPrepareDomainFn    = prepareKinstaSiteDomain
+	kinstaPrimaryDomainFn    = primaryKinstaSiteDomain
 	targetSSHReachableFn     = targetSSHReachable
 	runSSHScriptFn           = runSSHScript
 	runSSHCommandFn          = runSSHCommand

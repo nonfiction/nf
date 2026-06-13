@@ -184,7 +184,7 @@ func targetAddFlagCandidates() []string {
 
 func siteCompletionCandidates(args []string) []string {
 	if len(args) == 0 {
-		return []string{"list", "ls", "show", "shell", "sh", "wp", "export", "snapshot", "password", "basicauth", "refresh", "add", "staging", "remove", "rm", "help"}
+		return []string{"list", "ls", "show", "shell", "sh", "wp", "export", "snapshot", "password", "basicauth", "domain", "refresh", "add", "staging", "remove", "rm", "help"}
 	}
 	args[0] = cliCommandAlias(args[0])
 	switch args[0] {
@@ -214,6 +214,8 @@ func siteCompletionCandidates(args []string) []string {
 		return append(cachedSiteAndEnvCompletionNames(), "--wp", "--db", "--basicauth")
 	case "basicauth":
 		return siteBasicAuthCompletionCandidates(args[1:])
+	case "domain":
+		return siteDomainCompletionCandidates(args[1:])
 	case "staging":
 		return siteStagingCompletionCandidates(args[1:])
 	case "remove":
@@ -223,6 +225,27 @@ func siteCompletionCandidates(args []string) []string {
 			return cachedTargetCompletionNames()
 		}
 		return []string{"--with-staging", "--region", "--php", "--dry-run", "--execute", "--yes", "--non-interactive"}
+	default:
+		return nil
+	}
+}
+
+func siteDomainCompletionCandidates(args []string) []string {
+	if len(args) == 0 {
+		return []string{"prepare", "primary", "help"}
+	}
+	switch args[0] {
+	case "prepare", "primary":
+		flags := []string{"--canonical", "--alias", "--setup", "--dry-run", "--execute", "--yes", "--non-interactive"}
+		if args[0] == "primary" {
+			flags = append(flags, "--search-replace")
+		}
+		if len(args) == 1 {
+			values := append(cachedSiteEnvCompletionNames(), projectRemoteCompletionNames()...)
+			values = append(values, flags...)
+			return uniqueSortedStrings(values)
+		}
+		return flags
 	default:
 		return nil
 	}

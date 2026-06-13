@@ -285,6 +285,8 @@ Do not add old compatibility routes unless explicitly requested.
 * [x] `nf site shell <env-id>`
 * [x] `nf site wp <env-id> -- <args>`
 * [x] `nf site password [site|env] [--wp|--db|--basicauth]`
+* [x] `nf site domain prepare <env|remote> <domain>` prepares public-domain readiness without mutating public DNS
+* [x] `nf site domain primary <env|remote> <domain>` launches a canonical public domain with explicit aliases
 * [x] `nf site remove [site]` remove a whole site
 * [x] `nf remote add [name] [env-id]` with cache validation and prompts for omitted values
 * [x] `nf remote show <name>`
@@ -401,6 +403,7 @@ Current readers:
 * `nf site shell/wp` remote command execution
 * `nf env logs [remote]` remote debug log tailing
 * `nf env password [remote]` local/remote password lookup
+* `nf site domain prepare/primary` public-domain readiness and launch state
 
 Desired refresh behavior:
 
@@ -414,6 +417,8 @@ Provider-specific desired discovery:
 * DNSimple: no sites/envs.
 * Kinsta: use Kinsta API site/env endpoints.
 * Linode: read `/var/lib/nf/sites.json` over SSH from each target.
+
+Public launch domains are provider/env state, not repo remote identity. `nf site domain prepare` attaches/configures hostnames and prints the DNS records clients must create, but does not mutate client DNS. `nf site domain primary` sets the canonical public URL for the env and preserves the generated internal hostname as fallback state when known. Apex/www pairing is explicit through aliases so arbitrary subdomain launches such as `reports.client.com` are not accidentally coupled to `client.com`.
 
 ## Project metadata model
 
