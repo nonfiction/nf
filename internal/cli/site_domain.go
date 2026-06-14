@@ -25,6 +25,7 @@ type siteDomainOptions struct {
 	canonical      string
 	aliases        []string
 	setupType      string
+	proxyMode      string
 	searchReplace  bool
 	dryRun         bool
 	execute        bool
@@ -44,6 +45,7 @@ type siteDomainPlan struct {
 	Canonical        string
 	Aliases          []string
 	SetupType        string
+	ProxyMode        string
 	SearchReplace    bool
 	CurrentURL       string
 	CurrentHostname  string
@@ -94,6 +96,7 @@ func runSiteDomainHelp() int {
 		{},
 		{"--canonical <domain>", "canonical public hostname"},
 		{"--alias <domain>", "redirect/alternate hostname; repeatable"},
+		{"--proxy <mode>", "Linode proxy mode: cloudflare-strict or cloudflare-full"},
 		{"--setup <type>", "Kinsta setup type for prepare/primary: avoid-downtime or quick"},
 		{"--search-replace", "run provider/wp search-replace during primary"},
 		{},
@@ -142,6 +145,13 @@ func parseSiteDomainActionArgs(action string, argv []string) (string, siteDomain
 			}
 			i++
 			opts.setupType = argv[i]
+		case "--proxy":
+			if i+1 >= len(argv) || strings.TrimSpace(argv[i+1]) == "" {
+				fmt.Fprintln(os.Stderr, "--proxy requires a value")
+				return "", opts, false
+			}
+			i++
+			opts.proxyMode = argv[i]
 		default:
 			if strings.HasPrefix(arg, "--canonical=") {
 				opts.canonical = strings.TrimPrefix(arg, "--canonical=")
@@ -168,6 +178,14 @@ func parseSiteDomainActionArgs(action string, argv []string) (string, siteDomain
 				}
 				continue
 			}
+			if strings.HasPrefix(arg, "--proxy=") {
+				opts.proxyMode = strings.TrimPrefix(arg, "--proxy=")
+				if strings.TrimSpace(opts.proxyMode) == "" {
+					fmt.Fprintln(os.Stderr, "--proxy requires a value")
+					return "", opts, false
+				}
+				continue
+			}
 			if strings.HasPrefix(arg, "-") {
 				fmt.Fprintf(os.Stderr, "unknown site domain flag: %s\n", arg)
 				return "", opts, false
@@ -181,7 +199,7 @@ func parseSiteDomainActionArgs(action string, argv []string) (string, siteDomain
 	}
 	if action == "check" {
 		if opts.dryRun || opts.execute || opts.yes || opts.searchReplace || strings.TrimSpace(opts.setupType) != "" {
-			fmt.Fprintln(os.Stderr, "site domain check is read-only; use only --canonical, --alias, and --non-interactive")
+			fmt.Fprintln(os.Stderr, "site domain check is read-only; use only --canonical, --alias, --proxy, and --non-interactive")
 			return "", opts, false
 		}
 	}
@@ -367,6 +385,7 @@ func buildSiteDomainPlan(siteID, env, action string, opts siteDomainOptions) (si
 		Target:           target,
 		Canonical:        canonical,
 		Aliases:          aliases,
+		ProxyMode:        firstNonEmpty(opts.proxyMode, firstRecordString(record, "proxy_mode")),
 		SearchReplace:    opts.searchReplace,
 		CurrentURL:       currentURL,
 		CurrentHostname:  currentHostname,
@@ -377,6 +396,9 @@ func buildSiteDomainPlan(siteID, env, action string, opts siteDomainOptions) (si
 	}
 	switch plan.Provider {
 	case "kinsta":
+		if strings.TrimSpace(plan.ProxyMode) != "" {
+			return siteDomainPlan{}, ProjectError{Msg: "--proxy only applies to Linode domains"}
+		}
 		setup, err := normalizeKinstaDomainSetupType(opts.setupType)
 		if err != nil {
 			return siteDomainPlan{}, err
@@ -389,6 +411,11 @@ func buildSiteDomainPlan(siteID, env, action string, opts siteDomainOptions) (si
 			return siteDomainPlan{}, ProjectError{Msg: fmt.Sprintf("Kinsta env %q is missing API identifiers. Run nf site refresh and try again.", plan.EnvID)}
 		}
 	case "linode":
+		proxyMode, err := normalizeSiteDomainProxyMode(plan.ProxyMode)
+		if err != nil {
+			return siteDomainPlan{}, err
+		}
+		plan.ProxyMode = proxyMode
 		if strings.TrimSpace(opts.setupType) != "" {
 			return siteDomainPlan{}, ProjectError{Msg: "--setup only applies to Kinsta domains"}
 		}
@@ -404,6 +431,9 @@ func buildSiteDomainPlan(siteID, env, action string, opts siteDomainOptions) (si
 		plan.TargetIPv6 = firstRecordString(resolvedTarget, "public_ipv6", "ipv6")
 		plan.PHPVersion = firstNonEmpty(plan.PHPVersion, targetPHPVersion(resolvedTarget), "8.3")
 	default:
+		if strings.TrimSpace(plan.ProxyMode) != "" {
+			return siteDomainPlan{}, ProjectError{Msg: "--proxy only applies to Linode domains"}
+		}
 		return siteDomainPlan{}, ProjectError{Msg: fmt.Sprintf("site domain is not implemented for provider %q", plan.Provider)}
 	}
 	return plan, nil
@@ -475,6 +505,41 @@ func displayKinstaSetupType(value string) string {
 	return value
 }
 
+func normalizeSiteDomainProxyMode(value string) (string, error) {
+	switch strings.ToLower(strings.TrimSpace(value)) {
+	case "", "none", "direct", "dns-only", "dns_only":
+		return "", nil
+	case "cloudflare-strict", "cloudflare_strict":
+		return "cloudflare_strict", nil
+	case "cloudflare-full", "cloudflare_full":
+		return "cloudflare_full", nil
+	default:
+		return "", ProjectError{Msg: "--proxy must be cloudflare-strict or cloudflare-full"}
+	}
+}
+
+func displaySiteDomainProxyMode(value string) string {
+	if value == "cloudflare_strict" {
+		return "cloudflare-strict"
+	}
+	if value == "cloudflare_full" {
+		return "cloudflare-full"
+	}
+	return value
+}
+
+func siteDomainCloudflareStrict(plan siteDomainPlan) bool {
+	return plan.ProxyMode == "cloudflare_strict"
+}
+
+func siteDomainCloudflareFull(plan siteDomainPlan) bool {
+	return plan.ProxyMode == "cloudflare_full"
+}
+
+func siteDomainCloudflareProxy(plan siteDomainPlan) bool {
+	return siteDomainCloudflareStrict(plan) || siteDomainCloudflareFull(plan)
+}
+
 func hostnameFromURLish(value string) string {
 	value = strings.TrimSpace(value)
 	if value == "" {
@@ -542,6 +607,9 @@ func printSiteDomainPlan(plan siteDomainPlan, mode string) {
 	if len(plan.Aliases) > 0 {
 		fmt.Printf("  aliases:   %s\n", strings.Join(plan.Aliases, ", "))
 	}
+	if plan.ProxyMode != "" {
+		fmt.Printf("  proxy:     %s\n", displaySiteDomainProxyMode(plan.ProxyMode))
+	}
 	if plan.Provider == "kinsta" {
 		fmt.Printf("  kinsta setup: %s\n", displayKinstaSetupType(plan.SetupType))
 		if plan.Action == "primary" {
@@ -555,7 +623,13 @@ func printSiteDomainPlan(plan siteDomainPlan, mode string) {
 		if plan.Action == "primary" {
 			fmt.Printf("  search-replace: %t\n", plan.SearchReplace)
 		}
-		fmt.Println("  TLS: HTTP-01 certbot retry timer will issue HTTPS after DNS points at the target")
+		if siteDomainCloudflareStrict(plan) {
+			fmt.Println("  TLS: Cloudflare Full (strict) uses a public Let's Encrypt origin cert; certbot renewal stays enabled")
+		} else if siteDomainCloudflareFull(plan) {
+			fmt.Println("  TLS: Cloudflare Full uses the target wildcard cert for origin HTTPS; hostname validation is handled at the Cloudflare edge")
+		} else {
+			fmt.Println("  TLS: HTTP-01 certbot retry timer will issue HTTPS after DNS points at the target")
+		}
 	}
 	fmt.Printf("  local state: %s\n", state.StatePath("sites"))
 	if plan.Provider == "linode" {
@@ -566,6 +640,26 @@ func printSiteDomainPlan(plan siteDomainPlan, mode string) {
 
 func printLinodeDomainDNSInstructions(plan siteDomainPlan) {
 	domains := plan.allDomains()
+	if siteDomainCloudflareProxy(plan) {
+		fmt.Println("  client DNS records:")
+		for _, domain := range domains {
+			if plan.TargetIPv4 != "" {
+				fmt.Printf("    Cloudflare proxied A     %s -> %s\n", domain, plan.TargetIPv4)
+			}
+			if plan.TargetIPv6 != "" {
+				fmt.Printf("    Cloudflare proxied AAAA  %s -> %s\n", domain, plan.TargetIPv6)
+			}
+			if plan.TargetIPv4 == "" && plan.TargetIPv6 == "" && plan.TargetHostname != "" {
+				fmt.Printf("    Cloudflare proxied record for %s should point at target %s\n", domain, plan.TargetHostname)
+			}
+		}
+		if siteDomainCloudflareStrict(plan) {
+			fmt.Println("  Cloudflare SSL/TLS mode: Full (strict)")
+		} else {
+			fmt.Println("  Cloudflare SSL/TLS mode: Full")
+		}
+		return
+	}
 	if plan.TargetIPv4 != "" || plan.TargetIPv6 != "" {
 		fmt.Println("  client DNS records:")
 		for _, domain := range domains {
@@ -729,6 +823,7 @@ func applySiteDomainCacheFields(record map[string]any, plan siteDomainPlan, resu
 	}
 	record["domains"] = siteDomainCacheEntries(plan, result)
 	record["domain_state"] = map[string]string{"prepare": "prepared", "primary": "primary"}[plan.Action]
+	record["proxy_mode"] = plan.ProxyMode
 	if plan.Action == "primary" {
 		record["hostname"] = plan.Canonical
 		record["url"] = "https://" + plan.Canonical
@@ -767,6 +862,14 @@ func renderLinodeDomainScript(plan siteDomainPlan) string {
 	q := shellQuoteArg
 	allDomains := shellArrayValues(plan.allDomains())
 	aliasDomains := shellArrayValues(plan.Aliases)
+	expectedIPs := []string{}
+	if !siteDomainCloudflareStrict(plan) {
+		for _, ip := range []string{plan.TargetIPv4, plan.TargetIPv6} {
+			if strings.TrimSpace(ip) != "" {
+				expectedIPs = append(expectedIPs, ip)
+			}
+		}
+	}
 	fileSlug := plan.FileSlug
 	if fileSlug == "" {
 		fileSlug = envIDFileSlug(plan.EnvID)
@@ -802,6 +905,9 @@ func renderLinodeDomainScript(plan siteDomainPlan) string {
 	b.WriteByte('\n')
 	b.WriteString("mode=")
 	b.WriteString(q(plan.Action))
+	b.WriteByte('\n')
+	b.WriteString("proxy_mode=")
+	b.WriteString(q(plan.ProxyMode))
 	b.WriteByte('\n')
 	b.WriteString("vhost=")
 	b.WriteString(q(publicVhost))
@@ -842,7 +948,61 @@ WPBLOCK
 }
 tmp=$(mktemp)
 {
-  if [ "$mode" = "primary" ] && [ "$cert_ready" = "1" ]; then
+  if [ "$proxy_mode" = "cloudflare_full" ]; then
+    if [ "$mode" = "primary" ]; then
+      cat <<EOF
+server {
+    listen 80;
+    listen [::]:80;
+    server_name $server_names;
+    return 301 https://$canonical\$request_uri;
+}
+
+server {
+    listen 443 ssl http2;
+    listen [::]:443 ssl http2;
+    server_name $canonical;
+    include /etc/nginx/snippets/nf-wildcard-cert.conf;
+EOF
+      write_wordpress_block
+      cat <<EOF
+}
+EOF
+      if [ -n "$alias_names" ]; then
+        cat <<EOF
+
+server {
+    listen 443 ssl http2;
+    listen [::]:443 ssl http2;
+    server_name $alias_names;
+    include /etc/nginx/snippets/nf-wildcard-cert.conf;
+    return 301 https://$canonical\$request_uri;
+}
+EOF
+      fi
+    else
+      cat <<EOF
+server {
+    listen 80;
+    listen [::]:80;
+    server_name $server_names;
+EOF
+      write_wordpress_block
+      cat <<EOF
+}
+
+server {
+    listen 443 ssl http2;
+    listen [::]:443 ssl http2;
+    server_name $server_names;
+    include /etc/nginx/snippets/nf-wildcard-cert.conf;
+EOF
+      write_wordpress_block
+      cat <<EOF
+}
+EOF
+    fi
+  elif [ "$mode" = "primary" ] && [ "$cert_ready" = "1" ]; then
     cat <<EOF
 server {
     listen 80;
@@ -919,52 +1079,109 @@ REFRESH
 	b.WriteByte('\n')
 	b.WriteString(q(refreshScript))
 	b.WriteByte('\n')
-	b.WriteString("cat >")
-	b.WriteString(q(issueScript))
-	b.WriteString(" <<'ISSUE'\n")
-	b.WriteString("#!/usr/bin/env bash\n")
-	b.WriteString("set -euo pipefail\n")
-	b.WriteString("canonical=")
-	b.WriteString(q(plan.Canonical))
-	b.WriteByte('\n')
-	b.WriteString("domains=(")
-	b.WriteString(allDomains)
-	b.WriteString(")\n")
-	b.WriteString("refresh_script=")
-	b.WriteString(q(refreshScript))
-	b.WriteByte('\n')
-	b.WriteString(`args=(certbot certonly --non-interactive --agree-tos --webroot -w /var/www/letsencrypt -m web@nonfiction.ca --keep-until-expiring --deploy-hook "$refresh_script")
+	if siteDomainCloudflareFull(plan) {
+		b.WriteString("systemctl disable --now ")
+		b.WriteString(q(serviceName + ".timer"))
+		b.WriteString(" >/dev/null 2>&1 || true\n")
+		b.WriteString("systemctl stop ")
+		b.WriteString(q(serviceName + ".service"))
+		b.WriteString(" >/dev/null 2>&1 || true\n")
+		b.WriteString("rm -f ")
+		b.WriteString(q(issueScript))
+		b.WriteString(" /etc/systemd/system/")
+		b.WriteString(serviceName)
+		b.WriteString(".service /etc/systemd/system/")
+		b.WriteString(serviceName)
+		b.WriteString(".timer\n")
+		b.WriteString("systemctl daemon-reload\n")
+	} else {
+		b.WriteString("cat >")
+		b.WriteString(q(issueScript))
+		b.WriteString(" <<'ISSUE'\n")
+		b.WriteString("#!/usr/bin/env bash\n")
+		b.WriteString("set -euo pipefail\n")
+		b.WriteString("canonical=")
+		b.WriteString(q(plan.Canonical))
+		b.WriteByte('\n')
+		b.WriteString("domains=(")
+		b.WriteString(allDomains)
+		b.WriteString(")\n")
+		b.WriteString("expected_ips=(")
+		b.WriteString(shellArrayValues(expectedIPs))
+		b.WriteString(")\n")
+		b.WriteString("refresh_script=")
+		b.WriteString(q(refreshScript))
+		b.WriteByte('\n')
+		b.WriteString(`domain_points_here() {
+  local domain=$1 observed_ip expected_ip
+  if [ ${#expected_ips[@]} -eq 0 ]; then return 0; fi
+  while read -r observed_ip _; do
+    for expected_ip in "${expected_ips[@]}"; do
+      if [ "$observed_ip" = "$expected_ip" ]; then return 0; fi
+    done
+  done < <(getent ahosts "$domain" 2>/dev/null || true)
+  return 1
+}
+for domain in "${domains[@]}"; do
+  if ! domain_points_here "$domain"; then
+    echo "$domain does not resolve to this target yet; timer will retry."
+    exit 0
+  fi
+done
+args=(certbot certonly --non-interactive --agree-tos --webroot -w /var/www/letsencrypt -m web@nonfiction.ca --keep-until-expiring --deploy-hook "$refresh_script")
 for domain in "${domains[@]}"; do args+=(-d "$domain"); done
-"${args[@]}"
+tmp=$(mktemp)
+set +e
+flock -n -E 75 /run/nf-certbot.lock "${args[@]}" >"$tmp" 2>&1
+status=$?
+set -e
+if [ "$status" -eq 75 ]; then
+  echo "Another nf certbot job is already running; timer will retry."
+  rm -f "$tmp"
+  exit 0
+fi
+if [ "$status" -ne 0 ]; then
+  if grep -qi "Another instance of Certbot is already running" "$tmp"; then
+    echo "Certbot is already running; timer will retry."
+    rm -f "$tmp"
+    exit 0
+  fi
+  cat "$tmp" >&2
+  rm -f "$tmp"
+  exit "$status"
+fi
+cat "$tmp"
+rm -f "$tmp"
 "$refresh_script"
 ISSUE
 `)
-	b.WriteString("chmod 0755 ")
-	b.WriteString(q(issueScript))
-	b.WriteByte('\n')
-	b.WriteString("cat >/etc/systemd/system/")
-	b.WriteString(serviceName)
-	b.WriteString(".service <<EOF\n")
-	b.WriteString("[Unit]\nDescription=Issue nf public domain TLS certificate for ")
-	b.WriteString(plan.EnvID)
-	b.WriteString("\nWants=network-online.target\nAfter=network-online.target nginx.service\n\n[Service]\nType=oneshot\nExecStart=")
-	b.WriteString(issueScript)
-	b.WriteString("\nEOF\n")
-	b.WriteString("cat >/etc/systemd/system/")
-	b.WriteString(serviceName)
-	b.WriteString(".timer <<EOF\n")
-	b.WriteString("[Unit]\nDescription=Retry nf public domain TLS certificate for ")
-	b.WriteString(plan.EnvID)
-	b.WriteString("\n\n[Timer]\nOnBootSec=2min\nOnUnitActiveSec=5min\nPersistent=true\nUnit=")
-	b.WriteString(serviceName)
-	b.WriteString(".service\n\n[Install]\nWantedBy=timers.target\nEOF\n")
-	b.WriteString("systemctl daemon-reload\n")
-	b.WriteString("systemctl enable --now ")
-	b.WriteString(serviceName)
-	b.WriteString(".timer\n")
-	b.WriteString("systemctl start ")
-	b.WriteString(serviceName)
-	b.WriteString(".service || true\n")
+		b.WriteString("chmod 0755 ")
+		b.WriteString(q(issueScript))
+		b.WriteByte('\n')
+		b.WriteString("cat >/etc/systemd/system/")
+		b.WriteString(serviceName)
+		b.WriteString(".service <<EOF\n")
+		b.WriteString("[Unit]\nDescription=Issue nf public domain TLS certificate for ")
+		b.WriteString(plan.EnvID)
+		b.WriteString("\nWants=network-online.target\nAfter=network-online.target nginx.service\n\n[Service]\nType=oneshot\nExecStart=")
+		b.WriteString(issueScript)
+		b.WriteString("\nEOF\n")
+		b.WriteString("cat >/etc/systemd/system/")
+		b.WriteString(serviceName)
+		b.WriteString(".timer <<EOF\n")
+		b.WriteString("[Unit]\nDescription=Retry nf public domain TLS certificate for ")
+		b.WriteString(plan.EnvID)
+		b.WriteString("\n\n[Timer]\nOnBootSec=2min\nOnUnitActiveSec=5min\nPersistent=true\nUnit=")
+		b.WriteString(serviceName)
+		b.WriteString(".service\n\n[Install]\nWantedBy=timers.target\nEOF\n")
+		b.WriteString("systemctl daemon-reload\n")
+		b.WriteString("systemctl enable --now ")
+		b.WriteString(serviceName)
+		b.WriteString(".timer\n")
+		b.WriteString("systemctl start ")
+		b.WriteString(serviceName)
+		b.WriteString(".service || true\n")
+	}
 	if plan.Action == "primary" {
 		b.WriteString("wp_cmd=(sudo -u www-data wp --path=")
 		b.WriteString(q(plan.Target.WordPressPath))
@@ -1010,6 +1227,8 @@ ISSUE
 	b.WriteString(q(plan.InternalURL))
 	b.WriteString(" --arg domain_state ")
 	b.WriteString(q(domainState))
+	b.WriteString(" --arg proxy_mode ")
+	b.WriteString(q(plan.ProxyMode))
 	b.WriteString(" --argjson domains ")
 	b.WriteString(q(string(domainEntries)))
 	b.WriteString(" '\n")
@@ -1018,6 +1237,7 @@ ISSUE
 	b.WriteString("    | (if ((.internal_url // \"\") == \"\" and $internal_url != \"\") then .internal_url = $internal_url else . end)\n")
 	b.WriteString("    | .domains = $domains\n")
 	b.WriteString("    | .domain_state = $domain_state\n")
+	b.WriteString("    | .proxy_mode = $proxy_mode\n")
 	if plan.Action == "primary" {
 		b.WriteString("    | .hostname = $canonical | .url = $url | .primary_domain = $canonical\n")
 	}

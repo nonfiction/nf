@@ -553,9 +553,9 @@ nf site basicauth status <site.target:env>
 nf site basicauth enable <site.target:env> [--dry-run] [--execute --yes]
 nf site basicauth disable <site.target:env> [--dry-run] [--execute --yes]
 nf site basicauth password [site-id-or-alias]
-nf site domain prepare <site.target:env|remote> <domain> [--alias domain] [--setup avoid-downtime|quick] [--dry-run] [--execute --yes]
-nf site domain check <site.target:env|remote> <domain> [--alias domain]
-nf site domain primary <site.target:env|remote> <domain> [--alias domain] [--setup avoid-downtime|quick] [--search-replace] [--dry-run] [--execute --yes]
+nf site domain prepare <site.target:env|remote> <domain> [--alias domain] [--proxy cloudflare-strict|cloudflare-full] [--setup avoid-downtime|quick] [--dry-run] [--execute --yes]
+nf site domain check <site.target:env|remote> <domain> [--alias domain] [--proxy cloudflare-strict|cloudflare-full]
+nf site domain primary <site.target:env|remote> <domain> [--alias domain] [--proxy cloudflare-strict|cloudflare-full] [--setup avoid-downtime|quick] [--search-replace] [--dry-run] [--execute --yes]
 nf site remove [site-id-or-alias] [--dry-run] [--execute --yes]
 nf remote add [name] [site.target:env]
 nf remote show <name>
@@ -593,8 +593,8 @@ Current behavior:
 * `nf site password [site|env] [--wp|--db|--basicauth]` prints only one selected site password. `--wp` is the default. Env refs are accepted for `--db`; use a site ref for `--wp` or `--basicauth`. Linode WordPress, DB, and basic-auth passwords are derived from the site slug, purpose, `NF_PASSWORD_SALT`, and `project.password_version`; Kinsta DB password output uses the Kinsta SFTP password endpoint.
 * Linode site/env database creation grants the shared Adminer MySQL user privileges only on created site env databases and refuses to create a site DB user with the same name as the shared Adminer MySQL user. Site removal revokes per-database grants before dropping the databases.
 * `nf site basicauth ...` uses `basicauth_default_user` from `config.json` and a per-site derived password with `project.password_version` as the rotation source. Linode envs are managed over SSH by updating the selected env nginx vhost, including multi-vhost target nginx scripts. Kinsta Password protection exists in MyKinsta, but currently requires manual MyKinsta use because no public API endpoint is exposed.
-* `nf site domain prepare ...` makes the provider/env ready to answer a public hostname and prints the DNS records the client must create. It never mutates public/client DNS. Kinsta domains are added through the Kinsta API and Kinsta-provided verification/pointing records are printed. Linode domains update nginx on the target and install a certbot HTTP-01 retry timer so HTTPS is issued after client DNS points at the target.
-* `nf site domain check ...` is read-only and reports provider/server readiness, expected public DNS, HTTP reachability, HTTPS certificate status, and whether the domain is already primary. It exits `0` when public checks are ready and `2` when DNS, HTTP, HTTPS, or provider readiness is still pending.
+* `nf site domain prepare ...` makes the provider/env ready to answer a public hostname and prints the DNS records the client must create. It never mutates public/client DNS. Kinsta domains are added through the Kinsta API and Kinsta-provided verification/pointing records are printed. Linode domains update nginx on the target. By default Linode installs a certbot HTTP-01 retry timer so HTTPS is issued after client DNS points at the target. Add `--proxy cloudflare-strict` for the preferred Cloudflare-proxied Linode path: Cloudflare orange-cloud DNS, Cloudflare SSL/TLS `Full (strict)`, and a real Let's Encrypt origin certificate that continues to renew. Use `--proxy cloudflare-full` only when the origin should use the target wildcard certificate and Cloudflare should not strictly validate the origin hostname.
+* `nf site domain check ...` is read-only and reports provider/server readiness, expected public DNS, HTTP reachability, HTTPS certificate status, and whether the domain is already primary. It exits `0` when public checks are ready and `2` when DNS, HTTP, HTTPS, or provider readiness is still pending. With `--proxy cloudflare-strict` or `--proxy cloudflare-full`, Linode DNS checks verify the hostname resolves publicly but intentionally skip origin-IP matching because Cloudflare returns proxy IPs. Strict mode also checks the direct Linode origin certificate with SNI so `Full (strict)` renewal problems are visible before Cloudflare starts returning 526 errors.
 * `nf site domain primary ...` launches the canonical public hostname for the env. Pass aliases explicitly, for example `--alias client.com` when `www.client.com` should be canonical. Repo remotes in `nf.json` continue to point at env IDs, not domains.
 * `nf site remove [site]` removes a whole Linode site and deletes its env data.
 * `nf remote add` validates an env ID against the cache, then repo remotes are stored in `nf.json` under `remotes` as `<site>.<target>:<env>` refs.
@@ -629,6 +629,14 @@ nf site domain prepare production www.client.com --alias client.com
 ```
 
 4. Send the printed DNS records to the client. Kinsta records come from the Kinsta API. Linode records point the public hostnames at the target IPs. `nf` does not create or change public DNS records.
+
+For Cloudflare-proxied Linode domains, prefer Cloudflare SSL/TLS mode `Full (strict)` and include `--proxy cloudflare-strict` on prepare/check/primary. Cloudflare should still be configured with the Linode target IP as the origin record, but public DNS will return Cloudflare IPs. In this mode `nf` keeps the public-hostname Let's Encrypt certificate and renewal timer, skips public origin-IP DNS matching, and checks direct origin HTTPS separately from Cloudflare edge HTTPS. Keep Cloudflare WAF/cache/redirect rules from interfering with `/.well-known/acme-challenge/`; if issuing the first cert while orange-clouded fails, temporarily use DNS-only or add a Cloudflare rule that bypasses redirects, cache, and security checks for that path, then re-run `nf site domain check`.
+
+```sh
+nf site domain prepare production www.client.com --alias client.com --proxy cloudflare-strict
+```
+
+Use `--proxy cloudflare-full` only for Cloudflare SSL/TLS mode `Full`, where the origin uses the target wildcard certificate and Cloudflare does not strictly validate the public hostname on the origin certificate.
 
 5. Check readiness after the client says DNS has changed, or periodically if they might change DNS early.
 

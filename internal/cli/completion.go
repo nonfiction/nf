@@ -236,12 +236,22 @@ func siteDomainCompletionCandidates(args []string) []string {
 	}
 	switch args[0] {
 	case "prepare", "primary", "check":
-		flags := []string{"--canonical", "--alias", "--setup", "--dry-run", "--execute", "--yes", "--non-interactive"}
+		flags := []string{"--canonical", "--alias", "--proxy", "--setup", "--dry-run", "--execute", "--yes", "--non-interactive"}
 		if args[0] == "check" {
-			flags = []string{"--canonical", "--alias", "--non-interactive"}
+			flags = []string{"--canonical", "--alias", "--proxy", "--non-interactive"}
 		}
 		if args[0] == "primary" {
 			flags = append(flags, "--search-replace")
+		}
+		if len(args) > 1 {
+			switch args[len(args)-1] {
+			case "--proxy":
+				return []string{"cloudflare-strict", "cloudflare-full"}
+			case "--setup":
+				if args[0] != "check" {
+					return []string{"avoid-downtime", "quick"}
+				}
+			}
 		}
 		if len(args) == 1 {
 			values := append(cachedSiteEnvCompletionNames(), projectRemoteCompletionNames()...)

@@ -35,7 +35,9 @@ var (
 	siteDomainLookupTXTFn    = net.LookupTXT
 	siteDomainLookupCNAMEFn  = net.LookupCNAME
 	siteDomainHTTPStatusFn   = checkSiteDomainHTTP
+	siteDomainHTTPSStatusFn  = checkSiteDomainHTTPS
 	siteDomainTLSStatusFn    = checkSiteDomainTLS
+	siteDomainOriginTLSFn    = checkSiteDomainOriginTLS
 	targetSSHReachableFn     = targetSSHReachable
 	runSSHScriptFn           = runSSHScript
 	runSSHCommandFn          = runSSHCommand

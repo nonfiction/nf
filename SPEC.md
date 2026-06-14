@@ -421,6 +421,8 @@ Provider-specific desired discovery:
 
 Public launch domains are provider/env state, not repo remote identity. `nf site domain prepare` attaches/configures hostnames and prints the DNS records clients must create, but does not mutate client DNS. `nf site domain primary` sets the canonical public URL for the env and preserves the generated internal hostname as fallback state when known. Apex/www pairing is explicit through aliases so arbitrary subdomain launches such as `reports.client.com` are not accidentally coupled to `client.com`.
 
+Linode public domains default to direct/DNS-only origin behavior: public DNS is expected to point at the target IP and a public Let's Encrypt certificate is issued with HTTP-01. `--proxy cloudflare-strict` is the preferred explicit Linode mode for Cloudflare orange-cloud domains using Cloudflare SSL/TLS `Full (strict)`: public DNS may resolve to Cloudflare IPs, certbot continues to issue/renew a public-hostname Let's Encrypt origin certificate, `nf` skips public origin-IP DNS matching, and checks direct origin HTTPS separately from Cloudflare edge HTTPS. `--proxy cloudflare-full` is a fallback for Cloudflare SSL/TLS `Full`: nginx serves the public hostname over HTTPS with the target wildcard certificate and `nf` skips public origin-IP DNS matching, but this does not provide origin hostname validation.
+
 ## Project metadata model
 
 Project metadata lives in:
