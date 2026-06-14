@@ -4,8 +4,10 @@ import (
 	"context"
 	"crypto/tls"
 	"fmt"
+	"io"
 	"net"
 	"net/http"
+	"net/netip"
 	"os"
 	"strings"
 	"time"
@@ -40,6 +42,12 @@ type siteDomainProviderCheck struct {
 	Primary     bool
 	DNSRecords  []siteDomainExpectedDNSRecord
 	Description []string
+}
+
+type siteDomainIPRangeSet struct {
+	Prefixes []netip.Prefix
+	Source   string
+	Warning  string
 }
 
 func cmdSiteDomainCheck(plan siteDomainPlan) int {
@@ -299,6 +307,10 @@ func printSiteDomainDNSCheck(plan siteDomainPlan, records []siteDomainExpectedDN
 }
 
 func printSiteDomainCloudflareDNSCheck(plan siteDomainPlan) bool {
+	ranges := siteDomainCloudflareIPRangesFn()
+	if ranges.Warning != "" {
+		fmt.Printf("  warning: %s\n", ranges.Warning)
+	}
 	ready := true
 	for _, domain := range plan.allDomains() {
 		hosts, err := siteDomainLookupHostFn(domain)
@@ -311,9 +323,137 @@ func printSiteDomainCloudflareDNSCheck(plan siteDomainPlan) bool {
 			}
 			continue
 		}
-		fmt.Printf("  %s: ok (resolves publicly to %s; origin IP match skipped for %s)\n", domain, strings.Join(hosts, ", "), displaySiteDomainProxyMode(plan.ProxyMode))
+		outside := cloudflareDNSHostsOutsideRanges(hosts, ranges)
+		if len(outside) > 0 {
+			ready = false
+			fmt.Printf("  %s: pending (resolves publicly to %s; %s not in Cloudflare IP ranges)\n", domain, strings.Join(hosts, ", "), strings.Join(outside, ", "))
+			continue
+		}
+		fmt.Printf("  %s: ok (resolves publicly to Cloudflare IPs %s; origin IP match skipped for %s)\n", domain, strings.Join(hosts, ", "), displaySiteDomainProxyMode(plan.ProxyMode))
 	}
 	return ready
+}
+
+func cloudflareDNSHostsOutsideRanges(hosts []string, ranges siteDomainIPRangeSet) []string {
+	if len(ranges.Prefixes) == 0 {
+		return hosts
+	}
+	outside := []string{}
+	for _, host := range hosts {
+		addr, err := netip.ParseAddr(strings.TrimSpace(host))
+		if err != nil || !cloudflareRangesContain(ranges, addr) {
+			outside = append(outside, host)
+		}
+	}
+	return outside
+}
+
+func cloudflareRangesContain(ranges siteDomainIPRangeSet, addr netip.Addr) bool {
+	for _, prefix := range ranges.Prefixes {
+		if prefix.Contains(addr) {
+			return true
+		}
+	}
+	return false
+}
+
+func loadCloudflareIPRanges() siteDomainIPRangeSet {
+	ranges, err := fetchCloudflareIPRanges()
+	if err == nil {
+		return ranges
+	}
+	fallback := bundledCloudflareIPRanges()
+	fallback.Warning = fmt.Sprintf("Cloudflare IP range fetch failed; using bundled fallback from %s", fallback.Source)
+	return fallback
+}
+
+func fetchCloudflareIPRanges() (siteDomainIPRangeSet, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	prefixes := []netip.Prefix{}
+	for _, url := range []string{"https://www.cloudflare.com/ips-v4", "https://www.cloudflare.com/ips-v6"} {
+		body, err := fetchCloudflareIPRangeURL(ctx, url)
+		if err != nil {
+			return siteDomainIPRangeSet{}, err
+		}
+		parsed, err := parseCloudflareIPRangeText(body)
+		if err != nil {
+			return siteDomainIPRangeSet{}, err
+		}
+		prefixes = append(prefixes, parsed...)
+	}
+	return siteDomainIPRangeSet{Prefixes: prefixes, Source: "https://www.cloudflare.com/ips/"}, nil
+}
+
+func fetchCloudflareIPRangeURL(ctx context.Context, url string) (string, error) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+	if err != nil {
+		return "", err
+	}
+	req.Header.Set("User-Agent", "nf-domain-check")
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return "", err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return "", fmt.Errorf("%s returned HTTP %d", url, resp.StatusCode)
+	}
+	body, err := io.ReadAll(io.LimitReader(resp.Body, 64*1024))
+	if err != nil {
+		return "", err
+	}
+	return string(body), nil
+}
+
+func parseCloudflareIPRangeText(text string) ([]netip.Prefix, error) {
+	prefixes := []netip.Prefix{}
+	for _, line := range strings.Split(text, "\n") {
+		line = strings.TrimSpace(line)
+		if line == "" {
+			continue
+		}
+		prefix, err := netip.ParsePrefix(line)
+		if err != nil {
+			return nil, err
+		}
+		prefixes = append(prefixes, prefix)
+	}
+	if len(prefixes) == 0 {
+		return nil, fmt.Errorf("Cloudflare IP range list was empty")
+	}
+	return prefixes, nil
+}
+
+func bundledCloudflareIPRanges() siteDomainIPRangeSet {
+	const source = "2023-09-28"
+	text := `173.245.48.0/20
+103.21.244.0/22
+103.22.200.0/22
+103.31.4.0/22
+141.101.64.0/18
+108.162.192.0/18
+190.93.240.0/20
+188.114.96.0/20
+197.234.240.0/22
+198.41.128.0/17
+162.158.0.0/15
+104.16.0.0/13
+104.24.0.0/14
+172.64.0.0/13
+131.0.72.0/22
+2400:cb00::/32
+2606:4700::/32
+2803:f800::/32
+2405:b500::/32
+2405:8100::/32
+2a06:98c0::/29
+2c0f:f248::/32`
+	prefixes, err := parseCloudflareIPRangeText(text)
+	if err != nil {
+		return siteDomainIPRangeSet{Source: source}
+	}
+	return siteDomainIPRangeSet{Prefixes: prefixes, Source: source}
 }
 
 func checkSiteDomainDNSRecord(record siteDomainExpectedDNSRecord) (bool, string) {
