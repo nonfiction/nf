@@ -563,7 +563,7 @@ func TestRunCompleteSuggestsStaticAndCachedValues(t *testing.T) {
 			t.Fatalf("Run(__complete site domain actions) = %d, want 0", got)
 		}
 	})
-	for _, want := range []string{"prepare\n", "check\n", "primary\n", "help\n"} {
+	for _, want := range []string{"list\n", "prepare\n", "check\n", "primary\n", "help\n"} {
 		if !strings.Contains(siteDomainActionsOutput, want) {
 			t.Fatalf("site domain action completion missing %q:\n%s", want, siteDomainActionsOutput)
 		}
@@ -3097,6 +3097,17 @@ func TestRunSiteRefreshDiscoversKinstaRemoteSites(t *testing.T) {
 				{"id": "kenv-live", "name": "client", "display_name": "Client", "web_root": "/www/client_123/public", "container_info": map[string]any{"php_engine_version": "php8.3"}, "primaryDomain": map[string]any{"id": "kdom-live", "name": "client.kinsta.nonfiction.dev"}},
 				{"id": "kenv-staging", "name": "client-staging", "display_name": "Client Staging", "web_root": "/www/clientstaging_456/public", "container_info": map[string]any{"php_engine_version": "php8.3"}, "primaryDomain": map[string]any{"id": "kdom-staging", "name": "client-staging.kinsta.nonfiction.dev"}},
 			}}})
+		case "GET /sites/environments/kenv-live/domains":
+			_ = json.NewEncoder(w).Encode(map[string]any{"environment": map[string]any{"site_domains": []map[string]any{
+				{"id": "kdom-live", "name": "client.kinsta.nonfiction.dev", "is_primary": false},
+				{"id": "kdom-www", "name": "www.client.com", "is_primary": true},
+				{"id": "kdom-apex", "name": "client.com", "is_primary": false},
+			}}})
+		case "GET /sites/environments/kenv-staging/domains":
+			_ = json.NewEncoder(w).Encode(map[string]any{"environment": map[string]any{"site_domains": []map[string]any{
+				{"id": "kdom-staging", "name": "client-staging.kinsta.nonfiction.dev", "is_primary": false},
+				{"id": "kdom-stage-public", "name": "staging.client.com", "is_primary": true},
+			}}})
 		case "GET /sites/ksite123/environments/kenv-live/ssh/config":
 			_ = json.NewEncoder(w).Encode(map[string]any{"host": "203.0.113.10", "port": "12345", "user": "client_123", "ssh_command": "ssh client_123@203.0.113.10 -p 12345"})
 		case "GET /sites/ksite123/environments/kenv-staging/ssh/config":
@@ -3125,9 +3136,12 @@ func TestRunSiteRefreshDiscoversKinstaRemoteSites(t *testing.T) {
 	if len(records) != 2 {
 		t.Fatalf("site records len = %d, want 2: %#v", len(records), records)
 	}
-	for _, want := range []struct{ env, path, database, sshHost, sshPort, sshUser string }{
-		{"live", "/www/client_123/public", "client_123", "203.0.113.10", "12345", "client_123"},
-		{"staging", "/www/clientstaging_456/public", "clientstaging_456", "203.0.113.11", "12346", "clientstaging_456"},
+	for _, want := range []struct {
+		env, path, database, sshHost, sshPort, sshUser, primary string
+		domains                                                 []string
+	}{
+		{"live", "/www/client_123/public", "client_123", "203.0.113.10", "12345", "client_123", "www.client.com", []string{"www.client.com", "client.com"}},
+		{"staging", "/www/clientstaging_456/public", "clientstaging_456", "203.0.113.11", "12346", "clientstaging_456", "staging.client.com", []string{"staging.client.com"}},
 	} {
 		var record map[string]any
 		for _, candidate := range records {
@@ -3156,6 +3170,22 @@ func TestRunSiteRefreshDiscoversKinstaRemoteSites(t *testing.T) {
 		}
 		if got := mapStringAtPath(record, "ssh", "user"); got != want.sshUser {
 			t.Fatalf("%s ssh user = %q, want %q", want.env, got, want.sshUser)
+		}
+		if got := recordValueString(record["primary_domain"]); got != want.primary {
+			t.Fatalf("%s primary_domain = %q, want %q", want.env, got, want.primary)
+		}
+		if got := recordValueString(record["domain_state"]); got != "primary" {
+			t.Fatalf("%s domain_state = %q, want primary", want.env, got)
+		}
+		for _, domain := range want.domains {
+			if !recordHasSiteDomain(record, domain) {
+				t.Fatalf("%s cached domains missing %q in %#v", want.env, domain, record["domains"])
+			}
+		}
+		for _, internal := range []string{"client.kinsta.nonfiction.dev", "client-staging.kinsta.nonfiction.dev"} {
+			if recordHasSiteDomain(record, internal) {
+				t.Fatalf("%s cached domains include internal domain %q in %#v", want.env, internal, record["domains"])
+			}
 		}
 	}
 }
@@ -3390,6 +3420,20 @@ func TestRunSiteAddLinodeExecuteRunsSSHAndCachesEnvs(t *testing.T) {
 			t.Fatalf("site list output contains %q:\n%s", notWant, listOutput)
 		}
 	}
+	siteRecords, err := state.LoadStateRecords("sites")
+	if err != nil {
+		t.Fatalf("LoadStateRecords(sites) error = %v", err)
+	}
+	for _, record := range siteRecords {
+		record["php"] = map[string]any{"version": "8.3", "service": "php8.3-fpm"}
+		if recordValueString(record["env"]) == "live" {
+			record["domains"] = []map[string]any{{"name": "www.foobar.com", "role": "canonical"}, {"name": "foobar.com", "role": "redirect"}}
+			record["primary_domain"] = "www.foobar.com"
+		}
+	}
+	if err := state.SaveStateRecords("sites", siteRecords); err != nil {
+		t.Fatalf("SaveStateRecords(sites) error = %v", err)
+	}
 	showOutput := captureStdout(t, func() {
 		if got := Run([]string{"site", "show", "foobar.app1-linode"}); got != 0 {
 			t.Fatalf("Run(site show) = %d, want 0", got)
@@ -3402,11 +3446,11 @@ func TestRunSiteAddLinodeExecuteRunsSSHAndCachesEnvs(t *testing.T) {
 		"Provider   linode\n",
 		"Target     app1-linode\n",
 		"Environments\n",
-		"env      php  url\n",
-		"live          https://foobar.app1-linode.nonfiction.dev\n",
-		"staging       https://foobar-staging.app1-linode.nonfiction.dev",
+		"env      php  url",
+		"live     8.3  https://foobar.app1-linode.nonfiction.dev          www.foobar.com, foobar.com\n",
+		"staging  8.3  https://foobar-staging.app1-linode.nonfiction.dev",
 	})
-	for _, notWant := range []string{"Site       foobar.app1-linode", "Environments:"} {
+	for _, notWant := range []string{"Site       foobar.app1-linode", "Environments:", "map["} {
 		if strings.Contains(showOutput, notWant) {
 			t.Fatalf("site show output contains %q:\n%s", notWant, showOutput)
 		}
@@ -3583,7 +3627,7 @@ func TestRunSiteAddKinstaExecuteCachesEnvs(t *testing.T) {
 		"Provider   kinsta\n",
 		"Target     kinsta\n",
 		"Environments\n",
-		"env      php  url\n",
+		"env      php  url",
 		"live     8.2  https://foobar.kinsta.nonfiction.dev\n",
 		"staging  8.2  https://foobar-staging.kinsta.nonfiction.dev",
 	})
@@ -3683,6 +3727,117 @@ func TestRunSiteDomainKinstaPrepareExecutePrintsDNSAndCachesDomains(t *testing.T
 	}
 	if got := mapStringAtPath(record, "kinsta", "domain_id"); got != "kdom-internal" {
 		t.Fatalf("kinsta.domain_id = %q, want unchanged internal domain id during prepare", got)
+	}
+}
+
+func TestRunSiteDomainListShowsCachedDomainsAndFilters(t *testing.T) {
+	stateDir := t.TempDir()
+	t.Setenv("NF_STATE_HOME", stateDir)
+	if err := state.SaveStateRecords("sites", []map[string]any{
+		{
+			"provider":     "linode",
+			"site_id":      "client.app1-linode",
+			"env_id":       "client.app1-linode:live",
+			"name":         "client",
+			"env":          "live",
+			"target":       "app1-linode",
+			"hostname":     "client.app1-linode.nonfiction.dev",
+			"url":          "https://client.app1-linode.nonfiction.dev",
+			"domain_state": "prepared",
+			"proxy_mode":   "cloudflare-strict",
+			"domains":      []map[string]any{{"name": "www.client.com", "role": "canonical"}, {"name": "client.com", "role": "redirect"}},
+		},
+		{
+			"provider":     "linode",
+			"site_id":      "client.app1-linode",
+			"env_id":       "client.app1-linode:staging",
+			"name":         "client",
+			"env":          "staging",
+			"target":       "app1-linode",
+			"hostname":     "staging.client.com",
+			"url":          "https://staging.client.com",
+			"domain_state": "primary",
+			"domains":      []map[string]any{{"name": "staging.client.com", "role": "canonical"}},
+		},
+		{
+			"provider":       "kinsta",
+			"site_id":        "other.kinsta",
+			"env_id":         "other.kinsta:live",
+			"name":           "other",
+			"env":            "live",
+			"target":         "kinsta",
+			"hostname":       "www.other.com",
+			"url":            "https://www.other.com",
+			"primary_domain": "www.other.com",
+		},
+	}); err != nil {
+		t.Fatalf("SaveStateRecords(sites) error = %v", err)
+	}
+
+	output := captureStdout(t, func() {
+		if got := Run([]string{"site", "domain", "list"}); got != 0 {
+			t.Fatalf("Run(site domain list) = %d, want 0", got)
+		}
+	})
+	for _, want := range []string{
+		"domain",
+		"site",
+		"env",
+		"role",
+		"state",
+		"provider",
+		"proxy",
+		"url",
+		"www.client.com",
+		"client.com",
+		"staging.client.com",
+		"www.other.com",
+		"client.app1-linode",
+		"other.kinsta",
+		"canonical",
+		"redirect",
+		"prepared",
+		"primary",
+		"linode",
+		"kinsta",
+		"cloudflare-strict",
+		"https://client.app1-linode.nonfiction.dev",
+		"https://staging.client.com",
+		"https://www.other.com",
+	} {
+		if !strings.Contains(output, want) {
+			t.Fatalf("site domain list output missing %q:\n%s", want, output)
+		}
+	}
+
+	siteOutput := captureStdout(t, func() {
+		if got := Run([]string{"site", "domain", "list", "client.app1-linode"}); got != 0 {
+			t.Fatalf("Run(site domain list site) = %d, want 0", got)
+		}
+	})
+	for _, want := range []string{"www.client.com", "client.com", "staging.client.com"} {
+		if !strings.Contains(siteOutput, want) {
+			t.Fatalf("site domain list site output missing %q:\n%s", want, siteOutput)
+		}
+	}
+	if strings.Contains(siteOutput, "www.other.com") {
+		t.Fatalf("site domain list site output contains other site:\n%s", siteOutput)
+	}
+
+	envOutput := captureStdout(t, func() {
+		if got := Run([]string{"site", "domain", "list", "client.app1-linode:live"}); got != 0 {
+			t.Fatalf("Run(site domain list env) = %d, want 0", got)
+		}
+	})
+	for _, want := range []string{"www.client.com", "client.com"} {
+		if !strings.Contains(envOutput, want) {
+			t.Fatalf("site domain list env output missing %q:\n%s", want, envOutput)
+		}
+	}
+	for _, notWant := range []string{"staging.client.com", "www.other.com"} {
+		if strings.Contains(envOutput, notWant) {
+			t.Fatalf("site domain list env output contains %q:\n%s", notWant, envOutput)
+		}
 	}
 }
 
@@ -8603,7 +8758,7 @@ func TestRunSiteShowWithoutSitePromptsPicker(t *testing.T) {
 		"Provider   linode\n",
 		"Target     app1-linode\n",
 		"Environments\n",
-		"env      php  url\n",
+		"env      php  url",
 		"live",
 		"staging",
 	})
