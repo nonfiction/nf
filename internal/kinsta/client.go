@@ -217,6 +217,10 @@ type AddDomainRequest struct {
 	SetupType           string `json:"setup_type"`
 }
 
+type DeleteDomainsRequest struct {
+	DomainIDs []string `json:"domain_ids"`
+}
+
 type ModifyPHPVersionRequest struct {
 	EnvironmentID                  string `json:"environment_id"`
 	PHPVersion                     string `json:"php_version"`
@@ -283,6 +287,14 @@ func (c *Client) DeleteSite(ctx context.Context, siteID string) (string, error) 
 func (c *Client) AddDomain(ctx context.Context, envID string, req AddDomainRequest) (string, error) {
 	var out operationResponse
 	if err := c.do(ctx, http.MethodPost, "/sites/environments/"+url.PathEscape(envID)+"/domains", req, &out); err != nil {
+		return "", err
+	}
+	return out.OperationID(), nil
+}
+
+func (c *Client) DeleteDomains(ctx context.Context, envID string, domainIDs []string) (string, error) {
+	var out operationResponse
+	if err := c.do(ctx, http.MethodDelete, "/sites/environments/"+url.PathEscape(envID)+"/domains", DeleteDomainsRequest{DomainIDs: domainIDs}, &out); err != nil {
 		return "", err
 	}
 	return out.OperationID(), nil

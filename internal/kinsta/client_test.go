@@ -53,6 +53,17 @@ func TestClientSiteEnvironmentDomainFlow(t *testing.T) {
 				t.Fatalf("primary domain payload = %#v", payload)
 			}
 			_ = json.NewEncoder(w).Encode(map[string]any{"operation_id": "op-primary-domain"})
+		case "DELETE /sites/environments/kenv-live/domains":
+			var payload map[string]any
+			if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
+				t.Fatalf("delete domain decode error = %v", err)
+			}
+			domainIDs, ok := payload["domain_ids"].([]any)
+			if !ok || len(domainIDs) != 1 || domainIDs[0] != "kdom-old" {
+				t.Fatalf("delete domain payload = %#v", payload)
+			}
+			w.WriteHeader(http.StatusAccepted)
+			_ = json.NewEncoder(w).Encode(map[string]any{"operation_id": "op-delete-domain", "status": 202})
 		case "GET /operations/op123":
 			_ = json.NewEncoder(w).Encode(map[string]any{"operation": map[string]any{"id": "op123", "status": "complete"}})
 		case "PUT /sites/tools/modify-php-version":
@@ -135,6 +146,9 @@ func TestClientSiteEnvironmentDomainFlow(t *testing.T) {
 	}
 	if opID, err := client.ChangePrimaryDomain(ctx, "kenv-live", "kdom-live", true); err != nil || opID != "op-primary-domain" {
 		t.Fatalf("ChangePrimaryDomain() = %q, %v; want op-primary-domain", opID, err)
+	}
+	if opID, err := client.DeleteDomains(ctx, "kenv-live", []string{"kdom-old"}); err != nil || opID != "op-delete-domain" {
+		t.Fatalf("DeleteDomains() = %q, %v; want op-delete-domain", opID, err)
 	}
 	if err := client.WaitOperation(ctx, "op123", 0); err != nil {
 		t.Fatalf("WaitOperation() error = %v", err)
