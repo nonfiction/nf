@@ -245,7 +245,7 @@ func siteDomainCompletionCandidates(args []string) []string {
 			flags = []string{"--canonical", "--alias", "--proxy", "--delete-cert", "--dry-run", "--execute", "--yes", "--non-interactive"}
 		}
 		if args[0] == "primary" {
-			flags = append(flags, "--search-replace")
+			flags = append(flags, "--search-replace", "--wait", "--wait-timeout", "--wait-interval")
 		}
 		if len(args) > 1 {
 			switch args[len(args)-1] {

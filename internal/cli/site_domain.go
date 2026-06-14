@@ -28,6 +28,9 @@ type siteDomainOptions struct {
 	proxyMode      string
 	searchReplace  bool
 	deleteCert     bool
+	wait           bool
+	waitTimeout    time.Duration
+	waitInterval   time.Duration
 	dryRun         bool
 	execute        bool
 	yes            bool
@@ -110,6 +113,9 @@ func runSiteDomainHelp() int {
 		{"--proxy <mode>", "Linode proxy mode: cloudflare"},
 		{"--setup <type>", "Kinsta setup type for prepare/primary: avoid-downtime or quick"},
 		{"--search-replace", "run provider/wp search-replace during primary"},
+		{"--wait", "wait for readiness checks before primary launch"},
+		{"--wait-timeout <duration>", "maximum --wait duration; default 30m"},
+		{"--wait-interval <duration>", "poll interval for --wait; default 30s"},
 		{"--delete-cert", "also delete the Linode Let's Encrypt certificate lineage"},
 		{},
 		{"--dry-run", "show the mutation plan only"},
@@ -241,6 +247,30 @@ func parseSiteDomainActionArgs(action string, argv []string) (string, siteDomain
 			opts.searchReplace = true
 		case "--delete-cert":
 			opts.deleteCert = true
+		case "--wait":
+			opts.wait = true
+		case "--wait-timeout":
+			if i+1 >= len(argv) || strings.TrimSpace(argv[i+1]) == "" {
+				fmt.Fprintln(os.Stderr, "--wait-timeout requires a value")
+				return "", opts, false
+			}
+			i++
+			duration, ok := parseSiteDomainWaitDuration("--wait-timeout", argv[i])
+			if !ok {
+				return "", opts, false
+			}
+			opts.waitTimeout = duration
+		case "--wait-interval":
+			if i+1 >= len(argv) || strings.TrimSpace(argv[i+1]) == "" {
+				fmt.Fprintln(os.Stderr, "--wait-interval requires a value")
+				return "", opts, false
+			}
+			i++
+			duration, ok := parseSiteDomainWaitDuration("--wait-interval", argv[i])
+			if !ok {
+				return "", opts, false
+			}
+			opts.waitInterval = duration
 		case "--canonical":
 			if i+1 >= len(argv) || strings.TrimSpace(argv[i+1]) == "" {
 				fmt.Fprintln(os.Stderr, "--canonical requires a value")
@@ -303,6 +333,22 @@ func parseSiteDomainActionArgs(action string, argv []string) (string, siteDomain
 				}
 				continue
 			}
+			if strings.HasPrefix(arg, "--wait-timeout=") {
+				duration, ok := parseSiteDomainWaitDuration("--wait-timeout", strings.TrimPrefix(arg, "--wait-timeout="))
+				if !ok {
+					return "", opts, false
+				}
+				opts.waitTimeout = duration
+				continue
+			}
+			if strings.HasPrefix(arg, "--wait-interval=") {
+				duration, ok := parseSiteDomainWaitDuration("--wait-interval", strings.TrimPrefix(arg, "--wait-interval="))
+				if !ok {
+					return "", opts, false
+				}
+				opts.waitInterval = duration
+				continue
+			}
 			if strings.HasPrefix(arg, "-") {
 				fmt.Fprintf(os.Stderr, "unknown site domain flag: %s\n", arg)
 				return "", opts, false
@@ -312,6 +358,14 @@ func parseSiteDomainActionArgs(action string, argv []string) (string, siteDomain
 	}
 	if action == "prepare" && opts.searchReplace {
 		fmt.Fprintln(os.Stderr, "site domain prepare does not run search-replace")
+		return "", opts, false
+	}
+	if action != "primary" && (opts.wait || opts.waitTimeout > 0 || opts.waitInterval > 0) {
+		fmt.Fprintln(os.Stderr, "--wait only applies to site domain primary")
+		return "", opts, false
+	}
+	if action == "primary" && !opts.wait && (opts.waitTimeout > 0 || opts.waitInterval > 0) {
+		fmt.Fprintln(os.Stderr, "--wait-timeout and --wait-interval require --wait")
 		return "", opts, false
 	}
 	if action != "remove" && opts.deleteCert {
@@ -354,6 +408,15 @@ func parseSiteDomainActionArgs(action string, argv []string) (string, siteDomain
 	return envRef, opts, true
 }
 
+func parseSiteDomainWaitDuration(flag, value string) (time.Duration, bool) {
+	duration, err := time.ParseDuration(strings.TrimSpace(value))
+	if err != nil || duration <= 0 {
+		fmt.Fprintf(os.Stderr, "%s must be a positive duration like 30s or 30m\n", flag)
+		return 0, false
+	}
+	return duration, true
+}
+
 func cmdSiteDomain(envRef, action string, opts siteDomainOptions) int {
 	if opts.execute && opts.dryRun {
 		fmt.Fprintln(os.Stderr, "Choose either --execute or --dry-run, not both.")
@@ -391,6 +454,10 @@ func cmdSiteDomain(envRef, action string, opts siteDomainOptions) int {
 		mode = "execute"
 	}
 	printSiteDomainPlan(plan, mode)
+	if opts.wait && !willExecute {
+		fmt.Fprintln(os.Stderr, "site domain primary --wait requires execution; use --execute --yes in non-interactive mode.")
+		return 1
+	}
 	if !willExecute {
 		fmt.Println("No data was changed. Re-run with --execute to apply public-domain changes.")
 		return 0
@@ -400,7 +467,11 @@ func cmdSiteDomain(envRef, action string, opts siteDomainOptions) int {
 		return 1
 	}
 	if !opts.yes {
-		confirmed, err := ui.Confirm(fmt.Sprintf("%s public domain %q for %s?", strings.ToUpper(action[:1])+action[1:], plan.Canonical, plan.EnvID), false)
+		message := fmt.Sprintf("%s public domain %q for %s?", strings.ToUpper(action[:1])+action[1:], plan.Canonical, plan.EnvID)
+		if opts.wait {
+			message = fmt.Sprintf("Wait until public checks pass, then launch primary domain %q for %s without another prompt?", plan.Canonical, plan.EnvID)
+		}
+		confirmed, err := ui.Confirm(message, false)
 		if err != nil {
 			fmt.Fprintln(os.Stderr, err)
 			return 1
@@ -409,6 +480,17 @@ func cmdSiteDomain(envRef, action string, opts siteDomainOptions) int {
 			fmt.Fprintln(os.Stderr, "Aborted.")
 			return 1
 		}
+	}
+	if opts.wait {
+		proceed, err := waitForSiteDomainPrimaryReadiness(plan, opts)
+		if err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			return 1
+		}
+		if !proceed {
+			return 0
+		}
+		fmt.Println("Launching primary domain now...")
 	}
 	result := siteDomainProviderResult{}
 	switch plan.Provider {
@@ -460,6 +542,58 @@ func cmdSiteDomain(envRef, action string, opts siteDomainOptions) int {
 		fmt.Println("Site domain prepared.")
 	}
 	return 0
+}
+
+func waitForSiteDomainPrimaryReadiness(plan siteDomainPlan, opts siteDomainOptions) (bool, error) {
+	timeout := opts.waitTimeout
+	if timeout == 0 {
+		timeout = 30 * time.Minute
+	}
+	interval := opts.waitInterval
+	if interval == 0 {
+		interval = 30 * time.Second
+	}
+	deadline := time.Now().Add(timeout)
+	fmt.Println("Waiting for public domain checks.")
+	fmt.Println("Approval already captured; launch will run automatically when checks pass.")
+	for attempt := 1; ; attempt++ {
+		if attempt > 1 {
+			fmt.Println()
+			fmt.Println("Rechecking public domain readiness...")
+		}
+		result, err := printSiteDomainReadinessCheck(plan)
+		if err != nil {
+			return false, err
+		}
+		printSiteDomainCheckNextStep(plan, result)
+		if result.Ready {
+			fmt.Println("Overall: ready")
+			if result.Primary {
+				fmt.Println("Domain is already primary; no launch needed.")
+				return false, nil
+			}
+			fmt.Println("Checks ready.")
+			return true, nil
+		}
+		fmt.Println("Overall: pending")
+		remaining := time.Until(deadline)
+		if remaining <= 0 {
+			return false, ProjectError{Msg: "Timed out waiting for public domain checks; no data was changed."}
+		}
+		sleepFor := interval
+		if sleepFor > remaining {
+			sleepFor = remaining
+		}
+		fmt.Printf("Next check in %s. Timeout in %s.\n", formatSiteDomainWaitDuration(sleepFor), formatSiteDomainWaitDuration(remaining))
+		time.Sleep(sleepFor)
+	}
+}
+
+func formatSiteDomainWaitDuration(duration time.Duration) string {
+	if duration > time.Second {
+		duration = duration.Round(time.Second)
+	}
+	return duration.String()
 }
 
 func resolveSiteDomainEnvRef(action, ref string, nonInteractive bool) (string, bool) {

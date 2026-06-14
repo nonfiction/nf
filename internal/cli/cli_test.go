@@ -584,7 +584,7 @@ func TestRunCompleteSuggestsStaticAndCachedValues(t *testing.T) {
 			t.Fatalf("Run(__complete site domain primary --) = %d, want 0", got)
 		}
 	})
-	for _, want := range []string{"--alias\n", "--canonical\n", "--proxy\n", "--setup\n", "--search-replace\n", "--dry-run\n", "--execute\n", "--yes\n", "--non-interactive\n"} {
+	for _, want := range []string{"--alias\n", "--canonical\n", "--proxy\n", "--setup\n", "--search-replace\n", "--wait\n", "--wait-timeout\n", "--wait-interval\n", "--dry-run\n", "--execute\n", "--yes\n", "--non-interactive\n"} {
 		if !strings.Contains(siteDomainPrimaryFlagOutput, want) {
 			t.Fatalf("site domain primary flag completion missing %q:\n%s", want, siteDomainPrimaryFlagOutput)
 		}
@@ -3951,6 +3951,138 @@ func TestRunSiteDomainLinodePrepareRejectsCloudflareFull(t *testing.T) {
 	_, err := buildSiteDomainPlan("client.app1-linode", "live", "prepare", siteDomainOptions{canonical: "www.client.com", proxyMode: "cloudflare-full"})
 	if err == nil || !strings.Contains(err.Error(), "--proxy must be cloudflare") {
 		t.Fatalf("buildSiteDomainPlan() error = %v, want cloudflare-full rejected", err)
+	}
+}
+
+func TestRunSiteDomainLinodePrimaryWaitLaunchesAfterChecksPass(t *testing.T) {
+	configDir := t.TempDir()
+	stateDir := t.TempDir()
+	t.Setenv("NF_CONFIG_HOME", configDir)
+	t.Setenv("NF_STATE_HOME", stateDir)
+	if err := saveGlobalConfig(map[string]string{"linode_default_user": "nonfiction"}); err != nil {
+		t.Fatalf("saveGlobalConfig() error = %v", err)
+	}
+	if err := state.SaveStateRecords("providers", []map[string]any{{"provider": "linode", "targets": []map[string]any{{"name": "app1-linode", "provider": "linode", "hostname": "app1-linode.nonfiction.dev", "public_ipv4": "203.0.113.10", "ssh": map[string]any{"user": "nonfiction", "host": "app1-linode.nonfiction.dev"}}}}}); err != nil {
+		t.Fatalf("SaveStateRecords(providers) error = %v", err)
+	}
+	if err := state.SaveStateRecords("sites", []map[string]any{{"provider": "linode", "site_id": "client.app1-linode", "env_id": "client.app1-linode:live", "name": "client", "env": "live", "target": "app1-linode", "path": "/var/www/sites/client/public", "database": "client", "hostname": "client.app1-linode.nonfiction.dev", "url": "https://client.app1-linode.nonfiction.dev", "php_version": "8.3"}}); err != nil {
+		t.Fatalf("SaveStateRecords(sites) error = %v", err)
+	}
+
+	checks := 0
+	launches := 0
+	oldRunSSHOutput := runSSHOutputFn
+	oldRunSSH := runSSHCommandFn
+	oldLookupHost := siteDomainLookupHostFn
+	oldHTTP := siteDomainHTTPStatusFn
+	oldHTTPS := siteDomainHTTPSStatusFn
+	oldTLS := siteDomainTLSStatusFn
+	runSSHOutputFn = func(args []string) ([]byte, error) {
+		checks++
+		if checks == 1 {
+			return []byte("vhost=missing\nenabled=missing\ntimer=missing\nservice=failed\ncert=missing\n"), nil
+		}
+		return []byte("vhost=present\nenabled=present\ntimer=active\nservice=inactive\ncert=ready\n"), nil
+	}
+	runSSHCommandFn = func(args []string) error {
+		launches++
+		return nil
+	}
+	siteDomainLookupHostFn = func(host string) ([]string, error) { return []string{"203.0.113.10"}, nil }
+	siteDomainHTTPStatusFn = func(domain string) siteDomainHTTPCheckResult { return siteDomainHTTPCheckResult{StatusCode: 200} }
+	siteDomainHTTPSStatusFn = func(domain string) siteDomainHTTPCheckResult { return siteDomainHTTPCheckResult{StatusCode: 200} }
+	siteDomainTLSStatusFn = func(domain string) siteDomainTLSCheckResult {
+		return siteDomainTLSCheckResult{OK: true, NotAfter: time.Date(2026, 12, 31, 0, 0, 0, 0, time.UTC), Issuer: "Let's Encrypt"}
+	}
+	t.Cleanup(func() {
+		runSSHOutputFn = oldRunSSHOutput
+		runSSHCommandFn = oldRunSSH
+		siteDomainLookupHostFn = oldLookupHost
+		siteDomainHTTPStatusFn = oldHTTP
+		siteDomainHTTPSStatusFn = oldHTTPS
+		siteDomainTLSStatusFn = oldTLS
+	})
+
+	output := captureStdout(t, func() {
+		if got := Run([]string{"site", "domain", "primary", "client.app1-linode:live", "www.client.com", "--wait", "--wait-interval", "1ns", "--wait-timeout", "1s", "--execute", "--yes", "--non-interactive"}); got != 0 {
+			t.Fatalf("Run(site domain primary --wait linode) = %d, want 0", got)
+		}
+	})
+	assertContainsInOrder(t, output, []string{"Launch primary domain plan:", "Waiting for public domain checks.", "Approval already captured; launch will run automatically when checks pass.", "Overall: pending", "Next check in", "Rechecking public domain readiness...", "Overall: ready", "Checks ready.", "Launching primary domain now...", "Site domain launched as primary."})
+	if checks < 2 {
+		t.Fatalf("readiness checks = %d, want at least 2", checks)
+	}
+	if launches != 1 {
+		t.Fatalf("launches = %d, want 1", launches)
+	}
+	records, err := state.LoadStateRecords("sites")
+	if err != nil {
+		t.Fatalf("LoadStateRecords(sites) error = %v", err)
+	}
+	if got := recordValueString(records[0]["hostname"]); got != "www.client.com" {
+		t.Fatalf("hostname = %q, want www.client.com", got)
+	}
+}
+
+func TestRunSiteDomainLinodePrimaryWaitTimeoutDoesNotLaunch(t *testing.T) {
+	configDir := t.TempDir()
+	stateDir := t.TempDir()
+	t.Setenv("NF_CONFIG_HOME", configDir)
+	t.Setenv("NF_STATE_HOME", stateDir)
+	if err := saveGlobalConfig(map[string]string{"linode_default_user": "nonfiction"}); err != nil {
+		t.Fatalf("saveGlobalConfig() error = %v", err)
+	}
+	if err := state.SaveStateRecords("providers", []map[string]any{{"provider": "linode", "targets": []map[string]any{{"name": "app1-linode", "provider": "linode", "hostname": "app1-linode.nonfiction.dev", "public_ipv4": "203.0.113.10", "ssh": map[string]any{"user": "nonfiction", "host": "app1-linode.nonfiction.dev"}}}}}); err != nil {
+		t.Fatalf("SaveStateRecords(providers) error = %v", err)
+	}
+	if err := state.SaveStateRecords("sites", []map[string]any{{"provider": "linode", "site_id": "client.app1-linode", "env_id": "client.app1-linode:live", "name": "client", "env": "live", "target": "app1-linode", "path": "/var/www/sites/client/public", "database": "client", "hostname": "client.app1-linode.nonfiction.dev", "url": "https://client.app1-linode.nonfiction.dev", "php_version": "8.3"}}); err != nil {
+		t.Fatalf("SaveStateRecords(sites) error = %v", err)
+	}
+
+	oldRunSSHOutput := runSSHOutputFn
+	oldRunSSH := runSSHCommandFn
+	oldLookupHost := siteDomainLookupHostFn
+	oldHTTP := siteDomainHTTPStatusFn
+	oldHTTPS := siteDomainHTTPSStatusFn
+	oldTLS := siteDomainTLSStatusFn
+	runSSHOutputFn = func(args []string) ([]byte, error) {
+		return []byte("vhost=missing\nenabled=missing\ntimer=missing\nservice=failed\ncert=missing\n"), nil
+	}
+	runSSHCommandFn = func(args []string) error {
+		t.Fatalf("runSSHCommandFn should not be called before readiness passes")
+		return nil
+	}
+	siteDomainLookupHostFn = func(host string) ([]string, error) { return []string{"203.0.113.10"}, nil }
+	siteDomainHTTPStatusFn = func(domain string) siteDomainHTTPCheckResult { return siteDomainHTTPCheckResult{StatusCode: 200} }
+	siteDomainHTTPSStatusFn = func(domain string) siteDomainHTTPCheckResult { return siteDomainHTTPCheckResult{StatusCode: 200} }
+	siteDomainTLSStatusFn = func(domain string) siteDomainTLSCheckResult {
+		return siteDomainTLSCheckResult{OK: true, NotAfter: time.Date(2026, 12, 31, 0, 0, 0, 0, time.UTC), Issuer: "Let's Encrypt"}
+	}
+	t.Cleanup(func() {
+		runSSHOutputFn = oldRunSSHOutput
+		runSSHCommandFn = oldRunSSH
+		siteDomainLookupHostFn = oldLookupHost
+		siteDomainHTTPStatusFn = oldHTTP
+		siteDomainHTTPSStatusFn = oldHTTPS
+		siteDomainTLSStatusFn = oldTLS
+	})
+
+	stderr := captureStderr(t, func() {
+		_ = captureStdout(t, func() {
+			if got := Run([]string{"site", "domain", "primary", "client.app1-linode:live", "www.client.com", "--wait", "--wait-interval", "1ns", "--wait-timeout", "1ns", "--execute", "--yes", "--non-interactive"}); got != 1 {
+				t.Fatalf("Run(site domain primary --wait timeout) = %d, want 1", got)
+			}
+		})
+	})
+	if !strings.Contains(stderr, "Timed out waiting for public domain checks; no data was changed.") {
+		t.Fatalf("timeout stderr = %q", stderr)
+	}
+	records, err := state.LoadStateRecords("sites")
+	if err != nil {
+		t.Fatalf("LoadStateRecords(sites) error = %v", err)
+	}
+	if got := recordValueString(records[0]["hostname"]); got != "client.app1-linode.nonfiction.dev" {
+		t.Fatalf("hostname = %q, want unchanged internal hostname", got)
 	}
 }
 

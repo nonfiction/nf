@@ -50,12 +50,31 @@ type siteDomainIPRangeSet struct {
 	Warning  string
 }
 
+type siteDomainReadinessResult struct {
+	Ready   bool
+	Primary bool
+}
+
 func cmdSiteDomainCheck(plan siteDomainPlan) int {
-	printSiteDomainCheckHeader(plan)
-	providerCheck, err := checkSiteDomainProvider(plan)
+	result, err := printSiteDomainReadinessCheck(plan)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "%v\n", err)
 		return 1
+	}
+	printSiteDomainCheckNextStep(plan, result)
+	if result.Ready {
+		fmt.Println("Overall: ready")
+		return 0
+	}
+	fmt.Println("Overall: pending")
+	return 2
+}
+
+func printSiteDomainReadinessCheck(plan siteDomainPlan) (siteDomainReadinessResult, error) {
+	printSiteDomainCheckHeader(plan)
+	providerCheck, err := checkSiteDomainProvider(plan)
+	if err != nil {
+		return siteDomainReadinessResult{}, err
 	}
 	for _, line := range providerCheck.Description {
 		fmt.Println(line)
@@ -68,20 +87,18 @@ func cmdSiteDomainCheck(plan siteDomainPlan) int {
 		originTLSReady = printSiteDomainOriginTLSChecks(plan)
 	}
 	ready := providerCheck.Ready && dnsReady && httpReady && tlsReady && originTLSReady
+	return siteDomainReadinessResult{Ready: ready, Primary: providerCheck.Primary}, nil
+}
+
+func printSiteDomainCheckNextStep(plan siteDomainPlan, result siteDomainReadinessResult) {
 	fmt.Println("Next step:")
-	if ready && providerCheck.Primary {
+	if result.Ready && result.Primary {
 		fmt.Println("  domain is primary and public checks passed")
-	} else if ready {
+	} else if result.Ready {
 		fmt.Printf("  ready for primary: nf site domain primary %s %s%s%s\n", plan.EnvID, plan.Canonical, siteDomainAliasArgs(plan.Aliases), siteDomainProxyArg(plan.ProxyMode))
 	} else {
 		fmt.Println("  wait for pending checks, then run nf site domain check again")
 	}
-	if ready {
-		fmt.Println("Overall: ready")
-		return 0
-	}
-	fmt.Println("Overall: pending")
-	return 2
 }
 
 func siteDomainProxyArg(proxyMode string) string {
