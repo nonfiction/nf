@@ -356,12 +356,13 @@ func printSiteDetails(out map[string]any) {
 	}
 	fmt.Println()
 	fmt.Println("Environments")
-	rows := [][]string{{"env", "php", "url"}}
+	rows := [][]string{{"env", "php", "url", "domains"}}
 	for _, env := range envs {
 		rows = append(rows, []string{
 			siteEnvName(env),
 			sitePHPVersion(env),
 			firstRecordString(env, "url", "site_url", "home_url", "hostname"),
+			strings.Join(cachedSiteDomainNames(env), ", "),
 		})
 	}
 	fmt.Println(formatTable(rows))

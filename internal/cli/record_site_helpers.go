@@ -213,7 +213,7 @@ func siteKinstaID(site map[string]any, key string) string {
 }
 
 func sitePHPVersion(site map[string]any) string {
-	return firstNonEmpty(firstRecordString(site, "php_version", "php"), mapStringAtPath(site, "kinsta", "php_version"), mapStringAtPath(site, "php", "version"))
+	return firstNonEmpty(firstRecordString(site, "php_version"), mapStringAtPath(site, "kinsta", "php_version"), mapStringAtPath(site, "php", "version"), firstRecordString(site, "php"))
 }
 
 func targetPHPVersion(target map[string]any) string {
