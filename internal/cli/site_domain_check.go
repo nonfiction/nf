@@ -186,9 +186,7 @@ func kinstaDNSExpectations(domain string, records kinsta.DomainRecords) []siteDo
 func checkLinodeSiteDomainProvider(plan siteDomainPlan) siteDomainProviderCheck {
 	out := siteDomainProviderCheck{Ready: true, Description: []string{"Linode target:"}}
 	if siteDomainCloudflareStrict(plan) {
-		out.Description = append(out.Description, "  proxy mode: cloudflare-strict (Cloudflare validates visitor HTTPS and origin certificate hostname)")
-	} else if siteDomainCloudflareFull(plan) {
-		out.Description = append(out.Description, "  proxy mode: cloudflare-full (Cloudflare validates visitor HTTPS; origin hostname is not strictly validated)")
+		out.Description = append(out.Description, "  proxy mode: cloudflare (Cloudflare validates visitor HTTPS and origin certificate hostname)")
 	}
 	remote, err := runSSHOutputFn(remoteSudoBashArgs(plan.Target, renderLinodeDomainCheckScript(plan)))
 	if err != nil {
@@ -206,7 +204,7 @@ func checkLinodeSiteDomainProvider(plan siteDomainPlan) siteDomainProviderCheck 
 			value := firstNonEmpty(values[item.key], "unknown")
 			out.Description = append(out.Description, fmt.Sprintf("  %s: %s", item.label, value))
 		}
-		if values["vhost"] != "present" || values["enabled"] != "present" || (!siteDomainCloudflareFull(plan) && values["timer"] != "active" && values["cert"] != "ready") {
+		if values["vhost"] != "present" || values["enabled"] != "present" || values["timer"] != "active" && values["cert"] != "ready" {
 			out.Ready = false
 		}
 	}

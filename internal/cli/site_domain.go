@@ -107,7 +107,7 @@ func runSiteDomainHelp() int {
 		{},
 		{"--canonical <domain>", "canonical public hostname"},
 		{"--alias <domain>", "redirect/alternate hostname; repeatable"},
-		{"--proxy <mode>", "Linode proxy mode: cloudflare-strict or cloudflare-full"},
+		{"--proxy <mode>", "Linode proxy mode: cloudflare"},
 		{"--setup <type>", "Kinsta setup type for prepare/primary: avoid-downtime or quick"},
 		{"--search-replace", "run provider/wp search-replace during primary"},
 		{"--delete-cert", "also delete the Linode Let's Encrypt certificate lineage"},
@@ -166,7 +166,7 @@ func cmdSiteDomainList(filter string) int {
 				domain.role,
 				firstRecordString(record, "domain_state"),
 				recordValueString(record["provider"]),
-				firstRecordString(record, "proxy_mode"),
+				displaySiteDomainProxyMode(firstRecordString(record, "proxy_mode")),
 				firstRecordString(record, "url", "site_url", "home_url"),
 			})
 		}
@@ -665,35 +665,26 @@ func normalizeSiteDomainProxyMode(value string) (string, error) {
 	switch strings.ToLower(strings.TrimSpace(value)) {
 	case "", "none", "direct", "dns-only", "dns_only":
 		return "", nil
-	case "cloudflare-strict", "cloudflare_strict":
-		return "cloudflare_strict", nil
-	case "cloudflare-full", "cloudflare_full":
-		return "cloudflare_full", nil
+	case "cloudflare", "cloudflare-strict", "cloudflare_strict":
+		return "cloudflare", nil
 	default:
-		return "", ProjectError{Msg: "--proxy must be cloudflare-strict or cloudflare-full"}
+		return "", ProjectError{Msg: "--proxy must be cloudflare"}
 	}
 }
 
 func displaySiteDomainProxyMode(value string) string {
-	if value == "cloudflare_strict" {
-		return "cloudflare-strict"
-	}
-	if value == "cloudflare_full" {
-		return "cloudflare-full"
+	if value == "cloudflare" || value == "cloudflare-strict" || value == "cloudflare_strict" {
+		return "cloudflare"
 	}
 	return value
 }
 
 func siteDomainCloudflareStrict(plan siteDomainPlan) bool {
-	return plan.ProxyMode == "cloudflare_strict"
-}
-
-func siteDomainCloudflareFull(plan siteDomainPlan) bool {
-	return plan.ProxyMode == "cloudflare_full"
+	return plan.ProxyMode == "cloudflare"
 }
 
 func siteDomainCloudflareProxy(plan siteDomainPlan) bool {
-	return siteDomainCloudflareStrict(plan) || siteDomainCloudflareFull(plan)
+	return siteDomainCloudflareStrict(plan)
 }
 
 func hostnameFromURLish(value string) string {
@@ -798,9 +789,7 @@ func printSiteDomainPlan(plan siteDomainPlan, mode string) {
 				fmt.Println("  TLS: certificate lineage is kept for rollback safety")
 			}
 		} else if siteDomainCloudflareStrict(plan) {
-			fmt.Println("  TLS: Cloudflare Full (strict) uses a public Let's Encrypt origin cert; certbot renewal stays enabled")
-		} else if siteDomainCloudflareFull(plan) {
-			fmt.Println("  TLS: Cloudflare Full uses the target wildcard cert for origin HTTPS; hostname validation is handled at the Cloudflare edge")
+			fmt.Println("  TLS: Cloudflare uses Full (strict) with a public Let's Encrypt origin cert; certbot renewal stays enabled")
 		} else {
 			fmt.Println("  TLS: HTTP-01 certbot retry timer will issue HTTPS after DNS points at the target")
 		}
@@ -827,11 +816,7 @@ func printLinodeDomainDNSInstructions(plan siteDomainPlan) {
 				fmt.Printf("    Cloudflare proxied record for %s should point at target %s\n", domain, plan.TargetHostname)
 			}
 		}
-		if siteDomainCloudflareStrict(plan) {
-			fmt.Println("  Cloudflare SSL/TLS mode: Full (strict)")
-		} else {
-			fmt.Println("  Cloudflare SSL/TLS mode: Full")
-		}
+		fmt.Println("  Cloudflare SSL/TLS mode: Full (strict)")
 		return
 	}
 	if plan.TargetIPv4 != "" || plan.TargetIPv6 != "" {
@@ -1334,61 +1319,7 @@ WPBLOCK
 }
 tmp=$(mktemp)
 {
-  if [ "$proxy_mode" = "cloudflare_full" ]; then
-    if [ "$mode" = "primary" ]; then
-      cat <<EOF
-server {
-    listen 80;
-    listen [::]:80;
-    server_name $server_names;
-    return 301 https://$canonical\$request_uri;
-}
-
-server {
-    listen 443 ssl http2;
-    listen [::]:443 ssl http2;
-    server_name $canonical;
-    include /etc/nginx/snippets/nf-wildcard-cert.conf;
-EOF
-      write_wordpress_block
-      cat <<EOF
-}
-EOF
-      if [ -n "$alias_names" ]; then
-        cat <<EOF
-
-server {
-    listen 443 ssl http2;
-    listen [::]:443 ssl http2;
-    server_name $alias_names;
-    include /etc/nginx/snippets/nf-wildcard-cert.conf;
-    return 301 https://$canonical\$request_uri;
-}
-EOF
-      fi
-    else
-      cat <<EOF
-server {
-    listen 80;
-    listen [::]:80;
-    server_name $server_names;
-EOF
-      write_wordpress_block
-      cat <<EOF
-}
-
-server {
-    listen 443 ssl http2;
-    listen [::]:443 ssl http2;
-    server_name $server_names;
-    include /etc/nginx/snippets/nf-wildcard-cert.conf;
-EOF
-      write_wordpress_block
-      cat <<EOF
-}
-EOF
-    fi
-  elif [ "$mode" = "primary" ] && [ "$cert_ready" = "1" ]; then
+  if [ "$mode" = "primary" ] && [ "$cert_ready" = "1" ]; then
     cat <<EOF
 server {
     listen 80;
@@ -1465,40 +1396,24 @@ REFRESH
 	b.WriteByte('\n')
 	b.WriteString(q(refreshScript))
 	b.WriteByte('\n')
-	if siteDomainCloudflareFull(plan) {
-		b.WriteString("systemctl disable --now ")
-		b.WriteString(q(serviceName + ".timer"))
-		b.WriteString(" >/dev/null 2>&1 || true\n")
-		b.WriteString("systemctl stop ")
-		b.WriteString(q(serviceName + ".service"))
-		b.WriteString(" >/dev/null 2>&1 || true\n")
-		b.WriteString("rm -f ")
-		b.WriteString(q(issueScript))
-		b.WriteString(" /etc/systemd/system/")
-		b.WriteString(serviceName)
-		b.WriteString(".service /etc/systemd/system/")
-		b.WriteString(serviceName)
-		b.WriteString(".timer\n")
-		b.WriteString("systemctl daemon-reload\n")
-	} else {
-		b.WriteString("cat >")
-		b.WriteString(q(issueScript))
-		b.WriteString(" <<'ISSUE'\n")
-		b.WriteString("#!/usr/bin/env bash\n")
-		b.WriteString("set -euo pipefail\n")
-		b.WriteString("canonical=")
-		b.WriteString(q(plan.Canonical))
-		b.WriteByte('\n')
-		b.WriteString("domains=(")
-		b.WriteString(allDomains)
-		b.WriteString(")\n")
-		b.WriteString("expected_ips=(")
-		b.WriteString(shellArrayValues(expectedIPs))
-		b.WriteString(")\n")
-		b.WriteString("refresh_script=")
-		b.WriteString(q(refreshScript))
-		b.WriteByte('\n')
-		b.WriteString(`domain_points_here() {
+	b.WriteString("cat >")
+	b.WriteString(q(issueScript))
+	b.WriteString(" <<'ISSUE'\n")
+	b.WriteString("#!/usr/bin/env bash\n")
+	b.WriteString("set -euo pipefail\n")
+	b.WriteString("canonical=")
+	b.WriteString(q(plan.Canonical))
+	b.WriteByte('\n')
+	b.WriteString("domains=(")
+	b.WriteString(allDomains)
+	b.WriteString(")\n")
+	b.WriteString("expected_ips=(")
+	b.WriteString(shellArrayValues(expectedIPs))
+	b.WriteString(")\n")
+	b.WriteString("refresh_script=")
+	b.WriteString(q(refreshScript))
+	b.WriteByte('\n')
+	b.WriteString(`domain_points_here() {
   local domain=$1 observed_ip expected_ip
   if [ ${#expected_ips[@]} -eq 0 ]; then return 0; fi
   while read -r observed_ip _; do
@@ -1541,33 +1456,32 @@ rm -f "$tmp"
 "$refresh_script"
 ISSUE
 `)
-		b.WriteString("chmod 0755 ")
-		b.WriteString(q(issueScript))
-		b.WriteByte('\n')
-		b.WriteString("cat >/etc/systemd/system/")
-		b.WriteString(serviceName)
-		b.WriteString(".service <<EOF\n")
-		b.WriteString("[Unit]\nDescription=Issue nf public domain TLS certificate for ")
-		b.WriteString(plan.EnvID)
-		b.WriteString("\nWants=network-online.target\nAfter=network-online.target nginx.service\n\n[Service]\nType=oneshot\nExecStart=")
-		b.WriteString(issueScript)
-		b.WriteString("\nEOF\n")
-		b.WriteString("cat >/etc/systemd/system/")
-		b.WriteString(serviceName)
-		b.WriteString(".timer <<EOF\n")
-		b.WriteString("[Unit]\nDescription=Retry nf public domain TLS certificate for ")
-		b.WriteString(plan.EnvID)
-		b.WriteString("\n\n[Timer]\nOnBootSec=2min\nOnUnitActiveSec=5min\nPersistent=true\nUnit=")
-		b.WriteString(serviceName)
-		b.WriteString(".service\n\n[Install]\nWantedBy=timers.target\nEOF\n")
-		b.WriteString("systemctl daemon-reload\n")
-		b.WriteString("systemctl enable --now ")
-		b.WriteString(serviceName)
-		b.WriteString(".timer\n")
-		b.WriteString("systemctl start ")
-		b.WriteString(serviceName)
-		b.WriteString(".service || true\n")
-	}
+	b.WriteString("chmod 0755 ")
+	b.WriteString(q(issueScript))
+	b.WriteByte('\n')
+	b.WriteString("cat >/etc/systemd/system/")
+	b.WriteString(serviceName)
+	b.WriteString(".service <<EOF\n")
+	b.WriteString("[Unit]\nDescription=Issue nf public domain TLS certificate for ")
+	b.WriteString(plan.EnvID)
+	b.WriteString("\nWants=network-online.target\nAfter=network-online.target nginx.service\n\n[Service]\nType=oneshot\nExecStart=")
+	b.WriteString(issueScript)
+	b.WriteString("\nEOF\n")
+	b.WriteString("cat >/etc/systemd/system/")
+	b.WriteString(serviceName)
+	b.WriteString(".timer <<EOF\n")
+	b.WriteString("[Unit]\nDescription=Retry nf public domain TLS certificate for ")
+	b.WriteString(plan.EnvID)
+	b.WriteString("\n\n[Timer]\nOnBootSec=2min\nOnUnitActiveSec=5min\nPersistent=true\nUnit=")
+	b.WriteString(serviceName)
+	b.WriteString(".service\n\n[Install]\nWantedBy=timers.target\nEOF\n")
+	b.WriteString("systemctl daemon-reload\n")
+	b.WriteString("systemctl enable --now ")
+	b.WriteString(serviceName)
+	b.WriteString(".timer\n")
+	b.WriteString("systemctl start ")
+	b.WriteString(serviceName)
+	b.WriteString(".service || true\n")
 	if plan.Action == "primary" {
 		b.WriteString("wp_cmd=(sudo -u www-data wp --path=")
 		b.WriteString(q(plan.Target.WordPressPath))

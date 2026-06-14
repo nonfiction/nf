@@ -610,7 +610,7 @@ func TestRunCompleteSuggestsStaticAndCachedValues(t *testing.T) {
 			t.Fatalf("Run(__complete site domain prepare --proxy) = %d, want 0", got)
 		}
 	})
-	for _, want := range []string{"cloudflare-strict\n", "cloudflare-full\n"} {
+	for _, want := range []string{"cloudflare\n"} {
 		if !strings.Contains(siteDomainProxyValueOutput, want) {
 			t.Fatalf("site domain proxy value completion missing %q:\n%s", want, siteDomainProxyValueOutput)
 		}
@@ -3800,7 +3800,7 @@ func TestRunSiteDomainListShowsCachedDomainsAndFilters(t *testing.T) {
 		"primary",
 		"linode",
 		"kinsta",
-		"cloudflare-strict",
+		"cloudflare",
 		"https://client.app1-linode.nonfiction.dev",
 		"https://staging.client.com",
 		"https://www.other.com",
@@ -3932,7 +3932,7 @@ func TestRunSiteDomainLinodePrimaryExecuteConfiguresVhostAndCachesPrimary(t *tes
 	}
 }
 
-func TestRunSiteDomainLinodePrepareCloudflareFullUsesOriginWildcardCert(t *testing.T) {
+func TestRunSiteDomainLinodePrepareRejectsCloudflareFull(t *testing.T) {
 	configDir := t.TempDir()
 	stateDir := t.TempDir()
 	t.Setenv("NF_CONFIG_HOME", configDir)
@@ -3947,48 +3947,13 @@ func TestRunSiteDomainLinodePrepareCloudflareFullUsesOriginWildcardCert(t *testi
 		t.Fatalf("SaveStateRecords(sites) error = %v", err)
 	}
 
-	plan, err := buildSiteDomainPlan("client.app1-linode", "live", "prepare", siteDomainOptions{canonical: "www.client.com", proxyMode: "cloudflare-full"})
-	if err != nil {
-		t.Fatalf("buildSiteDomainPlan() error = %v", err)
-	}
-	if plan.ProxyMode != "cloudflare_full" {
-		t.Fatalf("ProxyMode = %q, want cloudflare_full", plan.ProxyMode)
-	}
-	script := renderLinodeDomainScript(plan)
-	for _, want := range []string{"proxy_mode=cloudflare_full", "include /etc/nginx/snippets/nf-wildcard-cert.conf;", "systemctl disable --now nf-public-domain-client.app1-linode.live-tls.timer", "rm -f /usr/local/bin/nf-issue-public-domain-cert-client.app1-linode.live", ".proxy_mode = $proxy_mode"} {
-		if !strings.Contains(script, want) {
-			t.Fatalf("cloudflare-full linode script missing %q:\n%s", want, script)
-		}
-	}
-	for _, notWant := range []string{"certbot certonly", "flock -n -E 75 /run/nf-certbot.lock"} {
-		if strings.Contains(script, notWant) {
-			t.Fatalf("cloudflare-full linode script unexpectedly contains %q:\n%s", notWant, script)
-		}
-	}
-
-	oldRunSSH := runSSHCommandFn
-	runSSHCommandFn = func(args []string) error { return nil }
-	t.Cleanup(func() { runSSHCommandFn = oldRunSSH })
-	output := captureStdout(t, func() {
-		if got := Run([]string{"site", "domain", "prepare", "client.app1-linode:live", "www.client.com", "--proxy", "cloudflare-full", "--execute", "--yes", "--non-interactive"}); got != 0 {
-			t.Fatalf("Run(site domain prepare linode cloudflare-full) = %d, want 0", got)
-		}
-	})
-	for _, want := range []string{"Prepare public domain plan:", "proxy:     cloudflare-full", "Cloudflare proxied A     www.client.com -> 203.0.113.10", "Cloudflare SSL/TLS mode: Full", "TLS: Cloudflare Full uses the target wildcard cert for origin HTTPS", "Site domain prepared."} {
-		if !strings.Contains(output, want) {
-			t.Fatalf("site domain cloudflare-full output missing %q:\n%s", want, output)
-		}
-	}
-	records, err := state.LoadStateRecords("sites")
-	if err != nil {
-		t.Fatalf("LoadStateRecords(sites) error = %v", err)
-	}
-	if got := recordValueString(records[0]["proxy_mode"]); got != "cloudflare_full" {
-		t.Fatalf("proxy_mode = %q, want cloudflare_full", got)
+	_, err := buildSiteDomainPlan("client.app1-linode", "live", "prepare", siteDomainOptions{canonical: "www.client.com", proxyMode: "cloudflare-full"})
+	if err == nil || !strings.Contains(err.Error(), "--proxy must be cloudflare") {
+		t.Fatalf("buildSiteDomainPlan() error = %v, want cloudflare-full rejected", err)
 	}
 }
 
-func TestRunSiteDomainLinodePrepareCloudflareStrictKeepsLetsEncrypt(t *testing.T) {
+func TestRunSiteDomainLinodePrepareCloudflareKeepsLetsEncrypt(t *testing.T) {
 	configDir := t.TempDir()
 	stateDir := t.TempDir()
 	t.Setenv("NF_CONFIG_HOME", configDir)
@@ -4003,22 +3968,22 @@ func TestRunSiteDomainLinodePrepareCloudflareStrictKeepsLetsEncrypt(t *testing.T
 		t.Fatalf("SaveStateRecords(sites) error = %v", err)
 	}
 
-	plan, err := buildSiteDomainPlan("client.app1-linode", "live", "prepare", siteDomainOptions{canonical: "www.client.com", proxyMode: "cloudflare-strict"})
+	plan, err := buildSiteDomainPlan("client.app1-linode", "live", "prepare", siteDomainOptions{canonical: "www.client.com", proxyMode: "cloudflare"})
 	if err != nil {
 		t.Fatalf("buildSiteDomainPlan() error = %v", err)
 	}
-	if plan.ProxyMode != "cloudflare_strict" {
-		t.Fatalf("ProxyMode = %q, want cloudflare_strict", plan.ProxyMode)
+	if plan.ProxyMode != "cloudflare" {
+		t.Fatalf("ProxyMode = %q, want cloudflare", plan.ProxyMode)
 	}
 	script := renderLinodeDomainScript(plan)
-	for _, want := range []string{"proxy_mode=cloudflare_strict", "expected_ips=()", "certbot certonly --non-interactive --agree-tos --webroot", "nf-public-domain-client.app1-linode.live-tls.timer", ".proxy_mode = $proxy_mode"} {
+	for _, want := range []string{"proxy_mode=cloudflare", "expected_ips=()", "certbot certonly --non-interactive --agree-tos --webroot", "nf-public-domain-client.app1-linode.live-tls.timer", ".proxy_mode = $proxy_mode"} {
 		if !strings.Contains(script, want) {
-			t.Fatalf("cloudflare-strict linode script missing %q:\n%s", want, script)
+			t.Fatalf("cloudflare linode script missing %q:\n%s", want, script)
 		}
 	}
 	for _, notWant := range []string{"systemctl disable --now nf-public-domain-client.app1-linode.live-tls.timer"} {
 		if strings.Contains(script, notWant) {
-			t.Fatalf("cloudflare-strict linode script unexpectedly contains %q:\n%s", notWant, script)
+			t.Fatalf("cloudflare linode script unexpectedly contains %q:\n%s", notWant, script)
 		}
 	}
 
@@ -4026,21 +3991,21 @@ func TestRunSiteDomainLinodePrepareCloudflareStrictKeepsLetsEncrypt(t *testing.T
 	runSSHCommandFn = func(args []string) error { return nil }
 	t.Cleanup(func() { runSSHCommandFn = oldRunSSH })
 	output := captureStdout(t, func() {
-		if got := Run([]string{"site", "domain", "prepare", "client.app1-linode:live", "www.client.com", "--proxy", "cloudflare-strict", "--execute", "--yes", "--non-interactive"}); got != 0 {
-			t.Fatalf("Run(site domain prepare linode cloudflare-strict) = %d, want 0", got)
+		if got := Run([]string{"site", "domain", "prepare", "client.app1-linode:live", "www.client.com", "--proxy", "cloudflare", "--execute", "--yes", "--non-interactive"}); got != 0 {
+			t.Fatalf("Run(site domain prepare linode cloudflare) = %d, want 0", got)
 		}
 	})
-	for _, want := range []string{"Prepare public domain plan:", "proxy:     cloudflare-strict", "Cloudflare proxied A     www.client.com -> 203.0.113.10", "Cloudflare SSL/TLS mode: Full (strict)", "TLS: Cloudflare Full (strict) uses a public Let's Encrypt origin cert", "Site domain prepared."} {
+	for _, want := range []string{"Prepare public domain plan:", "proxy:     cloudflare", "Cloudflare proxied A     www.client.com -> 203.0.113.10", "Cloudflare SSL/TLS mode: Full (strict)", "TLS: Cloudflare uses Full (strict) with a public Let's Encrypt origin cert", "Site domain prepared."} {
 		if !strings.Contains(output, want) {
-			t.Fatalf("site domain cloudflare-strict output missing %q:\n%s", want, output)
+			t.Fatalf("site domain cloudflare output missing %q:\n%s", want, output)
 		}
 	}
 	records, err := state.LoadStateRecords("sites")
 	if err != nil {
 		t.Fatalf("LoadStateRecords(sites) error = %v", err)
 	}
-	if got := recordValueString(records[0]["proxy_mode"]); got != "cloudflare_strict" {
-		t.Fatalf("proxy_mode = %q, want cloudflare_strict", got)
+	if got := recordValueString(records[0]["proxy_mode"]); got != "cloudflare" {
+		t.Fatalf("proxy_mode = %q, want cloudflare", got)
 	}
 }
 
@@ -4070,7 +4035,7 @@ func TestRunSiteDomainLinodeRemoveExecuteCleansPublicBindingAndResetsCache(t *te
 		"internal_hostname": "client.app1-linode.nonfiction.dev",
 		"internal_url":      "https://client.app1-linode.nonfiction.dev",
 		"domain_state":      "primary",
-		"proxy_mode":        "cloudflare_strict",
+		"proxy_mode":        "cloudflare",
 		"domains":           []map[string]any{{"name": "www.client.com", "role": "canonical"}, {"name": "client.com", "role": "redirect"}},
 	}}); err != nil {
 		t.Fatalf("SaveStateRecords(sites) error = %v", err)
@@ -4217,17 +4182,17 @@ func TestRunSiteDomainPrepareWarnsWhenDomainCachedElsewhere(t *testing.T) {
 		t.Fatalf("SaveStateRecords(providers) error = %v", err)
 	}
 	if err := state.SaveStateRecords("sites", []map[string]any{
-		{"provider": "linode", "site_id": "client.app1-linode", "env_id": "client.app1-linode:live", "name": "client", "env": "live", "target": "app1-linode", "path": "/var/www/sites/client/public", "database": "client", "hostname": "www.client.com", "url": "https://www.client.com", "proxy_mode": "cloudflare_strict", "domains": []map[string]any{{"name": "www.client.com", "role": "canonical"}}},
+		{"provider": "linode", "site_id": "client.app1-linode", "env_id": "client.app1-linode:live", "name": "client", "env": "live", "target": "app1-linode", "path": "/var/www/sites/client/public", "database": "client", "hostname": "www.client.com", "url": "https://www.client.com", "proxy_mode": "cloudflare", "domains": []map[string]any{{"name": "www.client.com", "role": "canonical"}}},
 		{"provider": "linode", "site_id": "client.app4-linode", "env_id": "client.app4-linode:live", "name": "client", "env": "live", "target": "app4-linode", "path": "/var/www/sites/client/public", "database": "client", "hostname": "client.app4-linode.nonfiction.dev", "url": "https://client.app4-linode.nonfiction.dev"},
 	}); err != nil {
 		t.Fatalf("SaveStateRecords(sites) error = %v", err)
 	}
 	output := captureStdout(t, func() {
-		if got := Run([]string{"site", "domain", "prepare", "client.app4-linode:live", "www.client.com", "--proxy", "cloudflare-strict", "--dry-run", "--non-interactive"}); got != 0 {
+		if got := Run([]string{"site", "domain", "prepare", "client.app4-linode:live", "www.client.com", "--proxy", "cloudflare", "--dry-run", "--non-interactive"}); got != 0 {
 			t.Fatalf("Run(site domain prepare duplicate dry-run) = %d, want 0", got)
 		}
 	})
-	for _, want := range []string{"Warning: www.client.com is also cached on client.app1-linode:live", "nf site domain remove client.app1-linode:live www.client.com --proxy cloudflare-strict", "Prepare public domain plan:"} {
+	for _, want := range []string{"Warning: www.client.com is also cached on client.app1-linode:live", "nf site domain remove client.app1-linode:live www.client.com --proxy cloudflare", "Prepare public domain plan:"} {
 		if !strings.Contains(output, want) {
 			t.Fatalf("duplicate domain warning output missing %q:\n%s", want, output)
 		}
@@ -4383,124 +4348,6 @@ func TestRunSiteDomainLinodeCheckReportsPending(t *testing.T) {
 	for _, want := range []string{"ssh", "nonfiction@app1-linode.nonfiction.dev", "nf-site-public-client.app1-linode.live", "nf-public-domain-client.app1-linode.live-tls.timer"} {
 		if !strings.Contains(joinedArgs, want) {
 			t.Fatalf("ssh args missing %q:\n%#v", want, sshArgs)
-		}
-	}
-}
-
-func TestRunSiteDomainLinodeCheckCloudflareFullSkipsOriginIPDNS(t *testing.T) {
-	configDir := t.TempDir()
-	stateDir := t.TempDir()
-	t.Setenv("NF_CONFIG_HOME", configDir)
-	t.Setenv("NF_STATE_HOME", stateDir)
-	if err := saveGlobalConfig(map[string]string{"linode_default_user": "nonfiction"}); err != nil {
-		t.Fatalf("saveGlobalConfig() error = %v", err)
-	}
-	if err := state.SaveStateRecords("providers", []map[string]any{{"provider": "linode", "targets": []map[string]any{{"name": "app1-linode", "provider": "linode", "hostname": "app1-linode.nonfiction.dev", "public_ipv4": "203.0.113.10", "ssh": map[string]any{"user": "nonfiction", "host": "app1-linode.nonfiction.dev"}}}}}); err != nil {
-		t.Fatalf("SaveStateRecords(providers) error = %v", err)
-	}
-	if err := state.SaveStateRecords("sites", []map[string]any{{"provider": "linode", "site_id": "client.app1-linode", "env_id": "client.app1-linode:live", "name": "client", "env": "live", "target": "app1-linode", "path": "/var/www/sites/client/public", "database": "client", "hostname": "client.app1-linode.nonfiction.dev", "url": "https://client.app1-linode.nonfiction.dev", "php_version": "8.3", "proxy_mode": "cloudflare_full"}}); err != nil {
-		t.Fatalf("SaveStateRecords(sites) error = %v", err)
-	}
-
-	oldRunSSHOutput := runSSHOutputFn
-	oldLookupHost := siteDomainLookupHostFn
-	oldHTTP := siteDomainHTTPStatusFn
-	oldHTTPS := siteDomainHTTPSStatusFn
-	oldTLS := siteDomainTLSStatusFn
-	runSSHOutputFn = func(args []string) ([]byte, error) {
-		return []byte("vhost=present\nenabled=present\ntimer=missing\nservice=unknown\ncert=missing\n"), nil
-	}
-	siteDomainLookupHostFn = func(host string) ([]string, error) {
-		return []string{"104.16.1.1", "104.16.2.2"}, nil
-	}
-	siteDomainHTTPStatusFn = func(domain string) siteDomainHTTPCheckResult {
-		return siteDomainHTTPCheckResult{StatusCode: 200}
-	}
-	siteDomainHTTPSStatusFn = func(domain string) siteDomainHTTPCheckResult {
-		return siteDomainHTTPCheckResult{StatusCode: 200}
-	}
-	siteDomainTLSStatusFn = func(domain string) siteDomainTLSCheckResult {
-		return siteDomainTLSCheckResult{OK: true, NotAfter: time.Date(2026, 12, 31, 0, 0, 0, 0, time.UTC), Issuer: "Cloudflare Inc ECC"}
-	}
-	t.Cleanup(func() {
-		runSSHOutputFn = oldRunSSHOutput
-		siteDomainLookupHostFn = oldLookupHost
-		siteDomainHTTPStatusFn = oldHTTP
-		siteDomainHTTPSStatusFn = oldHTTPS
-		siteDomainTLSStatusFn = oldTLS
-	})
-
-	output := captureStdout(t, func() {
-		if got := Run([]string{"site", "domain", "check", "client.app1-linode:live", "www.client.com", "--non-interactive"}); got != 0 {
-			t.Fatalf("Run(site domain check linode cloudflare-full) = %d, want 0", got)
-		}
-	})
-	for _, want := range []string{"Public domain check:", "proxy:     cloudflare-full", "proxy mode: cloudflare-full", "certbot timer: missing", "certificate: missing", "www.client.com: ok (resolves publicly to 104.16.1.1, 104.16.2.2; origin IP match skipped for cloudflare-full)", "https://www.client.com: ok expires 2026-12-31 issuer Cloudflare Inc ECC", "ready for primary: nf site domain primary client.app1-linode:live www.client.com --proxy cloudflare-full", "Overall: ready"} {
-		if !strings.Contains(output, want) {
-			t.Fatalf("site domain linode cloudflare-full check output missing %q:\n%s", want, output)
-		}
-	}
-}
-
-func TestRunSiteDomainLinodeCheckCloudflareStrictChecksOriginTLS(t *testing.T) {
-	configDir := t.TempDir()
-	stateDir := t.TempDir()
-	t.Setenv("NF_CONFIG_HOME", configDir)
-	t.Setenv("NF_STATE_HOME", stateDir)
-	if err := saveGlobalConfig(map[string]string{"linode_default_user": "nonfiction"}); err != nil {
-		t.Fatalf("saveGlobalConfig() error = %v", err)
-	}
-	if err := state.SaveStateRecords("providers", []map[string]any{{"provider": "linode", "targets": []map[string]any{{"name": "app1-linode", "provider": "linode", "hostname": "app1-linode.nonfiction.dev", "public_ipv4": "203.0.113.10", "ssh": map[string]any{"user": "nonfiction", "host": "app1-linode.nonfiction.dev"}}}}}); err != nil {
-		t.Fatalf("SaveStateRecords(providers) error = %v", err)
-	}
-	if err := state.SaveStateRecords("sites", []map[string]any{{"provider": "linode", "site_id": "client.app1-linode", "env_id": "client.app1-linode:live", "name": "client", "env": "live", "target": "app1-linode", "path": "/var/www/sites/client/public", "database": "client", "hostname": "client.app1-linode.nonfiction.dev", "url": "https://client.app1-linode.nonfiction.dev", "php_version": "8.3", "proxy_mode": "cloudflare_strict"}}); err != nil {
-		t.Fatalf("SaveStateRecords(sites) error = %v", err)
-	}
-
-	oldRunSSHOutput := runSSHOutputFn
-	oldLookupHost := siteDomainLookupHostFn
-	oldHTTP := siteDomainHTTPStatusFn
-	oldHTTPS := siteDomainHTTPSStatusFn
-	oldTLS := siteDomainTLSStatusFn
-	oldOriginTLS := siteDomainOriginTLSFn
-	runSSHOutputFn = func(args []string) ([]byte, error) {
-		return []byte("vhost=present\nenabled=present\ntimer=active\nservice=inactive\ncert=ready\n"), nil
-	}
-	siteDomainLookupHostFn = func(host string) ([]string, error) {
-		return []string{"104.16.1.1", "104.16.2.2"}, nil
-	}
-	siteDomainHTTPStatusFn = func(domain string) siteDomainHTTPCheckResult {
-		return siteDomainHTTPCheckResult{StatusCode: 200}
-	}
-	siteDomainHTTPSStatusFn = func(domain string) siteDomainHTTPCheckResult {
-		return siteDomainHTTPCheckResult{StatusCode: 200}
-	}
-	siteDomainTLSStatusFn = func(domain string) siteDomainTLSCheckResult {
-		return siteDomainTLSCheckResult{OK: true, NotAfter: time.Date(2026, 12, 31, 0, 0, 0, 0, time.UTC), Issuer: "Cloudflare Inc ECC"}
-	}
-	siteDomainOriginTLSFn = func(domain, origin string) siteDomainTLSCheckResult {
-		if domain != "www.client.com" || origin != "203.0.113.10" {
-			t.Fatalf("siteDomainOriginTLSFn(%q, %q), want www.client.com, 203.0.113.10", domain, origin)
-		}
-		return siteDomainTLSCheckResult{OK: true, NotAfter: time.Date(2026, 9, 12, 0, 0, 0, 0, time.UTC), Issuer: "Let's Encrypt"}
-	}
-	t.Cleanup(func() {
-		runSSHOutputFn = oldRunSSHOutput
-		siteDomainLookupHostFn = oldLookupHost
-		siteDomainHTTPStatusFn = oldHTTP
-		siteDomainHTTPSStatusFn = oldHTTPS
-		siteDomainTLSStatusFn = oldTLS
-		siteDomainOriginTLSFn = oldOriginTLS
-	})
-
-	output := captureStdout(t, func() {
-		if got := Run([]string{"site", "domain", "check", "client.app1-linode:live", "www.client.com", "--non-interactive"}); got != 0 {
-			t.Fatalf("Run(site domain check linode cloudflare-strict) = %d, want 0", got)
-		}
-	})
-	for _, want := range []string{"Public domain check:", "proxy:     cloudflare-strict", "proxy mode: cloudflare-strict", "certbot timer: active", "certificate: ready", "www.client.com: ok (resolves publicly to 104.16.1.1, 104.16.2.2; origin IP match skipped for cloudflare-strict)", "https://www.client.com: ok expires 2026-12-31 issuer Cloudflare Inc ECC", "Origin HTTPS:", "https://www.client.com @ 203.0.113.10: ok expires 2026-09-12 issuer Let's Encrypt", "ready for primary: nf site domain primary client.app1-linode:live www.client.com --proxy cloudflare-strict", "Overall: ready"} {
-		if !strings.Contains(output, want) {
-			t.Fatalf("site domain linode cloudflare-strict check output missing %q:\n%s", want, output)
 		}
 	}
 }

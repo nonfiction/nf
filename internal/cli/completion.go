@@ -250,7 +250,7 @@ func siteDomainCompletionCandidates(args []string) []string {
 		if len(args) > 1 {
 			switch args[len(args)-1] {
 			case "--proxy":
-				return []string{"cloudflare-strict", "cloudflare-full"}
+				return []string{"cloudflare"}
 			case "--setup":
 				if args[0] != "check" {
 					return []string{"avoid-downtime", "quick"}
