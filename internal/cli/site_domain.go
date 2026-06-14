@@ -27,6 +27,7 @@ type siteDomainOptions struct {
 	setupType      string
 	proxyMode      string
 	searchReplace  bool
+	deleteCert     bool
 	dryRun         bool
 	execute        bool
 	yes            bool
@@ -47,6 +48,7 @@ type siteDomainPlan struct {
 	SetupType        string
 	ProxyMode        string
 	SearchReplace    bool
+	DeleteCert       bool
 	CurrentURL       string
 	CurrentHostname  string
 	InternalURL      string
@@ -77,7 +79,7 @@ func runSiteDomain(argv []string) int {
 		return runSiteDomainHelp()
 	}
 	action := strings.TrimSpace(argv[0])
-	if action != "prepare" && action != "primary" && action != "check" {
+	if action != "prepare" && action != "primary" && action != "check" && action != "remove" {
 		fmt.Fprintf(os.Stderr, "unsupported site domain action: %s\n", action)
 		return 1
 	}
@@ -93,16 +95,18 @@ func runSiteDomainHelp() int {
 		{"prepare <env|remote> <domain> [flags]", "make a provider/env ready for a public domain"},
 		{"check <env|remote> <domain> [flags]", "check DNS, provider, HTTP, and HTTPS readiness"},
 		{"primary <env|remote> <domain> [flags]", "launch a canonical public domain"},
+		{"remove <env|remote> <domain> [flags]", "remove a public domain binding"},
 		{},
 		{"--canonical <domain>", "canonical public hostname"},
 		{"--alias <domain>", "redirect/alternate hostname; repeatable"},
 		{"--proxy <mode>", "Linode proxy mode: cloudflare-strict or cloudflare-full"},
 		{"--setup <type>", "Kinsta setup type for prepare/primary: avoid-downtime or quick"},
 		{"--search-replace", "run provider/wp search-replace during primary"},
+		{"--delete-cert", "also delete the Linode Let's Encrypt certificate lineage"},
 		{},
-		{"--dry-run", "show the prepare/primary plan only"},
-		{"--execute", "execute the prepare/primary plan"},
-		{"--yes", "confirm prepare/primary execution"},
+		{"--dry-run", "show the mutation plan only"},
+		{"--execute", "execute the mutation plan"},
+		{"--yes", "confirm mutation execution"},
 		{"--non-interactive", "fail instead of prompting"},
 	})
 	return 0
@@ -124,6 +128,8 @@ func parseSiteDomainActionArgs(action string, argv []string) (string, siteDomain
 			opts.nonInteractive = true
 		case "--search-replace":
 			opts.searchReplace = true
+		case "--delete-cert":
+			opts.deleteCert = true
 		case "--canonical":
 			if i+1 >= len(argv) || strings.TrimSpace(argv[i+1]) == "" {
 				fmt.Fprintln(os.Stderr, "--canonical requires a value")
@@ -197,8 +203,16 @@ func parseSiteDomainActionArgs(action string, argv []string) (string, siteDomain
 		fmt.Fprintln(os.Stderr, "site domain prepare does not run search-replace")
 		return "", opts, false
 	}
+	if action != "remove" && opts.deleteCert {
+		fmt.Fprintln(os.Stderr, "--delete-cert only applies to site domain remove")
+		return "", opts, false
+	}
+	if action == "remove" && (opts.searchReplace || strings.TrimSpace(opts.setupType) != "") {
+		fmt.Fprintln(os.Stderr, "site domain remove does not support --setup or --search-replace")
+		return "", opts, false
+	}
 	if action == "check" {
-		if opts.dryRun || opts.execute || opts.yes || opts.searchReplace || strings.TrimSpace(opts.setupType) != "" {
+		if opts.dryRun || opts.execute || opts.yes || opts.searchReplace || opts.deleteCert || strings.TrimSpace(opts.setupType) != "" {
 			fmt.Fprintln(os.Stderr, "site domain check is read-only; use only --canonical, --alias, --proxy, and --non-interactive")
 			return "", opts, false
 		}
@@ -251,6 +265,15 @@ func cmdSiteDomain(envRef, action string, opts siteDomainOptions) int {
 	if action == "check" {
 		return cmdSiteDomainCheck(plan)
 	}
+	if action != "remove" {
+		printSiteDomainStaleWarnings(plan)
+	}
+	if action == "remove" && plan.Provider == "linode" {
+		if remaining := remainingCachedSiteDomainsAfterRemove(plan); len(remaining) > 0 {
+			fmt.Fprintf(os.Stderr, "Linode public domain bindings are env-scoped; remove all cached domains for %s or replace them with prepare/primary first. Remaining cached domains: %s\n", plan.EnvID, strings.Join(remaining, ", "))
+			return 1
+		}
+	}
 	willExecute := opts.execute || (!opts.dryRun && !opts.nonInteractive)
 	mode := "dry-run"
 	if willExecute {
@@ -258,7 +281,7 @@ func cmdSiteDomain(envRef, action string, opts siteDomainOptions) int {
 	}
 	printSiteDomainPlan(plan, mode)
 	if !willExecute {
-		fmt.Println("No data was changed. Re-run with --execute to apply public-domain readiness.")
+		fmt.Println("No data was changed. Re-run with --execute to apply public-domain changes.")
 		return 0
 	}
 	if opts.nonInteractive && !opts.yes {
@@ -279,7 +302,9 @@ func cmdSiteDomain(envRef, action string, opts siteDomainOptions) int {
 	result := siteDomainProviderResult{}
 	switch plan.Provider {
 	case "kinsta":
-		if action == "primary" {
+		if action == "remove" {
+			result, err = kinstaRemoveDomainFn(plan)
+		} else if action == "primary" {
 			result, err = kinstaPrimaryDomainFn(plan)
 		} else {
 			result, err = kinstaPrepareDomainFn(plan)
@@ -288,9 +313,15 @@ func cmdSiteDomain(envRef, action string, opts siteDomainOptions) int {
 			fmt.Fprintln(os.Stderr, err)
 			return 1
 		}
-		printKinstaDomainRecords(result)
+		if action != "remove" {
+			printKinstaDomainRecords(result)
+		}
 	case "linode":
-		if err := runSSHCommandFn(remoteSudoBashArgs(plan.Target, renderLinodeDomainScript(plan))); err != nil {
+		script := renderLinodeDomainScript(plan)
+		if action == "remove" {
+			script = renderLinodeDomainRemoveScript(plan, opts.deleteCert)
+		}
+		if err := runSSHCommandFn(remoteSudoBashArgs(plan.Target, script)); err != nil {
 			fmt.Fprintln(os.Stderr, err)
 			return 1
 		}
@@ -298,11 +329,21 @@ func cmdSiteDomain(envRef, action string, opts siteDomainOptions) int {
 		fmt.Fprintf(os.Stderr, "site domain is not implemented for provider %q; no data was changed.\n", plan.Provider)
 		return 1
 	}
-	if err := updateSiteDomainCache(plan, result); err != nil {
+	if action == "remove" {
+		err = removeSiteDomainCache(plan)
+	} else {
+		err = updateSiteDomainCache(plan, result)
+	}
+	if err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		return 1
 	}
-	if action == "primary" {
+	if action == "remove" {
+		if plan.Provider == "linode" && !opts.deleteCert {
+			fmt.Println("Certificate lineage was kept for rollback safety. Use --delete-cert after the rollback window if you want to remove it.")
+		}
+		fmt.Println("Site domain removed.")
+	} else if action == "primary" {
 		fmt.Println("Site domain launched as primary.")
 	} else {
 		fmt.Println("Site domain prepared.")
@@ -387,6 +428,7 @@ func buildSiteDomainPlan(siteID, env, action string, opts siteDomainOptions) (si
 		Aliases:          aliases,
 		ProxyMode:        firstNonEmpty(opts.proxyMode, firstRecordString(record, "proxy_mode")),
 		SearchReplace:    opts.searchReplace,
+		DeleteCert:       opts.deleteCert,
 		CurrentURL:       currentURL,
 		CurrentHostname:  currentHostname,
 		InternalURL:      internalURL,
@@ -396,6 +438,9 @@ func buildSiteDomainPlan(siteID, env, action string, opts siteDomainOptions) (si
 	}
 	switch plan.Provider {
 	case "kinsta":
+		if opts.deleteCert {
+			return siteDomainPlan{}, ProjectError{Msg: "--delete-cert only applies to Linode domains"}
+		}
 		if strings.TrimSpace(plan.ProxyMode) != "" {
 			return siteDomainPlan{}, ProjectError{Msg: "--proxy only applies to Linode domains"}
 		}
@@ -590,6 +635,8 @@ func printSiteDomainPlan(plan siteDomainPlan, mode string) {
 	title := "Prepare public domain plan:"
 	if plan.Action == "primary" {
 		title = "Launch primary domain plan:"
+	} else if plan.Action == "remove" {
+		title = "Remove public domain plan:"
 	}
 	fmt.Println(title)
 	fmt.Printf("  env:       %s\n", plan.EnvID)
@@ -611,19 +658,35 @@ func printSiteDomainPlan(plan siteDomainPlan, mode string) {
 		fmt.Printf("  proxy:     %s\n", displaySiteDomainProxyMode(plan.ProxyMode))
 	}
 	if plan.Provider == "kinsta" {
-		fmt.Printf("  kinsta setup: %s\n", displayKinstaSetupType(plan.SetupType))
+		if plan.Action != "remove" {
+			fmt.Printf("  kinsta setup: %s\n", displayKinstaSetupType(plan.SetupType))
+		}
 		if plan.Action == "primary" {
 			fmt.Printf("  search-replace: %t\n", plan.SearchReplace)
 		}
 		fmt.Println("  public DNS: no DNS records will be changed by nf")
-		fmt.Println("  DNS records: returned by Kinsta after execution")
+		if plan.Action == "remove" {
+			fmt.Println("  provider: remove non-primary domain from Kinsta")
+		} else {
+			fmt.Println("  DNS records: returned by Kinsta after execution")
+		}
 	} else if plan.Provider == "linode" {
 		fmt.Println("  public DNS: no DNS records will be changed by nf")
-		printLinodeDomainDNSInstructions(plan)
+		if plan.Action == "remove" {
+			fmt.Println("  provider: remove nf-managed public vhost, scripts, timer, and cached metadata")
+		} else {
+			printLinodeDomainDNSInstructions(plan)
+		}
 		if plan.Action == "primary" {
 			fmt.Printf("  search-replace: %t\n", plan.SearchReplace)
 		}
-		if siteDomainCloudflareStrict(plan) {
+		if plan.Action == "remove" {
+			if plan.DeleteCert {
+				fmt.Println("  TLS: delete the Let's Encrypt certificate lineage")
+			} else {
+				fmt.Println("  TLS: certificate lineage is kept for rollback safety")
+			}
+		} else if siteDomainCloudflareStrict(plan) {
 			fmt.Println("  TLS: Cloudflare Full (strict) uses a public Let's Encrypt origin cert; certbot renewal stays enabled")
 		} else if siteDomainCloudflareFull(plan) {
 			fmt.Println("  TLS: Cloudflare Full uses the target wildcard cert for origin HTTPS; hostname validation is handled at the Cloudflare edge")
@@ -686,6 +749,53 @@ func prepareKinstaSiteDomain(plan siteDomainPlan) (siteDomainProviderResult, err
 
 func primaryKinstaSiteDomain(plan siteDomainPlan) (siteDomainProviderResult, error) {
 	return runKinstaSiteDomain(plan, true)
+}
+
+func removeKinstaSiteDomain(plan siteDomainPlan) (siteDomainProviderResult, error) {
+	token := envwizard.Value("KINSTA_API_KEY")
+	if token == "" {
+		return siteDomainProviderResult{}, fmt.Errorf("Expected KINSTA_API_KEY in the environment or %s.", config.EnvFile())
+	}
+	client := kinsta.NewClient(firstNonEmpty(envwizard.Value("KINSTA_BASE_URL"), "https://api.kinsta.com/v2"), token)
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Minute)
+	defer cancel()
+	domains, err := client.ListDomains(ctx, plan.KinstaEnvID)
+	if err != nil {
+		return siteDomainProviderResult{}, err
+	}
+	result := siteDomainProviderResult{Domains: []siteDomainProviderDomain{}}
+	ids := []string{}
+	for _, name := range plan.allDomains() {
+		domain, ok := kinsta.FindDomain(domains, name)
+		if !ok {
+			fmt.Printf("Kinsta domain %s is not attached; skipping.\n", name)
+			continue
+		}
+		if domain.IsPrimary {
+			return siteDomainProviderResult{}, ProjectError{Msg: fmt.Sprintf("Kinsta domain %q is primary. Change primary to another domain before removing it.", name)}
+		}
+		ids = append(ids, domain.ID)
+		result.Domains = append(result.Domains, siteDomainProviderDomain{Name: name, DomainID: domain.ID})
+	}
+	if len(ids) == 0 {
+		return result, nil
+	}
+	fmt.Printf("Removing Kinsta domain%s %s...\n", pluralSuffix(len(ids)), strings.Join(plan.allDomains(), ", "))
+	opID, err := client.DeleteDomains(ctx, plan.KinstaEnvID, ids)
+	if err != nil {
+		return siteDomainProviderResult{}, err
+	}
+	if err := waitKinstaOperation(ctx, client, opID); err != nil {
+		return siteDomainProviderResult{}, err
+	}
+	return result, nil
+}
+
+func pluralSuffix(count int) string {
+	if count == 1 {
+		return ""
+	}
+	return "s"
 }
 
 func runKinstaSiteDomain(plan siteDomainPlan, primary bool) (siteDomainProviderResult, error) {
@@ -814,6 +924,58 @@ func updateSiteDomainCache(plan siteDomainPlan, result siteDomainProviderResult)
 	return state.SaveStateRecords("sites", records)
 }
 
+func removeSiteDomainCache(plan siteDomainPlan) error {
+	records, err := state.LoadStateRecords("sites")
+	if err != nil {
+		return err
+	}
+	updated := false
+	for _, record := range records {
+		if !siteEnvMatchesSite(record, plan.SiteID) || !siteEnvMatchesEnv(record, plan.Env) {
+			continue
+		}
+		applySiteDomainRemoveCacheFields(record, plan)
+		updated = true
+	}
+	if !updated {
+		return ProjectError{Msg: fmt.Sprintf("No cached remote env matched %q.", plan.EnvID)}
+	}
+	return state.SaveStateRecords("sites", records)
+}
+
+func applySiteDomainRemoveCacheFields(record map[string]any, plan siteDomainPlan) {
+	removeSet := siteDomainNameSet(plan.allDomains())
+	remaining := []any{}
+	for _, entry := range siteDomainEntryValues(record["domains"]) {
+		if removeSet[normalizeDomainName(siteDomainEntryName(entry))] {
+			continue
+		}
+		remaining = append(remaining, entry)
+	}
+	if len(remaining) == 0 {
+		delete(record, "domains")
+		delete(record, "domain_state")
+		delete(record, "proxy_mode")
+	} else {
+		record["domains"] = remaining
+	}
+	if removeSet[normalizeDomainName(firstRecordString(record, "primary_domain"))] || removeSet[normalizeDomainName(hostnameFromURLish(firstNonEmpty(firstRecordString(record, "url", "site_url", "home_url"), firstRecordString(record, "hostname"))))] {
+		delete(record, "primary_domain")
+		if plan.InternalHostname != "" {
+			record["hostname"] = plan.InternalHostname
+		}
+		if plan.InternalURL != "" {
+			record["url"] = plan.InternalURL
+		}
+	}
+	if plan.Provider == "kinsta" {
+		kinstaData := mapMapAtPath(record, "kinsta")
+		if kinstaData != nil && removeSet[normalizeDomainName(plan.Canonical)] && firstRecordString(record, "primary_domain") == "" {
+			delete(kinstaData, "domain_id")
+		}
+	}
+}
+
 func applySiteDomainCacheFields(record map[string]any, plan siteDomainPlan, result siteDomainProviderResult) {
 	if firstRecordString(record, "internal_hostname") == "" && plan.InternalHostname != "" {
 		record["internal_hostname"] = plan.InternalHostname
@@ -855,6 +1017,119 @@ func siteDomainCacheEntries(plan siteDomainPlan, result siteDomainProviderResult
 		entries = append(entries, entry)
 	}
 	return entries
+}
+
+func normalizeDomainName(value string) string {
+	return strings.ToLower(strings.TrimSuffix(strings.TrimSpace(value), "."))
+}
+
+func siteDomainNameSet(domains []string) map[string]bool {
+	set := map[string]bool{}
+	for _, domain := range domains {
+		if normalized := normalizeDomainName(domain); normalized != "" {
+			set[normalized] = true
+		}
+	}
+	return set
+}
+
+func siteDomainEntryValues(value any) []any {
+	switch typed := value.(type) {
+	case []any:
+		return typed
+	case []map[string]any:
+		out := make([]any, 0, len(typed))
+		for _, entry := range typed {
+			out = append(out, entry)
+		}
+		return out
+	default:
+		return nil
+	}
+}
+
+func siteDomainEntryName(entry any) string {
+	if typed, ok := entry.(map[string]any); ok {
+		return firstRecordString(typed, "name", "domain", "domain_name", "hostname")
+	}
+	return ""
+}
+
+func cachedSiteDomainNames(record map[string]any) []string {
+	seen := map[string]bool{}
+	values := []string{}
+	add := func(value string) {
+		value = normalizeDomainName(hostnameFromURLish(value))
+		if value == "" || seen[value] {
+			return
+		}
+		seen[value] = true
+		values = append(values, value)
+	}
+	for _, entry := range siteDomainEntryValues(record["domains"]) {
+		add(siteDomainEntryName(entry))
+	}
+	add(firstRecordString(record, "primary_domain"))
+	if host := hostnameFromURLish(firstRecordString(record, "hostname")); !looksLikeInternalSiteHostname(record, host) {
+		add(host)
+	}
+	if host := hostnameFromURLish(firstRecordString(record, "url", "site_url", "home_url")); !looksLikeInternalSiteHostname(record, host) {
+		add(host)
+	}
+	return values
+}
+
+func recordHasSiteDomain(record map[string]any, domain string) bool {
+	needle := normalizeDomainName(domain)
+	if needle == "" {
+		return false
+	}
+	for _, cached := range cachedSiteDomainNames(record) {
+		if cached == needle {
+			return true
+		}
+	}
+	return false
+}
+
+func remainingCachedSiteDomainsAfterRemove(plan siteDomainPlan) []string {
+	cached := cachedSiteDomainNames(plan.Record)
+	if len(cached) == 0 {
+		return nil
+	}
+	removeSet := siteDomainNameSet(plan.allDomains())
+	remaining := []string{}
+	for _, domain := range cached {
+		if !removeSet[domain] {
+			remaining = append(remaining, domain)
+		}
+	}
+	return remaining
+}
+
+func printSiteDomainStaleWarnings(plan siteDomainPlan) {
+	records, err := state.LoadStateRecords("sites")
+	if err != nil {
+		return
+	}
+	printed := map[string]bool{}
+	for _, record := range records {
+		if siteEnvMatchesSite(record, plan.SiteID) && siteEnvMatchesEnv(record, plan.Env) {
+			continue
+		}
+		for _, domain := range plan.allDomains() {
+			if !recordHasSiteDomain(record, domain) {
+				continue
+			}
+			envID := siteRecordEnvID(record)
+			if envID == "" || printed[envID+"|"+domain] {
+				continue
+			}
+			printed[envID+"|"+domain] = true
+			proxyArg := siteDomainProxyArg(firstRecordString(record, "proxy_mode"))
+			fmt.Printf("Warning: %s is also cached on %s; after cutover run: nf site domain remove %s %s%s\n", domain, envID, envID, domain, proxyArg)
+		}
+	}
 }
 
 func renderLinodeDomainScript(plan siteDomainPlan) string {
@@ -1241,6 +1516,79 @@ ISSUE
 	if plan.Action == "primary" {
 		b.WriteString("    | .hostname = $canonical | .url = $url | .primary_domain = $canonical\n")
 	}
+	b.WriteString("  else . end)\n")
+	b.WriteString("' /var/lib/nf/sites.json >\"$tmp\" && install -o ")
+	b.WriteString(q(plan.Target.SSHUser))
+	b.WriteString(" -g www-data -m 0664 \"$tmp\" /var/lib/nf/sites.json && rm -f \"$tmp\"\n")
+	b.WriteString("nginx -t\n")
+	b.WriteString("systemctl reload nginx\n")
+	return b.String()
+}
+
+func renderLinodeDomainRemoveScript(plan siteDomainPlan, deleteCert bool) string {
+	q := shellQuoteArg
+	fileSlug := plan.FileSlug
+	if fileSlug == "" {
+		fileSlug = envIDFileSlug(plan.EnvID)
+	}
+	serviceName := "nf-public-domain-" + fileSlug + "-tls"
+	refreshScript := "/usr/local/bin/nf-refresh-public-domain-" + fileSlug
+	issueScript := "/usr/local/bin/nf-issue-public-domain-cert-" + fileSlug
+	publicVhost := "/etc/nginx/sites-available/nf-site-public-" + fileSlug
+	publicEnabled := "/etc/nginx/sites-enabled/nf-site-public-" + fileSlug
+	domains, _ := json.Marshal(plan.allDomains())
+	resetPrimary := "0"
+	if siteDomainNameSet(plan.allDomains())[normalizeDomainName(plan.CurrentHostname)] || siteDomainNameSet(plan.allDomains())[normalizeDomainName(firstRecordString(plan.Record, "primary_domain"))] {
+		resetPrimary = "1"
+	}
+	var b strings.Builder
+	b.WriteString("set -euo pipefail\n")
+	b.WriteString("rm -f ")
+	b.WriteString(q(publicEnabled))
+	b.WriteByte(' ')
+	b.WriteString(q(publicVhost))
+	b.WriteByte(' ')
+	b.WriteString(q(refreshScript))
+	b.WriteByte(' ')
+	b.WriteString(q(issueScript))
+	b.WriteByte('\n')
+	b.WriteString("systemctl disable --now ")
+	b.WriteString(q(serviceName + ".timer"))
+	b.WriteString(" >/dev/null 2>&1 || true\n")
+	b.WriteString("systemctl stop ")
+	b.WriteString(q(serviceName + ".service"))
+	b.WriteString(" >/dev/null 2>&1 || true\n")
+	b.WriteString("rm -f /etc/systemd/system/")
+	b.WriteString(serviceName)
+	b.WriteString(".service /etc/systemd/system/")
+	b.WriteString(serviceName)
+	b.WriteString(".timer\n")
+	b.WriteString("systemctl daemon-reload\n")
+	if deleteCert {
+		b.WriteString("certbot delete --cert-name ")
+		b.WriteString(q(plan.Canonical))
+		b.WriteString(" --non-interactive >/dev/null 2>&1 || true\n")
+	}
+	b.WriteString("touch /var/lib/nf/sites.json\n")
+	b.WriteString("if ! jq empty /var/lib/nf/sites.json >/dev/null 2>&1; then printf '[]\\n' >/var/lib/nf/sites.json; fi\n")
+	b.WriteString("tmp=$(mktemp)\n")
+	b.WriteString("jq --arg site_id ")
+	b.WriteString(q(plan.SiteID))
+	b.WriteString(" --arg env ")
+	b.WriteString(q(plan.Env))
+	b.WriteString(" --arg internal_hostname ")
+	b.WriteString(q(plan.InternalHostname))
+	b.WriteString(" --arg internal_url ")
+	b.WriteString(q(plan.InternalURL))
+	b.WriteString(" --arg reset_primary ")
+	b.WriteString(q(resetPrimary))
+	b.WriteString(" --argjson remove_domains ")
+	b.WriteString(q(string(domains)))
+	b.WriteString(" '\n")
+	b.WriteString("  map(if (.site_id == $site_id and .env == $env) then\n")
+	b.WriteString("    .domains = ((.domains // []) | map(select((.name // .domain // .domain_name // .hostname // \"\") as $name | (($remove_domains | index($name)) | not))))\n")
+	b.WriteString("    | (if ((.domains // []) | length) == 0 then del(.domains, .domain_state, .proxy_mode) else . end)\n")
+	b.WriteString("    | (if $reset_primary == \"1\" then (del(.primary_domain) | (if $internal_hostname != \"\" then .hostname = $internal_hostname else . end) | (if $internal_url != \"\" then .url = $internal_url else . end)) else . end)\n")
 	b.WriteString("  else . end)\n")
 	b.WriteString("' /var/lib/nf/sites.json >\"$tmp\" && install -o ")
 	b.WriteString(q(plan.Target.SSHUser))

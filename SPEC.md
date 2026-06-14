@@ -288,6 +288,7 @@ Do not add old compatibility routes unless explicitly requested.
 * [x] `nf site domain prepare <env|remote> <domain>` prepares public-domain readiness without mutating public DNS
 * [x] `nf site domain check <env|remote> <domain>` reports provider, DNS, HTTP, and HTTPS readiness
 * [x] `nf site domain primary <env|remote> <domain>` launches a canonical public domain with explicit aliases
+* [x] `nf site domain remove <env|remote> <domain>` removes public-domain bindings after domain renames or target moves
 * [x] `nf site remove [site]` remove a whole site
 * [x] `nf remote add [name] [env-id]` with cache validation and prompts for omitted values
 * [x] `nf remote show <name>`
@@ -404,7 +405,7 @@ Current readers:
 * `nf site shell/wp` remote command execution
 * `nf env logs [remote]` remote debug log tailing
 * `nf env password [remote]` local/remote password lookup
-* `nf site domain prepare/check/primary` public-domain readiness and launch state
+* `nf site domain prepare/check/primary/remove` public-domain readiness, launch, and retirement state
 
 Desired refresh behavior:
 
@@ -420,6 +421,8 @@ Provider-specific desired discovery:
 * Linode: read `/var/lib/nf/sites.json` over SSH from each target.
 
 Public launch domains are provider/env state, not repo remote identity. `nf site domain prepare` attaches/configures hostnames and prints the DNS records clients must create, but does not mutate client DNS. `nf site domain primary` sets the canonical public URL for the env and preserves the generated internal hostname as fallback state when known. Apex/www pairing is explicit through aliases so arbitrary subdomain launches such as `reports.client.com` are not accidentally coupled to `client.com`.
+
+`nf site domain remove` retires public-domain bindings when domains are renamed or moved between targets. Linode removal deletes nf-managed public vhosts, scripts, certbot units, and local/remote domain metadata, then resets the cached current URL to the generated internal fallback when the removed domain was primary. Kinsta removal deletes non-primary domains from the Kinsta environment and refuses to remove the current primary domain. Public DNS remains client-managed.
 
 Linode public domains default to direct/DNS-only origin behavior: public DNS is expected to point at the target IP and a public Let's Encrypt certificate is issued with HTTP-01. `--proxy cloudflare-strict` is the preferred explicit Linode mode for Cloudflare orange-cloud domains using Cloudflare SSL/TLS `Full (strict)`: public DNS may resolve to Cloudflare IPs, certbot continues to issue/renew a public-hostname Let's Encrypt origin certificate, `nf` skips public origin-IP DNS matching, and checks direct origin HTTPS separately from Cloudflare edge HTTPS. `--proxy cloudflare-full` is a fallback for Cloudflare SSL/TLS `Full`: nginx serves the public hostname over HTTPS with the target wildcard certificate and `nf` skips public origin-IP DNS matching, but this does not provide origin hostname validation.
 

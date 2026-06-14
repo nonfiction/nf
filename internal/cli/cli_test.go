@@ -3889,6 +3889,196 @@ func TestRunSiteDomainLinodePrepareCloudflareStrictKeepsLetsEncrypt(t *testing.T
 	}
 }
 
+func TestRunSiteDomainLinodeRemoveExecuteCleansPublicBindingAndResetsCache(t *testing.T) {
+	configDir := t.TempDir()
+	stateDir := t.TempDir()
+	t.Setenv("NF_CONFIG_HOME", configDir)
+	t.Setenv("NF_STATE_HOME", stateDir)
+	if err := saveGlobalConfig(map[string]string{"linode_default_user": "nonfiction"}); err != nil {
+		t.Fatalf("saveGlobalConfig() error = %v", err)
+	}
+	if err := state.SaveStateRecords("providers", []map[string]any{{"provider": "linode", "targets": []map[string]any{{"name": "app1-linode", "provider": "linode", "hostname": "app1-linode.nonfiction.dev", "public_ipv4": "203.0.113.10", "ssh": map[string]any{"user": "nonfiction", "host": "app1-linode.nonfiction.dev"}}}}}); err != nil {
+		t.Fatalf("SaveStateRecords(providers) error = %v", err)
+	}
+	if err := state.SaveStateRecords("sites", []map[string]any{{
+		"provider":          "linode",
+		"site_id":           "client.app1-linode",
+		"env_id":            "client.app1-linode:live",
+		"name":              "client",
+		"env":               "live",
+		"target":            "app1-linode",
+		"path":              "/var/www/sites/client/public",
+		"database":          "client",
+		"hostname":          "www.client.com",
+		"url":               "https://www.client.com",
+		"primary_domain":    "www.client.com",
+		"internal_hostname": "client.app1-linode.nonfiction.dev",
+		"internal_url":      "https://client.app1-linode.nonfiction.dev",
+		"domain_state":      "primary",
+		"proxy_mode":        "cloudflare_strict",
+		"domains":           []map[string]any{{"name": "www.client.com", "role": "canonical"}, {"name": "client.com", "role": "redirect"}},
+	}}); err != nil {
+		t.Fatalf("SaveStateRecords(sites) error = %v", err)
+	}
+
+	plan, err := buildSiteDomainPlan("client.app1-linode", "live", "remove", siteDomainOptions{canonical: "www.client.com", aliases: []string{"client.com"}, deleteCert: true})
+	if err != nil {
+		t.Fatalf("buildSiteDomainPlan() error = %v", err)
+	}
+	script := renderLinodeDomainRemoveScript(plan, true)
+	for _, want := range []string{"rm -f /etc/nginx/sites-enabled/nf-site-public-client.app1-linode.live", "systemctl disable --now nf-public-domain-client.app1-linode.live-tls.timer", "rm -f /etc/systemd/system/nf-public-domain-client.app1-linode.live-tls.service", "certbot delete --cert-name www.client.com --non-interactive", "--argjson remove_domains", "del(.domains, .domain_state, .proxy_mode)", ".hostname = $internal_hostname", ".url = $internal_url"} {
+		if !strings.Contains(script, want) {
+			t.Fatalf("linode remove script missing %q:\n%s", want, script)
+		}
+	}
+
+	var sshArgs []string
+	oldRunSSH := runSSHCommandFn
+	runSSHCommandFn = func(args []string) error {
+		sshArgs = append([]string{}, args...)
+		return nil
+	}
+	t.Cleanup(func() { runSSHCommandFn = oldRunSSH })
+	output := captureStdout(t, func() {
+		if got := Run([]string{"site", "domain", "remove", "client.app1-linode:live", "www.client.com", "--alias", "client.com", "--delete-cert", "--execute", "--yes", "--non-interactive"}); got != 0 {
+			t.Fatalf("Run(site domain remove linode) = %d, want 0", got)
+		}
+	})
+	for _, want := range []string{"Remove public domain plan:", "provider:  linode", "canonical: www.client.com", "aliases:   client.com", "provider: remove nf-managed public vhost", "TLS: delete the Let's Encrypt certificate lineage", "Site domain removed."} {
+		if !strings.Contains(output, want) {
+			t.Fatalf("site domain linode remove output missing %q:\n%s", want, output)
+		}
+	}
+	joinedArgs := strings.Join(sshArgs, " ")
+	for _, want := range []string{"ssh", "nonfiction@app1-linode.nonfiction.dev", "nf-site-public-client.app1-linode.live", "certbot delete --cert-name www.client.com"} {
+		if !strings.Contains(joinedArgs, want) {
+			t.Fatalf("ssh args missing %q:\n%#v", want, sshArgs)
+		}
+	}
+	records, err := state.LoadStateRecords("sites")
+	if err != nil {
+		t.Fatalf("LoadStateRecords(sites) error = %v", err)
+	}
+	record := records[0]
+	if got := recordValueString(record["hostname"]); got != "client.app1-linode.nonfiction.dev" {
+		t.Fatalf("hostname = %q, want internal fallback", got)
+	}
+	if got := recordValueString(record["url"]); got != "https://client.app1-linode.nonfiction.dev" {
+		t.Fatalf("url = %q, want internal fallback", got)
+	}
+	for _, key := range []string{"domains", "domain_state", "proxy_mode", "primary_domain"} {
+		if _, ok := record[key]; ok {
+			t.Fatalf("%s still present after remove: %#v", key, record)
+		}
+	}
+}
+
+func TestRunSiteDomainKinstaRemoveDeletesNonPrimaryAndRefusesPrimary(t *testing.T) {
+	stateDir := t.TempDir()
+	t.Setenv("NF_STATE_HOME", stateDir)
+	t.Setenv("KINSTA_API_KEY", "test-token")
+	if err := state.SaveStateRecords("sites", []map[string]any{{
+		"provider":       "kinsta",
+		"site_id":        "client.kinsta",
+		"env_id":         "client.kinsta:live",
+		"name":           "client",
+		"env":            "live",
+		"target":         "kinsta",
+		"hostname":       "www.client.com",
+		"url":            "https://www.client.com",
+		"primary_domain": "www.client.com",
+		"path":           "/www/client/public",
+		"ssh":            map[string]any{"host": "203.0.113.10", "port": "12345", "user": "client"},
+		"kinsta":         map[string]any{"site_id": "ksite123", "environment_id": "kenv-live", "domain_id": "kdom-www"},
+		"domains":        []map[string]any{{"name": "www.client.com", "role": "canonical", "domain_id": "kdom-www"}, {"name": "old.client.com", "role": "redirect", "domain_id": "kdom-old"}},
+	}}); err != nil {
+		t.Fatalf("SaveStateRecords(sites) error = %v", err)
+	}
+	deleteCalls := 0
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		switch r.Method + " " + r.URL.Path {
+		case "GET /sites/environments/kenv-live/domains":
+			_ = json.NewEncoder(w).Encode(map[string]any{"environment": map[string]any{"site_domains": []map[string]any{{"id": "kdom-www", "name": "www.client.com", "is_primary": true}, {"id": "kdom-old", "name": "old.client.com"}}}})
+		case "DELETE /sites/environments/kenv-live/domains":
+			deleteCalls++
+			var payload map[string][]string
+			if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
+				t.Fatalf("delete domain decode error = %v", err)
+			}
+			if !reflect.DeepEqual(payload["domain_ids"], []string{"kdom-old"}) {
+				t.Fatalf("delete payload = %#v", payload)
+			}
+			w.WriteHeader(http.StatusAccepted)
+			_ = json.NewEncoder(w).Encode(map[string]any{"operation_id": "op-delete-domain", "status": 202})
+		case "GET /operations/op-delete-domain":
+			_ = json.NewEncoder(w).Encode(map[string]any{"operation": map[string]any{"status": "complete"}})
+		default:
+			t.Fatalf("unexpected Kinsta request: %s %s", r.Method, r.URL.Path)
+		}
+	}))
+	t.Cleanup(server.Close)
+	t.Setenv("KINSTA_BASE_URL", server.URL)
+
+	output := captureStdout(t, func() {
+		if got := Run([]string{"site", "domain", "remove", "client.kinsta:live", "old.client.com", "--execute", "--yes", "--non-interactive"}); got != 0 {
+			t.Fatalf("Run(site domain remove kinsta old) = %d, want 0", got)
+		}
+	})
+	if !strings.Contains(output, "Removing Kinsta domain old.client.com") || !strings.Contains(output, "Site domain removed.") {
+		t.Fatalf("site domain kinsta remove output = %q, want success", output)
+	}
+	if deleteCalls != 1 {
+		t.Fatalf("deleteCalls = %d, want 1", deleteCalls)
+	}
+	records, err := state.LoadStateRecords("sites")
+	if err != nil {
+		t.Fatalf("LoadStateRecords(sites) error = %v", err)
+	}
+	domains, ok := records[0]["domains"].([]any)
+	if !ok || len(domains) != 1 || recordValueString(domains[0].(map[string]any)["name"]) != "www.client.com" {
+		t.Fatalf("domains after Kinsta remove = %#v, want only canonical", records[0]["domains"])
+	}
+
+	stderr := captureStderr(t, func() {
+		if got := Run([]string{"site", "domain", "remove", "client.kinsta:live", "www.client.com", "--execute", "--yes", "--non-interactive"}); got != 1 {
+			t.Fatalf("Run(site domain remove kinsta primary) = %d, want 1", got)
+		}
+	})
+	if !strings.Contains(stderr, "Kinsta domain \"www.client.com\" is primary") {
+		t.Fatalf("primary remove stderr = %q", stderr)
+	}
+}
+
+func TestRunSiteDomainPrepareWarnsWhenDomainCachedElsewhere(t *testing.T) {
+	configDir := t.TempDir()
+	stateDir := t.TempDir()
+	t.Setenv("NF_CONFIG_HOME", configDir)
+	t.Setenv("NF_STATE_HOME", stateDir)
+	if err := saveGlobalConfig(map[string]string{"linode_default_user": "nonfiction"}); err != nil {
+		t.Fatalf("saveGlobalConfig() error = %v", err)
+	}
+	if err := state.SaveStateRecords("providers", []map[string]any{{"provider": "linode", "targets": []map[string]any{{"name": "app1-linode", "provider": "linode", "hostname": "app1-linode.nonfiction.dev", "public_ipv4": "203.0.113.10", "ssh": map[string]any{"user": "nonfiction", "host": "app1-linode.nonfiction.dev"}}, {"name": "app4-linode", "provider": "linode", "hostname": "app4-linode.nonfiction.dev", "public_ipv4": "203.0.113.40", "ssh": map[string]any{"user": "nonfiction", "host": "app4-linode.nonfiction.dev"}}}}}); err != nil {
+		t.Fatalf("SaveStateRecords(providers) error = %v", err)
+	}
+	if err := state.SaveStateRecords("sites", []map[string]any{
+		{"provider": "linode", "site_id": "client.app1-linode", "env_id": "client.app1-linode:live", "name": "client", "env": "live", "target": "app1-linode", "path": "/var/www/sites/client/public", "database": "client", "hostname": "www.client.com", "url": "https://www.client.com", "proxy_mode": "cloudflare_strict", "domains": []map[string]any{{"name": "www.client.com", "role": "canonical"}}},
+		{"provider": "linode", "site_id": "client.app4-linode", "env_id": "client.app4-linode:live", "name": "client", "env": "live", "target": "app4-linode", "path": "/var/www/sites/client/public", "database": "client", "hostname": "client.app4-linode.nonfiction.dev", "url": "https://client.app4-linode.nonfiction.dev"},
+	}); err != nil {
+		t.Fatalf("SaveStateRecords(sites) error = %v", err)
+	}
+	output := captureStdout(t, func() {
+		if got := Run([]string{"site", "domain", "prepare", "client.app4-linode:live", "www.client.com", "--proxy", "cloudflare-strict", "--dry-run", "--non-interactive"}); got != 0 {
+			t.Fatalf("Run(site domain prepare duplicate dry-run) = %d, want 0", got)
+		}
+	})
+	for _, want := range []string{"Warning: www.client.com is also cached on client.app1-linode:live", "nf site domain remove client.app1-linode:live www.client.com --proxy cloudflare-strict", "Prepare public domain plan:"} {
+		if !strings.Contains(output, want) {
+			t.Fatalf("duplicate domain warning output missing %q:\n%s", want, output)
+		}
+	}
+}
+
 func TestRunSiteDomainKinstaCheckReportsReady(t *testing.T) {
 	stateDir := t.TempDir()
 	t.Setenv("NF_STATE_HOME", stateDir)

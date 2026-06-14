@@ -31,6 +31,7 @@ var (
 	kinstaRemoveSiteFn       = removeKinstaSite
 	kinstaPrepareDomainFn    = prepareKinstaSiteDomain
 	kinstaPrimaryDomainFn    = primaryKinstaSiteDomain
+	kinstaRemoveDomainFn     = removeKinstaSiteDomain
 	siteDomainLookupHostFn   = net.LookupHost
 	siteDomainLookupTXTFn    = net.LookupTXT
 	siteDomainLookupCNAMEFn  = net.LookupCNAME

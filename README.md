@@ -556,6 +556,7 @@ nf site basicauth password [site-id-or-alias]
 nf site domain prepare <site.target:env|remote> <domain> [--alias domain] [--proxy cloudflare-strict|cloudflare-full] [--setup avoid-downtime|quick] [--dry-run] [--execute --yes]
 nf site domain check <site.target:env|remote> <domain> [--alias domain] [--proxy cloudflare-strict|cloudflare-full]
 nf site domain primary <site.target:env|remote> <domain> [--alias domain] [--proxy cloudflare-strict|cloudflare-full] [--setup avoid-downtime|quick] [--search-replace] [--dry-run] [--execute --yes]
+nf site domain remove <site.target:env|remote> <domain> [--alias domain] [--delete-cert] [--dry-run] [--execute --yes]
 nf site remove [site-id-or-alias] [--dry-run] [--execute --yes]
 nf remote add [name] [site.target:env]
 nf remote show <name>
@@ -596,6 +597,7 @@ Current behavior:
 * `nf site domain prepare ...` makes the provider/env ready to answer a public hostname and prints the DNS records the client must create. It never mutates public/client DNS. Kinsta domains are added through the Kinsta API and Kinsta-provided verification/pointing records are printed. Linode domains update nginx on the target. By default Linode installs a certbot HTTP-01 retry timer so HTTPS is issued after client DNS points at the target. Add `--proxy cloudflare-strict` for the preferred Cloudflare-proxied Linode path: Cloudflare orange-cloud DNS, Cloudflare SSL/TLS `Full (strict)`, and a real Let's Encrypt origin certificate that continues to renew. Use `--proxy cloudflare-full` only when the origin should use the target wildcard certificate and Cloudflare should not strictly validate the origin hostname.
 * `nf site domain check ...` is read-only and reports provider/server readiness, expected public DNS, HTTP reachability, HTTPS certificate status, and whether the domain is already primary. It exits `0` when public checks are ready and `2` when DNS, HTTP, HTTPS, or provider readiness is still pending. With `--proxy cloudflare-strict` or `--proxy cloudflare-full`, Linode DNS checks verify the hostname resolves publicly but intentionally skip origin-IP matching because Cloudflare returns proxy IPs. Strict mode also checks the direct Linode origin certificate with SNI so `Full (strict)` renewal problems are visible before Cloudflare starts returning 526 errors.
 * `nf site domain primary ...` launches the canonical public hostname for the env. Pass aliases explicitly, for example `--alias client.com` when `www.client.com` should be canonical. Repo remotes in `nf.json` continue to point at env IDs, not domains.
+* `nf site domain remove ...` retires a public-domain binding after a domain rename or target move. Linode removal deletes the nf-managed public vhost, public-domain scripts, certbot timer/service, and domain metadata, then resets cached `hostname`/`url` to the generated internal fallback when the removed domain was primary. It keeps the Let's Encrypt lineage by default for rollback safety; add `--delete-cert` only after the rollback window. Kinsta removal deletes non-primary domains from the Kinsta environment and refuses to remove the current primary domain.
 * `nf site remove [site]` removes a whole Linode site and deletes its env data.
 * `nf remote add` validates an env ID against the cache, then repo remotes are stored in `nf.json` under `remotes` as `<site>.<target>:<env>` refs.
 * `nf site shell/wp ...` validate the cache, print the SSH or wp-cli command preview, then execute the remote command.
@@ -654,7 +656,15 @@ nf site domain primary production www.client.com --alias client.com --search-rep
 
 8. Run `check` again after `primary`. Confirm the domain is primary, DNS is still correct, HTTP does not redirect to the generated internal hostname, HTTPS is valid, and aliases behave as expected.
 
-9. Keep the generated internal hostname as fallback metadata. Do not change `nf.json` remotes from env IDs to public domains.
+9. If this launch moved a domain from another target/env, retire the old binding after cutover. Include the same aliases that were attached to the old env.
+
+```sh
+nf site domain remove client.app1-linode:live www.client.com --alias client.com --proxy cloudflare-strict
+```
+
+Use `--delete-cert` only after the rollback window if you also want to remove the old Let's Encrypt lineage. Otherwise certbot may later try to renew the old cert after DNS has moved, but keeping it briefly makes rollback safer.
+
+10. Keep the generated internal hostname as fallback metadata. Do not change `nf.json` remotes from env IDs to public domains.
 
 ## Password derivation
 
