@@ -232,9 +232,11 @@ func siteCompletionCandidates(args []string) []string {
 
 func siteDomainCompletionCandidates(args []string) []string {
 	if len(args) == 0 {
-		return []string{"prepare", "check", "primary", "remove", "help"}
+		return []string{"list", "ls", "prepare", "check", "primary", "remove", "help"}
 	}
 	switch args[0] {
+	case "list", "ls":
+		return append(cachedSiteAndEnvCompletionNames(), projectRemoteCompletionNames()...)
 	case "prepare", "primary", "check", "remove":
 		flags := []string{"--canonical", "--alias", "--proxy", "--setup", "--dry-run", "--execute", "--yes", "--non-interactive"}
 		if args[0] == "check" {

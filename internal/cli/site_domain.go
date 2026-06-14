@@ -78,7 +78,14 @@ func runSiteDomain(argv []string) int {
 	if len(argv) == 0 || argv[0] == "help" || argv[0] == "--help" || argv[0] == "-h" {
 		return runSiteDomainHelp()
 	}
-	action := strings.TrimSpace(argv[0])
+	action := cliCommandAlias(strings.TrimSpace(argv[0]))
+	if action == "list" {
+		filter, ok := parseSiteDomainListArgs(argv[1:])
+		if !ok {
+			return 1
+		}
+		return cmdSiteDomainList(filter)
+	}
 	if action != "prepare" && action != "primary" && action != "check" && action != "remove" {
 		fmt.Fprintf(os.Stderr, "unsupported site domain action: %s\n", action)
 		return 1
@@ -92,6 +99,7 @@ func runSiteDomain(argv []string) int {
 
 func runSiteDomainHelp() int {
 	printGroupHelp("site domain", []helpLine{
+		{"list [site|env|remote]", "list cached public domain bindings"},
 		{"prepare <env|remote> <domain> [flags]", "make a provider/env ready for a public domain"},
 		{"check <env|remote> <domain> [flags]", "check DNS, provider, HTTP, and HTTPS readiness"},
 		{"primary <env|remote> <domain> [flags]", "launch a canonical public domain"},
@@ -108,8 +116,111 @@ func runSiteDomainHelp() int {
 		{"--execute", "execute the mutation plan"},
 		{"--yes", "confirm mutation execution"},
 		{"--non-interactive", "fail instead of prompting"},
+		{},
+		{"refresh", "run nf site refresh to update cached domain listings"},
 	})
 	return 0
+}
+
+func parseSiteDomainListArgs(argv []string) (string, bool) {
+	filter := ""
+	for _, arg := range argv {
+		if strings.HasPrefix(arg, "-") {
+			fmt.Fprintf(os.Stderr, "unknown site domain list flag: %s\n", arg)
+			return "", false
+		}
+		if filter != "" {
+			fmt.Fprintln(os.Stderr, "site domain list takes at most one site, env, or remote")
+			return "", false
+		}
+		filter = arg
+	}
+	return filter, true
+}
+
+func cmdSiteDomainList(filter string) int {
+	resolved := strings.TrimSpace(filter)
+	if resolved != "" {
+		var err error
+		resolved, _, _, _, err = resolveSiteTarget(resolved)
+		if err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			return 1
+		}
+	}
+	records, err := state.LoadStateRecords("sites")
+	if err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		return 1
+	}
+	rows := [][]string{{"domain", "site", "env", "role", "state", "provider", "proxy", "url"}}
+	for _, record := range records {
+		if resolved != "" && !siteDomainListRecordMatches(record, resolved) {
+			continue
+		}
+		for _, domain := range siteDomainListDomains(record) {
+			rows = append(rows, []string{
+				domain.name,
+				siteRecordID(record),
+				siteEnvName(record),
+				domain.role,
+				firstRecordString(record, "domain_state"),
+				recordValueString(record["provider"]),
+				firstRecordString(record, "proxy_mode"),
+				firstRecordString(record, "url", "site_url", "home_url"),
+			})
+		}
+	}
+	if len(rows) == 1 {
+		if resolved != "" {
+			fmt.Printf("No site domains found for %q.\n", filter)
+		} else {
+			fmt.Println("No site domains found.")
+		}
+		return 0
+	}
+	fmt.Println(formatTable(rows))
+	return 0
+}
+
+func siteDomainListRecordMatches(record map[string]any, filter string) bool {
+	if siteID, env, ok := splitSiteEnvRef(filter); ok {
+		return siteEnvMatchesSite(record, siteID) && siteEnvMatchesEnv(record, env)
+	}
+	return siteEnvMatchesSite(record, filter)
+}
+
+type siteDomainListDomain struct {
+	name string
+	role string
+}
+
+func siteDomainListDomains(record map[string]any) []siteDomainListDomain {
+	seen := map[string]bool{}
+	domains := []siteDomainListDomain{}
+	add := func(name, role string) {
+		name = normalizeDomainName(hostnameFromURLish(name))
+		if name == "" || seen[name] {
+			return
+		}
+		seen[name] = true
+		domains = append(domains, siteDomainListDomain{name: name, role: firstNonEmpty(role, "public")})
+	}
+	for _, entry := range siteDomainEntryValues(record["domains"]) {
+		role := ""
+		if typed, ok := entry.(map[string]any); ok {
+			role = firstRecordString(typed, "role")
+		}
+		add(siteDomainEntryName(entry), role)
+	}
+	add(firstRecordString(record, "primary_domain"), "primary")
+	if host := hostnameFromURLish(firstRecordString(record, "hostname")); !looksLikeInternalSiteHostname(record, host) {
+		add(host, "current")
+	}
+	if host := hostnameFromURLish(firstRecordString(record, "url", "site_url", "home_url")); !looksLikeInternalSiteHostname(record, host) {
+		add(host, "current")
+	}
+	return domains
 }
 
 func parseSiteDomainActionArgs(action string, argv []string) (string, siteDomainOptions, bool) {
