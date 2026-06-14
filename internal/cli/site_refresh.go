@@ -317,12 +317,13 @@ func discoverKinstaTargetSites(target map[string]any) ([]map[string]any, error) 
 		for i, env := range envs {
 			envName := kinstaCacheEnvName(env, i)
 			phpVersion := env.CurrentPHPVersion()
+			domains, err := client.ListDomains(ctx, env.ID)
+			if err != nil {
+				return nil, fmt.Errorf("site %s env %s domains: %w", siteName, envName, err)
+			}
 			domain := kinstaEnvPrimaryDomain(env)
 			if domain.ID == "" || domainName(domain) == "" {
-				domains, err := client.ListDomains(ctx, env.ID)
-				if err == nil {
-					domain = preferredKinstaDomain(domains)
-				}
+				domain = preferredKinstaDomain(domains)
 			}
 			cfg, _ := client.SFTPConfig(ctx, site.ID, env.ID)
 			pathValue := kinstaEnvPath(firstNonEmpty(cfg.User, siteName), env.WebRoot)
@@ -331,7 +332,7 @@ func discoverKinstaTargetSites(target map[string]any) ([]map[string]any, error) 
 			port := firstNonEmpty(cfg.Port, env.SSHConnection.SSHPort, "22")
 			user := cfg.User
 			domainValue := domainName(domain)
-			records = append(records, map[string]any{
+			record := map[string]any{
 				"provider":    "kinsta",
 				"env_id":      canonicalEnvID(siteID, envName),
 				"site_id":     siteID,
@@ -351,7 +352,15 @@ func discoverKinstaTargetSites(target map[string]any) ([]map[string]any, error) 
 					"domain_id":      domain.ID,
 					"branch":         kinstaEnvBranch(envName),
 				},
-			})
+			}
+			if entries := kinstaDomainCacheEntries(domains, domain); len(entries) > 0 {
+				record["domains"] = entries
+			}
+			if primaryDomain := kinstaPrimaryPublicDomain(domains, domain); primaryDomain != "" {
+				record["primary_domain"] = primaryDomain
+				record["domain_state"] = "primary"
+			}
+			records = append(records, record)
 		}
 	}
 	return records, nil
@@ -389,6 +398,52 @@ func preferredKinstaDomain(domains []kinsta.Domain) kinsta.Domain {
 
 func domainName(domain kinsta.Domain) string {
 	return firstNonEmpty(domain.Name, domain.Domain, domain.DomainName)
+}
+
+func kinstaDomainCacheEntries(domains []kinsta.Domain, primary kinsta.Domain) []map[string]any {
+	entries := []map[string]any{}
+	seen := map[string]bool{}
+	primaryID := strings.TrimSpace(primary.ID)
+	primaryName := normalizeDomainName(domainName(primary))
+	for _, domain := range domains {
+		name := normalizeDomainName(domainName(domain))
+		if name == "" || seen[name] || kinstaInternalDomainName(name) {
+			continue
+		}
+		seen[name] = true
+		role := "redirect"
+		if domain.IsPrimary || (primaryID != "" && domain.ID == primaryID) || (primaryName != "" && name == primaryName) {
+			role = "canonical"
+		}
+		entry := map[string]any{"name": name, "role": role}
+		if domain.ID != "" {
+			entry["domain_id"] = domain.ID
+		}
+		entries = append(entries, entry)
+	}
+	return entries
+}
+
+func kinstaPrimaryPublicDomain(domains []kinsta.Domain, primary kinsta.Domain) string {
+	primaryID := strings.TrimSpace(primary.ID)
+	primaryName := normalizeDomainName(domainName(primary))
+	for _, domain := range domains {
+		name := normalizeDomainName(domainName(domain))
+		if name == "" || kinstaInternalDomainName(name) {
+			continue
+		}
+		if domain.IsPrimary || (primaryID != "" && domain.ID == primaryID) || (primaryName != "" && name == primaryName) {
+			return name
+		}
+	}
+	if primaryName != "" && !kinstaInternalDomainName(primaryName) {
+		return primaryName
+	}
+	return ""
+}
+
+func kinstaInternalDomainName(name string) bool {
+	return strings.Contains(normalizeDomainName(name), ".kinsta.")
 }
 
 func kinstaURL(domain string) string {
