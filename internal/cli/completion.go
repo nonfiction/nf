@@ -105,6 +105,8 @@ func completeContextCandidates(args []string) []string {
 		return targetCompletionCandidates(args[1:])
 	case "site":
 		return siteCompletionCandidates(args[1:])
+	case "domain":
+		return siteDomainCompletionCandidates(args[1:])
 	case "config":
 		return []string{"init", "show", "set-base-domain", "set-default-wp-email", "set-default-wp-user", "set-basicauth-default-user", "set-adminer-default-user", "set-docker-db-image", "set-docker-wordpress-image", "set-docker-user", "set-kinsta-default-region", "set-kinsta-default-php", "set-linode-default-region", "set-linode-default-type", "set-linode-default-image", "set-linode-default-user", "help"}
 	case "password":
@@ -123,7 +125,7 @@ func completeContextCandidates(args []string) []string {
 }
 
 func rootCompletionCandidates() []string {
-	candidates := []string{"init", "provider", "target", "site", "config", "password", "completion", "version", "help"}
+	candidates := []string{"init", "provider", "target", "site", "domain", "config", "password", "completion", "version", "help"}
 	if projectContextAvailable() {
 		candidates = append(candidates, "remote", "env", "theme", "public")
 	}
@@ -184,7 +186,7 @@ func targetAddFlagCandidates() []string {
 
 func siteCompletionCandidates(args []string) []string {
 	if len(args) == 0 {
-		return []string{"list", "ls", "show", "shell", "sh", "wp", "export", "snapshot", "password", "basicauth", "domain", "refresh", "add", "staging", "remove", "rm", "help"}
+		return []string{"list", "ls", "show", "shell", "sh", "wp", "export", "snapshot", "password", "basicauth", "refresh", "add", "staging", "remove", "rm", "help"}
 	}
 	args[0] = cliCommandAlias(args[0])
 	switch args[0] {
@@ -214,8 +216,6 @@ func siteCompletionCandidates(args []string) []string {
 		return append(cachedSiteAndEnvCompletionNames(), "--wp", "--db", "--basicauth")
 	case "basicauth":
 		return siteBasicAuthCompletionCandidates(args[1:])
-	case "domain":
-		return siteDomainCompletionCandidates(args[1:])
 	case "staging":
 		return siteStagingCompletionCandidates(args[1:])
 	case "remove":
@@ -232,17 +232,24 @@ func siteCompletionCandidates(args []string) []string {
 
 func siteDomainCompletionCandidates(args []string) []string {
 	if len(args) == 0 {
-		return []string{"list", "ls", "prepare", "check", "primary", "remove", "help"}
+		return []string{"list", "ls", "add", "check", "primary", "remove", "rm", "help"}
 	}
+	args[0] = cliCommandAlias(args[0])
 	switch args[0] {
 	case "list", "ls":
 		return append(cachedSiteAndEnvCompletionNames(), projectRemoteCompletionNames()...)
-	case "prepare", "primary", "check", "remove":
-		flags := []string{"--canonical", "--alias", "--proxy", "--setup", "--dry-run", "--execute", "--yes", "--non-interactive"}
+	case "add", "primary", "check", "remove":
+		flags := []string{"--proxy", "--setup", "--dry-run", "--execute", "--yes", "--non-interactive"}
+		if args[0] == "add" {
+			flags = append(flags, "--primary")
+		}
 		if args[0] == "check" {
-			flags = []string{"--canonical", "--alias", "--proxy", "--non-interactive"}
+			flags = []string{"--proxy", "--non-interactive"}
 		} else if args[0] == "remove" {
-			flags = []string{"--canonical", "--alias", "--proxy", "--delete-cert", "--dry-run", "--execute", "--yes", "--non-interactive"}
+			flags = []string{"--proxy", "--delete-cert", "--dry-run", "--execute", "--yes", "--non-interactive"}
+		}
+		if args[0] == "add" {
+			flags = append(flags, "--search-replace")
 		}
 		if args[0] == "primary" {
 			flags = append(flags, "--search-replace", "--force", "--wait-timeout", "--wait-interval")

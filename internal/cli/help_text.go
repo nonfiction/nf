@@ -96,13 +96,16 @@ func runSiteHelp() int {
 		{"snapshot [env|list|remove|prune] [flags]", "manage remote snapshots"},
 		{"export [env] [--output path] [--dry-run]", "create a full WordPress handoff export"},
 		{"basicauth <action> [site|env]", "manage provider basic auth"},
-		{"domain <action> <env> <domain>", "prepare, check, launch, or remove public domains"},
 		{},
 		{"add <target> <site> [flags]", "create a live env"},
 		{"staging <action> <site> [flags]", "manage staging env lifecycle"},
 		{"remove, rm [site] [flags]", "remove a whole site"},
 	})
 	return 0
+}
+
+func runDomainHelp() int {
+	return runSiteDomainHelp()
 }
 
 func runConfigHelp() int {

@@ -779,6 +779,7 @@ func runHelp() int {
 		{"provider", "manage provider integrations"},
 		{"target", "manage deployable targets"},
 		{"site", "manage remote sites and envs"},
+		{"domain", "manage remote env domains"},
 		{"password", "derive passwords"},
 	}
 	if projectContextAvailable() {

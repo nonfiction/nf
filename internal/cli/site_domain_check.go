@@ -95,9 +95,9 @@ func printSiteDomainCheckNextStep(plan siteDomainPlan, result siteDomainReadines
 	if result.Ready && result.Primary {
 		fmt.Println("  domain is primary and public checks passed")
 	} else if result.Ready {
-		fmt.Printf("  ready for primary: nf site domain primary %s %s%s%s\n", plan.EnvID, plan.Canonical, siteDomainAliasArgs(plan.Aliases), siteDomainProxyArg(plan.ProxyMode))
+		fmt.Printf("  ready for primary: nf domain primary %s %s%s\n", plan.EnvID, plan.Canonical, siteDomainProxyArg(plan.ProxyMode))
 	} else {
-		fmt.Println("  wait for pending checks, then run nf site domain check again")
+		fmt.Println("  wait for pending checks, then run nf domain check again")
 	}
 }
 
@@ -121,25 +121,17 @@ func printSiteDomainCheckHeader(plan siteDomainPlan) {
 	if plan.InternalURL != "" {
 		fmt.Printf("  fallback:  %s\n", plan.InternalURL)
 	}
-	fmt.Printf("  canonical: %s\n", plan.Canonical)
-	if len(plan.Aliases) > 0 {
-		fmt.Printf("  aliases:   %s\n", strings.Join(plan.Aliases, ", "))
+	if plan.Primary {
+		fmt.Printf("  primary:   %s\n", plan.Canonical)
+		if len(plan.Aliases) > 0 {
+			fmt.Printf("  secondary: %s\n", strings.Join(plan.Aliases, ", "))
+		}
+	} else {
+		fmt.Printf("  domains:   %s\n", strings.Join(plan.allDomains(), ", "))
 	}
 	if plan.ProxyMode != "" {
 		fmt.Printf("  proxy:     %s\n", displaySiteDomainProxyMode(plan.ProxyMode))
 	}
-}
-
-func siteDomainAliasArgs(aliases []string) string {
-	if len(aliases) == 0 {
-		return ""
-	}
-	var b strings.Builder
-	for _, alias := range aliases {
-		b.WriteString(" --alias ")
-		b.WriteString(alias)
-	}
-	return b.String()
 }
 
 func checkSiteDomainProvider(plan siteDomainPlan) (siteDomainProviderCheck, error) {
@@ -149,7 +141,7 @@ func checkSiteDomainProvider(plan siteDomainPlan) (siteDomainProviderCheck, erro
 	case "linode":
 		return checkLinodeSiteDomainProvider(plan), nil
 	default:
-		return siteDomainProviderCheck{}, ProjectError{Msg: fmt.Sprintf("site domain check is not implemented for provider %q", plan.Provider)}
+		return siteDomainProviderCheck{}, ProjectError{Msg: fmt.Sprintf("domain check is not implemented for provider %q", plan.Provider)}
 	}
 }
 
@@ -167,9 +159,9 @@ func checkKinstaSiteDomainProvider(plan siteDomainPlan) (siteDomainProviderCheck
 	}
 	out := siteDomainProviderCheck{Ready: true, Description: []string{"Kinsta:"}}
 	for i, name := range plan.allDomains() {
-		role := "canonical"
-		if i > 0 {
-			role = "redirect"
+		role := "secondary"
+		if plan.Primary && i == 0 {
+			role = "primary"
 		}
 		domain, ok := kinsta.FindDomain(domains, name)
 		if !ok {
@@ -179,6 +171,9 @@ func checkKinstaSiteDomainProvider(plan siteDomainPlan) (siteDomainProviderCheck
 		}
 		if i == 0 && domain.IsPrimary {
 			out.Primary = true
+		}
+		if domain.IsPrimary {
+			role = "primary"
 		}
 		primaryLabel := ""
 		if domain.IsPrimary {
@@ -251,37 +246,34 @@ func checkLinodeSiteDomainProvider(plan siteDomainPlan) siteDomainProviderCheck 
 
 func renderLinodeDomainCheckScript(plan siteDomainPlan) string {
 	q := shellQuoteArg
-	fileSlug := plan.FileSlug
-	if fileSlug == "" {
-		fileSlug = envIDFileSlug(plan.EnvID)
-	}
-	serviceName := "nf-public-domain-" + fileSlug + "-tls"
-	publicVhost := "/etc/nginx/sites-available/nf-site-public-" + fileSlug
-	publicEnabled := "/etc/nginx/sites-enabled/nf-site-public-" + fileSlug
-	certDir := "/etc/letsencrypt/live/" + plan.Canonical
 	var b strings.Builder
 	b.WriteString("set -euo pipefail\n")
-	b.WriteString("if [ -f ")
-	b.WriteString(q(publicVhost))
-	b.WriteString(" ]; then echo vhost=present; else echo vhost=missing; fi\n")
-	b.WriteString("if [ -L ")
-	b.WriteString(q(publicEnabled))
-	b.WriteString(" ] || [ -f ")
-	b.WriteString(q(publicEnabled))
-	b.WriteString(" ]; then echo enabled=present; else echo enabled=missing; fi\n")
-	b.WriteString("if systemctl is-active --quiet ")
-	b.WriteString(q(serviceName + ".timer"))
-	b.WriteString("; then echo timer=active; elif systemctl list-unit-files ")
-	b.WriteString(q(serviceName + ".timer"))
-	b.WriteString(" >/dev/null 2>&1; then echo timer=inactive; else echo timer=missing; fi\n")
-	b.WriteString("service_state=$(systemctl is-active ")
-	b.WriteString(q(serviceName + ".service"))
-	b.WriteString(" 2>/dev/null || true); if [ -n \"$service_state\" ]; then echo service=$service_state; else echo service=unknown; fi\n")
-	b.WriteString("if [ -f ")
-	b.WriteString(q(certDir + "/fullchain.pem"))
-	b.WriteString(" ] && [ -f ")
-	b.WriteString(q(certDir + "/privkey.pem"))
-	b.WriteString(" ]; then echo cert=ready; else echo cert=missing; fi\n")
+	b.WriteString("vhost=present\nenabled=present\ntimer=active\ncert=ready\nservice=unknown\n")
+	for _, domain := range plan.allDomains() {
+		art := linodeDomainArtifacts(domain)
+		b.WriteString("if [ ! -f ")
+		b.WriteString(q(art.Vhost))
+		b.WriteString(" ]; then vhost=missing; fi\n")
+		b.WriteString("if [ ! -L ")
+		b.WriteString(q(art.Enabled))
+		b.WriteString(" ] && [ ! -f ")
+		b.WriteString(q(art.Enabled))
+		b.WriteString(" ]; then enabled=missing; fi\n")
+		b.WriteString("if ! systemctl is-active --quiet ")
+		b.WriteString(q(art.ServiceName + ".timer"))
+		b.WriteString("; then if systemctl list-unit-files ")
+		b.WriteString(q(art.ServiceName + ".timer"))
+		b.WriteString(" >/dev/null 2>&1; then timer=inactive; else timer=missing; fi; fi\n")
+		b.WriteString("state=$(systemctl is-active ")
+		b.WriteString(q(art.ServiceName + ".service"))
+		b.WriteString(" 2>/dev/null || true); if [ -n \"$state\" ]; then service=$state; fi\n")
+		b.WriteString("if [ ! -f ")
+		b.WriteString(q(art.CertDir + "/fullchain.pem"))
+		b.WriteString(" ] || [ ! -f ")
+		b.WriteString(q(art.CertDir + "/privkey.pem"))
+		b.WriteString(" ]; then cert=missing; fi\n")
+	}
+	b.WriteString("echo vhost=$vhost\necho enabled=$enabled\necho timer=$timer\necho service=$service\necho cert=$cert\n")
 	return b.String()
 }
 

@@ -285,10 +285,11 @@ Do not add old compatibility routes unless explicitly requested.
 * [x] `nf site shell <env-id>`
 * [x] `nf site wp <env-id> -- <args>`
 * [x] `nf site password [site|env] [--wp|--db|--basicauth]`
-* [x] `nf site domain prepare <env|remote> <domain>` prepares public-domain readiness without mutating public DNS
-* [x] `nf site domain check <env|remote> <domain>` reports provider, DNS, HTTP, and HTTPS readiness
-* [x] `nf site domain primary <env|remote> <domain>` launches a canonical public domain with explicit aliases
-* [x] `nf site domain remove <env|remote> <domain>` removes public-domain bindings after domain renames or target moves
+* [x] `nf domain list [site|env|remote]` shows cached domain inventory
+* [x] `nf domain add <env|remote> <domain> [domain...] [--primary]` attaches public domains without mutating public DNS
+* [x] `nf domain check <env|remote> [domain...]` reports provider, DNS, HTTP, and HTTPS readiness
+* [x] `nf domain primary <env|remote> <domain>` launches a primary public domain
+* [x] `nf domain remove <env|remote> <domain> [domain...]` removes public-domain bindings after domain renames or target moves
 * [x] `nf site remove [site]` remove a whole site
 * [x] `nf remote add [name] [env-id]` with cache validation and prompts for omitted values
 * [x] `nf remote show <name>`
@@ -405,7 +406,7 @@ Current readers:
 * `nf site shell/wp` remote command execution
 * `nf env logs [remote]` remote debug log tailing
 * `nf env password [remote]` local/remote password lookup
-* `nf site domain prepare/check/primary/remove` public-domain readiness, launch, and retirement state
+* `nf domain add/check/primary/remove` public-domain readiness, launch, and retirement state
 
 Desired refresh behavior:
 
@@ -420,13 +421,13 @@ Provider-specific desired discovery:
 * Kinsta: use Kinsta API site/env endpoints.
 * Linode: read `/var/lib/nf/sites.json` over SSH from each target.
 
-Public launch domains are provider/env state, not repo remote identity. `nf site domain prepare` attaches/configures hostnames and prints the DNS records clients must create, but does not mutate client DNS. `nf site domain primary` sets the canonical public URL for the env and preserves the generated internal hostname as fallback state when known. Apex/www pairing is explicit through aliases so arbitrary subdomain launches such as `reports.client.com` are not accidentally coupled to `client.com`. `nf site domain list` shows full env IDs, user-managed public bindings as `type` `canonical`/`redirect`, and nf-created env hostnames as `type` `default`, `status` `managed`.
+Public launch domains are provider/env state, not repo remote identity. `nf domain add` attaches/configures hostnames and prints the DNS records clients must create, but does not mutate client DNS. `nf domain primary` sets the primary public URL for the env and preserves the generated internal hostname as fallback state when known. Apex/www pairing is explicit through positional domains so arbitrary subdomain launches such as `reports.client.com` are not accidentally coupled to `client.com`. `nf domain list` shows full env IDs and columns for `role` (`primary` or `secondary`), `management` (`internal` or `external`), and `status` (`active`, `verified`, `unverified`, or `pending`). The generated provider hostname is internal and is primary only until an external primary is set; after that it remains an internal secondary fallback.
 
-`nf site domain primary` asks for launch approval before waiting, polls the same readiness checks as `nf site domain check`, and runs the primary launch automatically as soon as checks pass. It must not prompt again after checks pass; the default behavior is unattended wait-then-cutover. If checks never pass before the timeout, it exits without changing primary state. `--force` is the explicit bypass for launching immediately without readiness checks.
+Every env should have exactly one primary domain and zero or more secondaries. `nf domain add --primary a.com b.com` makes `a.com` primary and `b.com` secondary. Without `--primary`, added domains are secondary and redirect to the current primary. `nf domain primary` asks for launch approval before waiting, polls the same readiness checks as `nf domain check`, and runs the primary launch automatically as soon as checks pass. It must not prompt again after checks pass; the default behavior is unattended wait-then-cutover. If checks never pass before the timeout, it exits without changing primary state. `--force` is the explicit bypass for launching immediately without readiness checks.
 
-`nf site domain remove` retires public-domain bindings when domains are renamed or moved between targets. Linode removal deletes nf-managed public vhosts, scripts, certbot units, and local/remote domain metadata, then resets the cached current URL to the generated internal fallback when the removed domain was primary. Kinsta removal deletes non-primary domains from the Kinsta environment and refuses to remove the current primary domain. Public DNS remains client-managed.
+`nf domain remove` retires public-domain bindings when domains are renamed or moved between targets. Linode removal deletes nf-managed per-domain public vhosts, scripts, certbot units, and local/remote domain metadata, then resets the cached current URL to the generated internal fallback when the removed domain was primary. Kinsta removal deletes non-primary domains from the Kinsta environment and refuses to remove the current primary domain. Public DNS remains client-managed.
 
-Linode public domains default to direct/DNS-only origin behavior: public DNS is expected to point at the target IP and a public Let's Encrypt certificate is issued with HTTP-01. `--proxy cloudflare` is the explicit Linode mode for Cloudflare orange-cloud domains using Cloudflare SSL/TLS `Full (strict)`: public DNS must resolve to Cloudflare IP ranges, certbot continues to issue/renew a public-hostname Let's Encrypt origin certificate only after Cloudflare-fronted ACME challenge reachability is confirmed, `nf` skips public origin-IP DNS matching, and checks direct origin HTTPS separately from Cloudflare edge HTTPS.
+Linode public domains default to direct/DNS-only origin behavior: public DNS is expected to point at the target IP and a public Let's Encrypt certificate is issued with HTTP-01 for each external domain. Secondary Linode domains 302 redirect to the current primary. Domain names must be unique within a Linode target because nginx rejects duplicate `server_name` values; target-side updates lock and validate `/var/lib/nf/sites.json` before writing per-domain vhosts. `--proxy cloudflare` is the explicit Linode mode for Cloudflare orange-cloud domains using Cloudflare SSL/TLS `Full (strict)`: public DNS must resolve to Cloudflare IP ranges, certbot continues to issue/renew public-hostname Let's Encrypt origin certificates only after Cloudflare-fronted ACME challenge reachability is confirmed, `nf` skips public origin-IP DNS matching, and checks direct origin HTTPS separately from Cloudflare edge HTTPS.
 
 ## Project metadata model
 

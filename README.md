@@ -553,10 +553,11 @@ nf site basicauth status <site.target:env>
 nf site basicauth enable <site.target:env> [--dry-run] [--execute --yes]
 nf site basicauth disable <site.target:env> [--dry-run] [--execute --yes]
 nf site basicauth password [site-id-or-alias]
-nf site domain prepare <site.target:env|remote> <domain> [--alias domain] [--proxy cloudflare] [--setup avoid-downtime|quick] [--dry-run] [--execute --yes]
-nf site domain check <site.target:env|remote> <domain> [--alias domain] [--proxy cloudflare]
-nf site domain primary <site.target:env|remote> <domain> [--alias domain] [--proxy cloudflare] [--setup avoid-downtime|quick] [--search-replace] [--force] [--wait-timeout 30m] [--wait-interval 30s] [--dry-run] [--execute --yes]
-nf site domain remove <site.target:env|remote> <domain> [--alias domain] [--delete-cert] [--dry-run] [--execute --yes]
+nf domain list [site|site.target:env|remote]
+nf domain add <site.target:env|remote> <domain> [domain...] [--primary] [--proxy cloudflare] [--setup avoid-downtime|quick] [--dry-run] [--execute --yes]
+nf domain check <site.target:env|remote> [domain...] [--proxy cloudflare]
+nf domain primary <site.target:env|remote> <domain> [--proxy cloudflare] [--setup avoid-downtime|quick] [--search-replace] [--force] [--wait-timeout 30m] [--wait-interval 30s] [--dry-run] [--execute --yes]
+nf domain remove <site.target:env|remote> <domain> [domain...] [--delete-cert] [--dry-run] [--execute --yes]
 nf site remove [site-id-or-alias] [--dry-run] [--execute --yes]
 nf remote add [name] [site.target:env]
 nf remote show <name>
@@ -594,11 +595,11 @@ Current behavior:
 * `nf site password [site|env] [--wp|--db|--basicauth]` prints only one selected site password. `--wp` is the default. Env refs are accepted for `--db`; use a site ref for `--wp` or `--basicauth`. Linode WordPress, DB, and basic-auth passwords are derived from the site slug, purpose, `NF_PASSWORD_SALT`, and `project.password_version`; Kinsta DB password output uses the Kinsta SFTP password endpoint.
 * Linode site/env database creation grants the shared Adminer MySQL user privileges only on created site env databases and refuses to create a site DB user with the same name as the shared Adminer MySQL user. Site removal revokes per-database grants before dropping the databases.
 * `nf site basicauth ...` uses `basicauth_default_user` from `config.json` and a per-site derived password with `project.password_version` as the rotation source. Linode envs are managed over SSH by updating the selected env nginx vhost, including multi-vhost target nginx scripts. Kinsta Password protection exists in MyKinsta, but currently requires manual MyKinsta use because no public API endpoint is exposed.
-* `nf site domain list` shows active domain inventory from the site cache, keyed by full env IDs like `client.app1-linode:live`. User-managed public bindings appear as `type` `canonical` or `redirect` with `status` `prepared` or `primary`. nf-created env hostnames appear as `type` `default` with `status` `managed`; they are not removable public-domain bindings.
-* `nf site domain prepare ...` makes the provider/env ready to answer a public hostname and prints the DNS records the client must create. It never mutates public/client DNS. Kinsta domains are added through the Kinsta API and Kinsta-provided verification/pointing records are printed. Linode domains update nginx on the target. By default Linode installs a certbot HTTP-01 retry timer so HTTPS is issued after client DNS points at the target. Add `--proxy cloudflare` for Cloudflare-proxied Linode domains using Cloudflare SSL/TLS `Full (strict)` and a real Let's Encrypt origin certificate that continues to renew; in that mode the timer waits until DNS resolves to Cloudflare IP ranges and the ACME challenge path is publicly reachable through Cloudflare before invoking certbot.
-* `nf site domain check ...` is read-only and reports provider/server readiness, expected public DNS, HTTP reachability, HTTPS certificate status, and whether the domain is already primary. It exits `0` when public checks are ready and `2` when DNS, HTTP, HTTPS, or provider readiness is still pending. With `--proxy cloudflare`, Linode DNS checks verify public DNS resolves to Cloudflare IP ranges from Cloudflare's published list, skip origin-IP matching, and check direct Linode origin HTTPS with SNI so `Full (strict)` renewal problems are visible before Cloudflare starts returning 526 errors.
-* `nf site domain primary ...` launches the canonical public hostname for the env. Pass aliases explicitly, for example `--alias client.com` when `www.client.com` should be canonical. By default execution approves once up front, polls the same readiness checks as `nf site domain check`, then launches immediately when checks pass without a second prompt. `--wait-timeout` defaults to `30m`; `--wait-interval` defaults to `30s`. Add `--force` only to bypass readiness checks and launch immediately. Repo remotes in `nf.json` continue to point at env IDs, not domains.
-* `nf site domain remove ...` retires a public-domain binding after a domain rename or target move. Linode removal deletes the nf-managed public vhost, public-domain scripts, certbot timer/service, and domain metadata, then resets cached `hostname`/`url` to the generated internal fallback when the removed domain was primary. It keeps the Let's Encrypt lineage by default for rollback safety; add `--delete-cert` only after the rollback window. Kinsta removal deletes non-primary domains from the Kinsta environment and refuses to remove the current primary domain.
+* `nf domain list` shows cached domain inventory keyed by full env IDs like `client.app1-linode:live`. Columns are `role` (`primary` or `secondary`), `management` (`internal` or `external`), and `status` (`active`, `verified`, `unverified`, or `pending`). The generated provider hostname is internal and is primary only until an external primary is set; after that it remains listed as an internal secondary fallback.
+* `nf domain add ...` attaches external domains and prints the DNS records the client must create. It never mutates public/client DNS. Pass `--primary` to make the first domain primary and any remaining domains secondary; without `--primary`, domains are added as secondaries and redirect to the current primary. Kinsta domains are added through the Kinsta API and Kinsta-provided verification/pointing records are printed. Linode domains create one nginx vhost, certbot script, and retry timer per domain on the target.
+* `nf domain check ...` is read-only and reports provider/server readiness, expected public DNS, HTTP reachability, HTTPS certificate status, and whether the domain is already primary. With no explicit domains, it checks cached external domains for the env. It exits `0` when public checks are ready and `2` when DNS, HTTP, HTTPS, or provider readiness is still pending. With `--proxy cloudflare`, Linode DNS checks verify public DNS resolves to Cloudflare IP ranges from Cloudflare's published list, skip origin-IP matching, and check direct Linode origin HTTPS with SNI so `Full (strict)` renewal problems are visible before Cloudflare starts returning 526 errors.
+* `nf domain primary ...` launches one external domain as the primary public hostname for the env. By default execution approves once up front, polls the same readiness checks as `nf domain check`, then launches immediately when checks pass without a second prompt. `--wait-timeout` defaults to `30m`; `--wait-interval` defaults to `30s`. Add `--force` only to bypass readiness checks and launch immediately. Repo remotes in `nf.json` continue to point at env IDs, not domains.
+* `nf domain remove ...` retires external domain bindings after a rename or target move. Linode removal deletes each nf-managed domain vhost, script, certbot timer/service, and domain metadata, then resets cached `hostname`/`url` to the generated internal fallback when the removed domain was primary. It keeps Let's Encrypt lineages by default for rollback safety; add `--delete-cert` only after the rollback window. Kinsta removal deletes non-primary domains from the Kinsta environment and refuses to remove the current primary domain.
 * `nf site remove [site]` removes a whole Linode site and deletes its env data.
 * `nf remote add` validates an env ID against the cache, then repo remotes are stored in `nf.json` under `remotes` as `<site>.<target>:<env>` refs.
 * `nf site shell/wp ...` validate the cache, print the SSH or wp-cli command preview, then execute the remote command.
@@ -619,47 +620,47 @@ Local state is disposable cache, not source of truth.
 
 ### Public domain launch checklist
 
-Use this checklist when launching a remote env on a client-owned public domain. Public DNS remains the client's responsibility; `nf` prepares the provider/env, prints DNS instructions, verifies readiness, and performs the canonical cutover.
+Use this checklist when launching a remote env on a client-owned public domain. Public DNS remains the client's responsibility; `nf` attaches domains, prints DNS instructions, verifies readiness, and performs the primary cutover.
 
 1. Confirm the env identity. Repo remotes should still point at env IDs, for example `production -> client.kinsta:live` or `production -> client.app1-linode:live`.
 
-2. Choose the canonical hostname and explicit aliases. Use `www.client.com --alias client.com` for www-primary launches, `client.com --alias www.client.com` for apex-primary launches, and just `reports.client.com` for a subdomain launch with no apex/www pairing.
+2. Choose the primary hostname and any secondary redirect hostnames. Use `www.client.com client.com --primary` for a www-primary launch, `client.com www.client.com --primary` for an apex-primary launch, and `reports.client.com --primary` for a subdomain launch with no apex/www pairing.
 
-3. Prepare the provider/env as soon as the launch domain and target are stable. Days or weeks ahead is fine. Do not run this before the domain choice or target/env might still change.
+3. Add the domains when you are ready for the first domain to become primary for the env. `--primary` is a primary transition: the first domain becomes primary and later domains become secondaries.
 
 ```sh
-nf site domain prepare production www.client.com --alias client.com
+nf domain add production www.client.com client.com --primary
 ```
 
 4. Send the printed DNS records to the client. Kinsta records come from the Kinsta API. Linode records point the public hostnames at the target IPs. `nf` does not create or change public DNS records.
 
-For Cloudflare-proxied Linode domains, use Cloudflare SSL/TLS mode `Full (strict)` and include `--proxy cloudflare` on prepare/check/primary. Cloudflare should still be configured with the Linode target IP as the origin record, but public DNS will return Cloudflare IPs. In this mode `nf` keeps the public-hostname Let's Encrypt certificate and renewal timer, waits for public DNS to resolve to Cloudflare IP ranges before certbot runs, verifies the ACME challenge path through Cloudflare, skips public origin-IP DNS matching, and checks direct origin HTTPS separately from Cloudflare edge HTTPS. Keep Cloudflare WAF/cache/redirect rules from interfering with `/.well-known/acme-challenge/`; if issuing the first cert while orange-clouded fails, temporarily use DNS-only or add a Cloudflare rule that bypasses redirects, cache, and security checks for that path, then re-run `nf site domain check`.
+For Cloudflare-proxied Linode domains, use Cloudflare SSL/TLS mode `Full (strict)` and include `--proxy cloudflare` on add/check/primary. Cloudflare should still be configured with the Linode target IP as the origin record, but public DNS will return Cloudflare IPs. In this mode `nf` keeps per-domain Let's Encrypt origin certificates and renewal timers, waits for public DNS to resolve to Cloudflare IP ranges before certbot runs, verifies the ACME challenge path through Cloudflare, skips public origin-IP DNS matching, and checks direct origin HTTPS separately from Cloudflare edge HTTPS. Keep Cloudflare WAF/cache/redirect rules from interfering with `/.well-known/acme-challenge/`; if issuing the first cert while orange-clouded fails, temporarily use DNS-only or add a Cloudflare rule that bypasses redirects, cache, and security checks for that path, then re-run `nf domain check`.
 
 ```sh
-nf site domain prepare production www.client.com --alias client.com --proxy cloudflare
+nf domain add production www.client.com client.com --primary --proxy cloudflare
 ```
 
 5. Check readiness after the client says DNS has changed, or periodically if they might change DNS early.
 
 ```sh
-nf site domain check production www.client.com --alias client.com
+nf domain check production www.client.com client.com
 ```
 
-6. Wait for `check` to report ready before planned cutover when possible. If the client points DNS early, the prepared domain may already reach the site, but WordPress/provider canonical state remains unchanged until `primary`; run `primary` as soon as the launch is approved. `primary` confirms before waiting and auto-launches as soon as checks pass. Use `--force` only when you intentionally need to bypass readiness checks.
+6. Wait for `check` to report ready when possible. For an already-added secondary, run `primary` as soon as the launch is approved. `primary` confirms before waiting and auto-launches as soon as checks pass. Use `--force` only when you intentionally need to bypass readiness checks.
 
-7. Launch the canonical public hostname at the cutover window.
+7. Promote an existing secondary to primary at the cutover window when needed.
 
 ```sh
-nf site domain primary production www.client.com --alias client.com --search-replace
-nf site domain primary production www.client.com --alias client.com --proxy cloudflare
+nf domain primary production www.client.com --search-replace
+nf domain primary production www.client.com --proxy cloudflare
 ```
 
-8. Run `check` again after `primary`. Confirm the domain is primary, DNS is still correct, HTTP does not redirect to the generated internal hostname, HTTPS is valid, and aliases behave as expected.
+8. Run `check` again after `primary`. Confirm the domain is primary, DNS is still correct, HTTP does not redirect to the generated internal hostname, HTTPS is valid, and secondary domains redirect as expected. Linode secondaries use 302 redirects to the current primary.
 
-9. If this launch moved a domain from another target/env, retire the old binding after cutover. Include the same aliases that were attached to the old env.
+9. If this launch moved a domain from another target/env, retire the old binding after cutover. Include all domains that were attached to the old env.
 
 ```sh
-nf site domain remove client.app1-linode:live www.client.com --alias client.com --proxy cloudflare
+nf domain remove client.app1-linode:live www.client.com client.com --proxy cloudflare
 ```
 
 Use `--delete-cert` only after the rollback window if you also want to remove the old Let's Encrypt lineage. Otherwise certbot may later try to renew the old cert after DNS has moved, but keeping it briefly makes rollback safer.

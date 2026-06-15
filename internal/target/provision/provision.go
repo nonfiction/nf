@@ -1229,18 +1229,7 @@ write_files:
   - path: /etc/nginx/sites-available/nf-server
     permissions: '0644'
     content: |
-      server {
-          listen 80;
-          listen [::]:80;
-          server_name __HOSTNAME__;
-          root /var/www/nf;
-          index index.html;
-          location = /healthz {
-              default_type application/json;
-              return 200 '{"server":"__NAME__","hostname":"__HOSTNAME__","status":"ready"}';
-          }
-          location / { try_files $uri $uri/ /index.html; }
-      }
+      server { listen 80 default_server; listen [::]:80 default_server; server_name __HOSTNAME__; root /var/www/nf; index index.html; location = /healthz { default_type application/json; return 200 '{"server":"__NAME__","hostname":"__HOSTNAME__","status":"ready"}'; } location / { try_files $uri $uri/ /index.html; } }
   - path: /usr/local/bin/nf-install-adminer
     permissions: '0755'
     content: |
@@ -1316,32 +1305,8 @@ write_files:
       certbot certonly --non-interactive --agree-tos --dns-dnsimple --dns-dnsimple-credentials /root/.secrets/certbot/dnsimple.ini -m web@nonfiction.ca -d __HOSTNAME__ -d "*.__HOSTNAME__"
 
       cat >/etc/nginx/sites-available/nf-server <<'EOF'
-      server {
-          listen 80;
-          listen [::]:80;
-          server_name __HOSTNAME__;
-          root /var/www/nf;
-          index index.html;
-          location = /healthz {
-              default_type application/json;
-              return 200 '{"server":"__NAME__","hostname":"__HOSTNAME__","status":"ready"}';
-          }
-          location / { try_files $uri $uri/ /index.html; }
-      }
-
-      server {
-          listen 443 ssl http2;
-          listen [::]:443 ssl http2;
-          server_name __HOSTNAME__;
-          include /etc/nginx/snippets/nf-wildcard-cert.conf;
-          root /var/www/nf;
-          index index.html;
-          location = /healthz {
-              default_type application/json;
-              return 200 '{"server":"__NAME__","hostname":"__HOSTNAME__","status":"ready"}';
-          }
-          location / { try_files $uri $uri/ /index.html; }
-      }
+      server { listen 80 default_server; listen [::]:80 default_server; server_name __HOSTNAME__; root /var/www/nf; index index.html; location = /healthz { default_type application/json; return 200 '{"server":"__NAME__","hostname":"__HOSTNAME__","status":"ready"}'; } location / { try_files $uri $uri/ /index.html; } }
+      server { listen 443 ssl http2 default_server; listen [::]:443 ssl http2 default_server; server_name __HOSTNAME__; include /etc/nginx/snippets/nf-wildcard-cert.conf; root /var/www/nf; index index.html; location = /healthz { default_type application/json; return 200 '{"server":"__NAME__","hostname":"__HOSTNAME__","status":"ready"}'; } location / { try_files $uri $uri/ /index.html; } }
       EOF
 
       cat >/etc/nginx/sites-available/nf-adminer <<'EOF'

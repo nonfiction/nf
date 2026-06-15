@@ -296,8 +296,6 @@ func runSite(argv []string) int {
 		return cmdSitePassword(needle, scope)
 	case "basicauth":
 		return runSiteBasicAuth(argv[1:])
-	case "domain":
-		return runSiteDomain(argv[1:])
 	case "remove":
 		needle, opts, err := parseRemoveSiteArgs(argv[1:])
 		if err != nil {

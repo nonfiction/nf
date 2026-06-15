@@ -32,6 +32,8 @@ func Run(argv []string) int {
 		return runTarget(argv[1:])
 	case "site":
 		return runSite(argv[1:])
+	case "domain":
+		return runDomain(argv[1:])
 	case "remote":
 		if rejectOutsideProject(argv[0]) {
 			return 1
@@ -79,6 +81,8 @@ func runTopicHelp(argv []string) int {
 		return runTargetHelp()
 	case "site":
 		return runSiteHelp()
+	case "domain":
+		return runDomainHelp()
 	case "remote":
 		if rejectOutsideProject(argv[0]) {
 			return 1

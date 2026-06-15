@@ -332,6 +332,7 @@ func discoverKinstaTargetSites(target map[string]any) ([]map[string]any, error) 
 			port := firstNonEmpty(cfg.Port, env.SSHConnection.SSHPort, "22")
 			user := cfg.User
 			domainValue := domainName(domain)
+			internalDomain := kinstaInternalDomain(domains)
 			record := map[string]any{
 				"provider":    "kinsta",
 				"env_id":      canonicalEnvID(siteID, envName),
@@ -353,12 +354,15 @@ func discoverKinstaTargetSites(target map[string]any) ([]map[string]any, error) 
 					"branch":         kinstaEnvBranch(envName),
 				},
 			}
+			if internalDomain != "" {
+				record["internal_hostname"] = internalDomain
+				record["internal_url"] = kinstaURL(internalDomain)
+			}
 			if entries := kinstaDomainCacheEntries(domains, domain); len(entries) > 0 {
 				record["domains"] = entries
 			}
 			if primaryDomain := kinstaPrimaryPublicDomain(domains, domain); primaryDomain != "" {
 				record["primary_domain"] = primaryDomain
-				record["domain_state"] = "primary"
 			}
 			records = append(records, record)
 		}
@@ -411,17 +415,27 @@ func kinstaDomainCacheEntries(domains []kinsta.Domain, primary kinsta.Domain) []
 			continue
 		}
 		seen[name] = true
-		role := "redirect"
+		role := "secondary"
 		if domain.IsPrimary || (primaryID != "" && domain.ID == primaryID) || (primaryName != "" && name == primaryName) {
-			role = "canonical"
+			role = "primary"
 		}
-		entry := map[string]any{"name": name, "role": role}
+		entry := map[string]any{"name": name, "role": role, "management": "external", "status": "active"}
 		if domain.ID != "" {
 			entry["domain_id"] = domain.ID
 		}
 		entries = append(entries, entry)
 	}
 	return entries
+}
+
+func kinstaInternalDomain(domains []kinsta.Domain) string {
+	for _, domain := range domains {
+		name := normalizeDomainName(domainName(domain))
+		if name != "" && kinstaInternalDomainName(name) {
+			return name
+		}
+	}
+	return ""
 }
 
 func kinstaPrimaryPublicDomain(domains []kinsta.Domain, primary kinsta.Domain) string {
