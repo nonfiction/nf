@@ -1,0 +1,134 @@
+# Commands
+
+Top-level help is context-sensitive.
+
+## Always Available Commands
+
+```text
+nf
+
+Commands:
+  provider    manage provider integrations
+  target      manage deployable targets
+  site        manage remote sites and envs
+  password    derive passwords
+
+  init        initialize project metadata
+  config      manage global config
+  completion  print shell completion scripts
+  version     show nf version
+  help        show help
+```
+
+## Project Commands
+
+Inside an `nf` project repo with `nf.json` next to `.git`:
+
+```text
+nf
+
+Commands:
+  provider    manage provider integrations
+  target      manage deployable targets
+  site        manage remote sites and envs
+  password    derive passwords
+
+  remote      manage repo remotes
+  env         manage the local development env
+  theme       package clean artifacts and run theme tasks
+  public      deploy static public paths
+
+  init        initialize project metadata
+  config      manage global config
+  completion  print shell completion scripts
+  version     show nf version
+  help        show help
+```
+
+## Providers, Targets, Sites, Domains, and Remotes
+
+Commands:
+
+```sh
+nf provider list
+nf provider show <provider>
+nf provider check <provider>
+nf target add linode <name> [--region region] [--type type] [--image image] [--adminer-user user] [--user user] [--keys all] [--execute --yes] [--wait]
+nf target remove <target> [--dry-run] [--execute --yes]
+nf target refresh
+nf target list
+nf target show <target>
+nf target adminer show <target>
+nf target password [target] [--root|--adminer]
+nf site add <target> <site> [--with-staging] [--region region] [--php version] [--execute --yes]
+nf site refresh
+nf site list [--refresh] [--envs]
+nf site show <site-id-or-alias-or-env-id>
+nf site staging status <site-id-or-alias>
+nf site staging add <site-id-or-alias> [--dry-run] [--execute --yes]
+nf site staging remove <site-id-or-alias> [--dry-run] [--execute --yes]
+nf site shell <site.target:env>
+nf site wp <site.target:env> -- <cmd>
+nf site export <site.target:env> [--output path] [--dry-run]
+nf site snapshot <site.target:env> [--output path] [--dry-run]
+nf site snapshot list
+nf site snapshot remove <name> [--yes]
+nf site snapshot prune [--keep N] [--dry-run] [--yes]
+nf site password [site-id-or-alias-or-env-id] [--wp|--db|--basicauth]
+nf site basicauth status <site.target:env>
+nf site basicauth enable <site.target:env> [--dry-run] [--execute --yes]
+nf site basicauth disable <site.target:env> [--dry-run] [--execute --yes]
+nf site basicauth password [site-id-or-alias]
+nf domain list [site|site.target:env|remote]
+nf domain add <site.target:env|remote> <domain> [domain...] [--primary] [--proxy cloudflare] [--setup avoid-downtime|quick] [--dry-run] [--execute --yes]
+nf domain check <site.target:env|remote> [domain...] [--proxy cloudflare]
+nf domain primary <site.target:env|remote> <domain> [--proxy cloudflare] [--setup avoid-downtime|quick] [--search-replace] [--force] [--wait-timeout 30m] [--wait-interval 30s] [--dry-run] [--execute --yes]
+nf domain remove <site.target:env|remote> <domain> [domain...] [--delete-cert] [--dry-run] [--execute --yes]
+nf site remove [site-id-or-alias] [--dry-run] [--execute --yes]
+nf remote add [name] [site.target:env]
+nf remote show <name>
+nf remote remove <name>
+nf remote list
+```
+
+Standard Linode target example:
+
+```sh
+nf target add linode app1 \
+  --region ca-central \
+  --type g6-standard-1 \
+  --image linode/ubuntu24.04 \
+  --adminer-user adminer \
+  --user nonfiction \
+  --keys all
+```
+
+## Current Behavior
+
+* `nf provider list` reports local credential status.
+* `nf provider check` calls safe read-only provider health endpoints and writes `providers.json`.
+* `nf provider show <provider>` reads cached provider metadata.
+* `nf target add linode <name>` creates a Linode target named `<name>-linode`, tags it `nf`, creates host and wildcard DNS records under `base_domain`, queues HTTPS setup on the target with a systemd retry timer, installs AdminNeo at `https://<adminer-user>.<target-hostname>/` behind HTTP Basic auth during target provisioning, and records the target under the Linode provider in `providers.json`. Add `--adminer-user` to override `adminer_default_user` for that target only; the same value controls the Adminer HTTP Basic user, shared MySQL user, and Adminer subdomain label. Add `--wait` to keep the CLI attached through SSH, TLS, and health checks. Existing completed targets that predate AdminNeo are not upgraded in place by provider checks or target refresh.
+* `nf target remove <target>` removes an empty Linode target.
+* `nf target refresh` updates target records from configured target providers so added and removed targets are reflected in `providers.json`.
+* `nf target list/show` read target records from `providers.json`, with a legacy `servers.json` fallback.
+* `nf target adminer show <target>` reads `/var/lib/nf/target.json` over SSH and prints the Adminer URL, username, and derived password. The username defaults to `adminer_default_user`; the password is derived from the target metadata identity/purpose and `NF_PASSWORD_SALT`.
+* `nf target password [target] [--root|--adminer]` prints only the derived Linode target root or Adminer password. It does not support Kinsta targets.
+* `nf site add <target> <site>` creates the live WordPress env on a target. Add `--with-staging` to create live and staging in one operation.
+* `nf site staging status/add/remove` manages an optional staging env for an existing site. `rm` is a shorthand for `remove`.
+* `nf site refresh` discovers sites from the cached target list. Remote target site discovery is not implemented yet.
+* `nf site list --envs`, `nf site show`, `nf site shell`, `nf site wp`, `nf site snapshot`, and `nf site export` read the local disposable site cache for now.
+* `nf site password [site|env] [--wp|--db|--basicauth]` prints only one selected site password. `--wp` is the default. Env refs are accepted for `--db`; use a site ref for `--wp` or `--basicauth`. Linode WordPress, DB, and basic-auth passwords are derived from the site slug, purpose, `NF_PASSWORD_SALT`, and `project.password_version`; Kinsta DB password output uses the Kinsta SFTP password endpoint.
+* Linode site/env database creation grants the shared Adminer MySQL user privileges only on created site env databases and refuses to create a site DB user with the same name as the shared Adminer MySQL user. Site removal revokes per-database grants before dropping the databases.
+* `nf site basicauth ...` uses `basicauth_default_user` from `config.json` and a per-site derived password with `project.password_version` as the rotation source. Linode envs are managed over SSH by updating the selected env nginx vhost, including multi-vhost target nginx scripts. Kinsta Password protection exists in MyKinsta, but currently requires manual MyKinsta use because no public API endpoint is exposed.
+* `nf domain list` shows cached domain inventory keyed by full env IDs like `client.app1-linode:live`. Columns are `role` (`primary` or `secondary`), `management` (`internal` or `external`), and `status` (`active`, `verified`, `unverified`, or `pending`). The generated provider hostname is internal and is primary only until an external primary is set; after that it remains listed as an internal secondary fallback.
+* `nf domain add ...` attaches external domains and prints the DNS records the client must create. It never mutates public/client DNS. Pass `--primary` to make the first domain primary and any remaining domains secondary; without `--primary`, domains are added as secondaries and redirect to the current primary. Kinsta domains are added through the Kinsta API and Kinsta-provided verification/pointing records are printed. Linode domains create one nginx vhost, certbot script, and retry timer per domain on the target.
+* `nf domain check ...` is read-only and reports provider/server readiness, expected public DNS, HTTP reachability, HTTPS certificate status, and whether the domain is already primary. With no explicit domains, it checks cached external domains for the env. It exits `0` when public checks are ready and `2` when DNS, HTTP, HTTPS, or provider readiness is still pending. With `--proxy cloudflare`, Linode DNS checks verify public DNS resolves to Cloudflare IP ranges from Cloudflare's published list, skip origin-IP matching, and check direct Linode origin HTTPS with SNI so `Full (strict)` renewal problems are visible before Cloudflare starts returning 526 errors.
+* `nf domain primary ...` launches one external domain as the primary public hostname for the env. By default execution approves once up front, polls the same readiness checks as `nf domain check`, then launches immediately when checks pass without a second prompt. `--wait-timeout` defaults to `30m`; `--wait-interval` defaults to `30s`. Add `--force` only to bypass readiness checks and launch immediately. Repo remotes in `nf.json` continue to point at env IDs, not domains.
+* `nf domain remove ...` retires external domain bindings after a rename or target move. Linode removal deletes each nf-managed domain vhost, script, certbot timer/service, and domain metadata, then resets cached `hostname`/`url` to the generated internal fallback when the removed domain was primary. It keeps Let's Encrypt lineages by default for rollback safety; add `--delete-cert` only after the rollback window. Kinsta removal deletes non-primary domains from the Kinsta environment and refuses to remove the current primary domain.
+* `nf site remove [site]` removes a whole Linode site and deletes its env data.
+* `nf remote add` validates an env ID against the cache, then repo remotes are stored in `nf.json` under `remotes` as `<site>.<target>:<env>` refs.
+* `nf site shell/wp ...` validate the cache, print the SSH or wp-cli command preview, then execute the remote command.
+* `nf env logs <remote>` resolves a configured repo remote, prints the SSH command preview, ensures `wp-content/debug.log` exists, and tails it on the remote host.
+* `nf env import <source>` imports external WordPress data into the local env after creating a safety snapshot. It never writes directly to a remote env.
+* `nf env push/pull [remote]` syncs database and mutable `wp-content` after an interactive confirmation. Omit `remote` to pick from configured repo remotes. Add `--dry-run` for a non-mutating plan, or use `--non-interactive` without `--execute` for preflight-only output.
