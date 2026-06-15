@@ -4129,10 +4129,15 @@ func TestRunSiteDomainLinodePrepareCloudflareKeepsLetsEncrypt(t *testing.T) {
 		t.Fatalf("ProxyMode = %q, want cloudflare", plan.ProxyMode)
 	}
 	script := renderLinodeDomainScript(plan)
-	for _, want := range []string{"proxy_mode=cloudflare", "expected_ips=()", "certbot certonly --non-interactive --agree-tos --webroot", "nf-public-domain-client.app1-linode.live-tls.timer", ".proxy_mode = $proxy_mode"} {
+	for _, want := range []string{"proxy_mode=cloudflare", "expected_ips=()", "cloudflare_ranges=(173.245.48.0/20", "domain_resolves_to_cloudflare", "cloudflare_http_challenge_reachable", "not in Cloudflare IP ranges; timer will retry.", "ACME HTTP challenge path is not reachable through Cloudflare yet; timer will retry.", "certbot certonly --non-interactive --agree-tos --webroot", "nf-public-domain-client.app1-linode.live-tls.timer", ".proxy_mode = $proxy_mode"} {
 		if !strings.Contains(script, want) {
 			t.Fatalf("cloudflare linode script missing %q:\n%s", want, script)
 		}
+	}
+	guardIndex := strings.Index(script, "if [ ${#cloudflare_ranges[@]} -gt 0 ]; then")
+	certbotIndex := strings.Index(script, "args=(certbot certonly")
+	if guardIndex < 0 || certbotIndex < 0 || guardIndex > certbotIndex {
+		t.Fatalf("cloudflare readiness guard must run before certbot:\n%s", script)
 	}
 	for _, notWant := range []string{"systemctl disable --now nf-public-domain-client.app1-linode.live-tls.timer"} {
 		if strings.Contains(script, notWant) {

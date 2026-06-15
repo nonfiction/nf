@@ -831,6 +831,15 @@ func siteDomainCloudflareProxy(plan siteDomainPlan) bool {
 	return siteDomainCloudflareStrict(plan)
 }
 
+func siteDomainBundledCloudflareIPRangeStrings() []string {
+	ranges := bundledCloudflareIPRanges()
+	out := make([]string, 0, len(ranges.Prefixes))
+	for _, prefix := range ranges.Prefixes {
+		out = append(out, prefix.String())
+	}
+	return out
+}
+
 func hostnameFromURLish(value string) string {
 	value = strings.TrimSpace(value)
 	if value == "" {
@@ -957,7 +966,7 @@ func printSiteDomainPlan(plan siteDomainPlan, mode string) {
 				fmt.Println("  TLS: certificate lineage is kept for rollback safety")
 			}
 		} else if siteDomainCloudflareStrict(plan) {
-			fmt.Println("  TLS: Cloudflare uses Full (strict) with a public Let's Encrypt origin cert; certbot renewal stays enabled")
+			fmt.Println("  TLS: Cloudflare uses Full (strict) with a public Let's Encrypt origin cert; certbot waits for Cloudflare DNS and ACME challenge reachability")
 		} else {
 			fmt.Println("  TLS: HTTP-01 certbot retry timer will issue HTTPS after DNS points at the target")
 		}
@@ -1409,6 +1418,10 @@ func renderLinodeDomainScript(plan siteDomainPlan) string {
 			}
 		}
 	}
+	cloudflareRanges := []string{}
+	if siteDomainCloudflareProxy(plan) {
+		cloudflareRanges = siteDomainBundledCloudflareIPRangeStrings()
+	}
 	fileSlug := plan.FileSlug
 	if fileSlug == "" {
 		fileSlug = envIDFileSlug(plan.EnvID)
@@ -1578,6 +1591,9 @@ REFRESH
 	b.WriteString("expected_ips=(")
 	b.WriteString(shellArrayValues(expectedIPs))
 	b.WriteString(")\n")
+	b.WriteString("cloudflare_ranges=(")
+	b.WriteString(shellArrayValues(cloudflareRanges))
+	b.WriteString(")\n")
 	b.WriteString("refresh_script=")
 	b.WriteString(q(refreshScript))
 	b.WriteByte('\n')
@@ -1591,12 +1607,71 @@ REFRESH
   done < <(getent ahosts "$domain" 2>/dev/null || true)
   return 1
 }
+domain_resolves_to_cloudflare() {
+  local domain=$1 observed_ip rest
+  local hosts=()
+  if ! command -v python3 >/dev/null 2>&1; then
+    echo "python3 is required to validate Cloudflare DNS; timer will retry."
+    return 1
+  fi
+  while read -r observed_ip rest; do
+    if [ -n "$observed_ip" ]; then hosts+=("$observed_ip"); fi
+  done < <(getent ahosts "$domain" 2>/dev/null || true)
+  if [ ${#hosts[@]} -eq 0 ]; then
+    echo "$domain has no public DNS records yet; timer will retry."
+    return 1
+  fi
+  python3 - "$domain" "${cloudflare_ranges[@]}" -- "${hosts[@]}" <<'PY'
+import ipaddress
+import sys
+
+domain = sys.argv[1]
+separator = sys.argv.index("--")
+ranges = [ipaddress.ip_network(value, strict=False) for value in sys.argv[2:separator]]
+hosts = sys.argv[separator + 1:]
+outside = []
+for host in hosts:
+    try:
+        addr = ipaddress.ip_address(host)
+    except ValueError:
+        outside.append(host)
+        continue
+    if not any(addr in network for network in ranges):
+        outside.append(host)
+if outside:
+    print(f"{domain} resolves publicly to {', '.join(hosts)}; {', '.join(outside)} not in Cloudflare IP ranges; timer will retry.")
+    sys.exit(1)
+PY
+}
+cloudflare_http_challenge_reachable() {
+  local domain=$1 token probe_dir probe_file expected observed
+  token="nf-probe-$(date +%s)-$$"
+  probe_dir=/var/www/letsencrypt/.well-known/acme-challenge
+  probe_file="$probe_dir/$token"
+  expected="nf-acme-probe:$domain:$token"
+  install -d -m 0755 "$probe_dir"
+  printf '%s' "$expected" >"$probe_file"
+  observed=$(curl --fail --silent --show-error --max-time 10 "http://$domain/.well-known/acme-challenge/$token" 2>/dev/null || true)
+  rm -f "$probe_file"
+  if [ "$observed" != "$expected" ]; then
+    echo "$domain ACME HTTP challenge path is not reachable through Cloudflare yet; timer will retry."
+    return 1
+  fi
+}
 for domain in "${domains[@]}"; do
   if ! domain_points_here "$domain"; then
     echo "$domain does not resolve to this target yet; timer will retry."
     exit 0
   fi
 done
+if [ ${#cloudflare_ranges[@]} -gt 0 ]; then
+  for domain in "${domains[@]}"; do
+    if ! domain_resolves_to_cloudflare "$domain"; then exit 0; fi
+  done
+  for domain in "${domains[@]}"; do
+    if ! cloudflare_http_challenge_reachable "$domain"; then exit 0; fi
+  done
+fi
 args=(certbot certonly --non-interactive --agree-tos --webroot -w /var/www/letsencrypt -m web@nonfiction.ca --keep-until-expiring --deploy-hook "$refresh_script")
 for domain in "${domains[@]}"; do args+=(-d "$domain"); done
 tmp=$(mktemp)

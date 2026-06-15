@@ -426,7 +426,7 @@ Public launch domains are provider/env state, not repo remote identity. `nf site
 
 `nf site domain remove` retires public-domain bindings when domains are renamed or moved between targets. Linode removal deletes nf-managed public vhosts, scripts, certbot units, and local/remote domain metadata, then resets the cached current URL to the generated internal fallback when the removed domain was primary. Kinsta removal deletes non-primary domains from the Kinsta environment and refuses to remove the current primary domain. Public DNS remains client-managed.
 
-Linode public domains default to direct/DNS-only origin behavior: public DNS is expected to point at the target IP and a public Let's Encrypt certificate is issued with HTTP-01. `--proxy cloudflare` is the explicit Linode mode for Cloudflare orange-cloud domains using Cloudflare SSL/TLS `Full (strict)`: public DNS must resolve to Cloudflare IP ranges, certbot continues to issue/renew a public-hostname Let's Encrypt origin certificate, `nf` skips public origin-IP DNS matching, and checks direct origin HTTPS separately from Cloudflare edge HTTPS.
+Linode public domains default to direct/DNS-only origin behavior: public DNS is expected to point at the target IP and a public Let's Encrypt certificate is issued with HTTP-01. `--proxy cloudflare` is the explicit Linode mode for Cloudflare orange-cloud domains using Cloudflare SSL/TLS `Full (strict)`: public DNS must resolve to Cloudflare IP ranges, certbot continues to issue/renew a public-hostname Let's Encrypt origin certificate only after Cloudflare-fronted ACME challenge reachability is confirmed, `nf` skips public origin-IP DNS matching, and checks direct origin HTTPS separately from Cloudflare edge HTTPS.
 
 ## Project metadata model
 
