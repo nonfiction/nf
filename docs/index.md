@@ -2,7 +2,7 @@
 
 `nf` is nonfiction's internal CLI for agency WordPress theme work. It manages project metadata, local WordPress dev environments, theme tasks and packaging, provider inventory, repo remotes, password derivation, and guarded future deploy/sync workflows.
 
-This documentation expands on the concise repo [README](https://github.com/nonfiction/nf/README.md). For the full project model, state layout, implementation phases, and roadmap, see [`SPEC.md`](https://github.com/nonfiction/SPEC.md).
+This documentation expands on the concise repo [README](https://github.com/nonfiction/nf/blob/main/README.md). For the full project model, state layout, implementation phases, and roadmap, see [`SPEC.md`](https://github.com/nonfiction/nf/blob/main/SPEC.md).
 
 ## Start Here
 
