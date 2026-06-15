@@ -28,7 +28,7 @@ type siteDomainOptions struct {
 	proxyMode      string
 	searchReplace  bool
 	deleteCert     bool
-	wait           bool
+	force          bool
 	waitTimeout    time.Duration
 	waitInterval   time.Duration
 	dryRun         bool
@@ -113,9 +113,9 @@ func runSiteDomainHelp() int {
 		{"--proxy <mode>", "Linode proxy mode: cloudflare"},
 		{"--setup <type>", "Kinsta setup type for prepare/primary: avoid-downtime or quick"},
 		{"--search-replace", "run provider/wp search-replace during primary"},
-		{"--wait", "wait for readiness checks before primary launch"},
-		{"--wait-timeout <duration>", "maximum --wait duration; default 30m"},
-		{"--wait-interval <duration>", "poll interval for --wait; default 30s"},
+		{"--force", "launch primary without waiting for readiness checks"},
+		{"--wait-timeout <duration>", "maximum primary readiness wait; default 30m"},
+		{"--wait-interval <duration>", "primary readiness poll interval; default 30s"},
 		{"--delete-cert", "also delete the Linode Let's Encrypt certificate lineage"},
 		{},
 		{"--dry-run", "show the mutation plan only"},
@@ -247,8 +247,8 @@ func parseSiteDomainActionArgs(action string, argv []string) (string, siteDomain
 			opts.searchReplace = true
 		case "--delete-cert":
 			opts.deleteCert = true
-		case "--wait":
-			opts.wait = true
+		case "--force":
+			opts.force = true
 		case "--wait-timeout":
 			if i+1 >= len(argv) || strings.TrimSpace(argv[i+1]) == "" {
 				fmt.Fprintln(os.Stderr, "--wait-timeout requires a value")
@@ -360,12 +360,12 @@ func parseSiteDomainActionArgs(action string, argv []string) (string, siteDomain
 		fmt.Fprintln(os.Stderr, "site domain prepare does not run search-replace")
 		return "", opts, false
 	}
-	if action != "primary" && (opts.wait || opts.waitTimeout > 0 || opts.waitInterval > 0) {
-		fmt.Fprintln(os.Stderr, "--wait only applies to site domain primary")
+	if action != "primary" && (opts.force || opts.waitTimeout > 0 || opts.waitInterval > 0) {
+		fmt.Fprintln(os.Stderr, "--force, --wait-timeout, and --wait-interval only apply to site domain primary")
 		return "", opts, false
 	}
-	if action == "primary" && !opts.wait && (opts.waitTimeout > 0 || opts.waitInterval > 0) {
-		fmt.Fprintln(os.Stderr, "--wait-timeout and --wait-interval require --wait")
+	if action == "primary" && opts.force && (opts.waitTimeout > 0 || opts.waitInterval > 0) {
+		fmt.Fprintln(os.Stderr, "--wait-timeout and --wait-interval cannot be used with --force")
 		return "", opts, false
 	}
 	if action != "remove" && opts.deleteCert {
@@ -454,10 +454,6 @@ func cmdSiteDomain(envRef, action string, opts siteDomainOptions) int {
 		mode = "execute"
 	}
 	printSiteDomainPlan(plan, mode)
-	if opts.wait && !willExecute {
-		fmt.Fprintln(os.Stderr, "site domain primary --wait requires execution; use --execute --yes in non-interactive mode.")
-		return 1
-	}
 	if !willExecute {
 		fmt.Println("No data was changed. Re-run with --execute to apply public-domain changes.")
 		return 0
@@ -468,8 +464,11 @@ func cmdSiteDomain(envRef, action string, opts siteDomainOptions) int {
 	}
 	if !opts.yes {
 		message := fmt.Sprintf("%s public domain %q for %s?", strings.ToUpper(action[:1])+action[1:], plan.Canonical, plan.EnvID)
-		if opts.wait {
+		if action == "primary" {
 			message = fmt.Sprintf("Wait until public checks pass, then launch primary domain %q for %s without another prompt?", plan.Canonical, plan.EnvID)
+			if opts.force {
+				message = fmt.Sprintf("Force primary domain %q for %s without waiting for public checks?", plan.Canonical, plan.EnvID)
+			}
 		}
 		confirmed, err := ui.Confirm(message, false)
 		if err != nil {
@@ -481,7 +480,7 @@ func cmdSiteDomain(envRef, action string, opts siteDomainOptions) int {
 			return 1
 		}
 	}
-	if opts.wait {
+	if action == "primary" && !opts.force {
 		proceed, err := waitForSiteDomainPrimaryReadiness(plan, opts)
 		if err != nil {
 			fmt.Fprintln(os.Stderr, err)

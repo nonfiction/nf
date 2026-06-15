@@ -555,7 +555,7 @@ nf site basicauth disable <site.target:env> [--dry-run] [--execute --yes]
 nf site basicauth password [site-id-or-alias]
 nf site domain prepare <site.target:env|remote> <domain> [--alias domain] [--proxy cloudflare] [--setup avoid-downtime|quick] [--dry-run] [--execute --yes]
 nf site domain check <site.target:env|remote> <domain> [--alias domain] [--proxy cloudflare]
-nf site domain primary <site.target:env|remote> <domain> [--alias domain] [--proxy cloudflare] [--setup avoid-downtime|quick] [--search-replace] [--wait] [--wait-timeout 30m] [--wait-interval 30s] [--dry-run] [--execute --yes]
+nf site domain primary <site.target:env|remote> <domain> [--alias domain] [--proxy cloudflare] [--setup avoid-downtime|quick] [--search-replace] [--force] [--wait-timeout 30m] [--wait-interval 30s] [--dry-run] [--execute --yes]
 nf site domain remove <site.target:env|remote> <domain> [--alias domain] [--delete-cert] [--dry-run] [--execute --yes]
 nf site remove [site-id-or-alias] [--dry-run] [--execute --yes]
 nf remote add [name] [site.target:env]
@@ -596,7 +596,7 @@ Current behavior:
 * `nf site basicauth ...` uses `basicauth_default_user` from `config.json` and a per-site derived password with `project.password_version` as the rotation source. Linode envs are managed over SSH by updating the selected env nginx vhost, including multi-vhost target nginx scripts. Kinsta Password protection exists in MyKinsta, but currently requires manual MyKinsta use because no public API endpoint is exposed.
 * `nf site domain prepare ...` makes the provider/env ready to answer a public hostname and prints the DNS records the client must create. It never mutates public/client DNS. Kinsta domains are added through the Kinsta API and Kinsta-provided verification/pointing records are printed. Linode domains update nginx on the target. By default Linode installs a certbot HTTP-01 retry timer so HTTPS is issued after client DNS points at the target. Add `--proxy cloudflare` for Cloudflare-proxied Linode domains using Cloudflare SSL/TLS `Full (strict)` and a real Let's Encrypt origin certificate that continues to renew.
 * `nf site domain check ...` is read-only and reports provider/server readiness, expected public DNS, HTTP reachability, HTTPS certificate status, and whether the domain is already primary. It exits `0` when public checks are ready and `2` when DNS, HTTP, HTTPS, or provider readiness is still pending. With `--proxy cloudflare`, Linode DNS checks verify public DNS resolves to Cloudflare IP ranges from Cloudflare's published list, skip origin-IP matching, and check direct Linode origin HTTPS with SNI so `Full (strict)` renewal problems are visible before Cloudflare starts returning 526 errors.
-* `nf site domain primary ...` launches the canonical public hostname for the env. Pass aliases explicitly, for example `--alias client.com` when `www.client.com` should be canonical. Add `--wait` to approve once up front, poll the same readiness checks as `nf site domain check`, then launch immediately when checks pass without a second prompt. `--wait-timeout` defaults to `30m`; `--wait-interval` defaults to `30s`. Repo remotes in `nf.json` continue to point at env IDs, not domains.
+* `nf site domain primary ...` launches the canonical public hostname for the env. Pass aliases explicitly, for example `--alias client.com` when `www.client.com` should be canonical. By default execution approves once up front, polls the same readiness checks as `nf site domain check`, then launches immediately when checks pass without a second prompt. `--wait-timeout` defaults to `30m`; `--wait-interval` defaults to `30s`. Add `--force` only to bypass readiness checks and launch immediately. Repo remotes in `nf.json` continue to point at env IDs, not domains.
 * `nf site domain remove ...` retires a public-domain binding after a domain rename or target move. Linode removal deletes the nf-managed public vhost, public-domain scripts, certbot timer/service, and domain metadata, then resets cached `hostname`/`url` to the generated internal fallback when the removed domain was primary. It keeps the Let's Encrypt lineage by default for rollback safety; add `--delete-cert` only after the rollback window. Kinsta removal deletes non-primary domains from the Kinsta environment and refuses to remove the current primary domain.
 * `nf site remove [site]` removes a whole Linode site and deletes its env data.
 * `nf remote add` validates an env ID against the cache, then repo remotes are stored in `nf.json` under `remotes` as `<site>.<target>:<env>` refs.
@@ -644,13 +644,13 @@ nf site domain prepare production www.client.com --alias client.com --proxy clou
 nf site domain check production www.client.com --alias client.com
 ```
 
-6. Wait for `check` to report ready before planned cutover when possible. If the client points DNS early, the prepared domain may already reach the site, but WordPress/provider canonical state remains unchanged until `primary`; run `primary` as soon as the launch is approved. To avoid babysitting the terminal, use `primary --wait`; it confirms before waiting and auto-launches as soon as checks pass.
+6. Wait for `check` to report ready before planned cutover when possible. If the client points DNS early, the prepared domain may already reach the site, but WordPress/provider canonical state remains unchanged until `primary`; run `primary` as soon as the launch is approved. `primary` confirms before waiting and auto-launches as soon as checks pass. Use `--force` only when you intentionally need to bypass readiness checks.
 
 7. Launch the canonical public hostname at the cutover window.
 
 ```sh
 nf site domain primary production www.client.com --alias client.com --search-replace
-nf site domain primary production www.client.com --alias client.com --proxy cloudflare --wait
+nf site domain primary production www.client.com --alias client.com --proxy cloudflare
 ```
 
 8. Run `check` again after `primary`. Confirm the domain is primary, DNS is still correct, HTTP does not redirect to the generated internal hostname, HTTPS is valid, and aliases behave as expected.

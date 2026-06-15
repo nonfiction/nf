@@ -584,10 +584,13 @@ func TestRunCompleteSuggestsStaticAndCachedValues(t *testing.T) {
 			t.Fatalf("Run(__complete site domain primary --) = %d, want 0", got)
 		}
 	})
-	for _, want := range []string{"--alias\n", "--canonical\n", "--proxy\n", "--setup\n", "--search-replace\n", "--wait\n", "--wait-timeout\n", "--wait-interval\n", "--dry-run\n", "--execute\n", "--yes\n", "--non-interactive\n"} {
+	for _, want := range []string{"--alias\n", "--canonical\n", "--proxy\n", "--setup\n", "--search-replace\n", "--force\n", "--wait-timeout\n", "--wait-interval\n", "--dry-run\n", "--execute\n", "--yes\n", "--non-interactive\n"} {
 		if !strings.Contains(siteDomainPrimaryFlagOutput, want) {
 			t.Fatalf("site domain primary flag completion missing %q:\n%s", want, siteDomainPrimaryFlagOutput)
 		}
+	}
+	if strings.Contains(siteDomainPrimaryFlagOutput, "--wait\n") {
+		t.Fatalf("site domain primary flag completion unexpectedly contains --wait:\n%s", siteDomainPrimaryFlagOutput)
 	}
 
 	siteDomainCheckFlagOutput := captureStdout(t, func() {
@@ -3842,7 +3845,7 @@ func TestRunSiteDomainListShowsCachedDomainsAndFilters(t *testing.T) {
 	}
 }
 
-func TestRunSiteDomainLinodePrimaryExecuteConfiguresVhostAndCachesPrimary(t *testing.T) {
+func TestRunSiteDomainLinodePrimaryForceConfiguresVhostAndCachesPrimary(t *testing.T) {
 	configDir := t.TempDir()
 	stateDir := t.TempDir()
 	t.Setenv("NF_CONFIG_HOME", configDir)
@@ -3877,8 +3880,8 @@ func TestRunSiteDomainLinodePrimaryExecuteConfiguresVhostAndCachesPrimary(t *tes
 	t.Cleanup(func() { runSSHCommandFn = oldRunSSH })
 
 	output := captureStdout(t, func() {
-		if got := Run([]string{"site", "domain", "primary", "client.app1-linode:live", "www.client.com", "--alias", "client.com", "--search-replace", "--execute", "--yes", "--non-interactive"}); got != 0 {
-			t.Fatalf("Run(site domain primary linode) = %d, want 0", got)
+		if got := Run([]string{"site", "domain", "primary", "client.app1-linode:live", "www.client.com", "--alias", "client.com", "--search-replace", "--force", "--execute", "--yes", "--non-interactive"}); got != 0 {
+			t.Fatalf("Run(site domain primary --force linode) = %d, want 0", got)
 		}
 	})
 	for _, want := range []string{"Launch primary domain plan:", "provider:  linode", "target:    app1-linode", "fallback:  https://client.app1-linode.nonfiction.dev", "canonical: www.client.com", "aliases:   client.com", "public DNS: no DNS records will be changed by nf", "A     www.client.com -> 203.0.113.10", "AAAA  client.com -> 2001:db8::10", "search-replace: true", "TLS: HTTP-01 certbot retry timer", "Site domain launched as primary."} {
@@ -3954,7 +3957,7 @@ func TestRunSiteDomainLinodePrepareRejectsCloudflareFull(t *testing.T) {
 	}
 }
 
-func TestRunSiteDomainLinodePrimaryWaitLaunchesAfterChecksPass(t *testing.T) {
+func TestRunSiteDomainLinodePrimaryLaunchesAfterChecksPass(t *testing.T) {
 	configDir := t.TempDir()
 	stateDir := t.TempDir()
 	t.Setenv("NF_CONFIG_HOME", configDir)
@@ -4004,8 +4007,8 @@ func TestRunSiteDomainLinodePrimaryWaitLaunchesAfterChecksPass(t *testing.T) {
 	})
 
 	output := captureStdout(t, func() {
-		if got := Run([]string{"site", "domain", "primary", "client.app1-linode:live", "www.client.com", "--wait", "--wait-interval", "1ns", "--wait-timeout", "1s", "--execute", "--yes", "--non-interactive"}); got != 0 {
-			t.Fatalf("Run(site domain primary --wait linode) = %d, want 0", got)
+		if got := Run([]string{"site", "domain", "primary", "client.app1-linode:live", "www.client.com", "--wait-interval", "1ns", "--wait-timeout", "1s", "--execute", "--yes", "--non-interactive"}); got != 0 {
+			t.Fatalf("Run(site domain primary linode) = %d, want 0", got)
 		}
 	})
 	assertContainsInOrder(t, output, []string{"Launch primary domain plan:", "Waiting for public domain checks.", "Approval already captured; launch will run automatically when checks pass.", "Overall: pending", "Next check in", "Rechecking public domain readiness...", "Overall: ready", "Checks ready.", "Launching primary domain now...", "Site domain launched as primary."})
@@ -4024,7 +4027,7 @@ func TestRunSiteDomainLinodePrimaryWaitLaunchesAfterChecksPass(t *testing.T) {
 	}
 }
 
-func TestRunSiteDomainLinodePrimaryWaitTimeoutDoesNotLaunch(t *testing.T) {
+func TestRunSiteDomainLinodePrimaryTimeoutDoesNotLaunch(t *testing.T) {
 	configDir := t.TempDir()
 	stateDir := t.TempDir()
 	t.Setenv("NF_CONFIG_HOME", configDir)
@@ -4069,8 +4072,8 @@ func TestRunSiteDomainLinodePrimaryWaitTimeoutDoesNotLaunch(t *testing.T) {
 
 	stderr := captureStderr(t, func() {
 		_ = captureStdout(t, func() {
-			if got := Run([]string{"site", "domain", "primary", "client.app1-linode:live", "www.client.com", "--wait", "--wait-interval", "1ns", "--wait-timeout", "1ns", "--execute", "--yes", "--non-interactive"}); got != 1 {
-				t.Fatalf("Run(site domain primary --wait timeout) = %d, want 1", got)
+			if got := Run([]string{"site", "domain", "primary", "client.app1-linode:live", "www.client.com", "--wait-interval", "1ns", "--wait-timeout", "1ns", "--execute", "--yes", "--non-interactive"}); got != 1 {
+				t.Fatalf("Run(site domain primary timeout) = %d, want 1", got)
 			}
 		})
 	})
