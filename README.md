@@ -1,6 +1,6 @@
 # nf
 
-<img width="150" align="right" src="nf.svg">
+<img width="150" align="right" src="docs/nf.svg">
 
 `nf` is nonfiction's internal CLI for agency WordPress theme work.
 
@@ -51,14 +51,14 @@ Start with the [documentation index](docs/index.md) or the [usage guide](docs/us
 
 Common practical guides:
 
-* [Local development](docs/local-development.md)
-* [Targets](docs/targets.md)
-* [Sites](docs/sites.md)
-* [Staging](docs/staging.md)
-* [Remotes](docs/remotes.md)
-* [Themes](docs/themes.md)
-* [Snapshots](docs/snapshots.md)
-* [Sync](docs/sync.md)
-* [Domains and launch](docs/domains.md)
+- [Local development](docs/local-development.md)
+- [Targets](docs/targets.md)
+- [Sites](docs/sites.md)
+- [Staging](docs/staging.md)
+- [Remotes](docs/remotes.md)
+- [Themes](docs/themes.md)
+- [Snapshots](docs/snapshots.md)
+- [Sync](docs/sync.md)
+- [Domains and launch](docs/domains.md)
 
 For the full project model, state layout, implementation phases, and roadmap, see [`SPEC.md`](SPEC.md).
