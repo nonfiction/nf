@@ -159,7 +159,7 @@ func cmdSiteDomainList(filter string) int {
 		fmt.Fprintln(os.Stderr, err)
 		return 1
 	}
-	rows := [][]string{{"domain", "site", "env", "role", "state", "provider", "proxy", "url"}}
+	rows := [][]string{{"domain", "env", "type", "status", "provider", "proxy", "url"}}
 	for _, record := range records {
 		if resolved != "" && !siteDomainListRecordMatches(record, resolved) {
 			continue
@@ -167,10 +167,9 @@ func cmdSiteDomainList(filter string) int {
 		for _, domain := range siteDomainListDomains(record) {
 			rows = append(rows, []string{
 				domain.name,
-				siteRecordID(record),
-				siteEnvName(record),
-				domain.role,
-				firstRecordString(record, "domain_state"),
+				siteRecordEnvID(record),
+				domain.domainType,
+				domain.status,
 				recordValueString(record["provider"]),
 				displaySiteDomainProxyMode(firstRecordString(record, "proxy_mode")),
 				firstRecordString(record, "url", "site_url", "home_url"),
@@ -197,34 +196,39 @@ func siteDomainListRecordMatches(record map[string]any, filter string) bool {
 }
 
 type siteDomainListDomain struct {
-	name string
-	role string
+	name       string
+	domainType string
+	status     string
 }
 
 func siteDomainListDomains(record map[string]any) []siteDomainListDomain {
 	seen := map[string]bool{}
 	domains := []siteDomainListDomain{}
-	add := func(name, role string) {
+	add := func(name, domainType, status string) {
 		name = normalizeDomainName(hostnameFromURLish(name))
 		if name == "" || seen[name] {
 			return
 		}
 		seen[name] = true
-		domains = append(domains, siteDomainListDomain{name: name, role: firstNonEmpty(role, "public")})
+		domains = append(domains, siteDomainListDomain{name: name, domainType: firstNonEmpty(domainType, "public"), status: status})
 	}
+	if defaultHost := siteDomainDefaultHostname(record); defaultHost != "" {
+		add(defaultHost, "default", "managed")
+	}
+	publicStatus := firstRecordString(record, "domain_state")
 	for _, entry := range siteDomainEntryValues(record["domains"]) {
-		role := ""
+		domainType := ""
 		if typed, ok := entry.(map[string]any); ok {
-			role = firstRecordString(typed, "role")
+			domainType = firstRecordString(typed, "type", "role")
 		}
-		add(siteDomainEntryName(entry), role)
+		add(siteDomainEntryName(entry), domainType, publicStatus)
 	}
-	add(firstRecordString(record, "primary_domain"), "primary")
+	add(firstRecordString(record, "primary_domain"), "canonical", firstNonEmpty(publicStatus, "primary"))
 	if host := hostnameFromURLish(firstRecordString(record, "hostname")); !looksLikeInternalSiteHostname(record, host) {
-		add(host, "current")
+		add(host, "current", publicStatus)
 	}
 	if host := hostnameFromURLish(firstRecordString(record, "url", "site_url", "home_url")); !looksLikeInternalSiteHostname(record, host) {
-		add(host, "current")
+		add(host, "current", publicStatus)
 	}
 	return domains
 }
@@ -645,10 +649,6 @@ func buildSiteDomainPlan(siteID, env, action string, opts siteDomainOptions) (si
 	if record == nil {
 		return siteDomainPlan{}, ProjectError{Msg: fmt.Sprintf("No cached remote env matched %q.", canonicalEnvID(siteID, env))}
 	}
-	target, err := envRemoteSyncTargetFromSiteRecord(record, canonicalEnvID(siteID, env), siteID, env)
-	if err != nil {
-		return siteDomainPlan{}, err
-	}
 	currentURL := firstRecordString(record, "url", "site_url", "home_url")
 	currentHostname := hostnameFromURLish(firstNonEmpty(currentURL, firstRecordString(record, "hostname")))
 	internalHostname := firstRecordString(record, "internal_hostname")
@@ -658,6 +658,17 @@ func buildSiteDomainPlan(siteID, env, action string, opts siteDomainOptions) (si
 	}
 	if internalURL == "" && internalHostname != "" {
 		internalURL = firstNonEmpty(currentURL, "https://"+internalHostname)
+	}
+	if action == "remove" {
+		for _, domain := range append([]string{canonical}, aliases...) {
+			if siteDomainIsDefaultHostname(record, domain) {
+				return siteDomainPlan{}, ProjectError{Msg: fmt.Sprintf("%s is an nf-managed default domain for %s and cannot be removed with site domain remove.", domain, canonicalEnvID(siteID, env))}
+			}
+		}
+	}
+	target, err := envRemoteSyncTargetFromSiteRecord(record, canonicalEnvID(siteID, env), siteID, env)
+	if err != nil {
+		return siteDomainPlan{}, err
 	}
 	plan := siteDomainPlan{
 		Action:           action,
@@ -848,6 +859,30 @@ func looksLikeInternalSiteHostname(record map[string]any, host string) bool {
 	}
 	target := strings.ToLower(strings.TrimSpace(siteProviderTarget(record)))
 	return target != "" && (strings.Contains(host, "."+target+".") || strings.HasSuffix(host, "."+target))
+}
+
+func siteDomainDefaultHostname(record map[string]any) string {
+	if host := normalizeDomainName(hostnameFromURLish(firstRecordString(record, "internal_hostname"))); host != "" {
+		return host
+	}
+	if host := normalizeDomainName(hostnameFromURLish(firstRecordString(record, "hostname"))); looksLikeInternalSiteHostname(record, host) {
+		return host
+	}
+	if host := normalizeDomainName(hostnameFromURLish(firstRecordString(record, "url", "site_url", "home_url"))); looksLikeInternalSiteHostname(record, host) {
+		return host
+	}
+	return ""
+}
+
+func siteDomainIsDefaultHostname(record map[string]any, host string) bool {
+	host = normalizeDomainName(hostnameFromURLish(host))
+	if host == "" {
+		return false
+	}
+	if defaultHost := siteDomainDefaultHostname(record); defaultHost != "" && host == defaultHost {
+		return true
+	}
+	return looksLikeInternalSiteHostname(record, host)
 }
 
 func (p siteDomainPlan) allDomains() []string {

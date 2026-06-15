@@ -3752,27 +3752,31 @@ func TestRunSiteDomainListShowsCachedDomainsAndFilters(t *testing.T) {
 			"domains":      []map[string]any{{"name": "www.client.com", "role": "canonical"}, {"name": "client.com", "role": "redirect"}},
 		},
 		{
-			"provider":     "linode",
-			"site_id":      "client.app1-linode",
-			"env_id":       "client.app1-linode:staging",
-			"name":         "client",
-			"env":          "staging",
-			"target":       "app1-linode",
-			"hostname":     "staging.client.com",
-			"url":          "https://staging.client.com",
-			"domain_state": "primary",
-			"domains":      []map[string]any{{"name": "staging.client.com", "role": "canonical"}},
+			"provider":          "linode",
+			"site_id":           "client.app1-linode",
+			"env_id":            "client.app1-linode:staging",
+			"name":              "client",
+			"env":               "staging",
+			"target":            "app1-linode",
+			"hostname":          "staging.client.com",
+			"url":               "https://staging.client.com",
+			"internal_hostname": "client-staging.app1-linode.nonfiction.dev",
+			"internal_url":      "https://client-staging.app1-linode.nonfiction.dev",
+			"domain_state":      "primary",
+			"domains":           []map[string]any{{"name": "staging.client.com", "role": "canonical"}},
 		},
 		{
-			"provider":       "kinsta",
-			"site_id":        "other.kinsta",
-			"env_id":         "other.kinsta:live",
-			"name":           "other",
-			"env":            "live",
-			"target":         "kinsta",
-			"hostname":       "www.other.com",
-			"url":            "https://www.other.com",
-			"primary_domain": "www.other.com",
+			"provider":          "kinsta",
+			"site_id":           "other.kinsta",
+			"env_id":            "other.kinsta:live",
+			"name":              "other",
+			"env":               "live",
+			"target":            "kinsta",
+			"hostname":          "www.other.com",
+			"url":               "https://www.other.com",
+			"primary_domain":    "www.other.com",
+			"internal_hostname": "other.kinsta.nonfiction.dev",
+			"internal_url":      "https://other.kinsta.nonfiction.dev",
 		},
 	}); err != nil {
 		t.Fatalf("SaveStateRecords(sites) error = %v", err)
@@ -3785,21 +3789,26 @@ func TestRunSiteDomainListShowsCachedDomainsAndFilters(t *testing.T) {
 	})
 	for _, want := range []string{
 		"domain",
-		"site",
 		"env",
-		"role",
-		"state",
+		"type",
+		"status",
 		"provider",
 		"proxy",
 		"url",
+		"client.app1-linode.nonfiction.dev",
+		"client-staging.app1-linode.nonfiction.dev",
+		"other.kinsta.nonfiction.dev",
 		"www.client.com",
 		"client.com",
 		"staging.client.com",
 		"www.other.com",
-		"client.app1-linode",
-		"other.kinsta",
+		"client.app1-linode:live",
+		"client.app1-linode:staging",
+		"other.kinsta:live",
 		"canonical",
 		"redirect",
+		"default",
+		"managed",
 		"prepared",
 		"primary",
 		"linode",
@@ -3813,13 +3822,21 @@ func TestRunSiteDomainListShowsCachedDomainsAndFilters(t *testing.T) {
 			t.Fatalf("site domain list output missing %q:\n%s", want, output)
 		}
 	}
+	if firstLine, _, _ := strings.Cut(output, "\n"); strings.Contains(firstLine, "site") {
+		t.Fatalf("site domain list header contains old site column:\n%s", output)
+	}
+	for _, notWant := range []string{"role", "state"} {
+		if strings.Contains(output, notWant) {
+			t.Fatalf("site domain list output contains old header %q:\n%s", notWant, output)
+		}
+	}
 
 	siteOutput := captureStdout(t, func() {
 		if got := Run([]string{"site", "domain", "list", "client.app1-linode"}); got != 0 {
 			t.Fatalf("Run(site domain list site) = %d, want 0", got)
 		}
 	})
-	for _, want := range []string{"www.client.com", "client.com", "staging.client.com"} {
+	for _, want := range []string{"client.app1-linode.nonfiction.dev", "www.client.com", "client.com", "client-staging.app1-linode.nonfiction.dev", "staging.client.com"} {
 		if !strings.Contains(siteOutput, want) {
 			t.Fatalf("site domain list site output missing %q:\n%s", want, siteOutput)
 		}
@@ -3833,7 +3850,7 @@ func TestRunSiteDomainListShowsCachedDomainsAndFilters(t *testing.T) {
 			t.Fatalf("Run(site domain list env) = %d, want 0", got)
 		}
 	})
-	for _, want := range []string{"www.client.com", "client.com"} {
+	for _, want := range []string{"client.app1-linode.nonfiction.dev", "www.client.com", "client.com"} {
 		if !strings.Contains(envOutput, want) {
 			t.Fatalf("site domain list env output missing %q:\n%s", want, envOutput)
 		}
@@ -4226,6 +4243,59 @@ func TestRunSiteDomainLinodeRemoveExecuteCleansPublicBindingAndResetsCache(t *te
 		if _, ok := record[key]; ok {
 			t.Fatalf("%s still present after remove: %#v", key, record)
 		}
+	}
+}
+
+func TestRunSiteDomainRemoveRejectsDefaultHostname(t *testing.T) {
+	configDir := t.TempDir()
+	stateDir := t.TempDir()
+	t.Setenv("NF_CONFIG_HOME", configDir)
+	t.Setenv("NF_STATE_HOME", stateDir)
+	if err := saveGlobalConfig(map[string]string{"linode_default_user": "nonfiction"}); err != nil {
+		t.Fatalf("saveGlobalConfig() error = %v", err)
+	}
+	if err := state.SaveStateRecords("sites", []map[string]any{{
+		"provider":          "linode",
+		"site_id":           "client.app1-linode",
+		"env_id":            "client.app1-linode:live",
+		"name":              "client",
+		"env":               "live",
+		"target":            "app1-linode",
+		"hostname":          "www.client.com",
+		"url":               "https://www.client.com",
+		"primary_domain":    "www.client.com",
+		"internal_hostname": "client.app1-linode.nonfiction.dev",
+		"internal_url":      "https://client.app1-linode.nonfiction.dev",
+		"domain_state":      "primary",
+		"domains":           []map[string]any{{"name": "www.client.com", "role": "canonical"}},
+	}}); err != nil {
+		t.Fatalf("SaveStateRecords(sites) error = %v", err)
+	}
+	records, err := state.LoadStateRecords("sites")
+	if err != nil {
+		t.Fatalf("LoadStateRecords(sites) error = %v", err)
+	}
+	if !siteDomainIsDefaultHostname(records[0], "client.app1-linode.nonfiction.dev") {
+		t.Fatalf("siteDomainIsDefaultHostname() = false, want true for internal hostname in %#v", records[0])
+	}
+	_, err = buildSiteDomainPlan("client.app1-linode", "live", "remove", siteDomainOptions{canonical: "client.app1-linode.nonfiction.dev"})
+	if err == nil || !strings.Contains(err.Error(), "nf-managed default domain") {
+		t.Fatalf("buildSiteDomainPlan(default remove) error = %v, want default-domain rejection", err)
+	}
+	oldRunSSH := runSSHCommandFn
+	runSSHCommandFn = func(args []string) error {
+		t.Fatalf("runSSHCommandFn should not be called for default hostname removal")
+		return nil
+	}
+	t.Cleanup(func() { runSSHCommandFn = oldRunSSH })
+
+	stderr := captureStderr(t, func() {
+		if got := Run([]string{"site", "domain", "remove", "client.app1-linode:live", "client.app1-linode.nonfiction.dev", "--execute", "--yes", "--non-interactive"}); got != 1 {
+			t.Fatalf("Run(site domain remove default hostname) = %d, want 1", got)
+		}
+	})
+	if !strings.Contains(stderr, "client.app1-linode.nonfiction.dev is an nf-managed default domain for client.app1-linode:live and cannot be removed with site domain remove.") {
+		t.Fatalf("default removal stderr = %q", stderr)
 	}
 }
 
