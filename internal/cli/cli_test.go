@@ -2394,6 +2394,59 @@ func TestRunTargetShowDisplaysCachedAdminerURL(t *testing.T) {
 	})
 }
 
+func TestRunTargetShowReadsRemoteAdminerMetadataWhenCacheIsMissing(t *testing.T) {
+	stateDir := t.TempDir()
+	t.Setenv("NF_STATE_HOME", stateDir)
+	t.Setenv("NF_PASSWORD_SALT", "test-salt")
+	if err := state.SaveStateRecords("providers", []map[string]any{{"provider": "linode", "targets": []map[string]any{{
+		"name":     "app1-linode",
+		"provider": "linode",
+		"hostname": "app1-linode.nonfiction.dev",
+		"ssh":      map[string]any{"user": "nonfiction", "host": "app1-linode.nonfiction.dev"},
+	}}}}); err != nil {
+		t.Fatalf("SaveStateRecords(providers) error = %v", err)
+	}
+	var sshArgs []string
+	oldSSH := targetSSHReachableFn
+	oldSSHOutput := runSSHOutputFn
+	targetSSHReachableFn = func(record map[string]any) bool { return true }
+	runSSHOutputFn = func(args []string) ([]byte, error) {
+		sshArgs = append([]string(nil), args...)
+		return []byte(`{
+  "hostname": "app1-linode.nonfiction.dev",
+  "adminer": {
+    "tool": "AdminNeo",
+    "version": "5.4.1",
+    "hostname": "adminer.app1-linode.nonfiction.dev",
+    "url": "https://adminer.app1-linode.nonfiction.dev/",
+    "user": "adminer",
+    "auth": {"password": {"identity": "app1-linode.nonfiction.dev", "purpose": "adminer-console", "stored": false}}
+  }
+}`), nil
+	}
+	t.Cleanup(func() {
+		targetSSHReachableFn = oldSSH
+		runSSHOutputFn = oldSSHOutput
+	})
+
+	output := captureStdout(t, func() {
+		if got := Run([]string{"target", "show", "app1-linode"}); got != 0 {
+			t.Fatalf("Run(target show) = %d, want 0", got)
+		}
+	})
+	password := passwords.DerivePassword("app1-linode.nonfiction.dev", "adminer-console", "test-salt")
+	assertContainsInOrder(t, output, []string{
+		"Access\n",
+		"  SSH       ssh nonfiction@app1-linode.nonfiction.dev\n",
+		"  Adminer   https://adminer.app1-linode.nonfiction.dev/",
+		"   - User   adminer\n",
+		"   - Pass   " + password,
+	})
+	if got := strings.Join(sshArgs, " "); !strings.Contains(got, "nonfiction@app1-linode.nonfiction.dev") || !strings.Contains(got, "/var/lib/nf/target.json") {
+		t.Fatalf("ssh args = %#v, want target.json read", sshArgs)
+	}
+}
+
 func TestRunTargetAdminerShowReadsTargetMetadataAndDerivesPassword(t *testing.T) {
 	stateDir := t.TempDir()
 	t.Setenv("NF_STATE_HOME", stateDir)

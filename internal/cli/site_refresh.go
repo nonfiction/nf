@@ -56,6 +56,7 @@ func cmdShowTarget(needle string, jsonOutput bool) int {
 		return 1
 	}
 	if !jsonOutput {
+		record = targetWithRemoteAdminerMetadata(record)
 		printTargetDetails(record)
 		return 0
 	}
@@ -90,6 +91,28 @@ func printTargetDetails(record map[string]any) {
 		}
 	}
 	fmt.Println(strings.Join(lines, "\n"))
+}
+
+func targetWithRemoteAdminerMetadata(record map[string]any) map[string]any {
+	if strings.ToLower(strings.TrimSpace(recordValueString(record["provider"]))) != "linode" || targetAdminerURL(record) != "" {
+		return record
+	}
+	remote, err := readLinodeTargetFile(record)
+	if err != nil {
+		return record
+	}
+	adminer, ok := remote["adminer"].(map[string]any)
+	if !ok || len(adminer) == 0 {
+		return record
+	}
+	hydrated := cloneRecord(record)
+	hydrated["adminer"] = adminer
+	for _, key := range []string{"hostname", "host"} {
+		if recordValueString(hydrated[key]) == "" && recordValueString(remote[key]) != "" {
+			hydrated[key] = remote[key]
+		}
+	}
+	return hydrated
 }
 
 func targetAdminerLogin(record map[string]any) (string, string, string) {
