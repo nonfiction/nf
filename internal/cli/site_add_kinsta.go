@@ -344,7 +344,7 @@ func provisionKinstaSite(plan kinstaSiteAddPlan) (kinstaProvisionResult, error) 
 	if dnsToken == "" {
 		return kinstaProvisionResult{}, fmt.Errorf("Expected DNSIMPLE_TOKEN in the environment or %s.", config.EnvFile())
 	}
-	client := kinsta.NewClient(firstNonEmpty(envwizard.Value("KINSTA_BASE_URL"), "https://api.kinsta.com/v2"), token)
+	client := newKinstaClient(token)
 	ctx := context.Background()
 	companyID := plan.CompanyID
 	if companyID == "" {
@@ -382,13 +382,21 @@ func provisionKinstaStaging(plan kinstaSiteAddPlan) (kinstaProvisionResult, erro
 	if kinstaSiteID == "" {
 		return kinstaProvisionResult{}, fmt.Errorf("Selected Kinsta site %q has no Kinsta site_id. Run nf site refresh and try again.", plan.SiteID)
 	}
-	client := kinsta.NewClient(firstNonEmpty(envwizard.Value("KINSTA_BASE_URL"), "https://api.kinsta.com/v2"), token)
+	client := newKinstaClient(token)
 	ctx := context.Background()
 	liveEnv, err := ensureKinstaLiveEnvironment(ctx, client, kinstaSiteID, plan.PHPVersion)
 	if err != nil {
 		return kinstaProvisionResult{}, err
 	}
 	return provisionKinstaSelectedEnvs(ctx, client, dnsToken, plan, plan.CompanyID, kinstaSiteID, liveEnv)
+}
+
+func newKinstaClient(token string) *kinsta.Client {
+	options := []kinsta.Option{}
+	if graphqlURL := strings.TrimSpace(envwizard.Value("KINSTA_GRAPHQL_URL")); graphqlURL != "" {
+		options = append(options, kinsta.WithGraphQLURL(graphqlURL))
+	}
+	return kinsta.NewClient(firstNonEmpty(envwizard.Value("KINSTA_BASE_URL"), "https://api.kinsta.com/v2"), token, options...)
 }
 
 func provisionKinstaSelectedEnvs(ctx context.Context, client *kinsta.Client, dnsToken string, plan kinstaSiteAddPlan, companyID, kinstaSiteID string, liveEnv kinsta.Environment) (kinstaProvisionResult, error) {
@@ -412,9 +420,12 @@ func provisionKinstaSelectedEnvs(ctx context.Context, client *kinsta.Client, dns
 		if err != nil {
 			return kinstaProvisionResult{}, err
 		}
-		records, err := ensureKinstaDomainDNSRecords(ctx, client, dnsToken, plan, env, remoteEnv, domain)
+		dnsResult, err := ensureKinstaDomainDNSRecords(ctx, client, dnsToken, plan, env, remoteEnv, domain)
 		if err != nil {
 			return kinstaProvisionResult{}, err
+		}
+		if dnsResult.UsedFallback {
+			return kinstaProvisionResult{}, kinstaDomainFallbackManualVerificationError(env.Domain)
 		}
 		if !domain.IsPrimary {
 			fmt.Printf("Changing Kinsta primary domain to %s...\n", env.Domain)
@@ -425,9 +436,6 @@ func provisionKinstaSelectedEnvs(ctx context.Context, client *kinsta.Client, dns
 			if err := waitKinstaOperation(ctx, client, opID); err != nil {
 				return kinstaProvisionResult{}, err
 			}
-		}
-		if kinstaDomainRecordsHavePointing(records, env.Domain) {
-			confirmKinstaDomainPointing(ctx, client, remoteEnv.ID, domain.ID, env.Domain)
 		}
 		env.EnvID = remoteEnv.ID
 		env.DomainID = domain.ID
@@ -449,19 +457,23 @@ func provisionKinstaSelectedEnvs(ctx context.Context, client *kinsta.Client, dns
 	return result, nil
 }
 
-func ensureKinstaDomainDNSRecords(ctx context.Context, client *kinsta.Client, dnsToken string, plan kinstaSiteAddPlan, env kinstaSiteAddEnvPlan, remoteEnv kinsta.Environment, domain kinsta.Domain) (kinsta.DomainRecords, error) {
+type kinstaDomainDNSResult struct {
+	UsedFallback bool
+}
+
+func ensureKinstaDomainDNSRecords(ctx context.Context, client *kinsta.Client, dnsToken string, plan kinstaSiteAddPlan, env kinstaSiteAddEnvPlan, remoteEnv kinsta.Environment, domain kinsta.Domain) (kinstaDomainDNSResult, error) {
 	records, err := client.DomainRecords(ctx, domain.ID)
 	if err != nil {
-		return kinsta.DomainRecords{}, err
+		return kinstaDomainDNSResult{}, err
 	}
 	if err := upsertKinstaDNSRecords(dnsToken, plan.DNSAccountID, plan.DNSZone, env.Domain, records); err != nil {
-		return kinsta.DomainRecords{}, err
+		return kinstaDomainDNSResult{}, err
 	}
 	if kinstaDomainRecordsHavePointing(records, env.Domain) {
-		return records, nil
+		return kinstaDomainDNSResult{}, nil
 	}
 	if domain.IsPrimary && !kinstaDomainRecordsHaveAny(records) {
-		return records, nil
+		return kinstaDomainDNSResult{}, nil
 	}
 	syncedRecords := kinstaDomainRecordKeySet(records)
 	validationRecords := kinsta.DomainRecords{}
@@ -480,23 +492,23 @@ func ensureKinstaDomainDNSRecords(ctx context.Context, client *kinsta.Client, dn
 	}); err != nil {
 		fallback, fallbackErr := kinstaSiteAddFallbackDNSRecords(ctx, client, plan, env, remoteEnv, kinstaMergeDomainRecords(records, validationRecords))
 		if fallbackErr != nil {
-			return kinsta.DomainRecords{}, err
+			return kinstaDomainDNSResult{}, err
 		}
 		fmt.Printf("Kinsta has not detected verification DNS yet; using generated Kinsta DNS fallback %s -> %s.\n", env.Domain, fallback.Pointing[0].RecordContent())
 		if err := upsertKinstaDNSRecords(dnsToken, plan.DNSAccountID, plan.DNSZone, env.Domain, fallback); err != nil {
-			return kinsta.DomainRecords{}, err
+			return kinstaDomainDNSResult{}, err
 		}
-		return fallback, nil
+		return kinstaDomainDNSResult{UsedFallback: true}, nil
 	}
 	fmt.Println("Kinsta detected verification records.")
 	actionID, err := client.ConfirmCloudflareVerification(ctx, remoteEnv.ID, domain.ID)
 	if err != nil {
-		return kinsta.DomainRecords{}, err
+		return kinstaDomainDNSResult{}, err
 	}
 	if actionID != 0 {
 		action, err := client.GraphQLAction(ctx, actionID)
 		if err != nil {
-			return kinsta.DomainRecords{}, err
+			return kinstaDomainDNSResult{}, err
 		}
 		phantomAction := false
 		if !action.Found {
@@ -504,7 +516,7 @@ func ensureKinstaDomainDNSRecords(ctx context.Context, client *kinsta.Client, dn
 			phantomAction = true
 		}
 		if action.Error != "" {
-			return kinsta.DomainRecords{}, fmt.Errorf("Kinsta domain verification for %s failed: %s", env.Domain, action.Error)
+			return kinstaDomainDNSResult{}, fmt.Errorf("Kinsta domain verification for %s failed: %s", env.Domain, action.Error)
 		}
 		if phantomAction {
 			return waitKinstaDomainDNSAfterPhantomVerification(ctx, client, dnsToken, plan, env, remoteEnv, domain, syncedRecords)
@@ -524,13 +536,13 @@ func ensureKinstaDomainDNSRecords(ctx context.Context, client *kinsta.Client, dn
 		return nil
 	})
 	if err != nil {
-		return kinsta.DomainRecords{}, err
+		return kinstaDomainDNSResult{}, err
 	}
 	fmt.Println("Kinsta returned pointing records.")
-	return records, nil
+	return kinstaDomainDNSResult{}, nil
 }
 
-func waitKinstaDomainDNSAfterPhantomVerification(ctx context.Context, client *kinsta.Client, dnsToken string, plan kinstaSiteAddPlan, env kinstaSiteAddEnvPlan, remoteEnv kinsta.Environment, domain kinsta.Domain, syncedRecords map[string]struct{}) (kinsta.DomainRecords, error) {
+func waitKinstaDomainDNSAfterPhantomVerification(ctx context.Context, client *kinsta.Client, dnsToken string, plan kinstaSiteAddPlan, env kinstaSiteAddEnvPlan, remoteEnv kinsta.Environment, domain kinsta.Domain, syncedRecords map[string]struct{}) (kinstaDomainDNSResult, error) {
 	fmt.Println("Started Kinsta domain verification.")
 	fmt.Println("Waiting briefly for Kinsta domain verification...")
 	records, err := waitKinstaDomainPointingRecords(ctx, client, domain.ID, env.Domain, kinstaDomainPhantomWaitTimeout, func(records kinsta.DomainRecords) error {
@@ -547,16 +559,20 @@ func waitKinstaDomainDNSAfterPhantomVerification(ctx context.Context, client *ki
 	if err != nil {
 		fallback, fallbackErr := kinstaSiteAddFallbackDNSRecords(ctx, client, plan, env, remoteEnv, records)
 		if fallbackErr != nil {
-			return kinsta.DomainRecords{}, fmt.Errorf("Kinsta accepted domain verification for %s but did not expose a runnable verification action to the API token and did not return pointing records. Verification records were written; verify the domain in MyKinsta, then rerun site add: %w", env.Domain, err)
+			return kinstaDomainDNSResult{}, fmt.Errorf("Kinsta accepted domain verification for %s but did not expose a runnable verification action to the API token and did not return pointing records. Verification records were written; verify the domain in MyKinsta, then rerun site add: %w", env.Domain, err)
 		}
 		fmt.Printf("Kinsta did not return pointing records; using generated Kinsta DNS fallback %s -> %s.\n", env.Domain, fallback.Pointing[0].RecordContent())
 		if err := upsertKinstaDNSRecords(dnsToken, plan.DNSAccountID, plan.DNSZone, env.Domain, fallback); err != nil {
-			return kinsta.DomainRecords{}, err
+			return kinstaDomainDNSResult{}, err
 		}
-		return fallback, nil
+		return kinstaDomainDNSResult{UsedFallback: true}, nil
 	}
 	fmt.Println("Kinsta returned pointing records.")
-	return records, nil
+	return kinstaDomainDNSResult{}, nil
+}
+
+func kinstaDomainFallbackManualVerificationError(domain string) error {
+	return fmt.Errorf("Kinsta did not return authoritative pointing records for %s. DNS records were written using the generated Kinsta domain fallback, but Kinsta has not marked the custom domain live or issued HTTPS yet. Open MyKinsta, click Verify domain for %s, then rerun site add/staging add; the command is resumable", domain, domain)
 }
 
 func kinstaSiteAddFallbackDNSRecords(ctx context.Context, client *kinsta.Client, plan kinstaSiteAddPlan, env kinstaSiteAddEnvPlan, remoteEnv kinsta.Environment, records kinsta.DomainRecords) (kinsta.DomainRecords, error) {
@@ -695,24 +711,6 @@ func kinstaGeneratedDomainForDomains(domains []kinsta.Domain, customDomain strin
 		}
 	}
 	return ""
-}
-
-func confirmKinstaDomainPointing(ctx context.Context, client *kinsta.Client, envID, domainID, domainName string) {
-	fmt.Println("Requesting Kinsta domain pointing confirmation...")
-	if err := client.ConfirmDomainPointing(ctx, envID, domainID); err != nil {
-		if isKinstaPointingConfirmationUnavailable(err) {
-			fmt.Printf("DNS is in place for %s and Kinsta should mark it live after propagation.\n", domainName)
-			return
-		}
-		fmt.Printf("Kinsta pointing confirmation for %s did not complete automatically: %v\n", domainName, err)
-		return
-	}
-	fmt.Println("Kinsta accepted domain pointing confirmation.")
-}
-
-func isKinstaPointingConfirmationUnavailable(err error) bool {
-	message := strings.ToLower(err.Error())
-	return strings.Contains(message, "confirmpointing") && strings.Contains(message, "permission")
 }
 
 func waitKinstaDomainVerificationRecords(parent context.Context, client *kinsta.Client, domainID, domainName string, timeout time.Duration, onValidation func(kinsta.DomainVerificationValidation) error) (kinsta.DomainVerificationValidation, error) {

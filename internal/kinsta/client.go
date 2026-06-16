@@ -448,17 +448,6 @@ func (c *Client) ConfirmCloudflareVerification(ctx context.Context, envID, domai
 	return out.IDAction, nil
 }
 
-func (c *Client) ConfirmDomainPointing(ctx context.Context, envID, domainID string) error {
-	return c.doGraphQL(ctx, "ConfirmPointing", `mutation ConfirmPointing($idEnvironment: String!, $idSiteDomain: String!, $isDnsWarningSkipped: Boolean, $isHideNotification: Boolean) {
-  customHostnamePointingConfirm(
-    idEnvironment: $idEnvironment
-    idSiteDomain: $idSiteDomain
-    isDnsWarningSkipped: $isDnsWarningSkipped
-    isHideNotification: $isHideNotification
-  )
-}`, map[string]any{"idEnvironment": envID, "idSiteDomain": domainID, "isDnsWarningSkipped": false}, nil)
-}
-
 func (c *Client) GraphQLAction(ctx context.Context, actionID int) (GraphQLAction, error) {
 	var out actionResponse
 	err := c.doGraphQL(ctx, "Action", `query Action($idAction: Int!) {

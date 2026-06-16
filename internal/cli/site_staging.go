@@ -269,14 +269,15 @@ func buildSiteStagingAddPlan(siteRef string) (siteStagingAddPlan, error) {
 	if err != nil {
 		return siteStagingAddPlan{}, err
 	}
-	if findSiteRecordByEnv(matches, "staging") != nil {
-		return siteStagingAddPlan{}, ProjectError{Msg: fmt.Sprintf("Site %q already has staging env.", resolvedSiteID)}
-	}
+	staging := findSiteRecordByEnv(matches, "staging")
 	live := findSiteRecordByEnv(matches, "live")
 	if live == nil {
 		return siteStagingAddPlan{}, ProjectError{Msg: fmt.Sprintf("Site %q has no live env to stage from.", resolvedSiteID)}
 	}
 	provider := strings.ToLower(strings.TrimSpace(recordValueString(live["provider"])))
+	if staging != nil && provider != "kinsta" {
+		return siteStagingAddPlan{}, ProjectError{Msg: fmt.Sprintf("Site %q already has staging env.", resolvedSiteID)}
+	}
 	switch provider {
 	case "linode":
 		plan, err := buildLinodeSiteStagingAddPlan(live, resolvedSiteID)

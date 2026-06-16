@@ -3777,12 +3777,9 @@ func TestProvisionKinstaSiteAddWaitsForPointingRecordsBeforePrimary(t *testing.T
 	domainRecordsCalls := 0
 	validationCalls := 0
 	confirmCalls := 0
-	pointingConfirmCalls := 0
 	primaryCalls := 0
 	primaryBeforePointing := false
 	confirmBeforeValidation := false
-	pointingConfirmBeforePointing := false
-	pointingConfirmBeforePrimary := false
 	var addDomainPayload map[string]any
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
@@ -3834,18 +3831,6 @@ func TestProvisionKinstaSiteAddWaitsForPointingRecordsBeforePrimary(t *testing.T
 				_ = json.NewEncoder(w).Encode(map[string]any{"data": map[string]any{"idAction": 123}})
 			case "Action":
 				_ = json.NewEncoder(w).Encode(map[string]any{"data": map[string]any{"action": map[string]any{"id": 123, "error": nil, "isDone": false}, "action_liveKeys": []string{"key"}}})
-			case "ConfirmPointing":
-				pointingConfirmCalls++
-				if domainRecordsCalls < 4 {
-					pointingConfirmBeforePointing = true
-				}
-				if primaryCalls == 0 {
-					pointingConfirmBeforePrimary = true
-				}
-				if payload.Variables["idEnvironment"] != "kenv-live" || payload.Variables["idSiteDomain"] != "kdom-live" || payload.Variables["isDnsWarningSkipped"] != false {
-					t.Fatalf("pointing confirm variables = %#v", payload.Variables)
-				}
-				_ = json.NewEncoder(w).Encode(map[string]any{"data": map[string]any{"customHostnamePointingConfirm": nil}})
 			default:
 				t.Fatalf("unexpected graphql operation %q", payload.OperationName)
 			}
@@ -3899,9 +3884,6 @@ func TestProvisionKinstaSiteAddWaitsForPointingRecordsBeforePrimary(t *testing.T
 	}
 	if validationCalls != 1 || confirmCalls != 1 || confirmBeforeValidation {
 		t.Fatalf("verification calls validation=%d confirm=%d confirmBeforeValidation=%v, want validate then confirm", validationCalls, confirmCalls, confirmBeforeValidation)
-	}
-	if pointingConfirmCalls != 1 || pointingConfirmBeforePointing || pointingConfirmBeforePrimary {
-		t.Fatalf("pointing confirm calls=%d beforePointing=%v beforePrimary=%v, want one call after pointing records and primary change", pointingConfirmCalls, pointingConfirmBeforePointing, pointingConfirmBeforePrimary)
 	}
 	if primaryBeforePointing {
 		t.Fatal("change primary was called before pointing records were returned")
@@ -4042,7 +4024,6 @@ func TestProvisionKinstaSiteAddContinuesWhenVerificationActionIsNotVisible(t *te
 	domainListCalls := 0
 	domainRecordsCalls := 0
 	confirmCalls := 0
-	pointingConfirmCalls := 0
 	primaryCalls := 0
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
@@ -4083,9 +4064,6 @@ func TestProvisionKinstaSiteAddContinuesWhenVerificationActionIsNotVisible(t *te
 				_ = json.NewEncoder(w).Encode(map[string]any{"data": map[string]any{"idAction": 123}})
 			case "Action":
 				_ = json.NewEncoder(w).Encode(map[string]any{"data": map[string]any{"action": nil, "action_liveKeys": []string{"key"}}})
-			case "ConfirmPointing":
-				pointingConfirmCalls++
-				_ = json.NewEncoder(w).Encode(map[string]any{"data": map[string]any{"customHostnamePointingConfirm": nil}})
 			default:
 				t.Fatalf("unexpected graphql operation %q", payload.OperationName)
 			}
@@ -4127,8 +4105,8 @@ func TestProvisionKinstaSiteAddContinuesWhenVerificationActionIsNotVisible(t *te
 	if _, err := provisionKinstaSelectedEnvs(context.Background(), client, "dns-token", plan, "company-123", "ksite123", kinsta.Environment{ID: "kenv-live", Name: "live"}); err != nil {
 		t.Fatalf("provisionKinstaSelectedEnvs() error = %v", err)
 	}
-	if confirmCalls != 1 || primaryCalls != 1 || pointingConfirmCalls != 1 {
-		t.Fatalf("confirm=%d primary=%d pointingConfirm=%d, want one each", confirmCalls, primaryCalls, pointingConfirmCalls)
+	if confirmCalls != 1 || primaryCalls != 1 {
+		t.Fatalf("confirm=%d primary=%d, want one each", confirmCalls, primaryCalls)
 	}
 	for _, want := range []string{
 		"k-verification.foobar.kinsta TXT verify-token",
@@ -4162,7 +4140,6 @@ func TestProvisionKinstaSiteAddUsesGeneratedDNSFallbackWhenPointingRecordsAreMis
 	domainListCalls := 0
 	domainRecordsCalls := 0
 	primaryCalls := 0
-	pointingConfirmCalls := 0
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		switch r.Method + " " + r.URL.Path {
@@ -4198,9 +4175,6 @@ func TestProvisionKinstaSiteAddUsesGeneratedDNSFallbackWhenPointingRecordsAreMis
 				_ = json.NewEncoder(w).Encode(map[string]any{"data": map[string]any{"idAction": 123}})
 			case "Action":
 				_ = json.NewEncoder(w).Encode(map[string]any{"data": map[string]any{"action": nil, "action_liveKeys": []string{"key"}}})
-			case "ConfirmPointing":
-				pointingConfirmCalls++
-				_ = json.NewEncoder(w).Encode(map[string]any{"data": map[string]any{"customHostnamePointingConfirm": nil}})
 			default:
 				t.Fatalf("unexpected graphql operation %q", payload.OperationName)
 			}
@@ -4243,11 +4217,15 @@ func TestProvisionKinstaSiteAddUsesGeneratedDNSFallbackWhenPointingRecordsAreMis
 	}
 	liveEnv := kinsta.Environment{ID: "kenv-live", Name: "live", PrimaryDomain: kinsta.Domain{Name: "foobar.kinsta.cloud"}}
 
-	if _, err := provisionKinstaSelectedEnvs(context.Background(), client, "dns-token", plan, "company-123", "ksite123", liveEnv); err != nil {
-		t.Fatalf("provisionKinstaSelectedEnvs() error = %v", err)
+	_, err := provisionKinstaSelectedEnvs(context.Background(), client, "dns-token", plan, "company-123", "ksite123", liveEnv)
+	if err == nil {
+		t.Fatal("provisionKinstaSelectedEnvs() error = nil, want manual verification error")
 	}
-	if primaryCalls != 1 || pointingConfirmCalls != 1 {
-		t.Fatalf("primary=%d pointingConfirm=%d, want one each", primaryCalls, pointingConfirmCalls)
+	if msg := err.Error(); !strings.Contains(msg, "Kinsta did not return authoritative pointing records") || !strings.Contains(msg, "Open MyKinsta") || !strings.Contains(msg, "command is resumable") {
+		t.Fatalf("provisionKinstaSelectedEnvs() error = %q, want manual verification guidance", msg)
+	}
+	if primaryCalls != 0 {
+		t.Fatalf("primary calls = %d, want 0 before manual verification", primaryCalls)
 	}
 	for _, want := range []string{
 		"_acme-challenge.foobar.kinsta CNAME foobar.kinsta.nonfiction.dev.kinstavalidation.app",
@@ -4279,7 +4257,6 @@ func TestProvisionKinstaSiteAddUsesGeneratedDNSFallbackWithOnlyInitialVerificati
 
 	domainListCalls := 0
 	primaryCalls := 0
-	pointingConfirmCalls := 0
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		switch r.Method + " " + r.URL.Path {
@@ -4310,9 +4287,6 @@ func TestProvisionKinstaSiteAddUsesGeneratedDNSFallbackWithOnlyInitialVerificati
 				_ = json.NewEncoder(w).Encode(map[string]any{"data": map[string]any{"idAction": 123}})
 			case "Action":
 				_ = json.NewEncoder(w).Encode(map[string]any{"data": map[string]any{"action": nil, "action_liveKeys": []string{"key"}}})
-			case "ConfirmPointing":
-				pointingConfirmCalls++
-				_ = json.NewEncoder(w).Encode(map[string]any{"data": map[string]any{"customHostnamePointingConfirm": nil}})
 			default:
 				t.Fatalf("unexpected graphql operation %q", payload.OperationName)
 			}
@@ -4354,11 +4328,15 @@ func TestProvisionKinstaSiteAddUsesGeneratedDNSFallbackWithOnlyInitialVerificati
 	}
 	liveEnv := kinsta.Environment{ID: "kenv-live", Name: "live", PrimaryDomain: kinsta.Domain{Name: "foobar.kinsta.cloud"}}
 
-	if _, err := provisionKinstaSelectedEnvs(context.Background(), client, "dns-token", plan, "company-123", "ksite123", liveEnv); err != nil {
-		t.Fatalf("provisionKinstaSelectedEnvs() error = %v", err)
+	_, err := provisionKinstaSelectedEnvs(context.Background(), client, "dns-token", plan, "company-123", "ksite123", liveEnv)
+	if err == nil {
+		t.Fatal("provisionKinstaSelectedEnvs() error = nil, want manual verification error")
 	}
-	if primaryCalls != 1 || pointingConfirmCalls != 1 {
-		t.Fatalf("primary=%d pointingConfirm=%d, want one each", primaryCalls, pointingConfirmCalls)
+	if msg := err.Error(); !strings.Contains(msg, "Kinsta did not return authoritative pointing records") || !strings.Contains(msg, "Open MyKinsta") || !strings.Contains(msg, "command is resumable") {
+		t.Fatalf("provisionKinstaSelectedEnvs() error = %q, want manual verification guidance", msg)
+	}
+	if primaryCalls != 0 {
+		t.Fatalf("primary calls = %d, want 0 before manual verification", primaryCalls)
 	}
 	for _, want := range []string{
 		"_acme-challenge.foobar.kinsta CNAME foobar.kinsta.nonfiction.dev.kinstavalidation.app",
@@ -4429,8 +4407,6 @@ func TestProvisionKinstaSiteAddFallsBackWhenKinstaVerificationDetectionLags(t *t
 						{"name": "_acme-challenge.foobar.kinsta.nonfiction.dev", "value": "foobar.kinsta.nonfiction.dev.kinstavalidation.app", "type": "CNAME", "isDetected": true},
 					},
 				}}}})
-			case "ConfirmPointing":
-				_ = json.NewEncoder(w).Encode(map[string]any{"data": map[string]any{"customHostnamePointingConfirm": nil}})
 			default:
 				t.Fatalf("unexpected graphql operation %q", payload.OperationName)
 			}
@@ -4472,11 +4448,15 @@ func TestProvisionKinstaSiteAddFallsBackWhenKinstaVerificationDetectionLags(t *t
 	}
 	liveEnv := kinsta.Environment{ID: "kenv-live", Name: "live", PrimaryDomain: kinsta.Domain{Name: "foobar.kinsta.cloud"}}
 
-	if _, err := provisionKinstaSelectedEnvs(context.Background(), client, "dns-token", plan, "company-123", "ksite123", liveEnv); err != nil {
-		t.Fatalf("provisionKinstaSelectedEnvs() error = %v", err)
+	_, err := provisionKinstaSelectedEnvs(context.Background(), client, "dns-token", plan, "company-123", "ksite123", liveEnv)
+	if err == nil {
+		t.Fatal("provisionKinstaSelectedEnvs() error = nil, want manual verification error")
 	}
-	if primaryCalls != 1 {
-		t.Fatalf("primary calls = %d, want 1", primaryCalls)
+	if msg := err.Error(); !strings.Contains(msg, "Kinsta did not return authoritative pointing records") || !strings.Contains(msg, "Open MyKinsta") || !strings.Contains(msg, "command is resumable") {
+		t.Fatalf("provisionKinstaSelectedEnvs() error = %q, want manual verification guidance", msg)
+	}
+	if primaryCalls != 0 {
+		t.Fatalf("primary calls = %d, want 0 before manual verification", primaryCalls)
 	}
 	for _, want := range []string{
 		"_cf-custom-hostname.foobar.kinsta TXT cf-token",
@@ -4485,40 +4465,6 @@ func TestProvisionKinstaSiteAddFallsBackWhenKinstaVerificationDetectionLags(t *t
 	} {
 		if !dnsCallContains(upserts, want) {
 			t.Fatalf("missing DNS upsert %q in %#v", want, upserts)
-		}
-	}
-}
-
-func TestConfirmKinstaDomainPointingPrintsFriendlyAPITokenLimitation(t *testing.T) {
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Content-Type", "application/json")
-		if r.Method != http.MethodPost || r.URL.Path != "/" {
-			http.NotFound(w, r)
-			return
-		}
-		_ = json.NewEncoder(w).Encode(map[string]any{
-			"data":   map[string]any{"customHostnamePointingConfirm": nil},
-			"errors": []map[string]any{{"message": "Something went wrong or you don’t have the needed permission. Double-check and try again."}},
-		})
-	}))
-	t.Cleanup(server.Close)
-
-	client := kinsta.NewClient(server.URL, "kinsta-token", kinsta.WithGraphQLURL(server.URL))
-	output := captureStdout(t, func() {
-		confirmKinstaDomainPointing(context.Background(), client, "kenv-live", "kdom-live", "foobar.kinsta.nonfiction.dev")
-	})
-
-	for _, want := range []string{
-		"Requesting Kinsta domain pointing confirmation...",
-		"DNS is in place for foobar.kinsta.nonfiction.dev and Kinsta should mark it live after propagation.",
-	} {
-		if !strings.Contains(output, want) {
-			t.Fatalf("output = %q, want %q", output, want)
-		}
-	}
-	for _, notWant := range []string{"Something went wrong", "needed permission", "GraphQL ConfirmPointing failed"} {
-		if strings.Contains(output, notWant) {
-			t.Fatalf("output = %q, should not expose raw Kinsta error %q", output, notWant)
 		}
 	}
 }
@@ -5854,6 +5800,52 @@ func TestRunSiteStagingAddKinstaExecuteCachesStaging(t *testing.T) {
 	}
 	if len(records) != 2 || !siteEnvRecordExists(records, "foobar.kinsta", "live") || !siteEnvRecordExists(records, "foobar.kinsta", "staging") {
 		t.Fatalf("site records after kinsta staging add = %#v, want live and staging", records)
+	}
+}
+
+func TestRunSiteStagingAddKinstaExistingStagingResumes(t *testing.T) {
+	configDir := t.TempDir()
+	stateDir := t.TempDir()
+	t.Setenv("NF_CONFIG_HOME", configDir)
+	t.Setenv("NF_STATE_HOME", stateDir)
+	if err := saveGlobalConfig(map[string]string{"base_domain": "nonfiction.dev", "dnsimple_account_id": "14"}); err != nil {
+		t.Fatalf("saveGlobalConfig() error = %v", err)
+	}
+	if err := state.SaveStateRecords("sites", []map[string]any{
+		{"provider": "kinsta", "site_id": "foobar.kinsta", "env_id": "foobar.kinsta:live", "name": "foobar", "env": "live", "target": "kinsta", "hostname": "foobar.kinsta.nonfiction.dev", "php_version": "8.2", "kinsta": map[string]any{"site_id": "ksite123", "environment_id": "kenv-live", "domain_id": "kdom-live"}},
+		{"provider": "kinsta", "site_id": "foobar.kinsta", "env_id": "foobar.kinsta:staging", "name": "foobar", "env": "staging", "target": "kinsta", "hostname": "foobar-staging.kinsta.nonfiction.dev", "status": "active", "kinsta": map[string]any{"site_id": "ksite123", "environment_id": "kenv-staging-old", "domain_id": "kdom-staging-old"}},
+	}); err != nil {
+		t.Fatalf("SaveStateRecords(sites) error = %v", err)
+	}
+	called := false
+	oldProvision := kinstaProvisionStagingFn
+	kinstaProvisionStagingFn = func(plan kinstaSiteAddPlan) (kinstaProvisionResult, error) {
+		called = true
+		return kinstaProvisionResult{SiteID: "ksite123", Envs: []kinstaSiteAddEnvPlan{{Env: "staging", Domain: "foobar-staging.kinsta.nonfiction.dev", URL: "https://foobar-staging.kinsta.nonfiction.dev", Branch: "develop", EnvID: "kenv-staging", DomainID: "kdom-staging", Path: "/www/foobarstaging/public", Database: "foobarstaging", SSHHost: "203.0.113.11", SSHPort: "12346", SSHUser: "foobarstaging", SSHCmd: "ssh foobarstaging@203.0.113.11 -p 12346"}}}, nil
+	}
+	t.Cleanup(func() { kinstaProvisionStagingFn = oldProvision })
+
+	output := captureStdout(t, func() {
+		if got := Run([]string{"site", "staging", "add", "foobar.kinsta", "--execute", "--yes", "--non-interactive"}); got != 0 {
+			t.Fatalf("Run(site staging add kinsta existing) = %d, want 0", got)
+		}
+	})
+	if !called {
+		t.Fatal("kinstaProvisionStagingFn was not called")
+	}
+	if !strings.Contains(output, "Staging env added.") {
+		t.Fatalf("output = %q, want success", output)
+	}
+	records, err := state.LoadStateRecords("sites")
+	if err != nil {
+		t.Fatalf("LoadStateRecords(sites) error = %v", err)
+	}
+	if len(records) != 2 || !siteEnvRecordExists(records, "foobar.kinsta", "live") || !siteEnvRecordExists(records, "foobar.kinsta", "staging") {
+		t.Fatalf("site records after kinsta staging resume = %#v, want live and staging", records)
+	}
+	staging := findSiteRecordByEnv(records, "staging")
+	if got := siteKinstaID(staging, "domain_id"); got != "kdom-staging" {
+		t.Fatalf("staging domain_id = %q, want refreshed domain id", got)
 	}
 }
 
