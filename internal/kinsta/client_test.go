@@ -33,7 +33,7 @@ func TestClientSiteEnvironmentDomainFlow(t *testing.T) {
 		case "GET /sites/environments/kenv-live/ssh/password":
 			_ = json.NewEncoder(w).Encode(map[string]any{"environment": map[string]any{"id": "kenv-live", "sftp_password": "sftp-pass"}})
 		case "GET /sites/environments/kenv-live/domains":
-			_ = json.NewEncoder(w).Encode(map[string]any{"environment": map[string]any{"site_domains": []map[string]any{{"id": "kdom-live", "name": "foobar.kinsta.nonfiction.dev", "is_primary": true}}}})
+			_ = json.NewEncoder(w).Encode(map[string]any{"environment": map[string]any{"site_domains": []map[string]any{{"id": "kdom-live", "name": "foobar.kinsta.nonfiction.dev", "is_primary": true, "status": "verified", "is_verified": true}}}})
 		case "GET /sites/environments/domains/kdom-live/verification-records":
 			_ = json.NewEncoder(w).Encode(map[string]any{"site_domain": map[string]any{"verification_records": []map[string]any{{"name": "_acme-challenge.foobar.kinsta.nonfiction.dev", "type": "TXT", "content": "token"}}, "pointing_records": []map[string]any{{"name": "foobar.kinsta.nonfiction.dev", "type": "A", "content": "203.0.113.10", "ttl": 300}}}})
 		case "POST /sites/environments/kenv-live/domains":
@@ -132,7 +132,7 @@ func TestClientSiteEnvironmentDomainFlow(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ListDomains() error = %v", err)
 	}
-	if domain, ok := FindDomain(domains, "foobar.kinsta.nonfiction.dev"); !ok || domain.ID != "kdom-live" || !domain.IsPrimary {
+	if domain, ok := FindDomain(domains, "foobar.kinsta.nonfiction.dev"); !ok || domain.ID != "kdom-live" || !domain.IsPrimary || domain.Status != "verified" || domain.IsVerified == nil || !*domain.IsVerified {
 		t.Fatalf("FindDomain() = %#v, %v; want primary kdom-live", domain, ok)
 	}
 	records, err := client.DomainRecords(ctx, "kdom-live")

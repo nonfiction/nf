@@ -165,12 +165,19 @@ type SFTPPassword struct {
 }
 
 type Domain struct {
-	ID         string `json:"id"`
-	Name       string `json:"name"`
-	Domain     string `json:"domain"`
-	DomainName string `json:"domain_name"`
-	Type       string `json:"type"`
-	IsPrimary  bool   `json:"is_primary"`
+	ID                 string `json:"id"`
+	Name               string `json:"name"`
+	Domain             string `json:"domain"`
+	DomainName         string `json:"domain_name"`
+	Type               string `json:"type"`
+	Status             string `json:"status"`
+	State              string `json:"state"`
+	DomainStatus       string `json:"domain_status"`
+	DNSStatus          string `json:"dns_status"`
+	VerificationStatus string `json:"verification_status"`
+	IsPrimary          bool   `json:"is_primary"`
+	IsVerified         *bool  `json:"is_verified"`
+	IsPointing         *bool  `json:"is_pointing"`
 }
 
 type DNSRecord struct {
