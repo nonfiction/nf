@@ -22,6 +22,7 @@ var (
 	deleteDNSRecordFn              = provision.DeleteDNSimpleARecord
 	deleteDNSTXTRecordFn           = provision.DeleteDNSimpleTXTRecord
 	deleteDNSTypedRecordFn         = provision.DeleteDNSimpleRecord
+	listDNSTypedRecordsFn          = provision.ListDNSimpleRecords
 	upsertDNSRecordFn              = provision.UpsertDNSimpleRecord
 	providerCheckDNSimpleFn        = checkDNSimpleProvider
 	providerCheckKinstaFn          = checkKinstaProvider

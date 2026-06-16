@@ -4,7 +4,9 @@ package cli
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"net"
 	"os"
 	"path"
 	"strings"
@@ -29,6 +31,17 @@ func kinstaSiteDomain(site, baseDomain, env string) string {
 	return label + ".kinsta." + baseDomain
 }
 
+var (
+	kinstaDomainRecordsWaitTimeout  = 30 * time.Minute
+	kinstaDomainRecordsWaitInterval = 30 * time.Second
+	kinstaDomainPhantomWaitTimeout  = 2 * time.Minute
+	kinstaEnvironmentWaitTimeout    = 30 * time.Minute
+	kinstaEnvironmentWaitInterval   = 5 * time.Second
+	kinstaOperationWaitTimeout      = 30 * time.Minute
+	kinstaOperationWaitInterval     = 5 * time.Second
+	kinstaLookupHost                = net.LookupHost
+)
+
 func buildKinstaSiteAddPlan(args siteAddArgs) (kinstaSiteAddPlan, error) {
 	siteSlug, err := cleanSiteSlug(args.site)
 	if err != nil {
@@ -38,15 +51,19 @@ func buildKinstaSiteAddPlan(args siteAddArgs) (kinstaSiteAddPlan, error) {
 	if err != nil {
 		return kinstaSiteAddPlan{}, err
 	}
-	baseDomain := strings.TrimSuffix(strings.TrimSpace(values["base_domain"]), ".")
-	if baseDomain == "" {
-		return kinstaSiteAddPlan{}, ProjectError{Msg: fmt.Sprintf("Expected base_domain in %s. Set it with nf config set-base-domain <domain>.", config.ConfigFile())}
-	}
 	adminEmail := strings.TrimSpace(values["default_wp_email"])
 	if adminEmail == "" {
 		return kinstaSiteAddPlan{}, ProjectError{Msg: fmt.Sprintf("Expected default_wp_email in %s. Set it with nf config set-default-wp-email <email>.", config.ConfigFile())}
 	}
 	adminUser := firstNonEmpty(values["default_wp_user"], "admin")
+	baseDomain := strings.TrimSuffix(strings.TrimSpace(values["base_domain"]), ".")
+	if baseDomain == "" {
+		return kinstaSiteAddPlan{}, ProjectError{Msg: fmt.Sprintf("Expected base_domain in %s. Set it with nf config set-base-domain <domain>.", config.ConfigFile())}
+	}
+	dnsAccountID := firstNonEmpty(values["dnsimple_account_id"], dnsimpleAccountIDValue())
+	if dnsAccountID == "" {
+		return kinstaSiteAddPlan{}, ProjectError{Msg: fmt.Sprintf("Expected dnsimple_account_id in %s. Run nf provider check dnsimple.", config.ConfigFile())}
+	}
 	region := firstNonEmpty(args.region, values["kinsta_default_region"], "ca-toronto-1")
 	phpVersion := firstNonEmpty(args.phpVersion, values["kinsta_default_php"], "8.3")
 	targets, err := cachedTargets()
@@ -66,10 +83,6 @@ func buildKinstaSiteAddPlan(args siteAddArgs) (kinstaSiteAddPlan, error) {
 		targetName = "kinsta"
 	}
 	companyID := firstRecordString(target, "company_id", "company")
-	dnsAccountID := firstNonEmpty(values["dnsimple_account_id"], dnsimpleAccountIDValue())
-	if dnsAccountID == "" {
-		return kinstaSiteAddPlan{}, ProjectError{Msg: fmt.Sprintf("Expected dnsimple_account_id in %s. Run nf provider check dnsimple.", config.ConfigFile())}
-	}
 	passwordVersion := currentProjectPasswordVersionForSite(siteSlug)
 	adminPassword, err := deriveProjectPassword(siteSlug, "wp-admin", passwordVersion)
 	if err != nil {
@@ -92,11 +105,11 @@ func buildKinstaSiteAddPlan(args siteAddArgs) (kinstaSiteAddPlan, error) {
 		DNSAccountID:    dnsAccountID,
 	}
 	for _, env := range siteAddEnvNames(args.withStaging) {
-		domain := kinstaSiteDomain(siteSlug, baseDomain, env)
 		branch := "main"
 		if env == "staging" {
 			branch = "develop"
 		}
+		domain := kinstaSiteDomain(siteSlug, baseDomain, env)
 		plan.Envs = append(plan.Envs, kinstaSiteAddEnvPlan{Env: env, Domain: domain, URL: "https://" + domain, Title: siteEnvTitle(siteSlug, env), Branch: branch})
 	}
 	return plan, nil
@@ -255,7 +268,8 @@ func cmdKinstaSiteAdd(args siteAddArgs) int {
 		fmt.Fprintln(os.Stderr, err)
 		return 1
 	}
-	if err := ensureSiteNotCached(existing, plan.SiteID); err != nil {
+	resume, err := kinstaSiteAddResumeState(existing, plan.SiteID)
+	if err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		return 1
 	}
@@ -264,7 +278,11 @@ func cmdKinstaSiteAdd(args siteAddArgs) int {
 	if willExecute {
 		mode = "execute"
 	}
-	printKinstaSiteAddPlan(plan, mode)
+	if resume {
+		printKinstaSiteAddPlanWithTitle(plan, mode, "Resume Kinsta site add plan:")
+	} else {
+		printKinstaSiteAddPlan(plan, mode)
+	}
 	if !willExecute {
 		return 0
 	}
@@ -272,6 +290,12 @@ func cmdKinstaSiteAdd(args siteAddArgs) int {
 		message := fmt.Sprintf("Add site %q with live env on target %q?", plan.Site, plan.TargetName)
 		if args.withStaging {
 			message = fmt.Sprintf("Add site %q with live and staging envs on target %q?", plan.Site, plan.TargetName)
+		}
+		if resume {
+			message = fmt.Sprintf("Resume site %q with live env on target %q?", plan.Site, plan.TargetName)
+			if args.withStaging {
+				message = fmt.Sprintf("Resume site %q with live and staging envs on target %q?", plan.Site, plan.TargetName)
+			}
 		}
 		confirmed, err := ui.Confirm(message, false)
 		if err != nil {
@@ -295,6 +319,20 @@ func cmdKinstaSiteAdd(args siteAddArgs) int {
 	}
 	fmt.Println("Site added.")
 	return 0
+}
+
+func kinstaSiteAddResumeState(records []map[string]any, siteID string) (bool, error) {
+	resume := false
+	for _, record := range records {
+		if !siteEnvMatchesSite(record, siteID) {
+			continue
+		}
+		if !strings.EqualFold(firstRecordString(record, "provider"), "kinsta") {
+			return false, ProjectError{Msg: fmt.Sprintf("Site %q already exists in local site cache.", siteID)}
+		}
+		resume = true
+	}
+	return resume, nil
 }
 
 func provisionKinstaSite(plan kinstaSiteAddPlan) (kinstaProvisionResult, error) {
@@ -361,7 +399,7 @@ func provisionKinstaSelectedEnvs(ctx context.Context, client *kinsta.Client, dns
 		if env.Env == "staging" {
 			if stagingEnv.ID == "" {
 				var err error
-				stagingEnv, err = ensureKinstaStagingEnvironment(ctx, client, kinstaSiteID, liveEnv, plan.PHPVersion)
+				stagingEnv, err = ensureKinstaStagingEnvironment(ctx, client, companyID, kinstaSiteID, liveEnv, plan.PHPVersion)
 				if err != nil {
 					return kinstaProvisionResult{}, err
 				}
@@ -370,25 +408,26 @@ func provisionKinstaSelectedEnvs(ctx context.Context, client *kinsta.Client, dns
 		} else if env.Env != "live" {
 			return kinstaProvisionResult{}, fmt.Errorf("Unsupported Kinsta env %q. Only live and staging are supported.", env.Env)
 		}
-		domain, err := ensureKinstaDomain(ctx, client, remoteEnv.ID, env.Domain)
+		domain, err := ensureKinstaDomain(ctx, client, remoteEnv, env.Domain)
 		if err != nil {
 			return kinstaProvisionResult{}, err
 		}
-		records, err := client.DomainRecords(ctx, domain.ID)
+		records, err := ensureKinstaDomainDNSRecords(ctx, client, dnsToken, plan, env, remoteEnv, domain)
 		if err != nil {
-			return kinstaProvisionResult{}, err
-		}
-		if err := upsertKinstaDNSRecords(dnsToken, plan.DNSAccountID, plan.DNSZone, env.Domain, records); err != nil {
 			return kinstaProvisionResult{}, err
 		}
 		if !domain.IsPrimary {
-			opID, err := client.ChangePrimaryDomain(ctx, remoteEnv.ID, domain.ID, true)
+			fmt.Printf("Changing Kinsta primary domain to %s...\n", env.Domain)
+			opID, err := client.ChangePrimaryDomain(ctx, remoteEnv.ID, domain.ID, false)
 			if err != nil {
 				return kinstaProvisionResult{}, err
 			}
 			if err := waitKinstaOperation(ctx, client, opID); err != nil {
 				return kinstaProvisionResult{}, err
 			}
+		}
+		if kinstaDomainRecordsHavePointing(records, env.Domain) {
+			confirmKinstaDomainPointing(ctx, client, remoteEnv.ID, domain.ID, env.Domain)
 		}
 		env.EnvID = remoteEnv.ID
 		env.DomainID = domain.ID
@@ -408,6 +447,429 @@ func provisionKinstaSelectedEnvs(ctx context.Context, client *kinsta.Client, dns
 		result.Envs = append(result.Envs, env)
 	}
 	return result, nil
+}
+
+func ensureKinstaDomainDNSRecords(ctx context.Context, client *kinsta.Client, dnsToken string, plan kinstaSiteAddPlan, env kinstaSiteAddEnvPlan, remoteEnv kinsta.Environment, domain kinsta.Domain) (kinsta.DomainRecords, error) {
+	records, err := client.DomainRecords(ctx, domain.ID)
+	if err != nil {
+		return kinsta.DomainRecords{}, err
+	}
+	if err := upsertKinstaDNSRecords(dnsToken, plan.DNSAccountID, plan.DNSZone, env.Domain, records); err != nil {
+		return kinsta.DomainRecords{}, err
+	}
+	if kinstaDomainRecordsHavePointing(records, env.Domain) {
+		return records, nil
+	}
+	if domain.IsPrimary && !kinstaDomainRecordsHaveAny(records) {
+		return records, nil
+	}
+	syncedRecords := kinstaDomainRecordKeySet(records)
+	validationRecords := kinsta.DomainRecords{}
+	fmt.Println("Waiting for Kinsta to detect domain verification DNS...")
+	if _, err := waitKinstaDomainVerificationRecords(ctx, client, domain.ID, env.Domain, kinstaDomainPhantomWaitTimeout, func(validation kinsta.DomainVerificationValidation) error {
+		validationRecords = kinstaDomainVerificationDNSRecords(validation)
+		unsynced := kinstaDomainRecordsUnsynced(validationRecords, syncedRecords)
+		if !kinstaDomainRecordsHaveAny(unsynced) {
+			return nil
+		}
+		if err := upsertKinstaDNSRecords(dnsToken, plan.DNSAccountID, plan.DNSZone, env.Domain, unsynced); err != nil {
+			return err
+		}
+		kinstaAddDomainRecordKeys(syncedRecords, unsynced)
+		return nil
+	}); err != nil {
+		fallback, fallbackErr := kinstaSiteAddFallbackDNSRecords(ctx, client, plan, env, remoteEnv, kinstaMergeDomainRecords(records, validationRecords))
+		if fallbackErr != nil {
+			return kinsta.DomainRecords{}, err
+		}
+		fmt.Printf("Kinsta has not detected verification DNS yet; using generated Kinsta DNS fallback %s -> %s.\n", env.Domain, fallback.Pointing[0].RecordContent())
+		if err := upsertKinstaDNSRecords(dnsToken, plan.DNSAccountID, plan.DNSZone, env.Domain, fallback); err != nil {
+			return kinsta.DomainRecords{}, err
+		}
+		return fallback, nil
+	}
+	fmt.Println("Kinsta detected verification records.")
+	actionID, err := client.ConfirmCloudflareVerification(ctx, remoteEnv.ID, domain.ID)
+	if err != nil {
+		return kinsta.DomainRecords{}, err
+	}
+	if actionID != 0 {
+		action, err := client.GraphQLAction(ctx, actionID)
+		if err != nil {
+			return kinsta.DomainRecords{}, err
+		}
+		phantomAction := false
+		if !action.Found {
+			fmt.Printf("Kinsta accepted domain verification for %s; waiting for updated verification records.\n", env.Domain)
+			phantomAction = true
+		}
+		if action.Error != "" {
+			return kinsta.DomainRecords{}, fmt.Errorf("Kinsta domain verification for %s failed: %s", env.Domain, action.Error)
+		}
+		if phantomAction {
+			return waitKinstaDomainDNSAfterPhantomVerification(ctx, client, dnsToken, plan, env, remoteEnv, domain, syncedRecords)
+		}
+	}
+	fmt.Println("Started Kinsta domain verification.")
+	fmt.Println("Waiting for Kinsta domain verification...")
+	records, err = waitKinstaDomainPointingRecords(ctx, client, domain.ID, env.Domain, 0, func(records kinsta.DomainRecords) error {
+		unsynced := kinstaDomainRecordsUnsynced(records, syncedRecords)
+		if !kinstaDomainRecordsHaveAny(unsynced) {
+			return nil
+		}
+		if err := upsertKinstaDNSRecords(dnsToken, plan.DNSAccountID, plan.DNSZone, env.Domain, unsynced); err != nil {
+			return err
+		}
+		kinstaAddDomainRecordKeys(syncedRecords, unsynced)
+		return nil
+	})
+	if err != nil {
+		return kinsta.DomainRecords{}, err
+	}
+	fmt.Println("Kinsta returned pointing records.")
+	return records, nil
+}
+
+func waitKinstaDomainDNSAfterPhantomVerification(ctx context.Context, client *kinsta.Client, dnsToken string, plan kinstaSiteAddPlan, env kinstaSiteAddEnvPlan, remoteEnv kinsta.Environment, domain kinsta.Domain, syncedRecords map[string]struct{}) (kinsta.DomainRecords, error) {
+	fmt.Println("Started Kinsta domain verification.")
+	fmt.Println("Waiting briefly for Kinsta domain verification...")
+	records, err := waitKinstaDomainPointingRecords(ctx, client, domain.ID, env.Domain, kinstaDomainPhantomWaitTimeout, func(records kinsta.DomainRecords) error {
+		unsynced := kinstaDomainRecordsUnsynced(records, syncedRecords)
+		if !kinstaDomainRecordsHaveAny(unsynced) {
+			return nil
+		}
+		if err := upsertKinstaDNSRecords(dnsToken, plan.DNSAccountID, plan.DNSZone, env.Domain, unsynced); err != nil {
+			return err
+		}
+		kinstaAddDomainRecordKeys(syncedRecords, unsynced)
+		return nil
+	})
+	if err != nil {
+		fallback, fallbackErr := kinstaSiteAddFallbackDNSRecords(ctx, client, plan, env, remoteEnv, records)
+		if fallbackErr != nil {
+			return kinsta.DomainRecords{}, fmt.Errorf("Kinsta accepted domain verification for %s but did not expose a runnable verification action to the API token and did not return pointing records. Verification records were written; verify the domain in MyKinsta, then rerun site add: %w", env.Domain, err)
+		}
+		fmt.Printf("Kinsta did not return pointing records; using generated Kinsta DNS fallback %s -> %s.\n", env.Domain, fallback.Pointing[0].RecordContent())
+		if err := upsertKinstaDNSRecords(dnsToken, plan.DNSAccountID, plan.DNSZone, env.Domain, fallback); err != nil {
+			return kinsta.DomainRecords{}, err
+		}
+		return fallback, nil
+	}
+	fmt.Println("Kinsta returned pointing records.")
+	return records, nil
+}
+
+func kinstaSiteAddFallbackDNSRecords(ctx context.Context, client *kinsta.Client, plan kinstaSiteAddPlan, env kinstaSiteAddEnvPlan, remoteEnv kinsta.Environment, records kinsta.DomainRecords) (kinsta.DomainRecords, error) {
+	fallback, err := kinstaSiteAddGeneratedDNSFallback(ctx, client, plan, env, remoteEnv)
+	if err != nil {
+		return kinsta.DomainRecords{}, err
+	}
+	if !kinstaDomainRecordsHaveTLSChallenge(records, env.Domain) {
+		fallback.Verification = append(fallback.Verification, kinstaSiteAddTLSChallengeFallback(env.Domain))
+	}
+	return fallback, nil
+}
+
+func kinstaDomainVerificationDNSRecords(validation kinsta.DomainVerificationValidation) kinsta.DomainRecords {
+	records := kinsta.DomainRecords{Verification: make([]kinsta.DNSRecord, 0, len(validation.Records))}
+	for _, record := range validation.Records {
+		name := strings.TrimSpace(record.Name)
+		recordType := strings.TrimSpace(record.Type)
+		content := strings.TrimSpace(record.Value)
+		if name == "" || recordType == "" || content == "" {
+			continue
+		}
+		records.Verification = append(records.Verification, kinsta.DNSRecord{Name: name, Type: recordType, Content: content, TTL: 300})
+	}
+	return records
+}
+
+func kinstaMergeDomainRecords(records ...kinsta.DomainRecords) kinsta.DomainRecords {
+	merged := kinsta.DomainRecords{}
+	seen := map[string]struct{}{}
+	for _, records := range records {
+		for _, record := range records.Verification {
+			key := kinstaDomainRecordKey(record)
+			if key == "" {
+				continue
+			}
+			if _, ok := seen[key]; ok {
+				continue
+			}
+			seen[key] = struct{}{}
+			merged.Verification = append(merged.Verification, record)
+		}
+		for _, record := range records.Pointing {
+			key := kinstaDomainRecordKey(record)
+			if key == "" {
+				continue
+			}
+			if _, ok := seen[key]; ok {
+				continue
+			}
+			seen[key] = struct{}{}
+			merged.Pointing = append(merged.Pointing, record)
+		}
+	}
+	return merged
+}
+
+func kinstaSiteAddGeneratedDNSFallback(ctx context.Context, client *kinsta.Client, plan kinstaSiteAddPlan, env kinstaSiteAddEnvPlan, remoteEnv kinsta.Environment) (kinsta.DomainRecords, error) {
+	if !kinstaSiteAddInternalDomain(env.Domain, plan.BaseDomain) {
+		return kinsta.DomainRecords{}, fmt.Errorf("%s is not an nf-internal Kinsta site-add domain", env.Domain)
+	}
+	target := kinstaGeneratedDomainForEnv(remoteEnv, env.Domain)
+	if target == "" && remoteEnv.ID != "" {
+		domains, err := client.ListDomains(ctx, remoteEnv.ID)
+		if err != nil {
+			return kinsta.DomainRecords{}, err
+		}
+		target = kinstaGeneratedDomainForDomains(domains, env.Domain)
+	}
+	if target == "" {
+		return kinsta.DomainRecords{}, fmt.Errorf("Kinsta did not return a generated *.kinsta.cloud domain for environment %s", remoteEnv.ID)
+	}
+	content, recordType := kinstaGeneratedPointingRecord(target)
+	return kinsta.DomainRecords{Pointing: []kinsta.DNSRecord{{Name: env.Domain, Type: recordType, Content: content, TTL: 300}}}, nil
+}
+
+func kinstaGeneratedPointingRecord(target string) (string, string) {
+	for _, host := range []string{target, strings.TrimSuffix(target, ".")} {
+		if host == "" {
+			continue
+		}
+		addresses, err := kinstaLookupHost(host)
+		if err != nil {
+			continue
+		}
+		for _, address := range addresses {
+			ip := net.ParseIP(address)
+			if ip != nil && ip.To4() != nil {
+				return ip.String(), "A"
+			}
+		}
+	}
+	return target, "CNAME"
+}
+
+func kinstaSiteAddTLSChallengeFallback(domain string) kinsta.DNSRecord {
+	domain = normalizeDomainName(domain)
+	return kinsta.DNSRecord{Name: "_acme-challenge." + domain, Type: "CNAME", Content: domain + ".kinstavalidation.app", TTL: 300}
+}
+
+func kinstaDomainRecordsHaveTLSChallenge(records kinsta.DomainRecords, domain string) bool {
+	for _, record := range records.Verification {
+		fqdn := normalizeDomainName(record.RecordName())
+		if !kinstaDNSRecordBelongsToDomain(fqdn, domain) {
+			continue
+		}
+		if strings.HasPrefix(fqdn, "_acme-challenge.") && strings.EqualFold(record.RecordTypeName(), "CNAME") && record.RecordContent() != "" {
+			return true
+		}
+	}
+	return false
+}
+
+func kinstaSiteAddInternalDomain(domain, baseDomain string) bool {
+	domain = normalizeDomainName(domain)
+	baseDomain = normalizeDomainName(baseDomain)
+	return domain != "" && baseDomain != "" && strings.HasSuffix(domain, ".kinsta."+baseDomain)
+}
+
+func kinstaGeneratedDomainForEnv(env kinsta.Environment, customDomain string) string {
+	if target := kinstaGeneratedDomainForDomains([]kinsta.Domain{env.PrimaryDomain}, customDomain); target != "" {
+		return target
+	}
+	return kinstaGeneratedDomainForDomains(env.Domains, customDomain)
+}
+
+func kinstaGeneratedDomainForDomains(domains []kinsta.Domain, customDomain string) string {
+	customDomain = normalizeDomainName(customDomain)
+	for _, domain := range domains {
+		name := normalizeDomainName(domainName(domain))
+		if name == "" || name == customDomain || strings.HasPrefix(name, "*.") {
+			continue
+		}
+		if strings.HasSuffix(name, ".kinsta.cloud") {
+			return name
+		}
+	}
+	return ""
+}
+
+func confirmKinstaDomainPointing(ctx context.Context, client *kinsta.Client, envID, domainID, domainName string) {
+	fmt.Println("Requesting Kinsta domain pointing confirmation...")
+	if err := client.ConfirmDomainPointing(ctx, envID, domainID); err != nil {
+		if isKinstaPointingConfirmationUnavailable(err) {
+			fmt.Printf("DNS is in place for %s and Kinsta should mark it live after propagation.\n", domainName)
+			return
+		}
+		fmt.Printf("Kinsta pointing confirmation for %s did not complete automatically: %v\n", domainName, err)
+		return
+	}
+	fmt.Println("Kinsta accepted domain pointing confirmation.")
+}
+
+func isKinstaPointingConfirmationUnavailable(err error) bool {
+	message := strings.ToLower(err.Error())
+	return strings.Contains(message, "confirmpointing") && strings.Contains(message, "permission")
+}
+
+func waitKinstaDomainVerificationRecords(parent context.Context, client *kinsta.Client, domainID, domainName string, timeout time.Duration, onValidation func(kinsta.DomainVerificationValidation) error) (kinsta.DomainVerificationValidation, error) {
+	if timeout <= 0 {
+		timeout = kinstaDomainRecordsWaitTimeout
+	}
+	if timeout <= 0 {
+		timeout = 30 * time.Minute
+	}
+	interval := kinstaDomainRecordsWaitInterval
+	if interval <= 0 {
+		interval = 30 * time.Second
+	}
+	ctx, cancel := context.WithTimeout(parent, timeout)
+	defer cancel()
+	ticker := time.NewTicker(interval)
+	defer ticker.Stop()
+	var last kinsta.DomainVerificationValidation
+	for {
+		validation, err := client.ValidateDomainVerification(ctx, domainID)
+		if err != nil {
+			if ctx.Err() != nil {
+				return last, kinstaDomainVerificationRecordsTimeoutError(domainName)
+			}
+			return kinsta.DomainVerificationValidation{}, err
+		}
+		last = validation
+		if onValidation != nil {
+			if err := onValidation(validation); err != nil {
+				return kinsta.DomainVerificationValidation{}, err
+			}
+		}
+		if validation.Valid {
+			return validation, nil
+		}
+		select {
+		case <-ctx.Done():
+			return last, kinstaDomainVerificationRecordsTimeoutError(domainName)
+		case <-ticker.C:
+		}
+	}
+}
+
+func kinstaDomainVerificationRecordsTimeoutError(domainName string) error {
+	return fmt.Errorf("timed out waiting for Kinsta to detect verification DNS for %s. Verification records were written when available; rerun site add after DNS propagates", domainName)
+}
+
+func waitKinstaDomainPointingRecords(parent context.Context, client *kinsta.Client, domainID, domainName string, timeout time.Duration, onRecords func(kinsta.DomainRecords) error) (kinsta.DomainRecords, error) {
+	if timeout <= 0 {
+		timeout = kinstaDomainRecordsWaitTimeout
+	}
+	if timeout <= 0 {
+		timeout = 30 * time.Minute
+	}
+	interval := kinstaDomainRecordsWaitInterval
+	if interval <= 0 {
+		interval = 30 * time.Second
+	}
+	ctx, cancel := context.WithTimeout(parent, timeout)
+	defer cancel()
+	ticker := time.NewTicker(interval)
+	defer ticker.Stop()
+	var last kinsta.DomainRecords
+	var lastErr error
+	for {
+		records, err := client.DomainRecords(ctx, domainID)
+		if err != nil {
+			if ctx.Err() != nil {
+				return last, kinstaDomainPointingRecordsTimeoutError(domainName, lastErr)
+			}
+			if kinsta.IsTemporary(err) {
+				lastErr = err
+				select {
+				case <-ctx.Done():
+					return last, kinstaDomainPointingRecordsTimeoutError(domainName, lastErr)
+				case <-ticker.C:
+				}
+				continue
+			}
+			return kinsta.DomainRecords{}, err
+		}
+		lastErr = nil
+		last = records
+		if onRecords != nil {
+			if err := onRecords(records); err != nil {
+				return kinsta.DomainRecords{}, err
+			}
+		}
+		if kinstaDomainRecordsHavePointing(records, domainName) {
+			return records, nil
+		}
+		select {
+		case <-ctx.Done():
+			return last, kinstaDomainPointingRecordsTimeoutError(domainName, lastErr)
+		case <-ticker.C:
+		}
+	}
+}
+
+func kinstaDomainPointingRecordsTimeoutError(domainName string, lastErr error) error {
+	msg := fmt.Sprintf("timed out waiting for Kinsta pointing DNS records for %s. Verification records were written when available; rerun site add after Kinsta verifies the domain", domainName)
+	if lastErr != nil {
+		return fmt.Errorf("%s; last temporary Kinsta error: %w", msg, lastErr)
+	}
+	return errors.New(msg)
+}
+
+func kinstaDomainRecordsHavePointing(records kinsta.DomainRecords, domain string) bool {
+	for _, record := range records.Pointing {
+		fqdn := record.RecordName()
+		if !kinstaDNSRecordBelongsToDomain(fqdn, domain) {
+			continue
+		}
+		recordType := strings.ToUpper(record.RecordTypeName())
+		if recordType != "A" && recordType != "AAAA" && recordType != "CNAME" {
+			continue
+		}
+		if record.RecordContent() != "" {
+			return true
+		}
+	}
+	return false
+}
+
+func kinstaDomainRecordsHaveAny(records kinsta.DomainRecords) bool {
+	return len(records.Verification) > 0 || len(records.Pointing) > 0
+}
+
+func kinstaDomainRecordKeySet(records kinsta.DomainRecords) map[string]struct{} {
+	keys := map[string]struct{}{}
+	kinstaAddDomainRecordKeys(keys, records)
+	return keys
+}
+
+func kinstaAddDomainRecordKeys(keys map[string]struct{}, records kinsta.DomainRecords) {
+	for _, record := range append(append([]kinsta.DNSRecord{}, records.Verification...), records.Pointing...) {
+		keys[kinstaDomainRecordKey(record)] = struct{}{}
+	}
+}
+
+func kinstaDomainRecordsUnsynced(records kinsta.DomainRecords, synced map[string]struct{}) kinsta.DomainRecords {
+	var out kinsta.DomainRecords
+	for _, record := range records.Verification {
+		if _, ok := synced[kinstaDomainRecordKey(record)]; !ok {
+			out.Verification = append(out.Verification, record)
+		}
+	}
+	for _, record := range records.Pointing {
+		if _, ok := synced[kinstaDomainRecordKey(record)]; !ok {
+			out.Pointing = append(out.Pointing, record)
+		}
+	}
+	return out
+}
+
+func kinstaDomainRecordKey(record kinsta.DNSRecord) string {
+	return strings.Join([]string{strings.ToUpper(strings.TrimSpace(record.RecordTypeName())), strings.ToLower(strings.TrimSuffix(strings.TrimSpace(record.RecordName()), ".")), strings.TrimSpace(record.RecordContent()), fmt.Sprint(record.TTL)}, "\x00")
 }
 
 func kinstaEnvPath(user, webRoot string) string {
@@ -493,10 +955,10 @@ func ensureKinstaLiveEnvironment(ctx context.Context, client *kinsta.Client, sit
 	return live, nil
 }
 
-func ensureKinstaStagingEnvironment(ctx context.Context, client *kinsta.Client, siteID string, live kinsta.Environment, phpVersion string) (kinsta.Environment, error) {
+func ensureKinstaStagingEnvironment(ctx context.Context, client *kinsta.Client, companyID, siteID string, live kinsta.Environment, phpVersion string) (kinsta.Environment, error) {
 	envs, err := waitKinstaEnvironments(ctx, client, siteID, func(envs []kinsta.Environment) (kinsta.Environment, bool) {
 		if staging, ok := findKinstaStagingEnvironment(envs, live); ok {
-			return staging, true
+			return staging, !staging.IsBlocked
 		}
 		return findKinstaLiveEnvironment(envs)
 	})
@@ -504,34 +966,159 @@ func ensureKinstaStagingEnvironment(ctx context.Context, client *kinsta.Client, 
 		return kinsta.Environment{}, err
 	}
 	staging, ok := findKinstaStagingEnvironment(envs, live)
-	if ok {
+	if ok && !staging.IsBlocked {
 		if err := ensureKinstaEnvironmentPHP(ctx, client, staging, phpVersion); err != nil {
 			return kinsta.Environment{}, err
 		}
 		return staging, nil
 	}
-	fmt.Println("Creating Kinsta staging environment...")
-	opID, err := client.CloneEnvironment(ctx, siteID, kinsta.CloneEnvironmentRequest{DisplayName: "Staging", IsPremium: false, SourceEnvID: live.ID})
-	if err != nil {
-		return kinsta.Environment{}, err
+	ctx, cancel := context.WithTimeout(ctx, kinstaWaitTimeout(kinstaEnvironmentWaitTimeout, 30*time.Minute))
+	defer cancel()
+	for {
+		lastActivityID := int64(0)
+		if companyID != "" {
+			logs, err := client.ListActivityLogs(ctx, companyID, siteID, "siteActions", 10)
+			if err != nil {
+				return kinsta.Environment{}, err
+			}
+			lastActivityID = latestKinstaActivityID(logs)
+		}
+		fmt.Println("Creating Kinsta staging environment...")
+		if _, err := client.CloneEnvironment(ctx, siteID, kinsta.CloneEnvironmentRequest{DisplayName: "Staging", IsPremium: false, SourceEnvID: live.ID}); err != nil {
+			return kinsta.Environment{}, err
+		}
+		staging, err := waitKinstaStagingClone(ctx, client, companyID, siteID, live, lastActivityID)
+		if err == nil {
+			if err := ensureKinstaEnvironmentPHP(ctx, client, staging, phpVersion); err != nil {
+				return kinsta.Environment{}, err
+			}
+			return staging, nil
+		}
+		if !isKinstaEnvironmentBlockedError(err) {
+			return kinsta.Environment{}, err
+		}
+		fmt.Println("Kinsta reported the live environment is busy; retrying staging creation...")
+		select {
+		case <-ctx.Done():
+			return kinsta.Environment{}, fmt.Errorf("timed out waiting to create Kinsta staging environment for site %s: %w", siteID, err)
+		case <-time.After(kinstaWaitInterval(kinstaEnvironmentWaitInterval, 5*time.Second)):
+		}
 	}
-	if err := waitKinstaOperation(ctx, client, opID); err != nil {
-		return kinsta.Environment{}, err
+}
+
+func waitKinstaStagingClone(ctx context.Context, client *kinsta.Client, companyID, siteID string, live kinsta.Environment, afterActivityID int64) (kinsta.Environment, error) {
+	ticker := time.NewTicker(kinstaWaitInterval(kinstaEnvironmentWaitInterval, 5*time.Second))
+	defer ticker.Stop()
+	var last []kinsta.Environment
+	var lastErr error
+	for {
+		envs, err := client.ListEnvironments(ctx, siteID)
+		if err != nil {
+			if !kinsta.IsTemporary(err) {
+				return kinsta.Environment{}, err
+			}
+			lastErr = err
+		} else {
+			lastErr = nil
+			last = envs
+			if staging, ok := findKinstaStagingEnvironment(envs, live); ok && !staging.IsBlocked {
+				return staging, nil
+			}
+		}
+		if companyID != "" {
+			logs, err := client.ListActivityLogs(ctx, companyID, siteID, "siteActions", 10)
+			if err != nil {
+				if !kinsta.IsTemporary(err) {
+					return kinsta.Environment{}, err
+				}
+				lastErr = err
+			} else if activity, ok := latestKinstaStagingAddActivity(logs, afterActivityID); ok && activity.Done && activity.Failed {
+				return kinsta.Environment{}, kinstaStagingActivityError{activity: activity}
+			}
+		}
+		select {
+		case <-ctx.Done():
+			if lastErr != nil {
+				return kinsta.Environment{}, fmt.Errorf("timed out waiting for Kinsta staging environment for site %s after temporary Kinsta error: %w", siteID, lastErr)
+			}
+			return kinsta.Environment{}, fmt.Errorf("timed out waiting for Kinsta staging environment for site %s; found: %s", siteID, kinstaEnvironmentSummary(last))
+		case <-ticker.C:
+		}
 	}
-	envs, err = waitKinstaEnvironments(ctx, client, siteID, func(envs []kinsta.Environment) (kinsta.Environment, bool) {
-		return findKinstaStagingEnvironment(envs, live)
-	})
-	if err != nil {
-		return kinsta.Environment{}, err
+}
+
+type kinstaStagingActivityError struct {
+	activity kinsta.ActivityLog
+}
+
+func (e kinstaStagingActivityError) Error() string {
+	message := strings.TrimSpace(e.activity.PublicError)
+	if message == "" && len(e.activity.Descriptions) > 0 {
+		message = strings.Join(e.activity.Descriptions, "; ")
 	}
-	staging, ok = findKinstaStagingEnvironment(envs, live)
-	if !ok {
-		return kinsta.Environment{}, fmt.Errorf("Kinsta staging environment was created but was not found in environment list; found: %s", kinstaEnvironmentSummary(envs))
+	if message == "" {
+		message = "unknown Kinsta activity failure"
 	}
-	if err := ensureKinstaEnvironmentPHP(ctx, client, staging, phpVersion); err != nil {
-		return kinsta.Environment{}, err
+	return "Kinsta staging environment creation failed: " + message
+}
+
+func isKinstaEnvironmentBlockedError(err error) bool {
+	var activityErr kinstaStagingActivityError
+	if !errors.As(err, &activityErr) {
+		return false
 	}
-	return staging, nil
+	message := strings.ToLower(activityErr.activity.PublicError)
+	return strings.Contains(message, "blocked by another process")
+}
+
+func latestKinstaActivityID(logs []kinsta.ActivityLog) int64 {
+	var latest int64
+	for _, log := range logs {
+		if log.ID > latest {
+			latest = log.ID
+		}
+	}
+	return latest
+}
+
+func latestKinstaStagingAddActivity(logs []kinsta.ActivityLog, afterID int64) (kinsta.ActivityLog, bool) {
+	var latest kinsta.ActivityLog
+	for _, log := range logs {
+		if log.ID <= afterID || !strings.EqualFold(strings.TrimSpace(log.Type), "addEnvironment") {
+			continue
+		}
+		if !kinstaActivityMentionsStaging(log) {
+			continue
+		}
+		if latest.ID == 0 || log.ID > latest.ID {
+			latest = log
+		}
+	}
+	return latest, latest.ID != 0
+}
+
+func kinstaActivityMentionsStaging(log kinsta.ActivityLog) bool {
+	for _, description := range log.Descriptions {
+		description = strings.ToLower(description)
+		if strings.Contains(description, "staging") {
+			return true
+		}
+	}
+	return false
+}
+
+func kinstaWaitTimeout(value, fallback time.Duration) time.Duration {
+	if value > 0 {
+		return value
+	}
+	return fallback
+}
+
+func kinstaWaitInterval(value, fallback time.Duration) time.Duration {
+	if value > 0 {
+		return value
+	}
+	return fallback
 }
 
 func ensureKinstaEnvironmentPHP(ctx context.Context, client *kinsta.Client, env kinsta.Environment, phpVersion string) error {
@@ -548,22 +1135,31 @@ func ensureKinstaEnvironmentPHP(ctx context.Context, client *kinsta.Client, env 
 }
 
 func waitKinstaEnvironments(ctx context.Context, client *kinsta.Client, siteID string, ready func([]kinsta.Environment) (kinsta.Environment, bool)) ([]kinsta.Environment, error) {
-	ctx, cancel := context.WithTimeout(ctx, 30*time.Minute)
+	ctx, cancel := context.WithTimeout(ctx, kinstaWaitTimeout(kinstaEnvironmentWaitTimeout, 30*time.Minute))
 	defer cancel()
-	ticker := time.NewTicker(5 * time.Second)
+	ticker := time.NewTicker(kinstaWaitInterval(kinstaEnvironmentWaitInterval, 5*time.Second))
 	defer ticker.Stop()
 	var last []kinsta.Environment
+	var lastErr error
 	for {
 		envs, err := client.ListEnvironments(ctx, siteID)
 		if err != nil {
-			return nil, err
-		}
-		last = envs
-		if _, ok := ready(envs); ok {
-			return envs, nil
+			if !kinsta.IsTemporary(err) {
+				return nil, err
+			}
+			lastErr = err
+		} else {
+			lastErr = nil
+			last = envs
+			if _, ok := ready(envs); ok {
+				return envs, nil
+			}
 		}
 		select {
 		case <-ctx.Done():
+			if lastErr != nil {
+				return last, fmt.Errorf("timed out waiting for Kinsta environments for site %s after temporary Kinsta error: %w", siteID, lastErr)
+			}
 			return last, fmt.Errorf("timed out waiting for Kinsta environments for site %s; found: %s", siteID, kinstaEnvironmentSummary(last))
 		case <-ticker.C:
 		}
@@ -605,16 +1201,17 @@ func kinstaEnvironmentSummary(envs []kinsta.Environment) string {
 	return strings.Join(parts, "; ")
 }
 
-func ensureKinstaDomain(ctx context.Context, client *kinsta.Client, envID, domainName string) (kinsta.Domain, error) {
+func ensureKinstaDomain(ctx context.Context, client *kinsta.Client, env kinsta.Environment, domainName string) (kinsta.Domain, error) {
+	envID := env.ID
 	domains, err := client.ListDomains(ctx, envID)
 	if err != nil {
 		return kinsta.Domain{}, err
 	}
 	if domain, ok := kinsta.FindDomain(domains, domainName); ok {
-		return domain, nil
+		return markKinstaDomainPrimary(domain, env), nil
 	}
 	fmt.Printf("Adding Kinsta domain %s...\n", domainName)
-	opID, err := client.AddDomain(ctx, envID, kinsta.AddDomainRequest{DomainName: domainName, IsWildcardless: false, AddWithWWWSubdomain: false, SetupType: "quick"})
+	opID, err := client.AddDomain(ctx, envID, kinsta.AddDomainRequest{DomainName: domainName, IsWildcardless: true, AddWithWWWSubdomain: false, SetupType: "quick"})
 	if err != nil {
 		return kinsta.Domain{}, err
 	}
@@ -626,15 +1223,25 @@ func ensureKinstaDomain(ctx context.Context, client *kinsta.Client, envID, domai
 		return kinsta.Domain{}, err
 	}
 	if domain, ok := kinsta.FindDomain(domains, domainName); ok {
-		return domain, nil
+		return markKinstaDomainPrimary(domain, env), nil
 	}
 	return kinsta.Domain{}, fmt.Errorf("Kinsta domain %q was added but was not found in domain list", domainName)
 }
 
+func markKinstaDomainPrimary(domain kinsta.Domain, env kinsta.Environment) kinsta.Domain {
+	primaryID := strings.TrimSpace(env.PrimaryDomain.ID)
+	primaryName := strings.TrimSpace(domainName(env.PrimaryDomain))
+	name := strings.TrimSpace(domainName(domain))
+	if (primaryID != "" && strings.TrimSpace(domain.ID) == primaryID) || (primaryName != "" && strings.EqualFold(name, primaryName)) {
+		domain.IsPrimary = true
+	}
+	return domain
+}
+
 func waitKinstaOperation(parent context.Context, client *kinsta.Client, opID string) error {
-	ctx, cancel := context.WithTimeout(parent, 30*time.Minute)
+	ctx, cancel := context.WithTimeout(parent, kinstaWaitTimeout(kinstaOperationWaitTimeout, 30*time.Minute))
 	defer cancel()
-	return client.WaitOperation(ctx, opID, 5*time.Second)
+	return client.WaitOperation(ctx, opID, kinstaWaitInterval(kinstaOperationWaitInterval, 5*time.Second))
 }
 
 func upsertKinstaDNSRecords(token, accountID, zone, domain string, records kinsta.DomainRecords) error {
@@ -655,7 +1262,29 @@ func upsertKinstaDNSRecords(token, accountID, zone, domain string, records kinst
 		if ttl <= 0 {
 			ttl = 300
 		}
+		if err := deleteKinstaDNSRecordConflicts(token, accountID, zone, name, recordType, fqdn, domain); err != nil {
+			return err
+		}
 		if err := upsertDNSRecordFn(token, accountID, zone, name, recordType, content, ttl); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func deleteKinstaDNSRecordConflicts(token, accountID, zone, name, recordType, fqdn, domain string) error {
+	if !strings.EqualFold(normalizeDomainName(fqdn), normalizeDomainName(domain)) {
+		return nil
+	}
+	switch strings.ToUpper(strings.TrimSpace(recordType)) {
+	case "CNAME":
+		for _, conflictType := range []string{"A", "AAAA"} {
+			if err := deleteDNSTypedRecordFn(token, accountID, zone, name, conflictType); err != nil {
+				return err
+			}
+		}
+	case "A", "AAAA":
+		if err := deleteDNSTypedRecordFn(token, accountID, zone, name, "CNAME"); err != nil {
 			return err
 		}
 	}

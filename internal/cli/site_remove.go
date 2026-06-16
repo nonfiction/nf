@@ -16,6 +16,7 @@ import (
 	"github.com/nonfiction/nf/internal/envwizard"
 	"github.com/nonfiction/nf/internal/kinsta"
 	"github.com/nonfiction/nf/internal/state"
+	"github.com/nonfiction/nf/internal/target/provision"
 	"github.com/nonfiction/nf/internal/ui"
 )
 
@@ -214,9 +215,20 @@ func inferredKinstaDNSDeleteRecords(hostname, zone string) []siteDNSDeletePlan {
 	}
 	return []siteDNSDeletePlan{
 		{Name: name, RecordType: "A", Inferred: true},
+		{Name: name, RecordType: "AAAA", Inferred: true},
 		{Name: name, RecordType: "CNAME", Inferred: true},
+		{Name: dnsimpleTLSChallengeName(name), RecordType: "CNAME", Inferred: true},
 		{Name: dnsimpleTLSChallengeName(name), RecordType: "TXT", Inferred: true},
+		{Name: dnsimpleCloudflareHostnameName(name), RecordType: "TXT", Inferred: true},
 	}
+}
+
+func dnsimpleCloudflareHostnameName(name string) string {
+	name = strings.TrimSuffix(strings.TrimSpace(name), ".")
+	if name == "" {
+		return "_cf-custom-hostname"
+	}
+	return "_cf-custom-hostname." + name
 }
 
 func normalizeDNSDeleteRecord(record siteDNSDeletePlan) (siteDNSDeletePlan, bool) {
@@ -485,6 +497,9 @@ func removeKinstaSite(plan siteRemovePlan) error {
 			addDNSDeleteRecord(dnsRecords, siteDNSDeletePlan{Name: dnsimpleRelativeName(fqdn, plan.DNSZone), RecordType: record.RecordTypeName()})
 		}
 	}
+	if err := addDNSimpleKinstaOwnedDeleteRecords(dnsToken, plan, dnsRecords); err != nil {
+		return err
+	}
 	for _, record := range sortedDNSDeleteRecords(dnsRecords) {
 		fmt.Printf("Deleting DNS %s %s...\n", record.RecordType, dnsimpleFQDNForRelativeName(record.Name, plan.DNSZone))
 		if err := deleteDNSTypedRecordFn(dnsToken, plan.DNSAccountID, plan.DNSZone, record.Name, record.RecordType); err != nil {
@@ -510,6 +525,54 @@ func removeKinstaSite(plan siteRemovePlan) error {
 		return err
 	}
 	return waitKinstaOperation(ctx, client, opID)
+}
+
+func addDNSimpleKinstaOwnedDeleteRecords(dnsToken string, plan siteRemovePlan, records map[string]siteDNSDeletePlan) error {
+	for _, recordType := range []string{"A", "AAAA", "CNAME", "TXT"} {
+		dnsRecords, err := listDNSTypedRecordsFn(dnsToken, plan.DNSAccountID, plan.DNSZone, recordType)
+		if err != nil {
+			return err
+		}
+		for _, dnsRecord := range dnsRecords {
+			if !kinstaDNSimpleRecordOwnedByRemovedEnvs(dnsRecord, plan) {
+				continue
+			}
+			addDNSDeleteRecord(records, siteDNSDeletePlan{Name: dnsRecord.Name, RecordType: dnsRecord.Type})
+		}
+	}
+	return nil
+}
+
+func kinstaDNSimpleRecordOwnedByRemovedEnvs(record provision.DNSRecord, plan siteRemovePlan) bool {
+	recordType := strings.ToUpper(strings.TrimSpace(record.Type))
+	name := normalizeDNSimpleRecordName(record.Name)
+	for _, env := range plan.Envs {
+		hostname := normalizeDomainName(env.Hostname)
+		if hostname == "" || !kinstaSiteAddInternalDomain(hostname, plan.DNSZone) {
+			continue
+		}
+		relative := normalizeDNSimpleRecordName(dnsimpleRelativeName(hostname, plan.DNSZone))
+		if relative == "" {
+			continue
+		}
+		if (recordType == "A" || recordType == "AAAA" || recordType == "CNAME") && name == relative {
+			return true
+		}
+		if (recordType == "TXT" || recordType == "CNAME") && name == normalizeDNSimpleRecordName(dnsimpleTLSChallengeName(relative)) {
+			return true
+		}
+		if recordType == "TXT" && name == normalizeDNSimpleRecordName(dnsimpleCloudflareHostnameName(relative)) {
+			return true
+		}
+		if recordType == "TXT" && strings.HasPrefix(name, "k-verification-") && strings.HasSuffix(name, "."+relative) {
+			return true
+		}
+	}
+	return false
+}
+
+func normalizeDNSimpleRecordName(name string) string {
+	return strings.ToLower(strings.TrimSuffix(strings.TrimSpace(name), "."))
 }
 
 func cmdSiteRemove(siteID string, dryRun, execute, yes, nonInteractive bool) int {

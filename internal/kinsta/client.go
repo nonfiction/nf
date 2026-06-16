@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -13,9 +14,20 @@ import (
 	"time"
 )
 
-type Error struct{ Msg string }
+type Error struct {
+	Msg        string
+	StatusCode int
+}
 
 func (e Error) Error() string { return e.Msg }
+
+func IsTemporary(err error) bool {
+	var kerr Error
+	if !errors.As(err, &kerr) {
+		return false
+	}
+	return kerr.StatusCode == http.StatusTooManyRequests || kerr.StatusCode >= 500
+}
 
 func rawString(value any) string {
 	switch typed := value.(type) {
@@ -34,6 +46,7 @@ func rawString(value any) string {
 
 type Client struct {
 	baseURL    string
+	graphqlURL string
 	token      string
 	httpClient *http.Client
 }
@@ -48,12 +61,21 @@ func WithHTTPClient(httpClient *http.Client) Option {
 	}
 }
 
+func WithGraphQLURL(graphqlURL string) Option {
+	return func(c *Client) {
+		graphqlURL = strings.TrimSpace(graphqlURL)
+		if graphqlURL != "" {
+			c.graphqlURL = strings.TrimRight(graphqlURL, "/")
+		}
+	}
+}
+
 func NewClient(baseURL, token string, opts ...Option) *Client {
 	baseURL = strings.TrimRight(strings.TrimSpace(baseURL), "/")
 	if baseURL == "" {
 		baseURL = "https://api.kinsta.com/v2"
 	}
-	c := &Client{baseURL: baseURL, token: strings.TrimSpace(token), httpClient: http.DefaultClient}
+	c := &Client{baseURL: baseURL, graphqlURL: "https://graphql-router.kinsta.com", token: strings.TrimSpace(token), httpClient: http.DefaultClient}
 	for _, opt := range opts {
 		opt(c)
 	}
@@ -67,8 +89,9 @@ type ValidateResponse struct {
 }
 
 type Operation struct {
-	ID     string `json:"id"`
-	Status string `json:"status"`
+	ID      string `json:"id"`
+	Status  string `json:"status"`
+	Message string `json:"message"`
 }
 
 func (o *Operation) UnmarshalJSON(data []byte) error {
@@ -80,6 +103,7 @@ func (o *Operation) UnmarshalJSON(data []byte) error {
 	}
 	o.ID = rawString(raw["id"])
 	o.Status = rawString(raw["status"])
+	o.Message = rawString(raw["message"])
 	return nil
 }
 
@@ -93,6 +117,7 @@ type Environment struct {
 	ID            string        `json:"id"`
 	Name          string        `json:"name"`
 	DisplayName   string        `json:"display_name"`
+	IsBlocked     bool          `json:"is_blocked"`
 	PHPVersion    string        `json:"php_version"`
 	PHP           string        `json:"php"`
 	IsPremium     bool          `json:"is_premium"`
@@ -188,6 +213,37 @@ type DomainRecords struct {
 	Pointing     []DNSRecord
 }
 
+type DomainVerificationValidation struct {
+	DomainID string
+	Valid    bool
+	Records  []DomainVerificationRecord
+}
+
+type DomainVerificationRecord struct {
+	Name     string
+	Value    string
+	Type     string
+	Detected bool
+}
+
+type GraphQLAction struct {
+	ID    int
+	Found bool
+	Done  bool
+	Error string
+}
+
+type ActivityLog struct {
+	ID           int64    `json:"id"`
+	SiteID       string   `json:"site_id"`
+	Type         string   `json:"type"`
+	Done         bool     `json:"is_done"`
+	Failed       bool     `json:"has_failed"`
+	Warning      bool     `json:"has_warning"`
+	Descriptions []string `json:"descriptions"`
+	PublicError  string   `json:"public_error"`
+}
+
 type CreateSiteRequest struct {
 	Company              string `json:"company"`
 	DisplayName          string `json:"display_name"`
@@ -214,7 +270,7 @@ type AddDomainRequest struct {
 	DomainName          string `json:"domain_name"`
 	IsWildcardless      bool   `json:"is_wildcardless"`
 	AddWithWWWSubdomain bool   `json:"add_with_www_subdomain"`
-	SetupType           string `json:"setup_type"`
+	SetupType           string `json:"setup_type,omitempty"`
 }
 
 type DeleteDomainsRequest struct {
@@ -258,6 +314,29 @@ func (c *Client) ListEnvironments(ctx context.Context, siteID string) ([]Environ
 		return nil, err
 	}
 	return out.Environments(), nil
+}
+
+func (c *Client) ListActivityLogs(ctx context.Context, companyID, siteID, category string, limit int) ([]ActivityLog, error) {
+	companyID = strings.TrimSpace(companyID)
+	if companyID == "" {
+		return nil, Error{Msg: "Kinsta company id is required to list activity logs"}
+	}
+	if limit <= 0 {
+		limit = 10
+	}
+	values := url.Values{}
+	values.Set("limit", strconv.Itoa(limit))
+	if strings.TrimSpace(siteID) != "" {
+		values.Set("site_id", strings.TrimSpace(siteID))
+	}
+	if strings.TrimSpace(category) != "" {
+		values.Set("category", strings.TrimSpace(category))
+	}
+	var out activityLogsResponse
+	if err := c.do(ctx, http.MethodGet, "/company/"+url.PathEscape(companyID)+"/activity-logs?"+values.Encode(), nil, &out); err != nil {
+		return nil, err
+	}
+	return out.Logs(), nil
 }
 
 func (c *Client) CloneEnvironment(ctx context.Context, siteID string, req CloneEnvironmentRequest) (string, error) {
@@ -332,6 +411,70 @@ func (c *Client) DomainRecords(ctx context.Context, domainID string) (DomainReco
 	return out.Records(), nil
 }
 
+func (c *Client) ValidateDomainVerification(ctx context.Context, domainID string) (DomainVerificationValidation, error) {
+	var out validateDomainVerificationResponse
+	err := c.doGraphQL(ctx, "ValidateVerificationRecordsOfSiteDomains", `query ValidateVerificationRecordsOfSiteDomains($idSiteDomains: [String!]!) {
+  validateVerificationRecordsOfSiteDomains(idSiteDomains: $idSiteDomains) {
+    idSiteDomain
+    isValid
+    records {
+      name
+      value
+      type
+      isDetected
+    }
+  }
+}`, map[string]any{"idSiteDomains": []string{domainID}}, &out)
+	if err != nil {
+		return DomainVerificationValidation{}, err
+	}
+	return out.Validation(domainID), nil
+}
+
+func (c *Client) ConfirmCloudflareVerification(ctx context.Context, envID, domainID string) (int, error) {
+	var out confirmCloudflareVerificationResponse
+	err := c.doGraphQL(ctx, "ConfirmCloudflareVerification", `mutation ConfirmCloudflareVerification($idEnvironment: String!, $idSiteDomain: String!, $isConfirmed: Boolean, $isHideNotification: Boolean) {
+  idAction: initiateCloudflareVerification(
+    idEnvironment: $idEnvironment
+    idSiteDomain: $idSiteDomain
+    isConfirmed: $isConfirmed
+    isHideNotification: $isHideNotification
+    runActionInBackground: true
+  )
+}`, map[string]any{"idEnvironment": envID, "idSiteDomain": domainID, "isConfirmed": true}, &out)
+	if err != nil {
+		return 0, err
+	}
+	return out.IDAction, nil
+}
+
+func (c *Client) ConfirmDomainPointing(ctx context.Context, envID, domainID string) error {
+	return c.doGraphQL(ctx, "ConfirmPointing", `mutation ConfirmPointing($idEnvironment: String!, $idSiteDomain: String!, $isDnsWarningSkipped: Boolean, $isHideNotification: Boolean) {
+  customHostnamePointingConfirm(
+    idEnvironment: $idEnvironment
+    idSiteDomain: $idSiteDomain
+    isDnsWarningSkipped: $isDnsWarningSkipped
+    isHideNotification: $isHideNotification
+  )
+}`, map[string]any{"idEnvironment": envID, "idSiteDomain": domainID, "isDnsWarningSkipped": false}, nil)
+}
+
+func (c *Client) GraphQLAction(ctx context.Context, actionID int) (GraphQLAction, error) {
+	var out actionResponse
+	err := c.doGraphQL(ctx, "Action", `query Action($idAction: Int!) {
+  action(id: $idAction) {
+    id
+    error
+    isDone
+  }
+  action_liveKeys(id: $idAction)
+}`, map[string]any{"idAction": actionID}, &out)
+	if err != nil {
+		return GraphQLAction{}, err
+	}
+	return out.ActionStatus(actionID), nil
+}
+
 func (c *Client) ChangePrimaryDomain(ctx context.Context, envID, domainID string, runSearchReplace bool) (string, error) {
 	var out operationResponse
 	payload := map[string]any{"domain_id": domainID, "run_search_and_replace": runSearchReplace}
@@ -365,18 +508,20 @@ func (c *Client) WaitOperation(ctx context.Context, operationID string, interval
 	if interval <= 0 {
 		interval = 5 * time.Second
 	}
+	last := Operation{ID: operationID}
 	for {
 		op, err := c.Operation(ctx, operationID)
 		if err != nil {
 			return err
 		}
+		last = op
 		status := strings.ToLower(strings.TrimSpace(op.Status))
 		switch status {
-		case "", "202", "queued", "pending", "processing", "running", "in_progress":
-		case "200", "complete", "completed", "success", "succeeded", "finished", "done":
+		case "", "202", "queued", "pending", "processing", "running", "in_progress", "is_running":
+		case "200", "complete", "completed", "success", "succeeded", "finished", "done", "has_completed":
 			return nil
-		case "failed", "failure", "error", "cancelled", "canceled":
-			return Error{Msg: fmt.Sprintf("Kinsta operation %s failed with status %q", operationID, op.Status)}
+		case "failed", "failure", "error", "cancelled", "canceled", "has_failed":
+			return Error{Msg: fmt.Sprintf("Kinsta operation %s failed: %s", operationID, operationStatusSummary(op))}
 		default:
 			// Unknown non-empty statuses are treated as still running. Kinsta has changed
 			// operation labels before; this keeps polling conservative.
@@ -385,10 +530,25 @@ func (c *Client) WaitOperation(ctx context.Context, operationID string, interval
 		select {
 		case <-ctx.Done():
 			timer.Stop()
-			return Error{Msg: fmt.Sprintf("Timed out waiting for Kinsta operation %s: %v", operationID, ctx.Err())}
+			return Error{Msg: fmt.Sprintf("Timed out waiting for Kinsta operation %s: %v; last status: %s", operationID, ctx.Err(), operationStatusSummary(last))}
 		case <-timer.C:
 		}
 	}
+}
+
+func operationStatusSummary(op Operation) string {
+	status := strings.TrimSpace(op.Status)
+	message := strings.TrimSpace(op.Message)
+	if status == "" && message == "" {
+		return "unknown"
+	}
+	if message == "" {
+		return fmt.Sprintf("status %q", status)
+	}
+	if status == "" {
+		return message
+	}
+	return fmt.Sprintf("status %q (%s)", status, message)
 }
 
 func (c *Client) do(ctx context.Context, method, path string, body any, out any) error {
@@ -422,12 +582,78 @@ func (c *Client) do(ctx context.Context, method, path string, body any, out any)
 		return err
 	}
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return Error{Msg: fmt.Sprintf("Kinsta %s %s returned %s: %s", method, path, resp.Status, strings.TrimSpace(string(data)))}
+		return Error{Msg: fmt.Sprintf("Kinsta %s %s returned %s: %s", method, path, resp.Status, strings.TrimSpace(string(data))), StatusCode: resp.StatusCode}
 	}
 	if out == nil || len(strings.TrimSpace(string(data))) == 0 {
 		return nil
 	}
 	return json.Unmarshal(data, out)
+}
+
+func (c *Client) doGraphQL(ctx context.Context, operationName, query string, variables any, out any) error {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	payload := map[string]any{"operationName": operationName, "variables": variables, "query": query}
+	data, err := json.Marshal(payload)
+	if err != nil {
+		return err
+	}
+	endpoint := c.graphqlURL
+	if endpoint == "" {
+		endpoint = "https://graphql-router.kinsta.com"
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint+"/?opname="+url.QueryEscape(operationName), bytes.NewReader(data))
+	if err != nil {
+		return err
+	}
+	req.Header.Set("Authorization", "Bearer "+c.token)
+	req.Header.Set("Accept", "application/json")
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("apollographql-client-name", "mk-client")
+	resp, err := c.httpClient.Do(req)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+	respData, err := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
+	if err != nil {
+		return err
+	}
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return Error{Msg: fmt.Sprintf("Kinsta GraphQL %s returned %s: %s", operationName, resp.Status, strings.TrimSpace(string(respData))), StatusCode: resp.StatusCode}
+	}
+	var wrapper graphQLResponse
+	if err := json.Unmarshal(respData, &wrapper); err != nil {
+		return err
+	}
+	if len(wrapper.Errors) > 0 {
+		return Error{Msg: fmt.Sprintf("Kinsta GraphQL %s failed: %s", operationName, wrapper.ErrorSummary())}
+	}
+	if out == nil || len(wrapper.Data) == 0 || string(wrapper.Data) == "null" {
+		return nil
+	}
+	return json.Unmarshal(wrapper.Data, out)
+}
+
+type graphQLResponse struct {
+	Data   json.RawMessage `json:"data"`
+	Errors []struct {
+		Message string `json:"message"`
+	} `json:"errors"`
+}
+
+func (r graphQLResponse) ErrorSummary() string {
+	parts := make([]string, 0, len(r.Errors))
+	for _, err := range r.Errors {
+		if msg := strings.TrimSpace(err.Message); msg != "" {
+			parts = append(parts, msg)
+		}
+	}
+	if len(parts) == 0 {
+		return "unknown error"
+	}
+	return strings.Join(parts, "; ")
 }
 
 type operationResponse struct {
@@ -450,13 +676,14 @@ type operationStatusResponse struct {
 	OperationValue Operation `json:"operation"`
 	ID             string    `json:"id"`
 	Status         any       `json:"status"`
+	Message        any       `json:"message"`
 }
 
 func (r operationStatusResponse) Operation() Operation {
 	if r.OperationValue.ID != "" || r.OperationValue.Status != "" {
 		return r.OperationValue
 	}
-	return Operation{ID: r.ID, Status: rawString(r.Status)}
+	return Operation{ID: r.ID, Status: rawString(r.Status), Message: rawString(r.Message)}
 }
 
 type sitesResponse struct {
@@ -478,6 +705,24 @@ type environmentsResponse struct {
 		Environments []Environment `json:"environments"`
 	} `json:"site"`
 	EnvironmentsValue []Environment `json:"environments"`
+}
+
+type activityLogsResponse struct {
+	Company struct {
+		ActivityLogs activityLogsPage `json:"activity_logs"`
+	} `json:"company"`
+	ActivityLogs activityLogsPage `json:"activity_logs"`
+}
+
+type activityLogsPage struct {
+	Items []ActivityLog `json:"items"`
+}
+
+func (r activityLogsResponse) Logs() []ActivityLog {
+	if len(r.Company.ActivityLogs.Items) > 0 {
+		return r.Company.ActivityLogs.Items
+	}
+	return r.ActivityLogs.Items
 }
 
 func (r environmentsResponse) Environments() []Environment {
@@ -561,6 +806,53 @@ type domainRecordsResponse struct {
 	} `json:"site_domain"`
 	VerificationRecords []DNSRecord `json:"verification_records"`
 	PointingRecords     []DNSRecord `json:"pointing_records"`
+}
+
+type validateDomainVerificationResponse struct {
+	ValidateVerificationRecordsOfSiteDomains []struct {
+		IDSiteDomain string `json:"idSiteDomain"`
+		IsValid      bool   `json:"isValid"`
+		Records      []struct {
+			Name       string `json:"name"`
+			Value      string `json:"value"`
+			Type       string `json:"type"`
+			IsDetected bool   `json:"isDetected"`
+		} `json:"records"`
+	} `json:"validateVerificationRecordsOfSiteDomains"`
+}
+
+func (r validateDomainVerificationResponse) Validation(domainID string) DomainVerificationValidation {
+	domainID = strings.TrimSpace(domainID)
+	for _, item := range r.ValidateVerificationRecordsOfSiteDomains {
+		if domainID != "" && strings.TrimSpace(item.IDSiteDomain) != domainID {
+			continue
+		}
+		out := DomainVerificationValidation{DomainID: strings.TrimSpace(item.IDSiteDomain), Valid: item.IsValid, Records: make([]DomainVerificationRecord, 0, len(item.Records))}
+		for _, record := range item.Records {
+			out.Records = append(out.Records, DomainVerificationRecord{Name: strings.TrimSpace(record.Name), Value: strings.TrimSpace(record.Value), Type: strings.TrimSpace(record.Type), Detected: record.IsDetected})
+		}
+		return out
+	}
+	return DomainVerificationValidation{DomainID: domainID}
+}
+
+type confirmCloudflareVerificationResponse struct {
+	IDAction int `json:"idAction"`
+}
+
+type actionResponse struct {
+	Action *struct {
+		ID     int    `json:"id"`
+		Error  string `json:"error"`
+		IsDone bool   `json:"isDone"`
+	} `json:"action"`
+}
+
+func (r actionResponse) ActionStatus(actionID int) GraphQLAction {
+	if r.Action == nil {
+		return GraphQLAction{ID: actionID}
+	}
+	return GraphQLAction{ID: r.Action.ID, Found: true, Done: r.Action.IsDone, Error: strings.TrimSpace(r.Action.Error)}
 }
 
 func (r domainRecordsResponse) Records() DomainRecords {

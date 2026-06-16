@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 )
@@ -192,5 +193,69 @@ func TestWaitOperationHandlesKinstaNumericStatus(t *testing.T) {
 	}
 	if calls != 2 {
 		t.Fatalf("operation calls = %d, want 2", calls)
+	}
+}
+
+func TestWaitOperationHandlesKinstaStringStatus(t *testing.T) {
+	calls := 0
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/operations/op-string" {
+			http.NotFound(w, r)
+			return
+		}
+		calls++
+		w.Header().Set("Content-Type", "application/json")
+		status := "is_running"
+		if calls > 1 {
+			status = "has_completed"
+		}
+		_ = json.NewEncoder(w).Encode(map[string]any{"status": status, "message": "operation status"})
+	}))
+	t.Cleanup(server.Close)
+
+	client := NewClient(server.URL, "kinsta-token")
+	if err := client.WaitOperation(context.Background(), "op-string", time.Millisecond); err != nil {
+		t.Fatalf("WaitOperation() error = %v", err)
+	}
+	if calls != 2 {
+		t.Fatalf("operation calls = %d, want 2", calls)
+	}
+}
+
+func TestWaitOperationReturnsKinstaFailedStatus(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/operations/op-failed" {
+			http.NotFound(w, r)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(map[string]any{"status": "has_failed", "message": "Staging clone failed"})
+	}))
+	t.Cleanup(server.Close)
+
+	client := NewClient(server.URL, "kinsta-token")
+	err := client.WaitOperation(context.Background(), "op-failed", time.Millisecond)
+	if err == nil {
+		t.Fatal("WaitOperation() error = nil, want failed status error")
+	}
+	if msg := err.Error(); !strings.Contains(msg, "has_failed") || !strings.Contains(msg, "Staging clone failed") {
+		t.Fatalf("WaitOperation() error = %q, want status and message", msg)
+	}
+}
+
+func TestClientMarksServerErrorsTemporary(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusInternalServerError)
+		_ = json.NewEncoder(w).Encode(map[string]any{"status": 500, "message": "Server Error"})
+	}))
+	t.Cleanup(server.Close)
+
+	client := NewClient(server.URL, "kinsta-token")
+	_, err := client.ListEnvironments(context.Background(), "ksite123")
+	if err == nil {
+		t.Fatal("ListEnvironments() error = nil, want Kinsta server error")
+	}
+	if !IsTemporary(err) {
+		t.Fatalf("IsTemporary(%v) = false, want true", err)
 	}
 }

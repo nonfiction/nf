@@ -234,6 +234,14 @@ func defaultDNSimpleListARecords(token, accountID, zone string) ([]DNSRecord, er
 	return provider.listARecords(context.Background(), zone)
 }
 
+func defaultDNSimpleListRecords(token, accountID, zone, recordType string) ([]DNSRecord, error) {
+	provider, err := dnsimpleProviderFactory(context.Background(), token, accountID)
+	if err != nil {
+		return nil, err
+	}
+	return provider.listRecords(context.Background(), zone, recordType)
+}
+
 func defaultDNSimpleUpsertARecord(token, accountID, zone, name, ip string) error {
 	return defaultDNSimpleUpsertRecord(token, accountID, zone, name, "A", ip, 60)
 }
@@ -269,6 +277,10 @@ func defaultDNSimpleUpsertRecord(token, accountID, zone, name, recordType, conte
 
 func UpsertDNSimpleRecord(token, accountID, zone, name, recordType, content string, ttl int) error {
 	return defaultDNSimpleUpsertRecord(token, accountID, zone, name, recordType, content, ttl)
+}
+
+func ListDNSimpleRecords(token, accountID, zone, recordType string) ([]DNSRecord, error) {
+	return defaultDNSimpleListRecords(token, accountID, zone, recordType)
 }
 
 func defaultDNSimpleDeleteARecord(token, accountID, zone, name string) error {
