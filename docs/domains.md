@@ -32,6 +32,8 @@ Management:
 
 The generated provider hostname is internal and is primary only until an external primary is set. After that, it remains listed as an internal secondary fallback.
 
+For Kinsta, the generated internal hostname also records the canonical `nf` project slug for that Kinsta site. Keep it attached even when it is not primary; `nf site refresh` uses domains such as `client.kinsta.nonfiction.dev` and `client-staging.kinsta.nonfiction.dev` to recover the `client.kinsta` site ID when the Kinsta provider slug is different.
+
 ## Choose the Launch Shape
 
 Choose the primary hostname before the launch window:
@@ -82,7 +84,7 @@ Execute:
 nf domain add production www.client.com client.com --primary --execute --yes
 ```
 
-`nf domain add` attaches external domains and prints the DNS records the client must create. Kinsta records come from the Kinsta API. Linode records point the public hostnames at the target IPs.
+`nf domain add` attaches external domains and prints the DNS records the client must create. Kinsta records come from the Kinsta API. Linode records point the public hostnames at the target IPs. `nf` does not create or change public/client DNS records.
 
 For Kinsta, `--setup` accepts `avoid-downtime` or `quick` on add/primary:
 
@@ -207,7 +209,7 @@ nf domain remove client.app1-linode:live www.client.com client.com --proxy cloud
 
 Use `--delete-cert` only after the rollback window if you also want to remove the old Let's Encrypt lineage. Otherwise certbot may later try to renew the old cert after DNS has moved, but keeping it briefly makes rollback safer.
 
-Kinsta removal deletes non-primary domains from the Kinsta environment and refuses to remove the current primary domain.
+Kinsta removal deletes non-primary domains from the Kinsta environment and refuses to remove the current primary domain. Kinsta internal `nf` domains are kept as fallback identity.
 
 ## Rollback Window
 

@@ -6,7 +6,7 @@
 
 * Executable entrypoint: `cmd/nf/main.go`
 * CLI dispatcher: `internal/cli.Run`
-* Primary always-visible command groups: `init`, `provider`, `target`, `site`, `config`, `password`
+* Primary always-visible command groups: `init`, `provider`, `target`, `site`, `domain`, `config`, `password`
 * Project-only command groups: `remote`, `theme`, `env`, `public`
 
 Project-only commands appear only when the current repo has `nf.json` next to `.git`.
@@ -65,6 +65,13 @@ Local state is disposable cache, not source of truth. Provider truth is canonica
 * Remote target site discovery is not implemented yet.
 * Linode-hosted site/env truth is intended to live on each target at `/var/lib/nf/sites.json`, read over SSH as the standard user.
 * Linode target metadata lives at `/var/lib/nf/target.json`. It includes Adminer/AdminNeo metadata but no raw Adminer password.
+
+Kinsta sites have two possible slug identities:
+
+* canonical `nf` project slug: used for `site_id` (`client.kinsta`), repo remotes, derived passwords, and internal domains under `kinsta.<base_domain>`
+* Kinsta provider slug: the MyKinsta/`*.kinsta.cloud` site slug stored as `kinsta.slug` in cache
+
+`nf site add kinsta <project-slug> --kinsta-slug <provider-slug>` creates or adopts a Kinsta site whose provider slug differs from the repo/project slug. The attached internal Kinsta domain, such as `client.kinsta.nonfiction.dev`, is provider-side identity data: `nf site refresh` can infer the canonical project slug from it even when local `sites.json` is rebuilt.
 
 ## Password and Basic Auth Model
 

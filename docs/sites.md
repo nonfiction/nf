@@ -30,6 +30,18 @@ nf site add kinsta client --region us-central1 --php 8.3 --dry-run
 
 `nf site add <target> <site>` creates the live WordPress env on the selected target. `--with-staging` creates live and staging together. Kinsta supports `--region` and `--php`; `--php` does not apply to Linode targets.
 
+For Kinsta, `<site>` is the canonical `nf` project slug. It is used for the `nf` site ID, repo remotes, derived passwords, and the generated internal domains under `kinsta.<base_domain>`.
+
+If the Kinsta `*.kinsta.cloud` slug is unavailable or a site was already created in MyKinsta with a different slug, keep `<site>` as the project slug and pass the provider slug explicitly:
+
+```sh
+nf site add kinsta acme --kinsta-slug acmeinc --region us-central1 --php 8.3 --dry-run
+```
+
+That creates or adopts the Kinsta site named `acmeinc`, but caches it as `acme.kinsta` and attaches `acme.kinsta.<base_domain>` as the `nf` internal domain. `nf site refresh` can later rediscover the canonical project slug from that attached internal domain, so local cache aliases are not the source of truth.
+
+The canonical `<site>` slug must be lowercase ASCII letters and digits, start with a letter, and be at most 32 characters. `--kinsta-slug` accepts Kinsta-style lowercase ASCII letters, digits, and hyphens up to 63 characters.
+
 ## Refresh and List Sites
 
 ```sh
@@ -41,6 +53,8 @@ nf site show client.app1-linode:live
 ```
 
 `nf site refresh` fans out from cached targets. It must not be treated as provider refresh. Use `nf provider check ...` or `nf target refresh` when target cache may be stale.
+
+For Kinsta, refresh uses Kinsta API site/env/domain data. When an env has an `nf` internal domain like `client.kinsta.nonfiction.dev` or `client-staging.kinsta.nonfiction.dev`, refresh treats `client` as the canonical project slug even if the Kinsta provider slug differs.
 
 ## Passwords
 

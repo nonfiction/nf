@@ -277,7 +277,7 @@ Do not add old compatibility routes unless explicitly requested.
 * [x] `nf target password [target] [--root|--adminer]`
 * [x] `nf target add linode <name>` create/ensure target scaffold
 * [x] `nf target remove <target>` remove an empty Linode target
-* [x] `nf site add <target> <site> [--with-staging]` create live env scaffolding by default, with optional staging
+* [x] `nf site add <target> <site> [--with-staging] [--kinsta-slug <slug>]` create live env scaffolding by default, with optional staging and Kinsta provider-slug override
 * [x] `nf site staging status/add/remove` manage optional staging env lifecycle
 * [x] `nf site refresh` discovers remote site/env records from cached Kinsta and Linode targets
 * [x] `nf site list [--refresh] [--envs]`
@@ -418,10 +418,12 @@ Desired refresh behavior:
 Provider-specific desired discovery:
 
 * DNSimple: no sites/envs.
-* Kinsta: use Kinsta API site/env endpoints.
+* Kinsta: use Kinsta API site/env/domain endpoints. Prefer the canonical `nf` project slug inferred from attached internal domains under `kinsta.<base_domain>`; fall back to the Kinsta provider slug when no `nf` internal domain is present.
 * Linode: read `/var/lib/nf/sites.json` over SSH from each target.
 
 Public launch domains are provider/env state, not repo remote identity. `nf domain add` attaches/configures hostnames and prints the DNS records clients must create, but does not mutate client DNS. `nf domain primary` sets the primary public URL for the env and preserves the generated internal hostname as fallback state when known. Apex/www pairing is explicit through positional domains so arbitrary subdomain launches such as `reports.client.com` are not accidentally coupled to `client.com`. `nf domain list` shows full env IDs and columns for `role` (`primary` or `secondary`), `management` (`internal` or `external`), and `status` (`active`, `verified`, `unverified`, or `pending`). The generated provider hostname is internal and is primary only until an external primary is set; after that it remains an internal secondary fallback.
+
+For Kinsta, the generated internal hostname also anchors the canonical `nf` project slug. This matters when the Kinsta provider slug must differ from the repo `project.slug`: cache records use `project_slug` and `site_id` from the canonical slug, while `kinsta.slug` stores the provider slug. `nf site add kinsta acme --kinsta-slug acmeinc` should create/adopt Kinsta site `acmeinc`, attach `acme.kinsta.<base_domain>`, cache the site as `acme.kinsta`, and preserve an existing public primary domain. The `nf` internal Kinsta domain only becomes primary when the current Kinsta primary is still a `*.kinsta.cloud` default domain.
 
 Every env should have exactly one primary domain and zero or more secondaries. `nf domain add --primary a.com b.com` makes `a.com` primary and `b.com` secondary. Without `--primary`, added domains are secondary and redirect to the current primary. `nf domain primary` asks for launch approval before waiting, polls the same readiness checks as `nf domain check`, and runs the primary launch automatically as soon as checks pass. It must not prompt again after checks pass; the default behavior is unattended wait-then-cutover. If checks never pass before the timeout, it exits without changing primary state. `--force` is the explicit bypass for launching immediately without readiness checks.
 

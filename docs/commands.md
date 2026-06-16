@@ -11,6 +11,7 @@ Commands:
   provider    manage provider integrations
   target      manage deployable targets
   site        manage remote sites and envs
+  domain      manage remote env domains
   password    derive passwords
 
   init        initialize project metadata
@@ -31,6 +32,7 @@ Commands:
   provider    manage provider integrations
   target      manage deployable targets
   site        manage remote sites and envs
+  domain      manage remote env domains
   password    derive passwords
 
   remote      manage repo remotes
@@ -60,7 +62,7 @@ nf target list
 nf target show <target>
 nf target adminer show <target>
 nf target password [target] [--root|--adminer]
-nf site add <target> <site> [--with-staging] [--region region] [--php version] [--execute --yes]
+nf site add <target> <site> [--with-staging] [--kinsta-slug slug] [--region region] [--php version] [--execute --yes]
 nf site refresh
 nf site list [--refresh] [--envs]
 nf site show <site-id-or-alias-or-env-id>
@@ -114,14 +116,14 @@ nf target add linode app1 \
 * `nf target list/show` read target records from `providers.json`, with a legacy `servers.json` fallback.
 * `nf target adminer show <target>` reads `/var/lib/nf/target.json` over SSH and prints the Adminer URL, username, and derived password. The username defaults to `adminer_default_user`; the password is derived from the target metadata identity/purpose and `NF_PASSWORD_SALT`.
 * `nf target password [target] [--root|--adminer]` prints only the derived Linode target root or Adminer password. It does not support Kinsta targets.
-* `nf site add <target> <site>` creates the live WordPress env on a target. Add `--with-staging` to create live and staging in one operation.
+* `nf site add <target> <site>` creates the live WordPress env on a target. Add `--with-staging` to create live and staging in one operation. For Kinsta, `<site>` is the canonical `nf` project slug; add `--kinsta-slug <slug>` only when the Kinsta provider slug differs. The cache then stores `site_id` and `project_slug` from `<site>` plus `kinsta.slug` for the provider slug.
 * `nf site staging status/add/remove` manages an optional staging env for an existing site. `rm` is a shorthand for `remove`.
-* `nf site refresh` discovers sites from the cached target list. Remote target site discovery is not implemented yet.
+* `nf site refresh` discovers sites from the cached target list. Kinsta refresh uses Kinsta API site/env/domain data and infers the canonical project slug from attached `nf` internal domains under `kinsta.<base_domain>` when present. Remote target site discovery is not implemented yet.
 * `nf site list --envs`, `nf site show`, `nf site shell`, `nf site wp`, `nf site snapshot`, and `nf site export` read the local disposable site cache for now.
 * `nf site password [site|env] [--wp|--db|--basicauth]` prints only one selected site password. `--wp` is the default. Env refs are accepted for `--db`; use a site ref for `--wp` or `--basicauth`. Linode WordPress, DB, and basic-auth passwords are derived from the site slug, purpose, `NF_PASSWORD_SALT`, and `project.password_version`; Kinsta DB password output uses the Kinsta SFTP password endpoint.
 * Linode site/env database creation grants the shared Adminer MySQL user privileges only on created site env databases and refuses to create a site DB user with the same name as the shared Adminer MySQL user. Site removal revokes per-database grants before dropping the databases.
 * `nf site basicauth ...` uses `basicauth_default_user` from `config.json` and a per-site derived password with `project.password_version` as the rotation source. Linode envs are managed over SSH by updating the selected env nginx vhost, including multi-vhost target nginx scripts. Kinsta Password protection exists in MyKinsta, but currently requires manual MyKinsta use because no public API endpoint is exposed.
-* `nf domain list` shows cached domain inventory keyed by full env IDs like `client.app1-linode:live`. Columns are `role` (`primary` or `secondary`), `management` (`internal` or `external`), and `status` (`active`, `verified`, `unverified`, or `pending`). The generated provider hostname is internal and is primary only until an external primary is set; after that it remains listed as an internal secondary fallback.
+* `nf domain list` shows cached domain inventory keyed by full env IDs like `client.app1-linode:live`. Columns are `role` (`primary` or `secondary`), `management` (`internal` or `external`), and `status` (`active`, `verified`, `unverified`, or `pending`). The generated provider hostname is internal and is primary only until an external primary is set; after that it remains listed as an internal secondary fallback. For Kinsta, the internal domain also anchors the canonical `nf` project slug for refresh/adoption.
 * `nf domain add ...` attaches external domains and prints the DNS records the client must create. It never mutates public/client DNS. Pass `--primary` to make the first domain primary and any remaining domains secondary; without `--primary`, domains are added as secondaries and redirect to the current primary. Kinsta domains are added through the Kinsta API and Kinsta-provided verification/pointing records are printed. Linode domains create one nginx vhost, certbot script, and retry timer per domain on the target.
 * `nf domain check ...` is read-only and reports provider/server readiness, expected public DNS, HTTP reachability, HTTPS certificate status, and whether the domain is already primary. With no explicit domains, it checks cached external domains for the env. It exits `0` when public checks are ready and `2` when DNS, HTTP, HTTPS, or provider readiness is still pending. With `--proxy cloudflare`, Linode DNS checks verify public DNS resolves to Cloudflare IP ranges from Cloudflare's published list, skip origin-IP matching, and check direct Linode origin HTTPS with SNI so `Full (strict)` renewal problems are visible before Cloudflare starts returning 526 errors.
 * `nf domain primary ...` launches one external domain as the primary public hostname for the env. By default execution approves once up front, polls the same readiness checks as `nf domain check`, then launches immediately when checks pass without a second prompt. `--wait-timeout` defaults to `30m`; `--wait-interval` defaults to `30s`. Add `--force` only to bypass readiness checks and launch immediately. Repo remotes in `nf.json` continue to point at env IDs, not domains.
