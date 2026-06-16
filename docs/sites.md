@@ -54,6 +54,8 @@ nf site show client.app1-linode:live
 
 `nf site refresh` fans out from cached targets. It must not be treated as provider refresh. Use `nf provider check ...` or `nf target refresh` when target cache may be stale.
 
+Use `nf refresh` when you want a best-effort refresh of everything: all provider metadata, target records, then site/env records.
+
 For Kinsta, refresh uses Kinsta API site/env/domain data. When an env has an `nf` internal domain like `client.kinsta.nonfiction.dev` or `client-staging.kinsta.nonfiction.dev`, refresh treats `client` as the canonical project slug even if the Kinsta provider slug differs.
 
 ## Passwords

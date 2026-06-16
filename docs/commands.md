@@ -55,6 +55,7 @@ Commands:
 nf provider list
 nf provider show <provider>
 nf provider check <provider>
+nf refresh
 nf target add linode <name> [--region region] [--type type] [--image image] [--adminer-user user] [--user user] [--keys all] [--execute --yes] [--wait]
 nf target remove <target> [--dry-run] [--execute --yes]
 nf target refresh
@@ -110,6 +111,7 @@ nf target add linode app1 \
 * `nf provider list` reports local credential status.
 * `nf provider check` calls safe read-only provider health endpoints and writes `providers.json`.
 * `nf provider show <provider>` reads cached provider metadata.
+* `nf refresh` best-effort refreshes all configured provider metadata, target records, and site/env records. It runs every provider check, including DNSimple, then runs site discovery from whatever target cache is available, and exits non-zero if any provider or site refresh phase failed.
 * `nf target add linode <name>` creates a Linode target named `<name>-linode`, tags it `nf`, creates host and wildcard DNS records under `base_domain`, queues HTTPS setup on the target with a systemd retry timer, installs AdminNeo at `https://<adminer-user>.<target-hostname>/` behind HTTP Basic auth during target provisioning, and records the target under the Linode provider in `providers.json`. Add `--adminer-user` to override `adminer_default_user` for that target only; the same value controls the Adminer HTTP Basic user, shared MySQL user, and Adminer subdomain label. Add `--wait` to keep the CLI attached through SSH, TLS, and health checks. Existing completed targets that predate AdminNeo are not upgraded in place by provider checks or target refresh.
 * `nf target remove <target>` removes an empty Linode target.
 * `nf target refresh` updates target records from configured target providers so added and removed targets are reflected in `providers.json`.

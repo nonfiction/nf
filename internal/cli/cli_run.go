@@ -32,6 +32,8 @@ func Run(argv []string) int {
 		return runTarget(argv[1:])
 	case "site":
 		return runSite(argv[1:])
+	case "refresh":
+		return runRefresh(argv[1:])
 	case "domain":
 		return runDomain(argv[1:])
 	case "remote":
@@ -81,6 +83,8 @@ func runTopicHelp(argv []string) int {
 		return runTargetHelp()
 	case "site":
 		return runSiteHelp()
+	case "refresh":
+		return runRefreshHelp()
 	case "domain":
 		return runDomainHelp()
 	case "remote":

@@ -76,6 +76,9 @@ Local target records are cache. Provider truth is canonical remotely.
 Remote target site discovery is not implemented yet. After target and site changes, use the relevant refresh commands so local cache is current:
 
 ```sh
+nf refresh
 nf target refresh
 nf site refresh
 ```
+
+`nf refresh` is the broad best-effort command: it runs all provider checks, including DNSimple, then refreshes site/env records from the resulting target cache.

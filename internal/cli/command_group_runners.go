@@ -796,6 +796,7 @@ func runHelp() int {
 		helpLine{"init", "initialize project metadata"},
 		helpLine{"config", "manage global config"},
 		helpLine{"completion", "print shell completion scripts"},
+		helpLine{"refresh", "refresh all provider, target, and site caches"},
 		helpLine{"version", "show nf version"},
 		helpLine{"help", "show help"},
 	)

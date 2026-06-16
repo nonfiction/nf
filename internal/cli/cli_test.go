@@ -166,10 +166,11 @@ func TestRunHelpShowsTopLevelCommandsOutsideGit(t *testing.T) {
 		"\n  init        initialize project metadata\n",
 		"  config      manage global config\n",
 		"  completion  print shell completion scripts\n",
+		"  refresh     refresh all provider, target, and site caches\n",
 		"  version     show nf version\n",
 		"  help        show help\n",
 	})
-	for _, wanted := range []string{"\n  init        initialize project metadata\n", "\n  provider    manage provider integrations\n", "\n  target      manage deployable targets\n", "\n  site        manage remote sites and envs\n", "\n  config      manage global config\n", "\n  password    derive passwords\n", "\n  completion  print shell completion scripts\n", "\n  version     show nf version\n", "\n  help        show help\n"} {
+	for _, wanted := range []string{"\n  init        initialize project metadata\n", "\n  provider    manage provider integrations\n", "\n  target      manage deployable targets\n", "\n  site        manage remote sites and envs\n", "\n  refresh     refresh all provider, target, and site caches\n", "\n  config      manage global config\n", "\n  password    derive passwords\n", "\n  completion  print shell completion scripts\n", "\n  version     show nf version\n", "\n  help        show help\n"} {
 		if !strings.Contains(output, wanted) {
 			t.Fatalf("runHelp() output missing %q:\n%s", wanted, output)
 		}
@@ -436,6 +437,14 @@ func TestRunCompleteSuggestsStaticAndCachedValues(t *testing.T) {
 	})
 	if strings.TrimSpace(versionOutput) != "version" {
 		t.Fatalf("version completion = %q, want version", versionOutput)
+	}
+	refreshOutput := captureStdout(t, func() {
+		if got := Run([]string{"__complete", "--", "ref"}); got != 0 {
+			t.Fatalf("Run(__complete ref) = %d, want 0", got)
+		}
+	})
+	if strings.TrimSpace(refreshOutput) != "refresh" {
+		t.Fatalf("refresh completion = %q, want refresh", refreshOutput)
 	}
 	versionFlagOutput := captureStdout(t, func() {
 		if got := Run([]string{"__complete", "--", "version", "--"}); got != 0 {
@@ -1796,6 +1805,127 @@ func TestCheckProvidersAfterConfigInitPopulatesTargets(t *testing.T) {
 		if !found {
 			t.Fatalf("cachedTargets() missing %q: %#v", want, targets)
 		}
+	}
+}
+
+func TestRunRefreshUpdatesProvidersAndSites(t *testing.T) {
+	configDir := t.TempDir()
+	stateDir := t.TempDir()
+	t.Setenv("NF_CONFIG_HOME", configDir)
+	t.Setenv("NF_STATE_HOME", stateDir)
+	if err := saveGlobalConfig(map[string]string{"base_domain": "nonfiction.dev"}); err != nil {
+		t.Fatalf("saveGlobalConfig() error = %v", err)
+	}
+	t.Setenv("DNSIMPLE_TOKEN", "dnsimple-token-secret")
+	t.Setenv("KINSTA_API_KEY", "kinsta-token-secret")
+	t.Setenv("LINODE_TOKEN", "linode-token-secret")
+
+	oldDNSimple := providerCheckDNSimpleFn
+	oldKinsta := providerCheckKinstaFn
+	oldLinode := providerCheckLinodeFn
+	oldRunSSHOutput := runSSHOutputFn
+	t.Cleanup(func() {
+		providerCheckDNSimpleFn = oldDNSimple
+		providerCheckKinstaFn = oldKinsta
+		providerCheckLinodeFn = oldLinode
+		runSSHOutputFn = oldRunSSHOutput
+	})
+	providerCheckDNSimpleFn = func() (providerHealthResult, error) {
+		return providerHealthResult{Provider: "dnsimple", Details: map[string]string{"managed_domain": "nonfiction.dev"}, Record: map[string]any{"provider": "dnsimple", "targets": []map[string]any{}}}, nil
+	}
+	providerCheckKinstaFn = func() (providerHealthResult, error) {
+		return providerHealthResult{Provider: "kinsta", Details: map[string]string{"status": "active"}, Record: map[string]any{"provider": "kinsta", "targets": []map[string]any{}}}, nil
+	}
+	providerCheckLinodeFn = func() (providerHealthResult, error) {
+		return providerHealthResult{Provider: "linode", Details: map[string]string{"targets": "1"}, Record: map[string]any{"provider": "linode", "targets": []map[string]any{{"id": "98222343", "name": "app1-linode", "provider": "linode", "hostname": "app1-linode.nonfiction.dev", "ssh": map[string]any{"user": "nonfiction", "host": "app1-linode.nonfiction.dev"}}}}}, nil
+	}
+	runSSHOutputFn = func(args []string) ([]byte, error) {
+		if len(args) > 0 && args[len(args)-1] == "/var/lib/nf/target.json" {
+			return []byte(`{"php_version":"8.3"}`), nil
+		}
+		return []byte(`[{"site_id":"client.app1-linode","name":"client","env":"live","target":"app1-linode","url":"https://client.app1-linode.nonfiction.dev/"}]`), nil
+	}
+
+	output := captureStdout(t, func() {
+		if got := Run([]string{"refresh"}); got != 0 {
+			t.Fatalf("Run(refresh) = %d, want 0", got)
+		}
+	})
+	assertContainsInOrder(t, output, []string{"Refresh updates all provider, target, and site caches.", "Provider dnsimple healthcheck passed.", "Provider kinsta healthcheck passed.", "Provider linode healthcheck passed.", "Refreshing sites...", "Refreshed targets: 1", "Discovered remote site envs: 1", "Refresh complete."})
+	providers, err := state.LoadStateRecords("providers")
+	if err != nil {
+		t.Fatalf("LoadStateRecords(providers) error = %v", err)
+	}
+	if len(providers) != 3 {
+		t.Fatalf("provider records len = %d, want 3: %#v", len(providers), providers)
+	}
+	sites, err := state.LoadStateRecords("sites")
+	if err != nil {
+		t.Fatalf("LoadStateRecords(sites) error = %v", err)
+	}
+	if len(sites) != 1 || siteRecordID(sites[0]) != "client.app1-linode" {
+		t.Fatalf("site records = %#v, want discovered client site", sites)
+	}
+}
+
+func TestRunRefreshBestEffortAfterProviderFailure(t *testing.T) {
+	configDir := t.TempDir()
+	stateDir := t.TempDir()
+	t.Setenv("NF_CONFIG_HOME", configDir)
+	t.Setenv("NF_STATE_HOME", stateDir)
+	if err := saveGlobalConfig(map[string]string{"base_domain": "nonfiction.dev"}); err != nil {
+		t.Fatalf("saveGlobalConfig() error = %v", err)
+	}
+	t.Setenv("DNSIMPLE_TOKEN", "dnsimple-token-secret")
+	t.Setenv("KINSTA_API_KEY", "kinsta-token-secret")
+	t.Setenv("LINODE_TOKEN", "linode-token-secret")
+
+	oldDNSimple := providerCheckDNSimpleFn
+	oldKinsta := providerCheckKinstaFn
+	oldLinode := providerCheckLinodeFn
+	oldRunSSHOutput := runSSHOutputFn
+	t.Cleanup(func() {
+		providerCheckDNSimpleFn = oldDNSimple
+		providerCheckKinstaFn = oldKinsta
+		providerCheckLinodeFn = oldLinode
+		runSSHOutputFn = oldRunSSHOutput
+	})
+	providerCheckDNSimpleFn = func() (providerHealthResult, error) {
+		return providerHealthResult{}, fmt.Errorf("dnsimple unavailable")
+	}
+	providerCheckKinstaFn = func() (providerHealthResult, error) {
+		return providerHealthResult{Provider: "kinsta", Details: map[string]string{"status": "active"}, Record: map[string]any{"provider": "kinsta", "targets": []map[string]any{}}}, nil
+	}
+	providerCheckLinodeFn = func() (providerHealthResult, error) {
+		return providerHealthResult{Provider: "linode", Details: map[string]string{"targets": "1"}, Record: map[string]any{"provider": "linode", "targets": []map[string]any{{"id": "98222343", "name": "app1-linode", "provider": "linode", "hostname": "app1-linode.nonfiction.dev", "ssh": map[string]any{"user": "nonfiction", "host": "app1-linode.nonfiction.dev"}}}}}, nil
+	}
+	runSSHOutputFn = func(args []string) ([]byte, error) {
+		if len(args) > 0 && args[len(args)-1] == "/var/lib/nf/target.json" {
+			return []byte(`{"php_version":"8.3"}`), nil
+		}
+		return []byte(`[{"site_id":"client.app1-linode","name":"client","env":"live","target":"app1-linode","url":"https://client.app1-linode.nonfiction.dev/"}]`), nil
+	}
+
+	var output string
+	stderr := captureStderr(t, func() {
+		output = captureStdout(t, func() {
+			if got := Run([]string{"refresh"}); got != 1 {
+				t.Fatalf("Run(refresh) = %d, want 1", got)
+			}
+		})
+	})
+	assertContainsInOrder(t, output, []string{"Provider dnsimple healthcheck failed.", "Provider kinsta healthcheck passed.", "Provider linode healthcheck passed.", "Refreshing sites...", "Refreshed targets: 1", "Discovered remote site envs: 1"})
+	for _, want := range []string{"dnsimple unavailable", "refresh failed for: provider dnsimple"} {
+		if !strings.Contains(stderr, want) {
+			t.Fatalf("stderr missing %q:\n%s", want, stderr)
+		}
+	}
+	sites, err := state.LoadStateRecords("sites")
+	if err != nil {
+		t.Fatalf("LoadStateRecords(sites) error = %v", err)
+	}
+	if len(sites) != 1 || siteRecordID(sites[0]) != "client.app1-linode" {
+		t.Fatalf("site records = %#v, want best-effort discovered site", sites)
 	}
 }
 

@@ -382,6 +382,8 @@ nf target list
 nf target show app1-linode
 ```
 
+`nf refresh` is the top-level best-effort refresh: it runs all provider checks, including DNSimple, then refreshes site/env records from whatever target cache is available. It attempts all phases and exits non-zero if any phase fails.
+
 `nf target refresh` runs configured target-provider health checks and rewrites those provider records so added or removed targets are reflected in the cache.
 
 `nf site refresh` then fans out from the cached target list. It must not refresh providers directly.
