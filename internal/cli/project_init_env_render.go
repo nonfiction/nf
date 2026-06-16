@@ -253,6 +253,8 @@ func renderEnvCompose(cfg envConfig) string {
       && php -S 0.0.0.0:80 -t /var/www/html"
     ports:
       - "${ADMINER_PORT}:80"
+    volumes:
+      - ./php/uploads.ini:/usr/local/etc/php/conf.d/uploads.ini:ro
 
 volumes:
   db_data:
@@ -417,7 +419,7 @@ func localEnvAdminerURL(cfg envConfig) string {
 func localEnvPHPVersion() string { return "8.3" }
 
 func renderEnvUploadsINI() string {
-	return "file_uploads=On\nmemory_limit=256M\nupload_max_filesize=128M\npost_max_size=128M\nmax_execution_time=120\nmax_input_time=120\n"
+	return "file_uploads=On\nmemory_limit=1024M\nupload_max_filesize=1024M\npost_max_size=1024M\nmax_execution_time=120\nmax_input_time=120\n"
 }
 
 func renderEnvDockerfile(cfg envConfig) string {
