@@ -303,52 +303,89 @@ func discoverKinstaTargetSites(target map[string]any) ([]map[string]any, error) 
 	if err != nil {
 		return nil, err
 	}
+	values, _ := loadGlobalConfig()
+	baseDomain := strings.TrimSuffix(strings.TrimSpace(values["base_domain"]), ".")
+	type discoveredKinstaEnv struct {
+		Env        kinsta.Environment
+		EnvName    string
+		PHPVersion string
+		Domains    []kinsta.Domain
+		Primary    kinsta.Domain
+	}
+	projectClaims := map[string]string{}
 	records := []map[string]any{}
 	for _, site := range sites {
-		siteName := firstNonEmpty(site.Name, site.DisplayName, site.ID)
-		if siteName == "" || site.ID == "" {
+		kinstaSlug := firstNonEmpty(site.Name, site.DisplayName, site.ID)
+		if kinstaSlug == "" || site.ID == "" {
 			continue
 		}
-		siteID := kinstaSiteID(siteName)
 		envs, err := client.ListEnvironments(ctx, site.ID)
 		if err != nil {
-			return nil, fmt.Errorf("site %s environments: %w", siteName, err)
+			return nil, fmt.Errorf("site %s environments: %w", kinstaSlug, err)
 		}
+		discovered := make([]discoveredKinstaEnv, 0, len(envs))
+		projectSlug := ""
 		for i, env := range envs {
 			envName := kinstaCacheEnvName(env, i)
 			phpVersion := env.CurrentPHPVersion()
 			domains, err := client.ListDomains(ctx, env.ID)
 			if err != nil {
-				return nil, fmt.Errorf("site %s env %s domains: %w", siteName, envName, err)
+				return nil, fmt.Errorf("site %s env %s domains: %w", kinstaSlug, envName, err)
+			}
+			envProjectSlug, err := kinstaProjectSlugFromDomains(domains, baseDomain)
+			if err != nil {
+				return nil, fmt.Errorf("site %s env %s domains: %w", kinstaSlug, envName, err)
+			}
+			if envProjectSlug != "" {
+				if projectSlug != "" && projectSlug != envProjectSlug {
+					return nil, fmt.Errorf("Kinsta site %s (%s) has conflicting nf project slugs %q and %q in internal domains", kinstaSlug, site.ID, projectSlug, envProjectSlug)
+				}
+				projectSlug = envProjectSlug
 			}
 			domain := kinstaEnvPrimaryDomain(env)
 			if domain.ID == "" || domainName(domain) == "" {
 				domain = preferredKinstaDomain(domains)
 			}
+			discovered = append(discovered, discoveredKinstaEnv{Env: env, EnvName: envName, PHPVersion: phpVersion, Domains: domains, Primary: domain})
+		}
+		projectSlug = firstNonEmpty(projectSlug, kinstaSlug)
+		if owner := projectClaims[projectSlug]; owner != "" && owner != site.ID {
+			return nil, fmt.Errorf("Kinsta sites %s and %s both claim nf project slug %q", owner, site.ID, projectSlug)
+		}
+		projectClaims[projectSlug] = site.ID
+		siteID := kinstaSiteID(projectSlug)
+		for _, item := range discovered {
+			env := item.Env
+			envName := item.EnvName
+			phpVersion := item.PHPVersion
+			domains := item.Domains
+			domain := item.Primary
 			cfg, _ := client.SFTPConfig(ctx, site.ID, env.ID)
-			pathValue := kinstaEnvPath(firstNonEmpty(cfg.User, siteName), env.WebRoot)
-			database := firstNonEmpty(cfg.User, siteName)
+			pathValue := kinstaEnvPath(firstNonEmpty(cfg.User, kinstaSlug), env.WebRoot)
+			database := firstNonEmpty(cfg.User, kinstaSlug)
 			host := firstNonEmpty(cfg.Host, env.SSHConnection.SSHIP.ExternalIP)
 			port := firstNonEmpty(cfg.Port, env.SSHConnection.SSHPort, "22")
 			user := cfg.User
 			domainValue := domainName(domain)
 			internalDomain := kinstaInternalDomain(domains)
 			record := map[string]any{
-				"provider":    "kinsta",
-				"env_id":      canonicalEnvID(siteID, envName),
-				"site_id":     siteID,
-				"name":        siteName,
-				"env":         envName,
-				"target":      targetName,
-				"hostname":    domainValue,
-				"url":         kinstaURL(domainValue),
-				"path":        pathValue,
-				"database":    database,
-				"php_version": phpVersion,
-				"status":      "active",
-				"ssh":         sshRecord(user, host, port, cfg.SSHCommand),
+				"provider":     "kinsta",
+				"env_id":       canonicalEnvID(siteID, envName),
+				"site_id":      siteID,
+				"name":         projectSlug,
+				"project_slug": projectSlug,
+				"env":          envName,
+				"target":       targetName,
+				"hostname":     domainValue,
+				"url":          kinstaURL(domainValue),
+				"path":         pathValue,
+				"database":     database,
+				"php_version":  phpVersion,
+				"status":       "active",
+				"ssh":          sshRecord(user, host, port, cfg.SSHCommand),
 				"kinsta": map[string]any{
 					"site_id":        site.ID,
+					"slug":           kinstaSlug,
 					"environment_id": env.ID,
 					"domain_id":      domain.ID,
 					"branch":         kinstaEnvBranch(envName),
@@ -484,6 +521,47 @@ func kinstaInternalDomain(domains []kinsta.Domain) string {
 		}
 	}
 	return ""
+}
+
+func kinstaProjectSlugFromDomains(domains []kinsta.Domain, baseDomain string) (string, error) {
+	baseDomain = normalizeDomainName(baseDomain)
+	if baseDomain == "" {
+		return "", nil
+	}
+	slug := ""
+	for _, domain := range domains {
+		name := normalizeDomainName(domainName(domain))
+		if name == "" || siteDomainWildcardName(name) {
+			continue
+		}
+		candidate, ok := kinstaProjectSlugFromDomain(name, baseDomain)
+		if !ok {
+			continue
+		}
+		if slug != "" && slug != candidate {
+			return "", fmt.Errorf("conflicting nf internal domains imply project slugs %q and %q", slug, candidate)
+		}
+		slug = candidate
+	}
+	return slug, nil
+}
+
+func kinstaProjectSlugFromDomain(name, baseDomain string) (string, bool) {
+	name = normalizeDomainName(name)
+	baseDomain = normalizeDomainName(baseDomain)
+	suffix := ".kinsta." + baseDomain
+	if name == "" || baseDomain == "" || !strings.HasSuffix(name, suffix) {
+		return "", false
+	}
+	label := strings.TrimSuffix(name, suffix)
+	if label == "" || strings.Contains(label, ".") {
+		return "", false
+	}
+	label = strings.TrimSuffix(label, "-staging")
+	if validateSiteAddSlug(label) != nil {
+		return "", false
+	}
+	return label, true
 }
 
 func kinstaPrimaryPublicDomain(domains []kinsta.Domain, primary kinsta.Domain) string {

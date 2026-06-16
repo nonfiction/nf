@@ -229,11 +229,11 @@ func siteEnvName(site map[string]any) string {
 }
 
 func siteEnvSiteID(site map[string]any) string {
-	return firstRecordString(site, "site_id", "site", "site_name", "project", "project_slug", "wordpress_site")
+	return firstRecordString(site, "site_id", "project_slug", "project", "site", "site_name", "wordpress_site")
 }
 
 func siteRecordName(site map[string]any) string {
-	return firstRecordString(site, "name", "site_name", "project", "project_slug", "wordpress_site")
+	return firstRecordString(site, "project_slug", "project", "name", "site_name", "wordpress_site")
 }
 
 func siteCanonicalID(name, target string) string {
@@ -305,7 +305,7 @@ func siteEnvMatchesSite(site map[string]any, siteID string) bool {
 	if needle == "" {
 		return true
 	}
-	for _, candidate := range []string{siteRecordID(site), siteEnvSiteID(site), siteRecordName(site), siteRecordEnvID(site), siteTargetName(site), siteSummary(site), firstRecordString(site, "hostname", "url", "site_url", "home_url")} {
+	for _, candidate := range []string{siteRecordID(site), siteEnvSiteID(site), siteRecordName(site), siteKinstaID(site, "slug"), siteRecordEnvID(site), siteTargetName(site), siteSummary(site), firstRecordString(site, "hostname", "url", "site_url", "home_url")} {
 		if normalizedRecordString(candidate) == needle {
 			return true
 		}

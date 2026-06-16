@@ -13,12 +13,15 @@ import (
 )
 
 var siteAddSlugPattern = regexp.MustCompile(`^[a-z][a-z0-9]{0,31}$`)
+var kinstaSlugPattern = regexp.MustCompile(`^[a-z](?:[a-z0-9-]{0,61}[a-z0-9])?$`)
 
 const siteAddSlugRuleMessage = "must start with a lowercase ASCII letter, may contain only lowercase ASCII letters and digits, and must be 1-32 characters long. Do not use uppercase letters, hyphens, underscores, dots, spaces, punctuation, or Unicode.\nValid examples: client, nonfiction, site001\nInvalid examples: client-name, client_name, 1client, Client, client.com"
+const kinstaSlugRuleMessage = "must start with a lowercase ASCII letter, end with a lowercase ASCII letter or digit, may contain only lowercase ASCII letters, digits, and hyphens, and must be 1-63 characters long. Do not use uppercase letters, underscores, dots, spaces, punctuation other than hyphens, or Unicode."
 
 type siteAddArgs struct {
 	target         string
 	site           string
+	kinstaSlug     string
 	region         string
 	phpVersion     string
 	withStaging    bool
@@ -76,6 +79,7 @@ type kinstaSiteAddPlan struct {
 	TargetName      string
 	CompanyID       string
 	KinstaSiteID    string
+	KinstaSlug      string
 	Site            string
 	SiteID          string
 	BaseDomain      string
@@ -149,6 +153,13 @@ func validateSiteAddSlug(input string) error {
 		return nil
 	}
 	return ProjectError{Msg: fmt.Sprintf("invalid site slug %q: %s", input, siteAddSlugRuleMessage)}
+}
+
+func validateKinstaSlug(input string) error {
+	if kinstaSlugPattern.MatchString(input) {
+		return nil
+	}
+	return ProjectError{Msg: fmt.Sprintf("invalid Kinsta slug %q: %s", input, kinstaSlugRuleMessage)}
 }
 
 func siteDBName(site, env string) string {

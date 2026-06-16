@@ -422,6 +422,7 @@ func buildKinstaSiteStagingAddPlan(live map[string]any, resolvedSiteID string) (
 		TargetName:   targetName,
 		CompanyID:    firstRecordString(live, "company_id", "company"),
 		KinstaSiteID: remoteSiteID,
+		KinstaSlug:   firstNonEmpty(siteKinstaID(live, "slug"), siteSlug),
 		Site:         siteSlug,
 		SiteID:       resolvedSiteID,
 		BaseDomain:   baseDomain,

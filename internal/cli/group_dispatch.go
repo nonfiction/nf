@@ -335,6 +335,7 @@ func runSiteAdd(argv []string) int {
 			{"<target> <site> [flags]", "create a live env"},
 			{},
 			{"--with-staging", "also create staging"},
+			{"--kinsta-slug <slug>", "Kinsta provider slug when it differs from project slug"},
 			{"--region <region>", "Kinsta region override"},
 			{"--php <version>", "Kinsta PHP version override"},
 			{},
@@ -360,6 +361,13 @@ func runSiteAdd(argv []string) int {
 			args.dryRun = true
 		case "--with-staging":
 			args.withStaging = true
+		case "--kinsta-slug":
+			if i+1 >= len(argv) || strings.TrimSpace(argv[i+1]) == "" {
+				fmt.Fprintln(os.Stderr, "--kinsta-slug requires a value")
+				return 1
+			}
+			i++
+			args.kinstaSlug = argv[i]
 		case "--region":
 			if i+1 >= len(argv) || strings.TrimSpace(argv[i+1]) == "" {
 				fmt.Fprintln(os.Stderr, "--region requires a value")
@@ -375,6 +383,14 @@ func runSiteAdd(argv []string) int {
 			i++
 			args.phpVersion = argv[i]
 		default:
+			if strings.HasPrefix(arg, "--kinsta-slug=") {
+				args.kinstaSlug = strings.TrimPrefix(arg, "--kinsta-slug=")
+				if strings.TrimSpace(args.kinstaSlug) == "" {
+					fmt.Fprintln(os.Stderr, "--kinsta-slug requires a value")
+					return 1
+				}
+				continue
+			}
 			if strings.HasPrefix(arg, "--region=") {
 				args.region = strings.TrimPrefix(arg, "--region=")
 				if strings.TrimSpace(args.region) == "" {

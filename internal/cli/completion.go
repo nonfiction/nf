@@ -224,7 +224,7 @@ func siteCompletionCandidates(args []string) []string {
 		if len(args) == 1 {
 			return cachedTargetCompletionNames()
 		}
-		return []string{"--with-staging", "--region", "--php", "--dry-run", "--execute", "--yes", "--non-interactive"}
+		return []string{"--with-staging", "--kinsta-slug", "--region", "--php", "--dry-run", "--execute", "--yes", "--non-interactive"}
 	default:
 		return nil
 	}

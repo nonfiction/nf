@@ -349,7 +349,7 @@ func TestGroupedHelpScreensUseIntendedOrder(t *testing.T) {
 		{
 			name:   "site add",
 			render: func() string { return captureStdout(t, func() { _ = runSiteAdd([]string{"help"}) }) },
-			values: []string{"<target> <site> [flags]", "\n\n  --with-staging", "--region <region>", "--php <version>", "\n\n  --dry-run", "--execute", "--yes", "--non-interactive"},
+			values: []string{"<target> <site> [flags]", "\n\n  --with-staging", "--kinsta-slug <slug>", "--region <region>", "--php <version>", "\n\n  --dry-run", "--execute", "--yes", "--non-interactive"},
 		},
 		{
 			name:   "site staging",
@@ -3107,6 +3107,9 @@ func TestRunSiteRefreshDiscoversKinstaRemoteSites(t *testing.T) {
 	if err := os.WriteFile(config.EnvFile(), []byte("KINSTA_API_KEY=kinsta-token\n"), 0o600); err != nil {
 		t.Fatalf("WriteFile(.env) error = %v", err)
 	}
+	if err := saveGlobalConfig(map[string]string{"base_domain": "nonfiction.dev"}); err != nil {
+		t.Fatalf("saveGlobalConfig() error = %v", err)
+	}
 	if err := state.SaveStateRecords("providers", []map[string]any{{"provider": "kinsta", "targets": []map[string]any{{"name": "kinsta", "provider": "kinsta", "company_id": "company-123"}}}}); err != nil {
 		t.Fatalf("SaveStateRecords(providers) error = %v", err)
 	}
@@ -3120,7 +3123,7 @@ func TestRunSiteRefreshDiscoversKinstaRemoteSites(t *testing.T) {
 		w.Header().Set("Content-Type", "application/json")
 		switch r.Method + " " + r.URL.Path {
 		case "GET /sites":
-			_ = json.NewEncoder(w).Encode(map[string]any{"company": map[string]any{"sites": []map[string]any{{"id": "ksite123", "name": "client", "display_name": "Client"}}}})
+			_ = json.NewEncoder(w).Encode(map[string]any{"company": map[string]any{"sites": []map[string]any{{"id": "ksite123", "name": "clienthost", "display_name": "Client Host"}}}})
 		case "GET /sites/ksite123/environments":
 			_ = json.NewEncoder(w).Encode(map[string]any{"site": map[string]any{"environments": []map[string]any{
 				{"id": "kenv-live", "name": "client", "display_name": "Client", "web_root": "/www/client_123/public", "container_info": map[string]any{"php_engine_version": "php8.3"}, "primaryDomain": map[string]any{"id": "kdom-live", "name": "client.kinsta.nonfiction.dev"}},
@@ -3192,6 +3195,15 @@ func TestRunSiteRefreshDiscoversKinstaRemoteSites(t *testing.T) {
 		}
 		if got := recordValueString(record["database"]); got != want.database {
 			t.Fatalf("%s database = %q, want %q", want.env, got, want.database)
+		}
+		if got := recordValueString(record["project_slug"]); got != "client" {
+			t.Fatalf("%s project_slug = %q, want client", want.env, got)
+		}
+		if got := recordValueString(record["name"]); got != "client" {
+			t.Fatalf("%s name = %q, want client", want.env, got)
+		}
+		if got := mapStringAtPath(record, "kinsta", "slug"); got != "clienthost" {
+			t.Fatalf("%s kinsta.slug = %q, want clienthost", want.env, got)
 		}
 		if got := sitePHPVersion(record); got != "8.3" {
 			t.Fatalf("%s php version = %q, want 8.3", want.env, got)
@@ -3851,6 +3863,35 @@ func TestEnsureKinstaSiteRejectsExistingDisplayNameSlugMismatch(t *testing.T) {
 	}
 }
 
+func TestEnsureKinstaSiteUsesProviderSlugWhenItDiffersFromProjectSlug(t *testing.T) {
+	createCalls := 0
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		switch r.Method + " " + r.URL.Path {
+		case "GET /sites":
+			_ = json.NewEncoder(w).Encode(map[string]any{"company": map[string]any{"sites": []map[string]any{{"id": "ksite123", "name": "sanjelv", "display_name": "sanjelv"}}}})
+		case "POST /sites":
+			createCalls++
+			_ = json.NewEncoder(w).Encode(map[string]any{"operation_id": "op-create-site", "status": 202})
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	t.Cleanup(server.Close)
+
+	client := kinsta.NewClient(server.URL, "kinsta-token")
+	site, err := ensureKinstaSite(context.Background(), client, kinstaSiteAddPlan{Site: "sanjel", KinstaSlug: "sanjelv", Region: "ca-toronto-1"}, "company-123")
+	if err != nil {
+		t.Fatalf("ensureKinstaSite() error = %v", err)
+	}
+	if site.ID != "ksite123" || site.Name != "sanjelv" {
+		t.Fatalf("ensureKinstaSite() = %#v, want ksite123 sanjelv", site)
+	}
+	if createCalls != 0 {
+		t.Fatalf("createCalls = %d, want 0", createCalls)
+	}
+}
+
 func TestRunSiteAddKinstaExecuteCachesEnvs(t *testing.T) {
 	configDir := t.TempDir()
 	stateDir := t.TempDir()
@@ -3875,14 +3916,14 @@ func TestRunSiteAddKinstaExecuteCachesEnvs(t *testing.T) {
 	t.Cleanup(func() { kinstaProvisionSiteFn = oldProvision })
 
 	output := captureStdout(t, func() {
-		if got := Run([]string{"site", "add", "kinsta", "foobar", "--with-staging", "--region", "ca-toronto-1", "--php", "8.2", "--execute", "--yes", "--non-interactive"}); got != 0 {
+		if got := Run([]string{"site", "add", "kinsta", "foobar", "--kinsta-slug", "foobarinc", "--with-staging", "--region", "ca-toronto-1", "--php", "8.2", "--execute", "--yes", "--non-interactive"}); got != 0 {
 			t.Fatalf("Run(site add kinsta execute) = %d, want 0", got)
 		}
 	})
 	if !strings.Contains(output, "Site added.") || !strings.Contains(output, "mode: execute") {
 		t.Fatalf("site add kinsta execute output = %q, want success", output)
 	}
-	if capturedPlan.Region != "ca-toronto-1" || capturedPlan.SiteID != "foobar.kinsta" || capturedPlan.PHPVersion != "8.2" {
+	if capturedPlan.Region != "ca-toronto-1" || capturedPlan.SiteID != "foobar.kinsta" || capturedPlan.KinstaSlug != "foobarinc" || capturedPlan.PHPVersion != "8.2" {
 		t.Fatalf("captured plan = %#v, want region and site id", capturedPlan)
 	}
 	sites, err := state.LoadStateRecords("sites")
@@ -3908,6 +3949,9 @@ func TestRunSiteAddKinstaExecuteCachesEnvs(t *testing.T) {
 		}
 		if got := recordValueString(record["site_id"]); got != "foobar.kinsta" {
 			t.Fatalf("%s site_id = %q, want foobar.kinsta", want.env, got)
+		}
+		if got := recordValueString(record["project_slug"]); got != "foobar" {
+			t.Fatalf("%s project_slug = %q, want foobar", want.env, got)
 		}
 		if got := recordValueString(record["env_id"]); got != "foobar.kinsta:"+want.env {
 			t.Fatalf("%s env_id = %q, want foobar.kinsta:%s", want.env, got, want.env)
@@ -3947,6 +3991,9 @@ func TestRunSiteAddKinstaExecuteCachesEnvs(t *testing.T) {
 		}
 		if got := mapStringAtPath(record, "kinsta", "site_id"); got != "ksite123" {
 			t.Fatalf("%s kinsta site_id = %q, want ksite123", want.env, got)
+		}
+		if got := mapStringAtPath(record, "kinsta", "slug"); got != "foobarinc" {
+			t.Fatalf("%s kinsta slug = %q, want foobarinc", want.env, got)
 		}
 		if got := mapStringAtPath(record, "kinsta", "environment_id"); got != want.envID {
 			t.Fatalf("%s kinsta environment_id = %q, want %q", want.env, got, want.envID)
@@ -4147,7 +4194,7 @@ func TestProvisionKinstaSiteAddWaitsForPointingRecordsBeforePrimary(t *testing.T
 		}},
 	}
 
-	result, err := provisionKinstaSelectedEnvs(context.Background(), client, "dns-token", plan, "company-123", "ksite123", kinsta.Environment{ID: "kenv-live", Name: "live"})
+	result, err := provisionKinstaSelectedEnvs(context.Background(), client, "dns-token", plan, "company-123", "ksite123", kinsta.Environment{ID: "kenv-live", Name: "live", PrimaryDomain: kinsta.Domain{Name: "foobar.kinsta.cloud"}})
 	if err != nil {
 		t.Fatalf("provisionKinstaSelectedEnvs() error = %v", err)
 	}
@@ -4291,6 +4338,65 @@ func TestProvisionKinstaSiteAddSkipsVerificationForExistingPrimaryDomainWithNoRe
 	}
 }
 
+func TestProvisionKinstaSiteAddPreservesExistingPublicPrimaryDomain(t *testing.T) {
+	primaryCalls := 0
+	domainRecordsCalls := 0
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		switch r.Method + " " + r.URL.Path {
+		case "GET /sites/environments/kenv-live/domains":
+			_ = json.NewEncoder(w).Encode(map[string]any{"environment": map[string]any{"site_domains": []map[string]any{
+				{"id": "kdom-live", "name": "foobar.kinsta.nonfiction.dev", "is_primary": false},
+				{"id": "kdom-public", "name": "www.foobar.com", "is_primary": true},
+			}}})
+		case "GET /sites/environments/domains/kdom-live/verification-records":
+			domainRecordsCalls++
+			_ = json.NewEncoder(w).Encode(map[string]any{"site_domain": map[string]any{"pointing_records": []map[string]any{{"name": "foobar.kinsta.nonfiction.dev", "type": "A", "content": "203.0.113.10", "ttl": 300}}}})
+		case "PUT /sites/environments/kenv-live/change-primary-domain":
+			primaryCalls++
+			_ = json.NewEncoder(w).Encode(map[string]any{"operation_id": "op-primary-domain", "status": 202})
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	t.Cleanup(server.Close)
+
+	oldUpsert := upsertDNSRecordFn
+	upsertDNSRecordFn = func(token, accountID, zone, name, recordType, content string, ttl int) error { return nil }
+	t.Cleanup(func() { upsertDNSRecordFn = oldUpsert })
+	stubDNSTypedDeletes(t)
+
+	client := kinsta.NewClient(server.URL, "kinsta-token", kinsta.WithGraphQLURL(server.URL))
+	plan := kinstaSiteAddPlan{
+		Site:         "foobar",
+		SiteID:       "foobar.kinsta",
+		TargetName:   "kinsta",
+		PHPVersion:   "8.3",
+		DNSZone:      "nonfiction.dev",
+		DNSAccountID: "14",
+		Envs: []kinstaSiteAddEnvPlan{{
+			Env:    "live",
+			Domain: "foobar.kinsta.nonfiction.dev",
+			URL:    "https://foobar.kinsta.nonfiction.dev",
+		}},
+	}
+	liveEnv := kinsta.Environment{ID: "kenv-live", Name: "live", PrimaryDomain: kinsta.Domain{ID: "kdom-public", Name: "www.foobar.com"}}
+
+	result, err := provisionKinstaSelectedEnvs(context.Background(), client, "dns-token", plan, "company-123", "ksite123", liveEnv)
+	if err != nil {
+		t.Fatalf("provisionKinstaSelectedEnvs() error = %v", err)
+	}
+	if len(result.Envs) != 1 || result.Envs[0].DomainID != "kdom-live" {
+		t.Fatalf("result envs = %#v, want kdom-live", result.Envs)
+	}
+	if domainRecordsCalls != 1 {
+		t.Fatalf("domain records calls = %d, want 1", domainRecordsCalls)
+	}
+	if primaryCalls != 0 {
+		t.Fatalf("change primary calls = %d, want 0", primaryCalls)
+	}
+}
+
 func TestProvisionKinstaSiteAddContinuesWhenVerificationActionIsNotVisible(t *testing.T) {
 	oldInterval := kinstaDomainRecordsWaitInterval
 	kinstaDomainRecordsWaitInterval = time.Millisecond
@@ -4377,7 +4483,7 @@ func TestProvisionKinstaSiteAddContinuesWhenVerificationActionIsNotVisible(t *te
 		}},
 	}
 
-	if _, err := provisionKinstaSelectedEnvs(context.Background(), client, "dns-token", plan, "company-123", "ksite123", kinsta.Environment{ID: "kenv-live", Name: "live"}); err != nil {
+	if _, err := provisionKinstaSelectedEnvs(context.Background(), client, "dns-token", plan, "company-123", "ksite123", kinsta.Environment{ID: "kenv-live", Name: "live", PrimaryDomain: kinsta.Domain{Name: "foobar.kinsta.cloud"}}); err != nil {
 		t.Fatalf("provisionKinstaSelectedEnvs() error = %v", err)
 	}
 	if confirmCalls != 1 || primaryCalls != 1 {
@@ -6469,9 +6575,9 @@ func TestProvisionKinstaSiteCreatesStagingDomainsDNSAndPrimaryDomains(t *testing
 			if modifiedPHP["kenv-live"] {
 				livePHP = "8.3"
 			}
-			envs := []map[string]any{{"id": "kenv-live", "name": "foobar", "display_name": "foobar", "php_version": livePHP, "web_root": "/"}}
+			envs := []map[string]any{{"id": "kenv-live", "name": "foobar", "display_name": "foobar", "php_version": livePHP, "web_root": "/", "primaryDomain": map[string]any{"name": "foobar.kinsta.cloud"}}}
 			if createdStaging {
-				envs = append(envs, map[string]any{"id": "kenv-staging", "name": "foobar-staging", "display_name": "foobar-staging", "php_version": livePHP, "web_root": "/"})
+				envs = append(envs, map[string]any{"id": "kenv-staging", "name": "foobar-staging", "display_name": "foobar-staging", "php_version": livePHP, "web_root": "/", "primaryDomain": map[string]any{"name": "foobar-staging.kinsta.cloud"}})
 			}
 			_ = json.NewEncoder(w).Encode(map[string]any{"site": map[string]any{"environments": envs}})
 		case "PUT /sites/tools/modify-php-version":

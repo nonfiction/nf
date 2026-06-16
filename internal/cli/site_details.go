@@ -401,7 +401,7 @@ func siteAdminPassword(record map[string]any) (string, error) {
 }
 
 func sitePasswordSlug(record map[string]any) string {
-	if slug := firstRecordString(record, "password_scope", "admin_password_scope", "name", "site_name", "project", "project_slug", "wordpress_site"); slug != "" {
+	if slug := firstRecordString(record, "password_scope", "admin_password_scope", "project_slug", "project", "name", "site_name", "wordpress_site"); slug != "" {
 		return slug
 	}
 	siteID := siteEnvSiteID(record)

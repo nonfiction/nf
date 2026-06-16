@@ -217,6 +217,10 @@ func cmdSiteAdd(args siteAddArgs) int {
 	if provider == "kinsta" {
 		return cmdKinstaSiteAdd(args)
 	}
+	if strings.TrimSpace(args.kinstaSlug) != "" {
+		fmt.Fprintln(os.Stderr, "--kinsta-slug only applies to kinsta targets")
+		return 1
+	}
 	if strings.TrimSpace(args.phpVersion) != "" {
 		fmt.Fprintln(os.Stderr, "--php only applies to kinsta targets")
 		return 1

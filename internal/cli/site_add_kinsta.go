@@ -47,6 +47,13 @@ func buildKinstaSiteAddPlan(args siteAddArgs) (kinstaSiteAddPlan, error) {
 		return kinstaSiteAddPlan{}, err
 	}
 	siteSlug := args.site
+	kinstaSlug := strings.TrimSpace(args.kinstaSlug)
+	if kinstaSlug == "" {
+		kinstaSlug = siteSlug
+	}
+	if err := validateKinstaSlug(kinstaSlug); err != nil {
+		return kinstaSiteAddPlan{}, err
+	}
 	values, err := loadGlobalConfig()
 	if err != nil {
 		return kinstaSiteAddPlan{}, err
@@ -92,6 +99,7 @@ func buildKinstaSiteAddPlan(args siteAddArgs) (kinstaSiteAddPlan, error) {
 		Target:          target,
 		TargetName:      targetName,
 		CompanyID:       companyID,
+		KinstaSlug:      kinstaSlug,
 		Site:            siteSlug,
 		SiteID:          kinstaSiteID(siteSlug),
 		BaseDomain:      baseDomain,
@@ -157,21 +165,23 @@ func appendSiteAddRecords(plan siteAddPlan) error {
 
 func kinstaSiteAddRecord(plan kinstaSiteAddPlan, env kinstaSiteAddEnvPlan, result kinstaProvisionResult) map[string]any {
 	record := map[string]any{
-		"provider":    "kinsta",
-		"env_id":      canonicalEnvID(plan.SiteID, env.Env),
-		"site_id":     plan.SiteID,
-		"name":        plan.Site,
-		"env":         env.Env,
-		"target":      plan.TargetName,
-		"hostname":    env.Domain,
-		"url":         env.URL,
-		"path":        env.Path,
-		"database":    env.Database,
-		"php_version": plan.PHPVersion,
-		"status":      "active",
-		"ssh":         sshRecord(env.SSHUser, env.SSHHost, env.SSHPort, env.SSHCmd),
+		"provider":     "kinsta",
+		"env_id":       canonicalEnvID(plan.SiteID, env.Env),
+		"site_id":      plan.SiteID,
+		"name":         plan.Site,
+		"project_slug": plan.Site,
+		"env":          env.Env,
+		"target":       plan.TargetName,
+		"hostname":     env.Domain,
+		"url":          env.URL,
+		"path":         env.Path,
+		"database":     env.Database,
+		"php_version":  plan.PHPVersion,
+		"status":       "active",
+		"ssh":          sshRecord(env.SSHUser, env.SSHHost, env.SSHPort, env.SSHCmd),
 		"kinsta": map[string]any{
 			"site_id":        result.SiteID,
+			"slug":           firstNonEmpty(plan.KinstaSlug, plan.Site),
 			"environment_id": env.EnvID,
 			"domain_id":      env.DomainID,
 			"branch":         env.Branch,
@@ -198,10 +208,12 @@ func upsertKinstaSiteRecords(plan kinstaSiteAddPlan, result kinstaProvisionResul
 	}
 	kept := make([]map[string]any, 0, len(existing)+len(result.Envs))
 	for _, record := range existing {
-		if replaceWholeSite && siteEnvMatchesSite(record, plan.SiteID) {
+		sameSite := siteEnvMatchesSite(record, plan.SiteID)
+		sameKinstaSite := result.SiteID != "" && siteKinstaID(record, "site_id") == result.SiteID
+		if replaceWholeSite && (sameSite || sameKinstaSite) {
 			continue
 		}
-		if !replaceWholeSite && siteEnvMatchesSite(record, plan.SiteID) {
+		if !replaceWholeSite && (sameSite || sameKinstaSite) {
 			replaceEnv := false
 			for _, env := range result.Envs {
 				if normalizedRecordString(siteEnvName(record)) == normalizedRecordString(env.Env) {
@@ -233,6 +245,9 @@ func printKinstaSiteAddPlanWithTitle(plan kinstaSiteAddPlan, mode, title string)
 		fmt.Printf("  company id: %s\n", plan.CompanyID)
 	}
 	fmt.Printf("  site: %s\n", plan.Site)
+	if plan.KinstaSlug != "" && plan.KinstaSlug != plan.Site {
+		fmt.Printf("  kinsta slug: %s\n", plan.KinstaSlug)
+	}
 	fmt.Printf("  site id: %s\n", plan.SiteID)
 	fmt.Printf("  password version: %s\n", firstNonEmpty(plan.PasswordVersion, "0"))
 	fmt.Printf("  region: %s\n", plan.Region)
@@ -431,7 +446,11 @@ func provisionKinstaSelectedEnvs(ctx context.Context, client *kinsta.Client, dns
 		if dnsResult.UsedFallback {
 			return kinstaProvisionResult{}, kinstaDomainFallbackManualVerificationError(env.Domain)
 		}
-		if !domain.IsPrimary {
+		domains, err := client.ListDomains(ctx, remoteEnv.ID)
+		if err != nil {
+			return kinstaProvisionResult{}, err
+		}
+		if !domain.IsPrimary && shouldMakeKinstaInternalDomainPrimary(remoteEnv, domains) {
 			fmt.Printf("Changing Kinsta primary domain to %s...\n", env.Domain)
 			opID, err := client.ChangePrimaryDomain(ctx, remoteEnv.ID, domain.ID, false)
 			if err != nil {
@@ -440,14 +459,15 @@ func provisionKinstaSelectedEnvs(ctx context.Context, client *kinsta.Client, dns
 			if err := waitKinstaOperation(ctx, client, opID); err != nil {
 				return kinstaProvisionResult{}, err
 			}
+			domain.IsPrimary = true
+			domains, err = client.ListDomains(ctx, remoteEnv.ID)
+			if err != nil {
+				return kinstaProvisionResult{}, err
+			}
 		}
 		env.EnvID = remoteEnv.ID
 		env.DomainID = domain.ID
-		domains, err := client.ListDomains(ctx, remoteEnv.ID)
-		if err != nil {
-			return kinstaProvisionResult{}, err
-		}
-		env.DomainEntries = kinstaDomainCacheEntries(domains, kinsta.Domain{ID: env.DomainID, Name: env.Domain, IsPrimary: true})
+		env.DomainEntries = kinstaDomainCacheEntries(domains, kinsta.Domain{ID: env.DomainID, Name: env.Domain, IsPrimary: domain.IsPrimary})
 		if cfg, err := client.SFTPConfig(ctx, result.SiteID, remoteEnv.ID); err == nil {
 			env.SSHHost = cfg.Host
 			env.SSHPort = firstNonEmpty(cfg.Port, "22")
@@ -456,10 +476,11 @@ func provisionKinstaSelectedEnvs(ctx context.Context, client *kinsta.Client, dns
 			env.Path = kinstaEnvPath(cfg.User, remoteEnv.WebRoot)
 			env.Database = cfg.User
 		} else {
+			fallbackSlug := firstNonEmpty(plan.KinstaSlug, plan.Site)
 			env.SSHHost = remoteEnv.SSHConnection.SSHIP.ExternalIP
 			env.SSHPort = firstNonEmpty(remoteEnv.SSHConnection.SSHPort, "22")
-			env.Path = kinstaEnvPath(plan.Site, remoteEnv.WebRoot)
-			env.Database = plan.Site
+			env.Path = kinstaEnvPath(fallbackSlug, remoteEnv.WebRoot)
+			env.Database = fallbackSlug
 		}
 		result.Envs = append(result.Envs, env)
 	}
@@ -896,25 +917,26 @@ func kinstaEnvPath(user, webRoot string) string {
 }
 
 func ensureKinstaSite(ctx context.Context, client *kinsta.Client, plan kinstaSiteAddPlan, companyID string) (kinsta.Site, error) {
+	kinstaSlug := firstNonEmpty(strings.TrimSpace(plan.KinstaSlug), plan.Site)
 	sites, err := client.ListSites(ctx, companyID)
 	if err != nil {
 		return kinsta.Site{}, err
 	}
-	if site, ok := findKinstaSiteForRequestedSlug(sites, plan.Site); ok {
-		if err := validateKinstaSiteReturnedSlug(site, plan.Site); err != nil {
+	if site, ok := findKinstaSiteForRequestedSlug(sites, kinstaSlug); ok {
+		if err := validateKinstaSiteReturnedSlug(site, kinstaSlug); err != nil {
 			return kinsta.Site{}, err
 		}
 		return site, nil
 	}
 	// Only probe the shared *.kinsta.cloud namespace after confirming the slug
 	// is not already an exact canonical site in this Kinsta account.
-	if err := verifyKinstaCloudSlugAvailable(plan.Site); err != nil {
+	if err := verifyKinstaCloudSlugAvailable(kinstaSlug); err != nil {
 		return kinsta.Site{}, err
 	}
-	fmt.Printf("Creating Kinsta site %s in %s...\n", plan.Site, plan.Region)
+	fmt.Printf("Creating Kinsta site %s in %s...\n", kinstaSlug, plan.Region)
 	opID, err := client.CreateSite(ctx, kinsta.CreateSiteRequest{
 		Company:              companyID,
-		DisplayName:          plan.Site,
+		DisplayName:          kinstaSlug,
 		Region:               plan.Region,
 		InstallMode:          "new",
 		AdminEmail:           plan.AdminEmail,
@@ -937,13 +959,13 @@ func ensureKinstaSite(ctx context.Context, client *kinsta.Client, plan kinstaSit
 	if err != nil {
 		return kinsta.Site{}, err
 	}
-	if site, ok := findKinstaSiteForRequestedSlug(sites, plan.Site); ok {
-		if err := validateKinstaSiteReturnedSlug(site, plan.Site); err != nil {
+	if site, ok := findKinstaSiteForRequestedSlug(sites, kinstaSlug); ok {
+		if err := validateKinstaSiteReturnedSlug(site, kinstaSlug); err != nil {
 			return kinsta.Site{}, err
 		}
 		return site, nil
 	}
-	return kinsta.Site{}, fmt.Errorf("Kinsta site %q was created but was not found in site list", plan.Site)
+	return kinsta.Site{}, fmt.Errorf("Kinsta site %q was created but was not found in site list", kinstaSlug)
 }
 
 func findKinstaSiteForRequestedSlug(sites []kinsta.Site, requested string) (kinsta.Site, bool) {
@@ -1293,6 +1315,19 @@ func markKinstaDomainPrimary(domain kinsta.Domain, env kinsta.Environment) kinst
 		domain.IsPrimary = true
 	}
 	return domain
+}
+
+func shouldMakeKinstaInternalDomainPrimary(env kinsta.Environment, domains []kinsta.Domain) bool {
+	primaryName := normalizeDomainName(domainName(env.PrimaryDomain))
+	if primaryName == "" {
+		for _, domain := range domains {
+			if domain.IsPrimary {
+				primaryName = normalizeDomainName(domainName(domain))
+				break
+			}
+		}
+	}
+	return strings.HasSuffix(primaryName, ".kinsta.cloud")
 }
 
 func waitKinstaOperation(parent context.Context, client *kinsta.Client, opID string) error {
