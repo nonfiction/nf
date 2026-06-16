@@ -350,7 +350,7 @@ func TestGroupedHelpScreensUseIntendedOrder(t *testing.T) {
 		{
 			name:   "site add",
 			render: func() string { return captureStdout(t, func() { _ = runSiteAdd([]string{"help"}) }) },
-			values: []string{"<target> <site> [flags]", "\n\n  --with-staging", "--kinsta-slug <slug>", "--region <region>", "--php <version>", "\n\n  --dry-run", "--execute", "--yes", "--non-interactive"},
+			values: []string{"<target> <site> [flags]", "\n\n  --with-staging", "--password-version <version>", "--kinsta-slug <slug>", "--region <region>", "--php <version>", "\n\n  --dry-run", "--execute", "--yes", "--non-interactive"},
 		},
 		{
 			name:   "site staging",
@@ -3548,6 +3548,95 @@ func TestBuildSiteAddPlanUsesMatchingProjectPasswordVersion(t *testing.T) {
 	}
 }
 
+func TestBuildSiteAddPlanUsesExplicitPasswordVersion(t *testing.T) {
+	configDir := t.TempDir()
+	stateDir := t.TempDir()
+	t.Setenv("NF_CONFIG_HOME", configDir)
+	t.Setenv("NF_STATE_HOME", stateDir)
+	t.Setenv("NF_PASSWORD_SALT", "test-salt")
+	if err := saveGlobalConfig(map[string]string{"base_domain": "nonfiction.dev", "default_wp_email": "web@nonfiction.ca", "default_wp_user": "admin", "linode_default_user": "nonfiction"}); err != nil {
+		t.Fatalf("saveGlobalConfig() error = %v", err)
+	}
+	if err := state.SaveStateRecords("providers", []map[string]any{{"provider": "linode", "targets": []map[string]any{{"name": "app1-linode", "provider": "linode", "hostname": "app1-linode.nonfiction.dev", "ssh_user": "nonfiction"}}}}); err != nil {
+		t.Fatalf("SaveStateRecords(providers) error = %v", err)
+	}
+
+	plan, err := buildSiteAddPlan(siteAddArgs{target: "app1-linode", site: "foobar", passwordVersion: "7"})
+	if err != nil {
+		t.Fatalf("buildSiteAddPlan() error = %v", err)
+	}
+	if got, want := plan.PasswordVersion, "7"; got != want {
+		t.Fatalf("PasswordVersion = %q, want %q", got, want)
+	}
+	if got, want := plan.AdminPassword, passwords.DerivePassword("foobar:v7", "wp-admin", "test-salt"); got != want {
+		t.Fatalf("AdminPassword = %q, want %q", got, want)
+	}
+	if got, want := plan.DBPassword, passwords.DerivePassword("foobar:v7", "mysql", "test-salt"); got != want {
+		t.Fatalf("DBPassword = %q, want %q", got, want)
+	}
+	if records := siteAddRecords(plan); len(records) != 1 {
+		t.Fatalf("siteAddRecords len = %d, want 1", len(records))
+	} else if _, ok := records[0]["password_version"]; ok {
+		t.Fatalf("siteAddRecords wrote password_version into provider state: %#v", records[0])
+	}
+}
+
+func TestBuildSiteAddPlanExplicitPasswordVersionOverridesProject(t *testing.T) {
+	configDir := t.TempDir()
+	stateDir := t.TempDir()
+	t.Setenv("NF_CONFIG_HOME", configDir)
+	t.Setenv("NF_STATE_HOME", stateDir)
+	t.Setenv("NF_PASSWORD_SALT", "test-salt")
+	if err := saveGlobalConfig(map[string]string{"base_domain": "nonfiction.dev", "default_wp_email": "web@nonfiction.ca", "default_wp_user": "admin", "linode_default_user": "nonfiction"}); err != nil {
+		t.Fatalf("saveGlobalConfig() error = %v", err)
+	}
+	if err := state.SaveStateRecords("providers", []map[string]any{{"provider": "linode", "targets": []map[string]any{{"name": "app1-linode", "provider": "linode", "hostname": "app1-linode.nonfiction.dev", "ssh_user": "nonfiction"}}}}); err != nil {
+		t.Fatalf("SaveStateRecords(providers) error = %v", err)
+	}
+	repoRoot := t.TempDir()
+	if err := os.Mkdir(filepath.Join(repoRoot, ".git"), 0o755); err != nil {
+		t.Fatalf("Mkdir(.git) error = %v", err)
+	}
+	project := map[string]any{"version": 1, "project": map[string]any{"slug": "foobar", "password_version": 5}}
+	data, err := json.MarshalIndent(project, "", "  ")
+	if err != nil {
+		t.Fatalf("MarshalIndent() error = %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(repoRoot, "nf.json"), append(data, '\n'), 0o644); err != nil {
+		t.Fatalf("WriteFile(nf.json) error = %v", err)
+	}
+	oldwd, err := os.Getwd()
+	if err != nil {
+		t.Fatalf("Getwd() error = %v", err)
+	}
+	if err := os.Chdir(repoRoot); err != nil {
+		t.Fatalf("Chdir() error = %v", err)
+	}
+	t.Cleanup(func() { _ = os.Chdir(oldwd) })
+
+	plan, err := buildSiteAddPlan(siteAddArgs{target: "app1-linode", site: "foobar", passwordVersion: "2"})
+	if err != nil {
+		t.Fatalf("buildSiteAddPlan() error = %v", err)
+	}
+	if got, want := plan.PasswordVersion, "2"; got != want {
+		t.Fatalf("PasswordVersion = %q, want %q", got, want)
+	}
+	if got, want := plan.AdminPassword, passwords.DerivePassword("foobar:v2", "wp-admin", "test-salt"); got != want {
+		t.Fatalf("AdminPassword = %q, want %q", got, want)
+	}
+
+	plan, err = buildSiteAddPlan(siteAddArgs{target: "app1-linode", site: "foobar", passwordVersion: "0", passwordVersionSet: true})
+	if err != nil {
+		t.Fatalf("buildSiteAddPlan(version 0) error = %v", err)
+	}
+	if got, want := plan.PasswordVersion, ""; got != want {
+		t.Fatalf("PasswordVersion = %q, want %q", got, want)
+	}
+	if got, want := plan.AdminPassword, passwords.DerivePassword("foobar", "wp-admin", "test-salt"); got != want {
+		t.Fatalf("AdminPassword = %q, want %q", got, want)
+	}
+}
+
 func TestValidateSiteAddSlug(t *testing.T) {
 	for _, input := range []string{"client", "nonfiction", "site001", "a", "a123"} {
 		if err := validateSiteAddSlug(input); err != nil {
@@ -3585,6 +3674,64 @@ func TestRunSiteAddRejectsInvalidSlugBeforeLookup(t *testing.T) {
 		if strings.Contains(stderr, notWant) {
 			t.Fatalf("runSiteAdd stderr contains %q, so validation did not stop early:\n%s", notWant, stderr)
 		}
+	}
+}
+
+func TestRunSiteAddRejectsInvalidPasswordVersionBeforeLookup(t *testing.T) {
+	for _, argv := range [][]string{
+		{"missing-target", "foobar", "--password-version"},
+		{"missing-target", "foobar", "--password-version="},
+		{"missing-target", "foobar", "--password-version", "-1"},
+		{"missing-target", "foobar", "--password-version=1.2"},
+		{"missing-target", "foobar", "--password-version", "abc"},
+	} {
+		stderr := captureStderr(t, func() {
+			if got := runSiteAdd(argv); got != 1 {
+				t.Fatalf("runSiteAdd(%v) = %d, want 1", argv, got)
+			}
+		})
+		if !strings.Contains(stderr, "--password-version requires a value") && !strings.Contains(stderr, "must be an unsigned integer") {
+			t.Fatalf("runSiteAdd(%v) stderr missing password-version error:\n%s", argv, stderr)
+		}
+		for _, notWant := range []string{"No target matched", "Expected base_domain", "Expected default_wp_email"} {
+			if strings.Contains(stderr, notWant) {
+				t.Fatalf("runSiteAdd(%v) stderr contains %q, so validation did not stop early:\n%s", argv, notWant, stderr)
+			}
+		}
+	}
+}
+
+func TestRunSiteAddPasswordVersionFlagNormalizesZeroPaddedValue(t *testing.T) {
+	configDir := t.TempDir()
+	stateDir := t.TempDir()
+	t.Setenv("NF_CONFIG_HOME", configDir)
+	t.Setenv("NF_STATE_HOME", stateDir)
+	t.Setenv("NF_PASSWORD_SALT", "test-salt")
+	if err := saveGlobalConfig(map[string]string{"base_domain": "nonfiction.dev", "default_wp_email": "web@nonfiction.ca", "default_wp_user": "admin", "linode_default_user": "nonfiction"}); err != nil {
+		t.Fatalf("saveGlobalConfig() error = %v", err)
+	}
+	if err := state.SaveStateRecords("providers", []map[string]any{{"provider": "linode", "targets": []map[string]any{{"name": "app1-linode", "provider": "linode", "hostname": "app1-linode.nonfiction.dev", "ssh_user": "nonfiction"}}}}); err != nil {
+		t.Fatalf("SaveStateRecords(providers) error = %v", err)
+	}
+	oldRunSSH := runSSHScriptFn
+	runSSHScriptFn = func(user, host, script string) error {
+		t.Fatalf("runSSHScriptFn called during dry-run")
+		return nil
+	}
+	t.Cleanup(func() { runSSHScriptFn = oldRunSSH })
+
+	output := captureStdout(t, func() {
+		if got := Run([]string{"site", "add", "app1-linode", "foobar", "--password-version=002", "--dry-run", "--non-interactive"}); got != 0 {
+			t.Fatalf("Run(site add) = %d, want 0", got)
+		}
+	})
+	for _, want := range []string{"password version: 2", "admin password: derived from foobar", "mode: dry-run"} {
+		if !strings.Contains(output, want) {
+			t.Fatalf("site add dry-run output missing %q:\n%s", want, output)
+		}
+	}
+	if _, err := os.Stat(filepath.Join(stateDir, "sites.json")); !os.IsNotExist(err) {
+		t.Fatalf("sites.json unexpectedly exists after dry-run: %v", err)
 	}
 }
 
@@ -3836,6 +3983,31 @@ func TestBuildKinstaSiteAddPlanUsesConfiguredBaseDomain(t *testing.T) {
 		if got := env.URL; got != "https://"+wants[env.Env] {
 			t.Fatalf("%s URL = %q, want %q", env.Env, got, "https://"+wants[env.Env])
 		}
+	}
+}
+
+func TestBuildKinstaSiteAddPlanUsesExplicitPasswordVersion(t *testing.T) {
+	configDir := t.TempDir()
+	stateDir := t.TempDir()
+	t.Setenv("NF_CONFIG_HOME", configDir)
+	t.Setenv("NF_STATE_HOME", stateDir)
+	t.Setenv("NF_PASSWORD_SALT", "test-salt")
+	if err := saveGlobalConfig(map[string]string{"base_domain": "nonfiction.dev", "default_wp_email": "web@nonfiction.ca", "dnsimple_account_id": "14"}); err != nil {
+		t.Fatalf("saveGlobalConfig() error = %v", err)
+	}
+	if err := state.SaveStateRecords("providers", []map[string]any{{"provider": "kinsta", "targets": []map[string]any{{"name": "kinsta", "provider": "kinsta", "company_id": "company-123", "status": "active"}}}}); err != nil {
+		t.Fatalf("SaveStateRecords(providers) error = %v", err)
+	}
+
+	plan, err := buildKinstaSiteAddPlan(siteAddArgs{target: "kinsta", site: "client", passwordVersion: "3"})
+	if err != nil {
+		t.Fatalf("buildKinstaSiteAddPlan() error = %v", err)
+	}
+	if got, want := plan.PasswordVersion, "3"; got != want {
+		t.Fatalf("PasswordVersion = %q, want %q", got, want)
+	}
+	if got, want := plan.AdminPassword, passwords.DerivePassword("client:v3", "wp-admin", "test-salt"); got != want {
+		t.Fatalf("AdminPassword = %q, want %q", got, want)
 	}
 }
 
