@@ -344,7 +344,7 @@ func remoteCompletionCandidates(args []string) []string {
 
 func envCompletionCandidates(args []string) []string {
 	if len(args) == 0 {
-		return []string{"show", "password", "up", "down", "logs", "shell", "sh", "wp", "plugins", "snapshot", "import", "pull", "push", "reset", "help"}
+		return []string{"show", "password", "up", "down", "logs", "shell", "sh", "wp", "plugin", "snapshot", "import", "pull", "push", "reset", "help"}
 	}
 	args[0] = cliCommandAlias(args[0])
 	switch args[0] {
@@ -356,7 +356,7 @@ func envCompletionCandidates(args []string) []string {
 		return projectRemoteCompletionNames()
 	case "shell":
 		return projectRemoteCompletionNames()
-	case "plugins":
+	case "plugin":
 		return envPluginsCompletionCandidates(args[1:])
 	case "snapshot":
 		return envSnapshotCompletionCandidates(args[1:])
@@ -373,7 +373,7 @@ func envPluginsCompletionCandidates(args []string) []string {
 	}
 	args[0] = cliCommandAlias(args[0])
 	if args[0] == "add" {
-		return []string{"--source", "--no-activate", "--no-auto-update"}
+		return []string{"--source", "--manual", "--note", "--no-activate", "--no-auto-update"}
 	}
 	if args[0] == "remove" {
 		return projectPluginCompletionNames()

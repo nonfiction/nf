@@ -96,9 +96,9 @@ Read [Public Artifacts](public-artifacts.md) for configured non-WordPress URL pa
 Manage WordPress plugins declared in `nf.json`:
 
 ```sh
-nf env plugins status
-nf env plugins diff production
-nf env plugins install production --dry-run
+nf env plugin status
+nf env plugin diff production
+nf env plugin install production --dry-run
 ```
 
 Read [Plugins](plugins.md) for plugin configuration, status, diff, and install behavior.

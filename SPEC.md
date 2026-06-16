@@ -307,12 +307,12 @@ Do not add old compatibility routes unless explicitly requested.
 * [x] `nf env show`
 * [x] `nf env shell`
 * [x] `nf env wp -- <args>`
-* [x] `nf env plugins list`
-* [x] `nf env plugins add <plugin> [--source <source>] [--no-activate] [--no-auto-update]`
-* [x] `nf env plugins remove <plugin>`
-* [x] `nf env plugins status [remote]`
-* [x] `nf env plugins diff [remote]`
-* [x] `nf env plugins install [remote] [--dry-run] [--yes]`
+* [x] `nf env plugin list`
+* [x] `nf env plugin add <plugin> [--source <source>] [--manual] [--note <note>] [--no-activate] [--no-auto-update]`
+* [x] `nf env plugin remove <plugin>`
+* [x] `nf env plugin status [remote]`
+* [x] `nf env plugin diff [remote]`
+* [x] `nf env plugin install [remote] [--dry-run] [--yes]`
 * [x] `nf env snapshot add [name]`
 * [x] `nf env snapshot list`
 * [x] `nf env snapshot import [remote] [--name name]`
@@ -352,7 +352,7 @@ These commands are implemented, but intentionally guarded because they touch rem
 * [x] `nf site wp <env-id> -- <cmd>`: validates cache, previews SSH/wp-cli, then executes remote wp-cli
 * [x] `nf env logs <remote>`: validates repo remote/cache, previews SSH, ensures `wp-content/debug.log` exists, then tails it
 * [x] `nf env password <remote> [--wp|--db|--basicauth]`: resolves repo remote/cache and prints only the selected password
-* [x] `nf env plugins install <remote>`: validates repo remote/cache, prints a reviewable plugin plan, and asks for confirmation unless `--yes` is passed
+* [x] `nf env plugin install <remote>`: validates repo remote/cache, prints a reviewable plugin plan, and asks for confirmation unless `--yes` is passed
 * [x] `nf site export <env-id>`: validates cache, exports full remote WordPress filesystem plus database dump as a portable handoff directory
 * [x] `nf env import <source>`: creates a local import snapshot, creates a pre-restore safety snapshot, and restores external WordPress data into the local env only
 * [x] `nf env push <remote>`: validates repo remote/cache, prints a reviewable plan, and syncs with execute/confirmation gates
@@ -602,12 +602,12 @@ Current built-ins:
 * `shell`
 * `sh`
 * `wp`
-* `plugins list`
-* `plugins add <plugin> [--source <source>] [--no-activate] [--no-auto-update]`
-* `plugins remove <plugin>`
-* `plugins status [remote]`
-* `plugins diff [remote]`
-* `plugins install [remote] [--dry-run] [--yes]`
+* `plugin list`
+* `plugin add <plugin> [--source <source>] [--manual] [--note <note>] [--no-activate] [--no-auto-update]`
+* `plugin remove <plugin>`
+* `plugin status [remote]`
+* `plugin diff [remote]`
+* `plugin install [remote] [--dry-run] [--yes]`
 
 Rules:
 
@@ -632,17 +632,17 @@ Rules:
 * `nf site password [site|env] [--wp|--db|--basicauth]` accepts env refs for `--db`; site refs are required for `--wp` and `--basicauth`
 * `wordpress.plugins` is a bootstrap checklist, not a full plugin lifecycle manager
 * string plugin entries install from wordpress.org, activate, and enable auto-updates by default
-* object plugin entries require `slug`, support `source`, support `auto_update`, and default `activate` and `auto_update` to true
+* object plugin entries require `slug`, support `source`, `install`, `note`, and `auto_update`, and default `install`, `activate`, and `auto_update` to true
 * plugin `source` may be a wp.org marker, zip URL/path, or env-var-backed value such as `$NF_PLUGIN_ACF_PRO_ZIP`
-* `nf env plugins add <plugin>` appends to `wordpress.plugins` in `nf.json`, creates the array if missing, rejects duplicate slugs, and does not install anything
-* `nf env plugins remove <plugin>` removes a configured plugin from `nf.json`, rejects missing slugs, and does not uninstall anything
-* `nf env plugins install` with no remote targets the local env
-* `nf env plugins status [remote]` compares configured plugins against local or remote WordPress state and reports installed, active, and auto-update status
-* `nf env plugins diff [remote]` reports needed install/activate/auto-update changes and installed plugins that are not configured in `nf.json`; it mutates nothing, exits 0 when configured plugins match and no extras are installed, and exits 2 when drift exists
-* `nf env plugins install <remote>` validates the repo remote/cache, prints a remote plugin plan, and asks for yes/no confirmation unless `--yes` is passed
-* `nf env plugins install <remote> --dry-run` previews only and does not run SSH
+* `nf env plugin add <plugin>` appends to `wordpress.plugins` in `nf.json`, creates the array if missing, rejects duplicate slugs, and does not install anything
+* `nf env plugin remove <plugin>` removes a configured plugin from `nf.json`, rejects missing slugs, and does not uninstall anything
+* `nf env plugin install` with no remote targets the local env
+* `nf env plugin status [remote]` compares configured plugins against local or remote WordPress state and reports installed, active, and auto-update status
+* `nf env plugin diff [remote]` reports needed install/activate/auto-update changes, missing manual plugins, and installed plugins that are not configured in `nf.json`; it mutates nothing, exits 0 when configured plugins match and no extras are installed, and exits 2 when drift exists
+* `nf env plugin install <remote>` validates the repo remote/cache, prints a remote plugin plan, and asks for yes/no confirmation unless `--yes` is passed
+* `nf env plugin install <remote> --dry-run` previews only and does not run SSH
 * remote plugin installs run WP-CLI on the remote host; URL sources must be reachable from that host, and local zip sources are uploaded to a temporary remote directory before install and cleaned up afterward
-* plugin install is idempotent: it installs only missing plugins, activates only inactive plugins when requested, and enables native WordPress auto-updates only when not already enabled; it does not update, remove, pin, disable auto-updates, or manage licenses
+* plugin install is idempotent: it installs only missing plugins where `install` is true, activates only inactive plugins when requested, and enables native WordPress auto-updates only when not already enabled; it does not install manual plugins, update, remove, pin, disable auto-updates, or manage licenses
 * secrets, license keys, and private signed URLs must not be stored directly in `nf.json`
 * generated env scaffolding stays under `NF_DATA_HOME`, not in project repos
 

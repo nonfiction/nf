@@ -17,8 +17,10 @@ import (
 type wordpressPluginSpec struct {
 	Slug       string
 	Source     string
+	Install    bool
 	Activate   bool
 	AutoUpdate bool
+	Note       string
 }
 
 func loadWordPressPluginSpecs(metadata map[string]any) ([]wordpressPluginSpec, error) {
@@ -57,13 +59,21 @@ func parseWordPressPluginSpec(index int, value any) (wordpressPluginSpec, error)
 		if slug == "" {
 			return wordpressPluginSpec{}, ProjectError{Msg: fmt.Sprintf("nf.json wordpress.plugins[%d] must not be empty", index)}
 		}
-		return wordpressPluginSpec{Slug: slug, Source: "wordpress.org", Activate: true, AutoUpdate: true}, nil
+		return wordpressPluginSpec{Slug: slug, Source: "wordpress.org", Install: true, Activate: true, AutoUpdate: true}, nil
 	case map[string]any:
 		slug := strings.TrimSpace(recordValueString(typed["slug"]))
 		if slug == "" {
 			return wordpressPluginSpec{}, ProjectError{Msg: fmt.Sprintf("nf.json wordpress.plugins[%d].slug is required", index)}
 		}
 		activate := true
+		install := true
+		if value, ok := typed["install"]; ok {
+			boolValue, ok := value.(bool)
+			if !ok {
+				return wordpressPluginSpec{}, ProjectError{Msg: fmt.Sprintf("nf.json wordpress.plugins[%d].install must be true or false", index)}
+			}
+			install = boolValue
+		}
 		if value, ok := typed["activate"]; ok {
 			boolValue, ok := value.(bool)
 			if !ok {
@@ -83,7 +93,8 @@ func parseWordPressPluginSpec(index int, value any) (wordpressPluginSpec, error)
 		if source == "" {
 			source = "wordpress.org"
 		}
-		return wordpressPluginSpec{Slug: slug, Source: source, Activate: activate, AutoUpdate: autoUpdate}, nil
+		note := strings.TrimSpace(recordValueString(typed["note"]))
+		return wordpressPluginSpec{Slug: slug, Source: source, Install: install, Activate: activate, AutoUpdate: autoUpdate, Note: note}, nil
 	default:
 		return wordpressPluginSpec{}, ProjectError{Msg: fmt.Sprintf("nf.json wordpress.plugins[%d] must be a string or object", index)}
 	}
@@ -106,8 +117,11 @@ func cmdEnvPluginsList(metadata map[string]any) int {
 type envPluginAddOptions struct {
 	Slug          string
 	Source        string
+	Install       bool
 	Activate      bool
 	AutoUpdate    bool
+	Note          string
+	HasInstall    bool
 	HasActivate   bool
 	HasAutoUpdate bool
 }
@@ -212,12 +226,18 @@ func projectWordPressPlugins(metadata map[string]any, create bool) ([]any, error
 }
 
 func wordpressPluginAddValue(opts envPluginAddOptions) any {
-	if strings.TrimSpace(opts.Source) == "" && !opts.HasActivate && !opts.HasAutoUpdate {
+	if strings.TrimSpace(opts.Source) == "" && strings.TrimSpace(opts.Note) == "" && !opts.HasInstall && !opts.HasActivate && !opts.HasAutoUpdate {
 		return opts.Slug
 	}
 	pairs := []orderedPair{{Key: "slug", Value: opts.Slug}}
 	if strings.TrimSpace(opts.Source) != "" {
 		pairs = append(pairs, orderedPair{Key: "source", Value: opts.Source})
+	}
+	if opts.HasInstall && !opts.Install {
+		pairs = append(pairs, orderedPair{Key: "install", Value: false})
+	}
+	if strings.TrimSpace(opts.Note) != "" {
+		pairs = append(pairs, orderedPair{Key: "note", Value: opts.Note})
 	}
 	if opts.HasActivate && !opts.Activate {
 		pairs = append(pairs, orderedPair{Key: "activate", Value: false})
@@ -309,7 +329,7 @@ func cmdEnvPluginsStatusRemote(metadata map[string]any, remoteName string) int {
 		fmt.Println("No WordPress plugins configured.")
 		return 0
 	}
-	target, err := resolveEnvRemoteSyncTarget("plugins status", remoteName, metadata)
+	target, err := resolveEnvRemoteSyncTarget("plugin status", remoteName, metadata)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		return 1
@@ -340,7 +360,7 @@ func cmdEnvPluginsDiffRemote(metadata map[string]any, remoteName string) int {
 		fmt.Println("No WordPress plugins configured.")
 		return 0
 	}
-	target, err := resolveEnvRemoteSyncTarget("plugins diff", remoteName, metadata)
+	target, err := resolveEnvRemoteSyncTarget("plugin diff", remoteName, metadata)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		return 1
@@ -386,7 +406,7 @@ type envPluginInstallOptions struct {
 func cmdEnvPluginsInstallWithOptions(root string, metadata map[string]any, opts envPluginInstallOptions) int {
 	if strings.TrimSpace(opts.RemoteName) == "" {
 		if opts.DryRun {
-			fmt.Fprintln(os.Stderr, "env plugins install --dry-run requires a remote")
+			fmt.Fprintln(os.Stderr, "env plugin install --dry-run requires a remote")
 			return 1
 		}
 		cfg, ok := loadEnvConfig(root, metadata)
@@ -409,7 +429,7 @@ func cmdEnvPluginsInstallRemote(metadata map[string]any, opts envPluginInstallOp
 		fmt.Println("No WordPress plugins configured.")
 		return 0
 	}
-	target, err := resolveEnvRemoteSyncTarget("plugins install", opts.RemoteName, metadata)
+	target, err := resolveEnvRemoteSyncTarget("plugin install", opts.RemoteName, metadata)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		return 1
@@ -597,6 +617,9 @@ func remotePluginInstallSpecs(plugins []wordpressPluginSpec, remoteTmp string, r
 	remotePlugins := make([]remotePluginInstallSpec, 0, len(plugins))
 	uploads := []remotePluginUpload{}
 	for _, plugin := range plugins {
+		if !plugin.Install {
+			continue
+		}
 		installSource := pluginInstallSource(plugin)
 		if remotePluginSourceLooksLocal(plugin, installSource) {
 			localPath, err := filepath.Abs(installSource)
@@ -643,25 +666,33 @@ func remotePluginUploadArgs(target envRemoteSyncTarget, upload remotePluginUploa
 }
 
 func formatWordPressPluginTable(plugins []wordpressPluginSpec) string {
-	rows := [][]string{{"plugin", "source", "activate", "auto-update"}}
+	rows := [][]string{{"plugin", "source", "install", "activate", "auto-update", "note"}}
 	for _, plugin := range plugins {
 		activate := "no"
 		if plugin.Activate {
 			activate = "yes"
 		}
+		install := "no"
+		if plugin.Install {
+			install = "yes"
+		}
 		autoUpdate := "no"
 		if plugin.AutoUpdate {
 			autoUpdate = "yes"
 		}
-		rows = append(rows, []string{plugin.Slug, plugin.Source, activate, autoUpdate})
+		if !plugin.Install {
+			activate = "-"
+			autoUpdate = "-"
+		}
+		rows = append(rows, []string{plugin.Slug, plugin.Source, install, activate, autoUpdate, plugin.Note})
 	}
 	return formatTable(rows)
 }
 
 func formatWordPressPluginStatusTable(statuses []wordpressPluginStatus) string {
-	rows := [][]string{{"plugin", "source", "installed", "active", "auto-update"}}
+	rows := [][]string{{"plugin", "source", "install", "installed", "active", "auto-update", "note"}}
 	for _, status := range statuses {
-		rows = append(rows, []string{status.Plugin.Slug, status.Plugin.Source, yesNo(status.Installed), yesNo(status.Active), yesNo(status.AutoUpdate)})
+		rows = append(rows, []string{status.Plugin.Slug, status.Plugin.Source, yesNo(status.Plugin.Install), yesNo(status.Installed), yesNo(status.Active), yesNo(status.AutoUpdate), status.Plugin.Note})
 	}
 	return formatTable(rows)
 }
@@ -681,6 +712,10 @@ func wordpressPluginDiffs(statuses []wordpressPluginStatus) ([]wordpressPluginDi
 		changes := []string{}
 		if status.Extra {
 			changes = append(changes, extraPluginDiffChange(status))
+		} else if !status.Plugin.Install {
+			if !status.Installed {
+				changes = append(changes, "manual install required")
+			}
 		} else if !status.Installed {
 			if pluginLocalSourceMissing(status.Plugin) {
 				changes = append(changes, "source unavailable locally")
@@ -839,6 +874,9 @@ func localPluginInstallScript(plugins []wordpressPluginSpec) string {
 	var builder strings.Builder
 	builder.WriteString("set -eu\n")
 	for _, plugin := range plugins {
+		if !plugin.Install {
+			continue
+		}
 		slug := shellQuoteArg(plugin.Slug)
 		source := shellQuoteArg(pluginInstallSource(plugin))
 		builder.WriteString("if ! wp plugin is-installed ")
