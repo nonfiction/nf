@@ -335,6 +335,7 @@ func runSiteAdd(argv []string) int {
 			{"<target> <site> [flags]", "create a live env"},
 			{},
 			{"--with-staging", "also create staging"},
+			{"--password-version <version>", "password derivation version"},
 			{"--kinsta-slug <slug>", "Kinsta provider slug when it differs from project slug"},
 			{"--region <region>", "Kinsta region override"},
 			{"--php <version>", "Kinsta PHP version override"},
@@ -361,6 +362,19 @@ func runSiteAdd(argv []string) int {
 			args.dryRun = true
 		case "--with-staging":
 			args.withStaging = true
+		case "--password-version":
+			if i+1 >= len(argv) || strings.TrimSpace(argv[i+1]) == "" {
+				fmt.Fprintln(os.Stderr, "--password-version requires a value")
+				return 1
+			}
+			i++
+			passwordVersion, err := parseExplicitPasswordVersion(argv[i])
+			if err != nil {
+				fmt.Fprintln(os.Stderr, err)
+				return 1
+			}
+			args.passwordVersion = firstNonEmpty(passwordVersion, "0")
+			args.passwordVersionSet = true
 		case "--kinsta-slug":
 			if i+1 >= len(argv) || strings.TrimSpace(argv[i+1]) == "" {
 				fmt.Fprintln(os.Stderr, "--kinsta-slug requires a value")
@@ -383,6 +397,21 @@ func runSiteAdd(argv []string) int {
 			i++
 			args.phpVersion = argv[i]
 		default:
+			if strings.HasPrefix(arg, "--password-version=") {
+				value := strings.TrimPrefix(arg, "--password-version=")
+				if strings.TrimSpace(value) == "" {
+					fmt.Fprintln(os.Stderr, "--password-version requires a value")
+					return 1
+				}
+				passwordVersion, err := parseExplicitPasswordVersion(value)
+				if err != nil {
+					fmt.Fprintln(os.Stderr, err)
+					return 1
+				}
+				args.passwordVersion = firstNonEmpty(passwordVersion, "0")
+				args.passwordVersionSet = true
+				continue
+			}
 			if strings.HasPrefix(arg, "--kinsta-slug=") {
 				args.kinstaSlug = strings.TrimPrefix(arg, "--kinsta-slug=")
 				if strings.TrimSpace(args.kinstaSlug) == "" {

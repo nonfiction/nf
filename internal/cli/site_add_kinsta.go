@@ -91,6 +91,12 @@ func buildKinstaSiteAddPlan(args siteAddArgs) (kinstaSiteAddPlan, error) {
 	}
 	companyID := firstRecordString(target, "company_id", "company")
 	passwordVersion := currentProjectPasswordVersionForSite(siteSlug)
+	if args.passwordVersionSet || strings.TrimSpace(args.passwordVersion) != "" {
+		passwordVersion, err = parseExplicitPasswordVersion(args.passwordVersion)
+		if err != nil {
+			return kinstaSiteAddPlan{}, err
+		}
+	}
 	adminPassword, err := deriveProjectPassword(siteSlug, "wp-admin", passwordVersion)
 	if err != nil {
 		return kinstaSiteAddPlan{}, err

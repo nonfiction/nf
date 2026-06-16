@@ -19,16 +19,18 @@ const siteAddSlugRuleMessage = "must start with a lowercase ASCII letter, may co
 const kinstaSlugRuleMessage = "must start with a lowercase ASCII letter, end with a lowercase ASCII letter or digit, may contain only lowercase ASCII letters, digits, and hyphens, and must be 1-63 characters long. Do not use uppercase letters, underscores, dots, spaces, punctuation other than hyphens, or Unicode."
 
 type siteAddArgs struct {
-	target         string
-	site           string
-	kinstaSlug     string
-	region         string
-	phpVersion     string
-	withStaging    bool
-	execute        bool
-	dryRun         bool
-	yes            bool
-	nonInteractive bool
+	target             string
+	site               string
+	kinstaSlug         string
+	region             string
+	phpVersion         string
+	passwordVersion    string
+	passwordVersionSet bool
+	withStaging        bool
+	execute            bool
+	dryRun             bool
+	yes                bool
+	nonInteractive     bool
 }
 
 type siteEnvPlan struct {
@@ -282,6 +284,12 @@ func buildSiteAddPlan(args siteAddArgs) (siteAddPlan, error) {
 		return siteAddPlan{}, ProjectError{Msg: fmt.Sprintf("Target %q is missing an SSH user. Set linode_default_user with nf config set-linode-default-user <user>.", targetName)}
 	}
 	passwordVersion := currentProjectPasswordVersionForSite(siteSlug)
+	if args.passwordVersionSet || strings.TrimSpace(args.passwordVersion) != "" {
+		passwordVersion, err = parseExplicitPasswordVersion(args.passwordVersion)
+		if err != nil {
+			return siteAddPlan{}, err
+		}
+	}
 	adminPassword, err := deriveProjectPassword(siteSlug, "wp-admin", passwordVersion)
 	if err != nil {
 		return siteAddPlan{}, err

@@ -1,6 +1,8 @@
 package cli
 
 import (
+	"fmt"
+	"strconv"
 	"strings"
 
 	"github.com/nonfiction/nf/internal/passwords"
@@ -12,6 +14,26 @@ func normalizedPasswordVersion(value any) string {
 		return ""
 	}
 	return version
+}
+
+func parseExplicitPasswordVersion(value string) (string, error) {
+	version := strings.TrimSpace(value)
+	if version == "" {
+		return "", fmt.Errorf("password version must be an unsigned integer")
+	}
+	for _, r := range version {
+		if r < '0' || r > '9' {
+			return "", fmt.Errorf("password version %q must be an unsigned integer", value)
+		}
+	}
+	parsed, err := strconv.ParseUint(version, 10, 64)
+	if err != nil {
+		return "", fmt.Errorf("password version %q must be an unsigned integer", value)
+	}
+	if parsed == 0 {
+		return "", nil
+	}
+	return strconv.FormatUint(parsed, 10), nil
 }
 
 func deriveProjectPassword(slug, purpose, version string) (string, error) {
