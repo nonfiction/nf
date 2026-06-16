@@ -209,23 +209,66 @@ type siteDomainListDomain struct {
 }
 
 func siteDomainListDomains(record map[string]any) []siteDomainListDomain {
-	seen := map[string]bool{}
-	external := []siteDomainListDomain{}
-	addExternal := func(name, role, management, status, proxyMode string) {
+	seen := map[string]int{}
+	domains := []siteDomainListDomain{}
+	addDomain := func(name, role, management, status, proxyMode string) {
 		name = normalizeDomainName(hostnameFromURLish(name))
-		if name == "" || seen[name] {
+		if name == "" {
 			return
 		}
-		seen[name] = true
-		external = append(external, siteDomainListDomain{
+		entry := siteDomainListDomain{
 			name:       name,
 			role:       normalizeSiteDomainRole(role),
 			management: firstNonEmpty(normalizeSiteDomainManagement(management), "external"),
 			status:     normalizeSiteDomainStatus(status),
 			proxyMode:  proxyMode,
-		})
+		}
+		if i, ok := seen[name]; ok {
+			if entry.role == "primary" {
+				domains[i].role = "primary"
+			}
+			if entry.management == "internal" {
+				domains[i].management = "internal"
+			}
+			if entry.status == "active" {
+				domains[i].status = "active"
+			}
+			if entry.proxyMode != "" {
+				domains[i].proxyMode = entry.proxyMode
+			}
+			return
+		}
+		seen[name] = len(domains)
+		domains = append(domains, entry)
 	}
 	publicStatus := firstRecordString(record, "domain_state")
+	hasExternalPrimary := false
+	for _, entry := range siteDomainEntryValues(record["domains"]) {
+		if typed, ok := entry.(map[string]any); ok {
+			role := normalizeSiteDomainRole(firstRecordString(typed, "role", "type"))
+			management := firstNonEmpty(normalizeSiteDomainManagement(firstRecordString(typed, "management")), "external")
+			if management == "external" && role == "primary" {
+				hasExternalPrimary = true
+				break
+			}
+		}
+	}
+	if firstRecordString(record, "primary_domain") != "" {
+		hasExternalPrimary = true
+	}
+	if host := hostnameFromURLish(firstRecordString(record, "hostname")); host != "" && !looksLikeInternalSiteHostname(record, host) {
+		hasExternalPrimary = true
+	}
+	if host := hostnameFromURLish(firstRecordString(record, "url", "site_url", "home_url")); host != "" && !looksLikeInternalSiteHostname(record, host) {
+		hasExternalPrimary = true
+	}
+	if defaultHost := siteDomainDefaultHostname(record); defaultHost != "" {
+		role := "primary"
+		if hasExternalPrimary {
+			role = "secondary"
+		}
+		addDomain(defaultHost, role, "internal", "active", "")
+	}
 	for _, entry := range siteDomainEntryValues(record["domains"]) {
 		role := ""
 		management := ""
@@ -237,31 +280,15 @@ func siteDomainListDomains(record map[string]any) []siteDomainListDomain {
 			status = firstNonEmpty(firstRecordString(typed, "status"), status)
 			proxyMode = firstRecordString(typed, "proxy_mode")
 		}
-		addExternal(siteDomainEntryName(entry), role, management, status, proxyMode)
+		addDomain(siteDomainEntryName(entry), role, management, status, proxyMode)
 	}
-	addExternal(firstRecordString(record, "primary_domain"), "primary", "external", firstNonEmpty(publicStatus, "active"), firstRecordString(record, "proxy_mode"))
+	addDomain(firstRecordString(record, "primary_domain"), "primary", "external", firstNonEmpty(publicStatus, "active"), firstRecordString(record, "proxy_mode"))
 	if host := hostnameFromURLish(firstRecordString(record, "hostname")); !looksLikeInternalSiteHostname(record, host) {
-		addExternal(host, "primary", "external", firstNonEmpty(publicStatus, "active"), firstRecordString(record, "proxy_mode"))
+		addDomain(host, "primary", "external", firstNonEmpty(publicStatus, "active"), firstRecordString(record, "proxy_mode"))
 	}
 	if host := hostnameFromURLish(firstRecordString(record, "url", "site_url", "home_url")); !looksLikeInternalSiteHostname(record, host) {
-		addExternal(host, "primary", "external", firstNonEmpty(publicStatus, "active"), firstRecordString(record, "proxy_mode"))
+		addDomain(host, "primary", "external", firstNonEmpty(publicStatus, "active"), firstRecordString(record, "proxy_mode"))
 	}
-	hasExternalPrimary := false
-	for _, domain := range external {
-		if domain.management == "external" && domain.role == "primary" {
-			hasExternalPrimary = true
-			break
-		}
-	}
-	domains := []siteDomainListDomain{}
-	if defaultHost := siteDomainDefaultHostname(record); defaultHost != "" {
-		role := "primary"
-		if hasExternalPrimary {
-			role = "secondary"
-		}
-		domains = append(domains, siteDomainListDomain{name: defaultHost, role: role, management: "internal", status: "active"})
-	}
-	domains = append(domains, external...)
 	return domains
 }
 
@@ -687,7 +714,7 @@ func buildSiteDomainPlan(siteID, env, action string, opts siteDomainOptions) (si
 	}
 	domains := append([]string{}, opts.domains...)
 	if action == "check" && len(domains) == 0 {
-		domains = cachedSiteDomainNames(record)
+		domains = cachedExternalSiteDomainNames(record)
 		if len(domains) == 0 {
 			return siteDomainPlan{}, ProjectError{Msg: fmt.Sprintf("No cached external domains matched %q. Add a domain first or pass domains explicitly.", canonicalEnvID(siteID, env))}
 		}
@@ -716,13 +743,8 @@ func buildSiteDomainPlan(siteID, env, action string, opts siteDomainOptions) (si
 	existingPrimary := cachedExternalPrimaryDomain(record)
 	primary := action == "primary" || action == "add" && opts.primary
 	canonical := domains[0]
-	if action == "add" && !opts.primary {
-		if existingPrimary == "" {
-			return siteDomainPlan{}, ProjectError{Msg: "The first external domain for an env must be added with --primary or promoted with domain primary."}
-		}
-	}
 	if primary {
-		for _, existing := range cachedSiteDomainNames(record) {
+		for _, existing := range cachedExternalSiteDomainNames(record) {
 			if existing != canonical {
 				domains = uniqueDomainList(append(domains, existing))
 			}
@@ -741,6 +763,9 @@ func buildSiteDomainPlan(siteID, env, action string, opts siteDomainOptions) (si
 	redirectTarget := existingPrimary
 	if primary {
 		redirectTarget = canonical
+	}
+	if action == "add" && !opts.primary && firstNonEmpty(redirectTarget, currentHostname, internalHostname) == "" {
+		return siteDomainPlan{}, ProjectError{Msg: "Secondary domain add requires an existing primary or internal domain to redirect to. Add the first domain with --primary."}
 	}
 	plan := siteDomainPlan{
 		Action:           action,
@@ -1553,6 +1578,36 @@ func cachedSiteDomainNames(record map[string]any) []string {
 	}
 	for _, entry := range siteDomainEntryValues(record["domains"]) {
 		add(siteDomainEntryName(entry))
+	}
+	add(firstRecordString(record, "primary_domain"))
+	if host := hostnameFromURLish(firstRecordString(record, "hostname")); !looksLikeInternalSiteHostname(record, host) {
+		add(host)
+	}
+	if host := hostnameFromURLish(firstRecordString(record, "url", "site_url", "home_url")); !looksLikeInternalSiteHostname(record, host) {
+		add(host)
+	}
+	return values
+}
+
+func cachedExternalSiteDomainNames(record map[string]any) []string {
+	seen := map[string]bool{}
+	values := []string{}
+	add := func(value string) {
+		value = normalizeDomainName(hostnameFromURLish(value))
+		if value == "" || seen[value] {
+			return
+		}
+		seen[value] = true
+		values = append(values, value)
+	}
+	for _, entry := range siteDomainEntryValues(record["domains"]) {
+		management := "external"
+		if typed, ok := entry.(map[string]any); ok {
+			management = firstNonEmpty(normalizeSiteDomainManagement(firstRecordString(typed, "management")), "external")
+		}
+		if management == "external" {
+			add(siteDomainEntryName(entry))
+		}
 	}
 	add(firstRecordString(record, "primary_domain"))
 	if host := hostnameFromURLish(firstRecordString(record, "hostname")); !looksLikeInternalSiteHostname(record, host) {
