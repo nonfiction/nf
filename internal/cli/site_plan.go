@@ -50,19 +50,20 @@ type siteAddPlan struct {
 }
 
 type kinstaSiteAddEnvPlan struct {
-	Env      string
-	Domain   string
-	URL      string
-	Title    string
-	Branch   string
-	EnvID    string
-	DomainID string
-	Path     string
-	Database string
-	SSHHost  string
-	SSHPort  string
-	SSHUser  string
-	SSHCmd   string
+	Env           string
+	Domain        string
+	URL           string
+	Title         string
+	Branch        string
+	EnvID         string
+	DomainID      string
+	Path          string
+	Database      string
+	SSHHost       string
+	SSHPort       string
+	SSHUser       string
+	SSHCmd        string
+	DomainEntries []map[string]any
 }
 
 type kinstaSiteAddPlan struct {

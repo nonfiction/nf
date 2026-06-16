@@ -3129,12 +3129,14 @@ func TestRunSiteRefreshDiscoversKinstaRemoteSites(t *testing.T) {
 		case "GET /sites/environments/kenv-live/domains":
 			_ = json.NewEncoder(w).Encode(map[string]any{"environment": map[string]any{"site_domains": []map[string]any{
 				{"id": "kdom-live", "name": "client.kinsta.nonfiction.dev", "is_primary": false},
+				{"id": "kdom-generated", "name": "client.kinsta.cloud", "is_primary": false},
 				{"id": "kdom-www", "name": "www.client.com", "is_primary": true},
 				{"id": "kdom-apex", "name": "client.com", "is_primary": false},
 			}}})
 		case "GET /sites/environments/kenv-staging/domains":
 			_ = json.NewEncoder(w).Encode(map[string]any{"environment": map[string]any{"site_domains": []map[string]any{
 				{"id": "kdom-staging", "name": "client-staging.kinsta.nonfiction.dev", "is_primary": false},
+				{"id": "kdom-staging-generated", "name": "client-staging.kinsta.cloud", "is_primary": false},
 				{"id": "kdom-stage-public", "name": "staging.client.com", "is_primary": true},
 			}}})
 		case "GET /sites/ksite123/environments/kenv-live/ssh/config":
@@ -3167,10 +3169,11 @@ func TestRunSiteRefreshDiscoversKinstaRemoteSites(t *testing.T) {
 	}
 	for _, want := range []struct {
 		env, path, database, sshHost, sshPort, sshUser, primary string
-		domains                                                 []string
+		externalDomains                                         []string
+		internalDomains                                         []string
 	}{
-		{"live", "/www/client_123/public", "client_123", "203.0.113.10", "12345", "client_123", "www.client.com", []string{"www.client.com", "client.com"}},
-		{"staging", "/www/clientstaging_456/public", "clientstaging_456", "203.0.113.11", "12346", "clientstaging_456", "staging.client.com", []string{"staging.client.com"}},
+		{"live", "/www/client_123/public", "client_123", "203.0.113.10", "12345", "client_123", "www.client.com", []string{"www.client.com", "client.com"}, []string{"client.kinsta.nonfiction.dev", "client.kinsta.cloud"}},
+		{"staging", "/www/clientstaging_456/public", "clientstaging_456", "203.0.113.11", "12346", "clientstaging_456", "staging.client.com", []string{"staging.client.com"}, []string{"client-staging.kinsta.nonfiction.dev", "client-staging.kinsta.cloud"}},
 	} {
 		var record map[string]any
 		for _, candidate := range records {
@@ -3206,7 +3209,7 @@ func TestRunSiteRefreshDiscoversKinstaRemoteSites(t *testing.T) {
 		if _, ok := record["domain_state"]; ok {
 			t.Fatalf("%s domain_state should not be written in new cache model: %#v", want.env, record)
 		}
-		for _, domain := range want.domains {
+		for _, domain := range append(append([]string{}, want.externalDomains...), want.internalDomains...) {
 			if !recordHasSiteDomain(record, domain) {
 				t.Fatalf("%s cached domains missing %q in %#v", want.env, domain, record["domains"])
 			}
@@ -3217,13 +3220,22 @@ func TestRunSiteRefreshDiscoversKinstaRemoteSites(t *testing.T) {
 			if recordValueString(domain["name"]) == want.primary {
 				role = "primary"
 			}
-			if recordValueString(domain["role"]) != role || recordValueString(domain["management"]) != "external" || recordValueString(domain["status"]) != "active" {
-				t.Fatalf("%s domain entry = %#v, want %s external active", want.env, domain, role)
+			management := "external"
+			if strings.Contains(recordValueString(domain["name"]), ".kinsta.") {
+				management = "internal"
+			}
+			if recordValueString(domain["role"]) != role || recordValueString(domain["management"]) != management || recordValueString(domain["status"]) != "active" {
+				t.Fatalf("%s domain entry = %#v, want %s %s active", want.env, domain, role, management)
 			}
 		}
-		for _, internal := range []string{"client.kinsta.nonfiction.dev", "client-staging.kinsta.nonfiction.dev"} {
-			if recordHasSiteDomain(record, internal) {
-				t.Fatalf("%s cached domains include internal domain %q in %#v", want.env, internal, record["domains"])
+		listOutput := captureStdout(t, func() {
+			if got := Run([]string{"domain", "list", canonicalEnvID("client.kinsta", want.env)}); got != 0 {
+				t.Fatalf("Run(domain list %s) = %d, want 0", want.env, got)
+			}
+		})
+		for _, internal := range want.internalDomains {
+			if !strings.Contains(listOutput, internal) || !strings.Contains(listOutput, "internal") {
+				t.Fatalf("%s domain list output missing internal domain %q:\n%s", want.env, internal, listOutput)
 			}
 		}
 	}
@@ -4660,6 +4672,78 @@ func TestRunDomainKinstaAddPrimaryExecutePrintsDNSAndCachesDomains(t *testing.T)
 	}
 	if got := mapStringAtPath(record, "kinsta", "domain_id"); got != "kdom-www" {
 		t.Fatalf("kinsta.domain_id = %q, want primary public domain id", got)
+	}
+}
+
+func TestRunDomainKinstaAddSecondaryAllowsInternalPrimary(t *testing.T) {
+	stateDir := t.TempDir()
+	t.Setenv("NF_STATE_HOME", stateDir)
+	if err := state.SaveStateRecords("sites", []map[string]any{{
+		"provider": "kinsta",
+		"site_id":  "client.kinsta",
+		"env_id":   "client.kinsta:live",
+		"name":     "client",
+		"env":      "live",
+		"target":   "kinsta",
+		"hostname": "client.kinsta.nonfiction.dev",
+		"url":      "https://client.kinsta.nonfiction.dev",
+		"path":     "/www/client/public",
+		"ssh":      map[string]any{"host": "203.0.113.10", "port": "12345", "user": "client"},
+		"kinsta":   map[string]any{"site_id": "ksite123", "environment_id": "kenv-live", "domain_id": "kdom-internal"},
+	}}); err != nil {
+		t.Fatalf("SaveStateRecords(sites) error = %v", err)
+	}
+
+	var capturedPlan siteDomainPlan
+	oldPrepare := kinstaPrepareDomainFn
+	oldPrimary := kinstaPrimaryDomainFn
+	kinstaPrepareDomainFn = func(plan siteDomainPlan) (siteDomainProviderResult, error) {
+		capturedPlan = plan
+		return siteDomainProviderResult{Domains: []siteDomainProviderDomain{{Name: "oldwebsite.com", Role: "secondary", DomainID: "kdom-old"}}}, nil
+	}
+	kinstaPrimaryDomainFn = func(plan siteDomainPlan) (siteDomainProviderResult, error) {
+		t.Fatalf("kinstaPrimaryDomainFn should not be called for secondary add")
+		return siteDomainProviderResult{}, nil
+	}
+	t.Cleanup(func() {
+		kinstaPrepareDomainFn = oldPrepare
+		kinstaPrimaryDomainFn = oldPrimary
+	})
+
+	output := captureStdout(t, func() {
+		if got := Run([]string{"domain", "add", "client.kinsta:live", "oldwebsite.com", "--execute", "--yes", "--non-interactive"}); got != 0 {
+			t.Fatalf("Run(domain add secondary kinsta) = %d, want 0", got)
+		}
+	})
+	for _, want := range []string{"Add domain plan:", "secondary: oldwebsite.com", "redirects: https://client.kinsta.nonfiction.dev", "Domain added."} {
+		if !strings.Contains(output, want) {
+			t.Fatalf("domain add secondary output missing %q:\n%s", want, output)
+		}
+	}
+	if capturedPlan.Primary || capturedPlan.Canonical != "oldwebsite.com" || capturedPlan.RedirectTarget != "client.kinsta.nonfiction.dev" {
+		t.Fatalf("captured plan = %#v, want secondary oldwebsite.com redirecting to internal primary", capturedPlan)
+	}
+	records, err := state.LoadStateRecords("sites")
+	if err != nil {
+		t.Fatalf("LoadStateRecords(sites) error = %v", err)
+	}
+	record := records[0]
+	if got := recordValueString(record["hostname"]); got != "client.kinsta.nonfiction.dev" {
+		t.Fatalf("hostname = %q, want unchanged internal hostname", got)
+	}
+	if got := recordValueString(record["url"]); got != "https://client.kinsta.nonfiction.dev" {
+		t.Fatalf("url = %q, want unchanged internal url", got)
+	}
+	if got := recordValueString(record["primary_domain"]); got != "" {
+		t.Fatalf("primary_domain = %q, want unset", got)
+	}
+	domains := siteDomainEntryValues(record["domains"])
+	if len(domains) != 1 {
+		t.Fatalf("domains = %#v, want one secondary external domain", record["domains"])
+	}
+	domain := siteDomainEntryMap(domains[0])
+	if recordValueString(domain["name"]) != "oldwebsite.com" || recordValueString(domain["role"]) != "secondary" || recordValueString(domain["management"]) != "external" || recordValueString(domain["domain_id"]) != "kdom-old" {
+		t.Fatalf("domain entry = %#v, want oldwebsite.com secondary external", domain)
 	}
 }
 

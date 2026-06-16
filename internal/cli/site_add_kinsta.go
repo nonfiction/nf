@@ -156,7 +156,7 @@ func appendSiteAddRecords(plan siteAddPlan) error {
 }
 
 func kinstaSiteAddRecord(plan kinstaSiteAddPlan, env kinstaSiteAddEnvPlan, result kinstaProvisionResult) map[string]any {
-	return map[string]any{
+	record := map[string]any{
 		"provider":    "kinsta",
 		"env_id":      canonicalEnvID(plan.SiteID, env.Env),
 		"site_id":     plan.SiteID,
@@ -177,6 +177,10 @@ func kinstaSiteAddRecord(plan kinstaSiteAddPlan, env kinstaSiteAddEnvPlan, resul
 			"branch":         env.Branch,
 		},
 	}
+	if len(env.DomainEntries) > 0 {
+		record["domains"] = env.DomainEntries
+	}
+	return record
 }
 
 func upsertKinstaSiteAddRecords(plan kinstaSiteAddPlan, result kinstaProvisionResult) error {
@@ -439,6 +443,11 @@ func provisionKinstaSelectedEnvs(ctx context.Context, client *kinsta.Client, dns
 		}
 		env.EnvID = remoteEnv.ID
 		env.DomainID = domain.ID
+		domains, err := client.ListDomains(ctx, remoteEnv.ID)
+		if err != nil {
+			return kinstaProvisionResult{}, err
+		}
+		env.DomainEntries = kinstaDomainCacheEntries(domains, kinsta.Domain{ID: env.DomainID, Name: env.Domain, IsPrimary: true})
 		if cfg, err := client.SFTPConfig(ctx, result.SiteID, remoteEnv.ID); err == nil {
 			env.SSHHost = cfg.Host
 			env.SSHPort = firstNonEmpty(cfg.Port, "22")

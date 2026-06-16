@@ -409,17 +409,28 @@ func kinstaDomainCacheEntries(domains []kinsta.Domain, primary kinsta.Domain) []
 	seen := map[string]bool{}
 	primaryID := strings.TrimSpace(primary.ID)
 	primaryName := normalizeDomainName(domainName(primary))
+	hasListedPrimary := false
+	for _, domain := range domains {
+		if domain.IsPrimary {
+			hasListedPrimary = true
+			break
+		}
+	}
 	for _, domain := range domains {
 		name := normalizeDomainName(domainName(domain))
-		if name == "" || seen[name] || kinstaInternalDomainName(name) {
+		if name == "" || seen[name] {
 			continue
 		}
 		seen[name] = true
 		role := "secondary"
-		if domain.IsPrimary || (primaryID != "" && domain.ID == primaryID) || (primaryName != "" && name == primaryName) {
+		if domain.IsPrimary || !hasListedPrimary && ((primaryID != "" && domain.ID == primaryID) || (primaryName != "" && name == primaryName)) {
 			role = "primary"
 		}
-		entry := map[string]any{"name": name, "role": role, "management": "external", "status": "active"}
+		management := "external"
+		if kinstaInternalDomainName(name) {
+			management = "internal"
+		}
+		entry := map[string]any{"name": name, "role": role, "management": management, "status": "active"}
 		if domain.ID != "" {
 			entry["domain_id"] = domain.ID
 		}
@@ -429,6 +440,18 @@ func kinstaDomainCacheEntries(domains []kinsta.Domain, primary kinsta.Domain) []
 }
 
 func kinstaInternalDomain(domains []kinsta.Domain) string {
+	for _, domain := range domains {
+		name := normalizeDomainName(domainName(domain))
+		if name != "" && domain.IsPrimary && kinstaInternalDomainName(name) {
+			return name
+		}
+	}
+	for _, domain := range domains {
+		name := normalizeDomainName(domainName(domain))
+		if name != "" && kinstaInternalDomainName(name) && !strings.HasSuffix(name, ".kinsta.cloud") {
+			return name
+		}
+	}
 	for _, domain := range domains {
 		name := normalizeDomainName(domainName(domain))
 		if name != "" && kinstaInternalDomainName(name) {
