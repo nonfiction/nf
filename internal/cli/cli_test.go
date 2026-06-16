@@ -3130,14 +3130,16 @@ func TestRunSiteRefreshDiscoversKinstaRemoteSites(t *testing.T) {
 			_ = json.NewEncoder(w).Encode(map[string]any{"environment": map[string]any{"site_domains": []map[string]any{
 				{"id": "kdom-live", "name": "client.kinsta.nonfiction.dev", "is_primary": false},
 				{"id": "kdom-generated", "name": "client.kinsta.cloud", "is_primary": false},
-				{"id": "kdom-www", "name": "www.client.com", "is_primary": true},
+				{"id": "kdom-generated-wildcard", "name": "*.client.kinsta.cloud", "is_primary": false},
+				{"id": "kdom-www", "name": "www.client.com", "is_primary": true, "status": "verified"},
 				{"id": "kdom-apex", "name": "client.com", "is_primary": false},
 			}}})
 		case "GET /sites/environments/kenv-staging/domains":
 			_ = json.NewEncoder(w).Encode(map[string]any{"environment": map[string]any{"site_domains": []map[string]any{
 				{"id": "kdom-staging", "name": "client-staging.kinsta.nonfiction.dev", "is_primary": false},
 				{"id": "kdom-staging-generated", "name": "client-staging.kinsta.cloud", "is_primary": false},
-				{"id": "kdom-stage-public", "name": "staging.client.com", "is_primary": true},
+				{"id": "kdom-staging-generated-wildcard", "name": "*.client-staging.kinsta.cloud", "is_primary": false},
+				{"id": "kdom-stage-public", "name": "staging.client.com", "is_primary": true, "status": "pending_dns"},
 			}}})
 		case "GET /sites/ksite123/environments/kenv-live/ssh/config":
 			_ = json.NewEncoder(w).Encode(map[string]any{"host": "203.0.113.10", "port": "12345", "user": "client_123", "ssh_command": "ssh client_123@203.0.113.10 -p 12345"})
@@ -3169,11 +3171,11 @@ func TestRunSiteRefreshDiscoversKinstaRemoteSites(t *testing.T) {
 	}
 	for _, want := range []struct {
 		env, path, database, sshHost, sshPort, sshUser, primary string
-		externalDomains                                         []string
+		externalDomains                                         map[string]string
 		internalDomains                                         []string
 	}{
-		{"live", "/www/client_123/public", "client_123", "203.0.113.10", "12345", "client_123", "www.client.com", []string{"www.client.com", "client.com"}, []string{"client.kinsta.nonfiction.dev", "client.kinsta.cloud"}},
-		{"staging", "/www/clientstaging_456/public", "clientstaging_456", "203.0.113.11", "12346", "clientstaging_456", "staging.client.com", []string{"staging.client.com"}, []string{"client-staging.kinsta.nonfiction.dev", "client-staging.kinsta.cloud"}},
+		{"live", "/www/client_123/public", "client_123", "203.0.113.10", "12345", "client_123", "www.client.com", map[string]string{"www.client.com": "verified", "client.com": "pending"}, []string{"client.kinsta.nonfiction.dev", "client.kinsta.cloud"}},
+		{"staging", "/www/clientstaging_456/public", "clientstaging_456", "203.0.113.11", "12346", "clientstaging_456", "staging.client.com", map[string]string{"staging.client.com": "pending"}, []string{"client-staging.kinsta.nonfiction.dev", "client-staging.kinsta.cloud"}},
 	} {
 		var record map[string]any
 		for _, candidate := range records {
@@ -3209,23 +3211,34 @@ func TestRunSiteRefreshDiscoversKinstaRemoteSites(t *testing.T) {
 		if _, ok := record["domain_state"]; ok {
 			t.Fatalf("%s domain_state should not be written in new cache model: %#v", want.env, record)
 		}
-		for _, domain := range append(append([]string{}, want.externalDomains...), want.internalDomains...) {
+		for domain := range want.externalDomains {
+			if !recordHasSiteDomain(record, domain) {
+				t.Fatalf("%s cached domains missing %q in %#v", want.env, domain, record["domains"])
+			}
+		}
+		for _, domain := range want.internalDomains {
 			if !recordHasSiteDomain(record, domain) {
 				t.Fatalf("%s cached domains missing %q in %#v", want.env, domain, record["domains"])
 			}
 		}
 		for _, entry := range siteDomainEntryValues(record["domains"]) {
 			domain := siteDomainEntryMap(entry)
+			name := recordValueString(domain["name"])
+			if strings.HasPrefix(name, "*.") {
+				t.Fatalf("%s cached domains include wildcard %q in %#v", want.env, name, record["domains"])
+			}
 			role := "secondary"
-			if recordValueString(domain["name"]) == want.primary {
+			if name == want.primary {
 				role = "primary"
 			}
 			management := "external"
-			if strings.Contains(recordValueString(domain["name"]), ".kinsta.") {
+			status := want.externalDomains[name]
+			if strings.Contains(name, ".kinsta.") {
 				management = "internal"
+				status = "active"
 			}
-			if recordValueString(domain["role"]) != role || recordValueString(domain["management"]) != management || recordValueString(domain["status"]) != "active" {
-				t.Fatalf("%s domain entry = %#v, want %s %s active", want.env, domain, role, management)
+			if recordValueString(domain["role"]) != role || recordValueString(domain["management"]) != management || recordValueString(domain["status"]) != status {
+				t.Fatalf("%s domain entry = %#v, want %s %s %s", want.env, domain, role, management, status)
 			}
 		}
 		listOutput := captureStdout(t, func() {
@@ -3237,6 +3250,9 @@ func TestRunSiteRefreshDiscoversKinstaRemoteSites(t *testing.T) {
 			if !strings.Contains(listOutput, internal) || !strings.Contains(listOutput, "internal") {
 				t.Fatalf("%s domain list output missing internal domain %q:\n%s", want.env, internal, listOutput)
 			}
+		}
+		if strings.Contains(listOutput, "*.") {
+			t.Fatalf("%s domain list output contains wildcard:\n%s", want.env, listOutput)
 		}
 	}
 }
@@ -4806,7 +4822,6 @@ func TestRunSiteDomainListShowsCachedDomainsAndFilters(t *testing.T) {
 		"status",
 		"provider",
 		"proxy",
-		"url",
 		"client.app1-linode.nonfiction.dev",
 		"client-staging.app1-linode.nonfiction.dev",
 		"other.kinsta.nonfiction.dev",
@@ -4826,9 +4841,6 @@ func TestRunSiteDomainListShowsCachedDomainsAndFilters(t *testing.T) {
 		"linode",
 		"kinsta",
 		"cloudflare",
-		"https://client.app1-linode.nonfiction.dev",
-		"https://staging.client.com",
-		"https://www.other.com",
 	} {
 		if !strings.Contains(output, want) {
 			t.Fatalf("domain list output missing %q:\n%s", want, output)
@@ -4836,6 +4848,14 @@ func TestRunSiteDomainListShowsCachedDomainsAndFilters(t *testing.T) {
 	}
 	if firstLine, _, _ := strings.Cut(output, "\n"); strings.Contains(firstLine, "site") {
 		t.Fatalf("domain list header contains old site column:\n%s", output)
+	}
+	if firstLine, _, _ := strings.Cut(output, "\n"); strings.Contains(firstLine, "url") {
+		t.Fatalf("domain list header contains url column:\n%s", output)
+	}
+	for _, notWant := range []string{"https://client.app1-linode.nonfiction.dev", "https://staging.client.com", "https://www.other.com"} {
+		if strings.Contains(output, notWant) {
+			t.Fatalf("domain list output contains URL %q:\n%s", notWant, output)
+		}
 	}
 	for _, notWant := range []string{"type", "state", "canonical", "redirect", "default", "managed", "prepared"} {
 		if strings.Contains(output, notWant) {

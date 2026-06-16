@@ -418,7 +418,7 @@ func kinstaDomainCacheEntries(domains []kinsta.Domain, primary kinsta.Domain) []
 	}
 	for _, domain := range domains {
 		name := normalizeDomainName(domainName(domain))
-		if name == "" || seen[name] {
+		if name == "" || siteDomainWildcardName(name) || seen[name] {
 			continue
 		}
 		seen[name] = true
@@ -427,16 +427,41 @@ func kinstaDomainCacheEntries(domains []kinsta.Domain, primary kinsta.Domain) []
 			role = "primary"
 		}
 		management := "external"
+		status := kinstaDomainStatus(domain, false)
 		if kinstaInternalDomainName(name) {
 			management = "internal"
+			status = kinstaDomainStatus(domain, true)
 		}
-		entry := map[string]any{"name": name, "role": role, "management": management, "status": "active"}
+		entry := map[string]any{"name": name, "role": role, "management": management, "status": status}
 		if domain.ID != "" {
 			entry["domain_id"] = domain.ID
 		}
 		entries = append(entries, entry)
 	}
 	return entries
+}
+
+func kinstaDomainStatus(domain kinsta.Domain, internal bool) string {
+	status := normalizeSiteDomainStatus(firstNonEmpty(domain.Status, domain.State, domain.DomainStatus, domain.DNSStatus, domain.VerificationStatus))
+	if status != "pending" {
+		return status
+	}
+	if domain.IsVerified != nil {
+		if *domain.IsVerified {
+			return "active"
+		}
+		return "pending"
+	}
+	if domain.IsPointing != nil {
+		if *domain.IsPointing {
+			return "active"
+		}
+		return "pending"
+	}
+	if internal {
+		return "active"
+	}
+	return "pending"
 }
 
 func kinstaInternalDomain(domains []kinsta.Domain) string {

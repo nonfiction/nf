@@ -163,7 +163,7 @@ func cmdSiteDomainList(filter string) int {
 		fmt.Fprintln(os.Stderr, err)
 		return 1
 	}
-	rows := [][]string{{"domain", "env", "role", "management", "status", "provider", "proxy", "url"}}
+	rows := [][]string{{"domain", "env", "role", "management", "status", "provider", "proxy"}}
 	for _, record := range records {
 		if resolved != "" && !siteDomainListRecordMatches(record, resolved) {
 			continue
@@ -177,7 +177,6 @@ func cmdSiteDomainList(filter string) int {
 				domain.status,
 				recordValueString(record["provider"]),
 				displaySiteDomainProxyMode(firstNonEmpty(domain.proxyMode, firstRecordString(record, "proxy_mode"))),
-				firstRecordString(record, "url", "site_url", "home_url"),
 			})
 		}
 	}
@@ -213,7 +212,7 @@ func siteDomainListDomains(record map[string]any) []siteDomainListDomain {
 	domains := []siteDomainListDomain{}
 	addDomain := func(name, role, management, status, proxyMode string) {
 		name = normalizeDomainName(hostnameFromURLish(name))
-		if name == "" {
+		if name == "" || siteDomainWildcardName(name) {
 			return
 		}
 		entry := siteDomainListDomain{
@@ -230,8 +229,8 @@ func siteDomainListDomains(record map[string]any) []siteDomainListDomain {
 			if entry.management == "internal" {
 				domains[i].management = "internal"
 			}
-			if entry.status == "active" {
-				domains[i].status = "active"
+			if domains[i].status == "" && entry.status != "" {
+				domains[i].status = entry.status
 			}
 			if entry.proxyMode != "" {
 				domains[i].proxyMode = entry.proxyMode
@@ -318,6 +317,14 @@ func normalizeSiteDomainStatus(value string) string {
 	switch strings.ToLower(strings.TrimSpace(value)) {
 	case "active", "verified", "unverified", "pending":
 		return strings.ToLower(strings.TrimSpace(value))
+	case "connected", "pointed", "dns_verified":
+		return "active"
+	case "pending_dns", "dns_pending", "needs_dns", "requires_dns", "not_pointed", "not-pointed", "verifying", "waiting":
+		return "pending"
+	case "failed", "error", "invalid":
+		return "error"
+	case "inactive", "disabled":
+		return "inactive"
 	case "primary", "managed", "ready":
 		return "active"
 	case "prepared", "prepare":
@@ -325,6 +332,10 @@ func normalizeSiteDomainStatus(value string) string {
 	default:
 		return "pending"
 	}
+}
+
+func siteDomainWildcardName(name string) bool {
+	return strings.HasPrefix(normalizeDomainName(name), "*.")
 }
 
 func parseSiteDomainActionArgs(action string, argv []string) (string, siteDomainOptions, bool) {
