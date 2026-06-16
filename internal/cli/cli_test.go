@@ -3644,6 +3644,213 @@ func TestBuildKinstaSiteAddPlanUsesConfiguredBaseDomain(t *testing.T) {
 	}
 }
 
+func TestEnsureKinstaSiteRejectsResolvableKinstaCloudSlugBeforeCreate(t *testing.T) {
+	createCalls := 0
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		switch r.Method + " " + r.URL.Path {
+		case "GET /sites":
+			_ = json.NewEncoder(w).Encode(map[string]any{"company": map[string]any{"sites": []map[string]any{}}})
+		case "POST /sites":
+			createCalls++
+			_ = json.NewEncoder(w).Encode(map[string]any{"operation_id": "op-create-site", "status": 202})
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	t.Cleanup(server.Close)
+
+	lookupCalls := 0
+	oldLookup := kinstaLookupHost
+	kinstaLookupHost = func(host string) ([]string, error) {
+		lookupCalls++
+		if host != "nonfiction.kinsta.cloud" {
+			t.Fatalf("lookup host = %q, want nonfiction.kinsta.cloud", host)
+		}
+		return []string{"203.0.113.10"}, nil
+	}
+	t.Cleanup(func() { kinstaLookupHost = oldLookup })
+
+	client := kinsta.NewClient(server.URL, "kinsta-token")
+	_, err := ensureKinstaSite(context.Background(), client, kinstaSiteAddPlan{Site: "nonfiction", Region: "ca-toronto-1"}, "company-123")
+	if err == nil {
+		t.Fatal("ensureKinstaSite() error = nil, want unavailable slug error")
+	}
+	for _, want := range []string{"Kinsta slug \"nonfiction\" appears unavailable", "no matching Kinsta site was found in this account", "nonfiction.kinsta.cloud resolves", "Choose another slug"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Fatalf("ensureKinstaSite() error missing %q:\n%s", want, err)
+		}
+	}
+	if lookupCalls != 1 || createCalls != 0 {
+		t.Fatalf("lookupCalls=%d createCalls=%d, want 1 and 0", lookupCalls, createCalls)
+	}
+}
+
+func TestEnsureKinstaSiteAllowsNXDOMAINKinstaCloudSlugBeforeCreate(t *testing.T) {
+	siteListCalls := 0
+	createCalls := 0
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		switch r.Method + " " + r.URL.Path {
+		case "GET /sites":
+			siteListCalls++
+			sites := []map[string]any{}
+			if siteListCalls > 1 {
+				sites = []map[string]any{{"id": "ksite123", "name": "client", "display_name": "client"}}
+			}
+			_ = json.NewEncoder(w).Encode(map[string]any{"company": map[string]any{"sites": sites}})
+		case "POST /sites":
+			createCalls++
+			_ = json.NewEncoder(w).Encode(map[string]any{"operation_id": "op-create-site", "status": 202})
+		case "GET /operations/op-create-site":
+			_ = json.NewEncoder(w).Encode(map[string]any{"status": 200, "message": "Successfully finished request"})
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	t.Cleanup(server.Close)
+
+	lookupCalls := 0
+	oldLookup := kinstaLookupHost
+	kinstaLookupHost = func(host string) ([]string, error) {
+		lookupCalls++
+		if host != "client.kinsta.cloud" {
+			t.Fatalf("lookup host = %q, want client.kinsta.cloud", host)
+		}
+		return nil, &net.DNSError{Err: "no such host", Name: host, IsNotFound: true}
+	}
+	t.Cleanup(func() { kinstaLookupHost = oldLookup })
+
+	client := kinsta.NewClient(server.URL, "kinsta-token")
+	site, err := ensureKinstaSite(context.Background(), client, kinstaSiteAddPlan{Site: "client", Region: "ca-toronto-1"}, "company-123")
+	if err != nil {
+		t.Fatalf("ensureKinstaSite() error = %v", err)
+	}
+	if site.ID != "ksite123" || site.Name != "client" {
+		t.Fatalf("ensureKinstaSite() = %#v, want ksite123 client", site)
+	}
+	if lookupCalls != 1 || createCalls != 1 || siteListCalls != 2 {
+		t.Fatalf("lookupCalls=%d createCalls=%d siteListCalls=%d, want 1, 1, 2", lookupCalls, createCalls, siteListCalls)
+	}
+}
+
+func TestEnsureKinstaSiteSkipsKinstaCloudPreflightForExistingExactSlug(t *testing.T) {
+	createCalls := 0
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		switch r.Method + " " + r.URL.Path {
+		case "GET /sites":
+			_ = json.NewEncoder(w).Encode(map[string]any{"company": map[string]any{"sites": []map[string]any{{"id": "ksite123", "name": "client", "display_name": "client"}}}})
+		case "POST /sites":
+			createCalls++
+			_ = json.NewEncoder(w).Encode(map[string]any{"operation_id": "op-create-site", "status": 202})
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	t.Cleanup(server.Close)
+
+	lookupCalls := 0
+	oldLookup := kinstaLookupHost
+	kinstaLookupHost = func(host string) ([]string, error) {
+		lookupCalls++
+		return []string{"203.0.113.10"}, nil
+	}
+	t.Cleanup(func() { kinstaLookupHost = oldLookup })
+
+	client := kinsta.NewClient(server.URL, "kinsta-token")
+	site, err := ensureKinstaSite(context.Background(), client, kinstaSiteAddPlan{Site: "client", Region: "ca-toronto-1"}, "company-123")
+	if err != nil {
+		t.Fatalf("ensureKinstaSite() error = %v", err)
+	}
+	if site.ID != "ksite123" || site.Name != "client" {
+		t.Fatalf("ensureKinstaSite() = %#v, want ksite123 client", site)
+	}
+	if lookupCalls != 0 || createCalls != 0 {
+		t.Fatalf("lookupCalls=%d createCalls=%d, want 0 and 0", lookupCalls, createCalls)
+	}
+}
+
+func TestEnsureKinstaSiteRejectsAssignedSlugMismatch(t *testing.T) {
+	siteListCalls := 0
+	createCalls := 0
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		switch r.Method + " " + r.URL.Path {
+		case "GET /sites":
+			siteListCalls++
+			sites := []map[string]any{}
+			if siteListCalls > 1 {
+				sites = []map[string]any{{"id": "ksite123", "name": "sanjelv", "display_name": "sanjel"}}
+			}
+			_ = json.NewEncoder(w).Encode(map[string]any{"company": map[string]any{"sites": sites}})
+		case "POST /sites":
+			createCalls++
+			var payload map[string]any
+			if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
+				t.Fatalf("create site decode error = %v", err)
+			}
+			if payload["display_name"] != "sanjel" {
+				t.Fatalf("create site display_name = %#v, want sanjel", payload["display_name"])
+			}
+			_ = json.NewEncoder(w).Encode(map[string]any{"operation_id": "op-create-site", "status": 202})
+		case "GET /operations/op-create-site":
+			_ = json.NewEncoder(w).Encode(map[string]any{"status": 200, "message": "Successfully finished request"})
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	t.Cleanup(server.Close)
+	oldLookup := kinstaLookupHost
+	kinstaLookupHost = func(host string) ([]string, error) {
+		return nil, &net.DNSError{Err: "no such host", Name: host, IsNotFound: true}
+	}
+	t.Cleanup(func() { kinstaLookupHost = oldLookup })
+
+	client := kinsta.NewClient(server.URL, "kinsta-token")
+	_, err := ensureKinstaSite(context.Background(), client, kinstaSiteAddPlan{Site: "sanjel", Region: "ca-toronto-1"}, "company-123")
+	if err == nil {
+		t.Fatal("ensureKinstaSite() error = nil, want slug mismatch error")
+	}
+	for _, want := range []string{"Kinsta returned site slug \"sanjelv\" instead of requested \"sanjel\"", "ksite123", "cannot safely cache", "Delete the mismatched Kinsta site"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Fatalf("ensureKinstaSite() error missing %q:\n%s", want, err)
+		}
+	}
+	if siteListCalls != 2 || createCalls != 1 {
+		t.Fatalf("siteListCalls=%d createCalls=%d, want 2 and 1", siteListCalls, createCalls)
+	}
+}
+
+func TestEnsureKinstaSiteRejectsExistingDisplayNameSlugMismatch(t *testing.T) {
+	createCalls := 0
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		switch r.Method + " " + r.URL.Path {
+		case "GET /sites":
+			_ = json.NewEncoder(w).Encode(map[string]any{"company": map[string]any{"sites": []map[string]any{{"id": "ksite123", "name": "sanjelv", "display_name": "sanjel"}}}})
+		case "POST /sites":
+			createCalls++
+			_ = json.NewEncoder(w).Encode(map[string]any{"operation_id": "op-create-site", "status": 202})
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	t.Cleanup(server.Close)
+
+	client := kinsta.NewClient(server.URL, "kinsta-token")
+	_, err := ensureKinstaSite(context.Background(), client, kinstaSiteAddPlan{Site: "sanjel", Region: "ca-toronto-1"}, "company-123")
+	if err == nil {
+		t.Fatal("ensureKinstaSite() error = nil, want slug mismatch error")
+	}
+	if !strings.Contains(err.Error(), "Kinsta returned site slug \"sanjelv\" instead of requested \"sanjel\"") {
+		t.Fatalf("ensureKinstaSite() error = %v", err)
+	}
+	if createCalls != 0 {
+		t.Fatalf("createCalls = %d, want 0", createCalls)
+	}
+}
+
 func TestRunSiteAddKinstaExecuteCachesEnvs(t *testing.T) {
 	configDir := t.TempDir()
 	stateDir := t.TempDir()

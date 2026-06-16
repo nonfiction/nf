@@ -900,8 +900,16 @@ func ensureKinstaSite(ctx context.Context, client *kinsta.Client, plan kinstaSit
 	if err != nil {
 		return kinsta.Site{}, err
 	}
-	if site, ok := kinsta.FindSite(sites, plan.Site); ok {
+	if site, ok := findKinstaSiteForRequestedSlug(sites, plan.Site); ok {
+		if err := validateKinstaSiteReturnedSlug(site, plan.Site); err != nil {
+			return kinsta.Site{}, err
+		}
 		return site, nil
+	}
+	// Only probe the shared *.kinsta.cloud namespace after confirming the slug
+	// is not already an exact canonical site in this Kinsta account.
+	if err := verifyKinstaCloudSlugAvailable(plan.Site); err != nil {
+		return kinsta.Site{}, err
 	}
 	fmt.Printf("Creating Kinsta site %s in %s...\n", plan.Site, plan.Region)
 	opID, err := client.CreateSite(ctx, kinsta.CreateSiteRequest{
@@ -929,10 +937,52 @@ func ensureKinstaSite(ctx context.Context, client *kinsta.Client, plan kinstaSit
 	if err != nil {
 		return kinsta.Site{}, err
 	}
-	if site, ok := kinsta.FindSite(sites, plan.Site); ok {
+	if site, ok := findKinstaSiteForRequestedSlug(sites, plan.Site); ok {
+		if err := validateKinstaSiteReturnedSlug(site, plan.Site); err != nil {
+			return kinsta.Site{}, err
+		}
 		return site, nil
 	}
 	return kinsta.Site{}, fmt.Errorf("Kinsta site %q was created but was not found in site list", plan.Site)
+}
+
+func findKinstaSiteForRequestedSlug(sites []kinsta.Site, requested string) (kinsta.Site, bool) {
+	requested = strings.TrimSpace(requested)
+	for _, site := range sites {
+		if strings.TrimSpace(site.Name) == requested {
+			return site, true
+		}
+	}
+	return kinsta.FindSite(sites, requested)
+}
+
+func validateKinstaSiteReturnedSlug(site kinsta.Site, requested string) error {
+	requested = strings.TrimSpace(requested)
+	actual := strings.TrimSpace(site.Name)
+	if actual == "" {
+		return fmt.Errorf("Kinsta did not return a canonical site slug for requested site %q (site id %s). nf cannot safely cache this site or configure domains for the requested slug.", requested, firstNonEmpty(site.ID, "unknown"))
+	}
+	if actual != requested {
+		return fmt.Errorf("Kinsta returned site slug %q instead of requested %q (site id %s). nf cannot safely cache this site or configure domains for the requested slug. Delete the mismatched Kinsta site in MyKinsta, then rerun with an available slug.", actual, requested, firstNonEmpty(site.ID, "unknown"))
+	}
+	return nil
+}
+
+func verifyKinstaCloudSlugAvailable(site string) error {
+	site = strings.TrimSpace(site)
+	host := site + ".kinsta.cloud"
+	addresses, err := kinstaLookupHost(host)
+	if err == nil {
+		if len(addresses) > 0 {
+			return fmt.Errorf("Kinsta slug %q appears unavailable because no matching Kinsta site was found in this account and %s resolves. Choose another slug, or verify availability in MyKinsta before retrying.", site, host)
+		}
+		return fmt.Errorf("Kinsta slug %q appears unavailable because no matching Kinsta site was found in this account and %s resolved without addresses. Choose another slug, or verify availability in MyKinsta before retrying.", site, host)
+	}
+	var dnsErr *net.DNSError
+	if errors.As(err, &dnsErr) && dnsErr.IsNotFound {
+		return nil
+	}
+	return fmt.Errorf("Could not verify whether Kinsta slug %q is available because DNS lookup for %s failed: %w. Retry, or manually check %s before running site add.", site, host, err, host)
 }
 
 func ensureKinstaLiveEnvironment(ctx context.Context, client *kinsta.Client, siteID, phpVersion string) (kinsta.Environment, error) {
