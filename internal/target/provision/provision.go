@@ -1170,8 +1170,8 @@ write_files:
     permissions: '0644'
     content: |
       memory_limit = 256M
-      upload_max_filesize = 64M
-      post_max_size = 64M
+      upload_max_filesize = 1024M
+      post_max_size = 1024M
       max_execution_time = 120
       max_input_time = 120
       max_input_vars = 5000
@@ -1311,7 +1311,7 @@ write_files:
 
       cat >/etc/nginx/sites-available/nf-adminer <<'EOF'
       server { listen 80; listen [::]:80; server_name __ADMINER_HOSTNAME__; return 301 https://__ADMINER_HOSTNAME__$request_uri; }
-      server { listen 443 ssl http2; listen [::]:443 ssl http2; server_name __ADMINER_HOSTNAME__; include /etc/nginx/snippets/nf-wildcard-cert.conf; include /etc/nginx/snippets/nf-security-headers.conf; root /var/www/shared/adminer; index index.php; access_log /var/log/nginx/sites/adminer.access.log; error_log /var/log/nginx/sites/adminer.error.log; auth_basic "nf adminer"; auth_basic_user_file /var/lib/nf/adminer.htpasswd; location / { try_files $uri $uri/ /index.php?$args; } location ~ \.php$ { include /etc/nginx/snippets/nf-fastcgi-php.conf; fastcgi_pass unix:__PHP_FPM_SOCKET__; } }
+      server { listen 443 ssl http2; listen [::]:443 ssl http2; server_name __ADMINER_HOSTNAME__; include /etc/nginx/snippets/nf-wildcard-cert.conf; include /etc/nginx/snippets/nf-security-headers.conf; client_max_body_size 1024M; root /var/www/shared/adminer; index index.php; access_log /var/log/nginx/sites/adminer.access.log; error_log /var/log/nginx/sites/adminer.error.log; auth_basic "nf adminer"; auth_basic_user_file /var/lib/nf/adminer.htpasswd; location / { try_files $uri $uri/ /index.php?$args; } location ~ \.php$ { include /etc/nginx/snippets/nf-fastcgi-php.conf; fastcgi_pass unix:__PHP_FPM_SOCKET__; } }
       EOF
       ln -sf /etc/nginx/sites-available/nf-adminer /etc/nginx/sites-enabled/nf-adminer
       nginx -t
