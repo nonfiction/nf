@@ -63,7 +63,7 @@ nf target list
 nf target show <target>
 nf target adminer show <target>
 nf target password [target] [--root|--adminer]
-nf site add <target> <site> [--with-staging] [--kinsta-slug slug] [--region region] [--php version] [--execute --yes]
+nf site add <target> <site> [--with-staging] [--password-version version] [--kinsta-slug slug] [--region region] [--php version] [--execute --yes]
 nf site refresh
 nf site list [--refresh] [--envs]
 nf site show <site-id-or-alias-or-env-id>
@@ -118,7 +118,7 @@ nf target add linode app1 \
 * `nf target list/show` read target records from `providers.json`, with a legacy `servers.json` fallback.
 * `nf target adminer show <target>` reads `/var/lib/nf/target.json` over SSH and prints the Adminer URL, username, and derived password. The username defaults to `adminer_default_user`; the password is derived from the target metadata identity/purpose and `NF_PASSWORD_SALT`.
 * `nf target password [target] [--root|--adminer]` prints only the derived Linode target root or Adminer password. It does not support Kinsta targets.
-* `nf site add <target> <site>` creates the live WordPress env on a target. Add `--with-staging` to create live and staging in one operation. For Kinsta, `<site>` is the canonical `nf` project slug; add `--kinsta-slug <slug>` only when the Kinsta provider slug differs. The cache then stores `site_id` and `project_slug` from `<site>` plus `kinsta.slug` for the provider slug.
+* `nf site add <target> <site>` creates the live WordPress env on a target. Add `--with-staging` to create live and staging in one operation. Add `--password-version <version>` when the site must use a non-zero `project.password_version` from a repo that is not available to the command; the value must be an unsigned integer and `0` is the default. For Kinsta, `<site>` is the canonical `nf` project slug; add `--kinsta-slug <slug>` only when the Kinsta provider slug differs. The cache then stores `site_id` and `project_slug` from `<site>` plus `kinsta.slug` for the provider slug.
 * `nf site staging status/add/remove` manages an optional staging env for an existing site. `rm` is a shorthand for `remove`.
 * `nf site refresh` discovers sites from the cached target list. Kinsta refresh uses Kinsta API site/env/domain data and infers the canonical project slug from attached `nf` internal domains under `kinsta.<base_domain>` when present. Remote target site discovery is not implemented yet.
 * `nf site list --envs`, `nf site show`, `nf site shell`, `nf site wp`, `nf site snapshot`, and `nf site export` read the local disposable site cache for now.

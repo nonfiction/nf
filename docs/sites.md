@@ -22,13 +22,19 @@ Create live and staging in one operation:
 nf site add app1-linode client --with-staging --execute --yes
 ```
 
+Create a site for a project with a rotated password version:
+
+```sh
+nf site add app1-linode client --password-version 2 --execute --yes
+```
+
 Preview a Kinsta site:
 
 ```sh
 nf site add kinsta client --region us-central1 --php 8.3 --dry-run
 ```
 
-`nf site add <target> <site>` creates the live WordPress env on the selected target. `--with-staging` creates live and staging together. Kinsta supports `--region` and `--php`; `--php` does not apply to Linode targets.
+`nf site add <target> <site>` creates the live WordPress env on the selected target. `--with-staging` creates live and staging together. `--password-version` sets the unsigned integer version used for derived WordPress, database, and Basic Auth passwords when creating a site outside the matching repo context; omit it or pass `0` for the default. Kinsta supports `--region` and `--php`; `--php` does not apply to Linode targets.
 
 For Kinsta, `<site>` is the canonical `nf` project slug. It is used for the `nf` site ID, repo remotes, derived passwords, and the generated internal domains under `kinsta.<base_domain>`.
 

@@ -277,7 +277,7 @@ Do not add old compatibility routes unless explicitly requested.
 * [x] `nf target password [target] [--root|--adminer]`
 * [x] `nf target add linode <name>` create/ensure target scaffold
 * [x] `nf target remove <target>` remove an empty Linode target
-* [x] `nf site add <target> <site> [--with-staging] [--kinsta-slug <slug>]` create live env scaffolding by default, with optional staging and Kinsta provider-slug override
+* [x] `nf site add <target> <site> [--with-staging] [--password-version <version>] [--kinsta-slug <slug>]` create live env scaffolding by default, with optional staging, password-version override, and Kinsta provider-slug override
 * [x] `nf site staging status/add/remove` manage optional staging env lifecycle
 * [x] `nf site refresh` discovers remote site/env records from cached Kinsta and Linode targets
 * [x] `nf site list [--refresh] [--envs]`
