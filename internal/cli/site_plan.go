@@ -5,11 +5,16 @@ package cli
 import (
 	"fmt"
 	"path"
+	"regexp"
 	"strings"
 
 	"github.com/nonfiction/nf/internal/config"
 	"github.com/nonfiction/nf/internal/state"
 )
+
+var siteAddSlugPattern = regexp.MustCompile(`^[a-z][a-z0-9]{0,31}$`)
+
+const siteAddSlugRuleMessage = "must start with a lowercase ASCII letter, may contain only lowercase ASCII letters and digits, and must be 1-32 characters long. Do not use uppercase letters, hyphens, underscores, dots, spaces, punctuation, or Unicode.\nValid examples: client, nonfiction, site001\nInvalid examples: client-name, client_name, 1client, Client, client.com"
 
 type siteAddArgs struct {
 	target         string
@@ -139,6 +144,13 @@ func cleanSiteSlug(input string) (string, error) {
 	return slug, nil
 }
 
+func validateSiteAddSlug(input string) error {
+	if siteAddSlugPattern.MatchString(input) {
+		return nil
+	}
+	return ProjectError{Msg: fmt.Sprintf("invalid site slug %q: %s", input, siteAddSlugRuleMessage)}
+}
+
 func siteDBName(site, env string) string {
 	name := strings.ReplaceAll(site, "-", "_")
 	if env == "staging" {
@@ -217,10 +229,10 @@ func siteAddEnvNames(withStaging bool) []string {
 }
 
 func buildSiteAddPlan(args siteAddArgs) (siteAddPlan, error) {
-	siteSlug, err := cleanSiteSlug(args.site)
-	if err != nil {
+	if err := validateSiteAddSlug(args.site); err != nil {
 		return siteAddPlan{}, err
 	}
+	siteSlug := args.site
 	values, err := loadGlobalConfig()
 	if err != nil {
 		return siteAddPlan{}, err

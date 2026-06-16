@@ -3353,6 +3353,46 @@ func TestBuildSiteAddPlanUsesMatchingProjectPasswordVersion(t *testing.T) {
 	}
 }
 
+func TestValidateSiteAddSlug(t *testing.T) {
+	for _, input := range []string{"client", "nonfiction", "site001", "a", "a123"} {
+		if err := validateSiteAddSlug(input); err != nil {
+			t.Fatalf("validateSiteAddSlug(%q) error = %v, want nil", input, err)
+		}
+	}
+
+	invalid := []string{"Client", "client-name", "client_name", "1client", "client.com", "client name", "", "a" + strings.Repeat("1", 32)}
+	for _, input := range invalid {
+		err := validateSiteAddSlug(input)
+		if err == nil {
+			t.Fatalf("validateSiteAddSlug(%q) = nil, want error", input)
+		}
+		message := err.Error()
+		for _, want := range []string{"invalid site slug", "must start with a lowercase ASCII letter", "only lowercase ASCII letters and digits", "1-32 characters", "Valid examples: client, nonfiction, site001", "Invalid examples: client-name, client_name, 1client, Client, client.com"} {
+			if !strings.Contains(message, want) {
+				t.Fatalf("validateSiteAddSlug(%q) error missing %q:\n%s", input, want, message)
+			}
+		}
+	}
+}
+
+func TestRunSiteAddRejectsInvalidSlugBeforeLookup(t *testing.T) {
+	stderr := captureStderr(t, func() {
+		if got := runSiteAdd([]string{"missing-target", "Client", "--execute", "--yes", "--non-interactive"}); got != 1 {
+			t.Fatalf("runSiteAdd(invalid slug) = %d, want 1", got)
+		}
+	})
+	for _, want := range []string{"invalid site slug \"Client\"", "Valid examples: client, nonfiction, site001", "Invalid examples: client-name, client_name, 1client, Client, client.com"} {
+		if !strings.Contains(stderr, want) {
+			t.Fatalf("runSiteAdd stderr missing %q:\n%s", want, stderr)
+		}
+	}
+	for _, notWant := range []string{"No target matched", "Expected base_domain", "Expected default_wp_email"} {
+		if strings.Contains(stderr, notWant) {
+			t.Fatalf("runSiteAdd stderr contains %q, so validation did not stop early:\n%s", notWant, stderr)
+		}
+	}
+}
+
 func TestRunSiteAddLinodeExecuteRunsSSHAndCachesEnvs(t *testing.T) {
 	configDir := t.TempDir()
 	stateDir := t.TempDir()

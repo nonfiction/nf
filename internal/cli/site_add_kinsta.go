@@ -43,10 +43,10 @@ var (
 )
 
 func buildKinstaSiteAddPlan(args siteAddArgs) (kinstaSiteAddPlan, error) {
-	siteSlug, err := cleanSiteSlug(args.site)
-	if err != nil {
+	if err := validateSiteAddSlug(args.site); err != nil {
 		return kinstaSiteAddPlan{}, err
 	}
+	siteSlug := args.site
 	values, err := loadGlobalConfig()
 	if err != nil {
 		return kinstaSiteAddPlan{}, err

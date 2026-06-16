@@ -404,5 +404,9 @@ func runSiteAdd(argv []string) int {
 	}
 	args.target = positionals[0]
 	args.site = positionals[1]
+	if err := validateSiteAddSlug(args.site); err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		return 1
+	}
 	return cmdSiteAdd(args)
 }
