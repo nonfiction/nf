@@ -10,7 +10,7 @@ import (
 )
 
 var (
-	accentColor   = lipgloss.Color("62")
+	accentColor   = lipgloss.Color("14")
 	mutedColor    = lipgloss.Color("241")
 	titleStyle    = lipgloss.NewStyle().Bold(true)
 	labelStyle    = lipgloss.NewStyle().Bold(true)
