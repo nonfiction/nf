@@ -112,7 +112,7 @@ Local state is disposable. Provider truth is canonical remotely.
 * Remote target site discovery is not implemented yet.
 * Linode-hosted site/env truth is intended to live on each target at `/var/lib/nf/sites.json`, read over SSH as the standard user.
 * Linode target metadata lives at `/var/lib/nf/target.json`. It includes database UI metadata but no raw database UI password.
-* Linode database UI is deployed as pinned AdminNeo at `https://<db-user>.<target-hostname>/` during target provisioning, protected by HTTP Basic auth and the wildcard target certificate.
+* Linode database UI is deployed as pinned AdminNeo at `https://<db-user>.<target-hostname>/` during target provisioning, protected by HTTP Basic auth and the wildcard target certificate. New target database UI/admin credentials use the password derivation purpose `db-admin`; legacy target metadata may still record `db`, `adminer`, or `adminer-console` and must remain readable.
 * Linode site add grants the shared database access MySQL user privileges only on created site/env databases; site remove revokes those per-database grants before dropping DBs.
 * `nf remote add` validates the requested site/env exists in local cache before writing `nf.json`.
 * `nf site shell/wp` validate the cache, preview the SSH or wp-cli command, then execute the remote command.

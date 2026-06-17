@@ -62,13 +62,13 @@ nf password set-salt <salt>
 ```sh
 nf password set-salt <salt>
 nf password show-salt
-nf password derive <scope> <value...>
+nf password derive <scope> <value...> [--password-version N]
 nf env password [remote] [--wp|--db|--basicauth]
 nf site password [site|env] [--wp|--db|--basicauth]
 nf target password [target] [--root|--db]
 ```
 
-Password derivation uses `NF_PASSWORD_SALT` from the environment or `~/.config/nf/.env`. Legacy `NF_SECRET_SALT` is accepted only as a migration fallback. Project site passwords, including provider basic-auth passwords, also include `project.password_version` from `nf.json` when it is non-zero; missing or `0` preserves the original derivation.
+Password derivation uses `NF_PASSWORD_SALT` from the environment or `~/.config/nf/.env`. Legacy `NF_SECRET_SALT` is accepted only as a migration fallback. Project site scopes are `wp-admin`, `mysql`, and `basic-auth`; target scopes are `linode-root` and `db-admin`. Project site passwords, including provider basic-auth passwords, also include `project.password_version` from `nf.json` when it is non-zero; missing or `0` preserves the original derivation. Use `--password-version` when deriving a project site password outside the matching repo context.
 
 ## Test and Isolation Overrides
 

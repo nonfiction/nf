@@ -341,7 +341,7 @@ Do not add old compatibility routes unless explicitly requested.
 * [x] `nf config show`
 * [x] `nf password set-salt <salt>`
 * [x] `nf password show-salt`
-* [x] `nf password derive <scope> <value...>`
+* [x] `nf password derive <scope> <value...> [--password-version N]`
 
 ### Guarded / destructive
 
