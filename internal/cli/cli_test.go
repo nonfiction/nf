@@ -345,7 +345,7 @@ func TestGroupedHelpScreensUseIntendedOrder(t *testing.T) {
 		{
 			name:   "password",
 			render: func() string { return captureStdout(t, func() { _ = runPasswordHelp() }) },
-			values: []string{"derive <scope> [args...]", "\n\n  show-salt", "set-salt <salt>"},
+			values: []string{"derive <scope> <value...> [--password-version N]", "\n\n  show-salt", "set-salt <salt>"},
 		},
 		{
 			name:   "site add",
@@ -453,6 +453,37 @@ func TestRunCompleteSuggestsStaticAndCachedValues(t *testing.T) {
 	})
 	if strings.TrimSpace(versionFlagOutput) != "--short" {
 		t.Fatalf("version flag completion = %q, want --short", versionFlagOutput)
+	}
+	passwordScopeOutput := captureStdout(t, func() {
+		if got := Run([]string{"__complete", "--", "password", "derive", ""}); got != 0 {
+			t.Fatalf("Run(__complete password derive) = %d, want 0", got)
+		}
+	})
+	for _, want := range []string{"wp-admin\n", "mysql\n", "basic-auth\n", "linode-root\n", "db-admin\n", "--password-version\n"} {
+		if !strings.Contains(passwordScopeOutput, want) {
+			t.Fatalf("password derive scope completion missing %q:\n%s", want, passwordScopeOutput)
+		}
+	}
+	for _, unwanted := range []string{"adminer\n", "adminer-console\n", "db\n"} {
+		if strings.Contains(passwordScopeOutput, unwanted) {
+			t.Fatalf("password derive scope completion unexpectedly contains %q:\n%s", unwanted, passwordScopeOutput)
+		}
+	}
+	passwordProjectIdentityOutput := captureStdout(t, func() {
+		if got := Run([]string{"__complete", "--", "password", "derive", "wp-admin", "cl"}); got != 0 {
+			t.Fatalf("Run(__complete password derive wp-admin cl) = %d, want 0", got)
+		}
+	})
+	if strings.TrimSpace(passwordProjectIdentityOutput) != "client" {
+		t.Fatalf("password derive project identity completion = %q, want client", passwordProjectIdentityOutput)
+	}
+	passwordTargetIdentityOutput := captureStdout(t, func() {
+		if got := Run([]string{"__complete", "--", "password", "derive", "db-admin", "app"}); got != 0 {
+			t.Fatalf("Run(__complete password derive db-admin app) = %d, want 0", got)
+		}
+	})
+	if strings.TrimSpace(passwordTargetIdentityOutput) != "app1.example.com" {
+		t.Fatalf("password derive target identity completion = %q, want app1.example.com", passwordTargetIdentityOutput)
 	}
 
 	providerOutput := captureStdout(t, func() {
@@ -1078,6 +1109,95 @@ func TestRunCompleteSuggestsProjectValues(t *testing.T) {
 		if !strings.Contains(envPluginInstallOutput, want) {
 			t.Fatalf("env plugin install completion missing %q:\n%s", want, envPluginInstallOutput)
 		}
+	}
+}
+
+func TestRunPasswordDeriveUsesScopeValueOrderAndPasswordVersion(t *testing.T) {
+	t.Setenv("NF_PASSWORD_SALT", "test-salt")
+
+	output := captureStdout(t, func() {
+		if got := Run([]string{"password", "derive", "wp-admin", "client", "--password-version", "2"}); got != 0 {
+			t.Fatalf("Run(password derive) = %d, want 0", got)
+		}
+	})
+	want := passwords.DerivePassword("client:v2", "wp-admin", "test-salt") + "\n"
+	if output != want {
+		t.Fatalf("password derive output = %q, want %q", output, want)
+	}
+}
+
+func TestRunPasswordDeriveUsesMatchingProjectPasswordVersion(t *testing.T) {
+	t.Setenv("NF_PASSWORD_SALT", "test-salt")
+	repoRoot := t.TempDir()
+	if err := os.Mkdir(filepath.Join(repoRoot, ".git"), 0o755); err != nil {
+		t.Fatalf("Mkdir(.git) error = %v", err)
+	}
+	project := map[string]any{"version": 1, "project": map[string]any{"slug": "client", "password_version": 3}}
+	if err := os.WriteFile(config.ProjectFile(repoRoot), []byte(projectInitJSON(project)), 0o644); err != nil {
+		t.Fatalf("WriteFile(nf.json) error = %v", err)
+	}
+	oldwd, err := os.Getwd()
+	if err != nil {
+		t.Fatalf("Getwd() error = %v", err)
+	}
+	if err := os.Chdir(repoRoot); err != nil {
+		t.Fatalf("Chdir() error = %v", err)
+	}
+	t.Cleanup(func() { _ = os.Chdir(oldwd) })
+
+	output := captureStdout(t, func() {
+		if got := Run([]string{"password", "derive", "mysql", "client"}); got != 0 {
+			t.Fatalf("Run(password derive) = %d, want 0", got)
+		}
+	})
+	want := passwords.DerivePassword("client:v3", "mysql", "test-salt") + "\n"
+	if output != want {
+		t.Fatalf("password derive output = %q, want %q", output, want)
+	}
+}
+
+func TestRunPasswordDerivePromptsWhenArgumentsAreMissing(t *testing.T) {
+	t.Setenv("NF_PASSWORD_SALT", "test-salt")
+	oldSelect := passwordDeriveSelectFn
+	oldPrompt := passwordDerivePromptString
+	t.Cleanup(func() {
+		passwordDeriveSelectFn = oldSelect
+		passwordDerivePromptString = oldPrompt
+	})
+	var selectTitle string
+	var selectOptions []ui.SelectOption
+	passwordDeriveSelectFn = func(title string, options []ui.SelectOption) (string, error) {
+		selectTitle = title
+		selectOptions = append([]ui.SelectOption(nil), options...)
+		return "db-admin", nil
+	}
+	var prompts []string
+	passwordDerivePromptString = func(prompt, defaultValue string, allowBlank bool) (string, error) {
+		prompts = append(prompts, prompt)
+		return "app1.example.com", nil
+	}
+
+	output := captureStdout(t, func() {
+		if got := Run([]string{"password", "derive"}); got != 0 {
+			t.Fatalf("Run(password derive) = %d, want 0", got)
+		}
+	})
+	if selectTitle != "Choose a password scope" {
+		t.Fatalf("select title = %q, want password scope picker", selectTitle)
+	}
+	values := make([]string, 0, len(selectOptions))
+	for _, option := range selectOptions {
+		values = append(values, option.Value)
+	}
+	if !reflect.DeepEqual(values, []string{"wp-admin", "mysql", "basic-auth", "linode-root", "db-admin"}) {
+		t.Fatalf("select option values = %#v", values)
+	}
+	if !reflect.DeepEqual(prompts, []string{"Target hostname (example: app1-linode.nonfiction.dev)"}) {
+		t.Fatalf("prompts = %#v, want identity prompt only", prompts)
+	}
+	want := passwords.DerivePassword("app1.example.com", "db-admin", "test-salt") + "\n"
+	if output != want {
+		t.Fatalf("password derive output = %q, want %q", output, want)
 	}
 }
 
@@ -2020,7 +2140,7 @@ func TestRunTargetRefreshPreservesLinodeTargetMetadata(t *testing.T) {
 			"sites_path":  "/var/lib/nf/sites.json",
 			"ssh":         map[string]any{"host": "app1-linode.nonfiction.dev", "user": "custom", "port": "2222"},
 			"db":          map[string]any{"url": "https://dbadmin.app1-linode.nonfiction.dev/", "user": "dbadmin"},
-			"credentials": map[string]any{"db": map[string]any{"identity": "app1-linode.nonfiction.dev", "purpose": "db", "stored": false}},
+			"credentials": map[string]any{"db": map[string]any{"identity": "app1-linode.nonfiction.dev", "purpose": "db-admin", "stored": false}},
 		}},
 	}}
 	if err := state.SaveStateRecords("providers", providers); err != nil {
@@ -2063,8 +2183,8 @@ func TestRunTargetRefreshPreservesLinodeTargetMetadata(t *testing.T) {
 	if got := targetDBUser(target); got != "dbadmin" {
 		t.Fatalf("targetDBUser() = %q, want cached database user", got)
 	}
-	if got := mapStringAtPath(target, "credentials", "db", "purpose"); got != "db" {
-		t.Fatalf("credentials.db.purpose = %q, want db", got)
+	if got := mapStringAtPath(target, "credentials", "db", "purpose"); got != "db-admin" {
+		t.Fatalf("credentials.db.purpose = %q, want db-admin", got)
 	}
 	if got := mapStringAtPath(target, "ssh", "user"); got != "custom" {
 		t.Fatalf("ssh.user = %q, want custom", got)

@@ -1128,7 +1128,7 @@ func TestCloudInitTemplateIsServerOnly(t *testing.T) {
 		"client_max_body_size 1024M;",
 		"auth_basic \"nf database\";",
 		"CREATE USER IF NOT EXISTS 'admin'@'localhost' IDENTIFIED BY PASSWORD '<adminer mysql password hash>';",
-		`"purpose":"db"`,
+		`"purpose":"db-admin"`,
 	} {
 		if !strings.Contains(rendered, want) {
 			t.Fatalf("renderCloudInit() output missing %q:\n%s", want, rendered)
@@ -1368,14 +1368,14 @@ func TestServerStateRecordShapeDoesNotContainSecrets(t *testing.T) {
 		t.Fatalf("credentials.root = %#v, want derived metadata", credentials["root"])
 	} else if _, ok := root["password"]; ok {
 		t.Fatalf("credentials.root unexpectedly stored a password: %#v", root)
-	} else if db, ok := credentials["db"].(map[string]any); !ok || db["derived"] != true || db["identity"] != "app1.nonfiction.dev" || db["purpose"] != "db" || db["stored"] != false || db["user"] != "admin" {
+	} else if db, ok := credentials["db"].(map[string]any); !ok || db["derived"] != true || db["identity"] != "app1.nonfiction.dev" || db["purpose"] != "db-admin" || db["stored"] != false || db["user"] != "admin" {
 		t.Fatalf("credentials.db = %#v, want derived metadata", credentials["db"])
 	} else if _, ok := db["password"]; ok {
 		t.Fatalf("credentials.db unexpectedly stored a password: %#v", db)
 	}
 	if db, ok := record["db"].(map[string]any); !ok || db["tool"] != adminerToolName || db["version"] != adminerVersion || db["hostname"] != "admin.app1.nonfiction.dev" || db["url"] != "https://admin.app1.nonfiction.dev/" || db["user"] != "admin" {
 		t.Fatalf("db block = %#v, want AdminNeo metadata", record["db"])
-	} else if password, ok := db["auth"].(map[string]any)["password"].(map[string]any); !ok || password["purpose"] != "db" || password["stored"] != false {
+	} else if password, ok := db["auth"].(map[string]any)["password"].(map[string]any); !ok || password["purpose"] != "db-admin" || password["stored"] != false {
 		t.Fatalf("db auth password = %#v, want derived metadata", db["auth"])
 	}
 	if firewall, ok := record["firewall"].(map[string]any); !ok || firewall["mode"] != "managed" || firewall["id"] != "fw-123" {
