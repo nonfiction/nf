@@ -26,7 +26,6 @@ const (
 	passwordScopeDB        passwordScope = "db"
 	passwordScopeBasicAuth passwordScope = "basicauth"
 	passwordScopeRoot      passwordScope = "root"
-	passwordScopeAdminer   passwordScope = "adminer"
 )
 
 func parsePasswordScopeFlags(args []string, allowed map[string]passwordScope, defaultScope passwordScope, command string) ([]string, passwordScope, error) {
@@ -241,8 +240,6 @@ func passwordScopeLabel(scope passwordScope) string {
 		return "basic-auth"
 	case passwordScopeRoot:
 		return "root"
-	case passwordScopeAdminer:
-		return "adminer"
 	default:
 		return string(scope)
 	}

@@ -22,7 +22,7 @@ func runAddLinode(argv []string, stderr io.Writer) int {
 	fs.StringVar(&args.UbuntuVersion, "ubuntu-version", "", "Ubuntu LTS version to use")
 	fs.StringVar(&args.Firewall, "firewall", "", "Linode cloud firewall mode (managed or none)")
 	fs.StringVar(&args.FirewallID, "firewall-id", "", "existing Linode cloud firewall id")
-	fs.StringVar(&args.AdminerUser, "adminer-user", "", "Adminer database and HTTP Basic auth user")
+	fs.StringVar(&args.AdminerUser, "db-user", "", "database and HTTP Basic auth user")
 	fs.StringVar(&args.SshUser, "ssh-user", "", "deployment SSH user")
 	fs.StringVar(&args.SshUser, "user", "", "deployment SSH user")
 	fs.StringVar(&args.SshKeySource, "ssh-key-source", "", "SSH key source (linode-profile or file)")

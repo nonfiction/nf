@@ -10,7 +10,7 @@ import (
 )
 
 func runTargetPassword(argv []string) int {
-	positionals, scope, err := parsePasswordScopeFlags(argv, map[string]passwordScope{"--root": passwordScopeRoot, "--adminer": passwordScopeAdminer}, passwordScopeRoot, "target password")
+	positionals, scope, err := parsePasswordScopeFlags(argv, map[string]passwordScope{"--root": passwordScopeRoot, "--db": passwordScopeDB}, passwordScopeRoot, "target password")
 	if err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		return 1
@@ -63,20 +63,21 @@ func targetPassword(needle string, scope passwordScope) (string, error) {
 			return "", ProjectError{Msg: fmt.Sprintf("Target %q is missing hostname.", needle)}
 		}
 		return passwords.DerivePassword(identity, "linode-root", salt), nil
-	case passwordScopeAdminer:
+	case passwordScopeDB:
 		remote, err := readLinodeTargetFile(record)
 		if err != nil {
 			return "", fmt.Errorf("read /var/lib/nf/target.json: %w", err)
 		}
 		identity := firstNonEmpty(
+			mapStringAtPath(remote, "db", "auth", "password", "identity"),
 			mapStringAtPath(remote, "adminer", "auth", "password", "identity"),
 			recordValueString(remote["hostname"]),
 			firstRecordString(record, "hostname", "host"),
 		)
 		if identity == "" {
-			return "", ProjectError{Msg: fmt.Sprintf("Target %q is missing Adminer password identity.", needle)}
+			return "", ProjectError{Msg: fmt.Sprintf("Target %q is missing database password identity.", needle)}
 		}
-		purpose := firstNonEmpty(mapStringAtPath(remote, "adminer", "auth", "password", "purpose"), "adminer")
+		purpose := firstNonEmpty(mapStringAtPath(remote, "db", "auth", "password", "purpose"), mapStringAtPath(remote, "adminer", "auth", "password", "purpose"), "db")
 		return passwords.DerivePassword(identity, purpose, salt), nil
 	default:
 		return "", ProjectError{Msg: "unsupported target password scope"}

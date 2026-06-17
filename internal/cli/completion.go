@@ -110,7 +110,7 @@ func completeContextCandidates(args []string) []string {
 	case "domain":
 		return siteDomainCompletionCandidates(args[1:])
 	case "config":
-		return []string{"init", "show", "set-base-domain", "set-default-wp-email", "set-default-wp-user", "set-basicauth-default-user", "set-adminer-default-user", "set-docker-db-image", "set-docker-wordpress-image", "set-docker-user", "set-kinsta-default-region", "set-kinsta-default-php", "set-linode-default-region", "set-linode-default-type", "set-linode-default-image", "set-linode-default-user", "help"}
+		return []string{"init", "show", "set-base-domain", "set-default-wp-email", "set-default-wp-user", "set-basicauth-default-user", "set-db-default-user", "set-docker-db-image", "set-docker-wordpress-image", "set-docker-user", "set-kinsta-default-region", "set-kinsta-default-php", "set-linode-default-region", "set-linode-default-type", "set-linode-default-image", "set-linode-default-user", "help"}
 	case "password":
 		return []string{"show-salt", "set-salt", "derive", "help"}
 	case "remote":
@@ -150,7 +150,7 @@ func providerCompletionCandidates(args []string) []string {
 
 func targetCompletionCandidates(args []string) []string {
 	if len(args) == 0 {
-		return []string{"list", "ls", "show", "adminer", "password", "refresh", "add", "remove", "rm", "help"}
+		return []string{"list", "ls", "show", "password", "refresh", "add", "remove", "rm", "help"}
 	}
 	args[0] = cliCommandAlias(args[0])
 	switch args[0] {
@@ -161,10 +161,8 @@ func targetCompletionCandidates(args []string) []string {
 		return targetAddFlagCandidates()
 	case "show":
 		return cachedTargetCompletionNames()
-	case "adminer":
-		return targetAdminerCompletionCandidates(args[1:])
 	case "password":
-		return append(cachedLinodeTargetCompletionNames(), "--root", "--adminer")
+		return append(cachedLinodeTargetCompletionNames(), "--root", "--db")
 	case "remove":
 		return cachedTargetCompletionNames()
 	default:
@@ -172,18 +170,8 @@ func targetCompletionCandidates(args []string) []string {
 	}
 }
 
-func targetAdminerCompletionCandidates(args []string) []string {
-	if len(args) == 0 {
-		return []string{"show", "help"}
-	}
-	if args[0] == "show" {
-		return cachedLinodeTargetCompletionNames()
-	}
-	return nil
-}
-
 func targetAddFlagCandidates() []string {
-	return []string{"--region", "--type", "--image", "--adminer-user", "--ssh-user", "--execute", "--yes", "--non-interactive", "--dry-run"}
+	return []string{"--region", "--type", "--image", "--db-user", "--ssh-user", "--execute", "--yes", "--non-interactive", "--dry-run"}
 }
 
 func siteCompletionCandidates(args []string) []string {

@@ -62,8 +62,7 @@ func runTargetHelp() int {
 	printGroupHelp("target", []helpLine{
 		{"list, ls", "list deployable targets"},
 		{"show <target>", "show a deployable target"},
-		{"adminer show <target>", "show target Adminer access"},
-		{"password [target] [--root|--adminer]", "show target password only"},
+		{"password [target] [--root|--db]", "show target password only"},
 		{"refresh", "refresh targets from providers"},
 		{},
 		{"add linode <name> [flags]", "create a Linode target"},
@@ -117,7 +116,7 @@ func runConfigHelp() int {
 		{"set-default-wp-email <email>", "set default WordPress email"},
 		{"set-default-wp-user <user>", "set default WordPress user"},
 		{"set-basicauth-default-user <user>", "set default basic-auth user"},
-		{"set-adminer-default-user <user>", "set default Adminer user"},
+		{"set-db-default-user <user>", "set default database access user"},
 		{},
 		{"set-docker-db-image <image>", "set default Docker database image"},
 		{"set-docker-wordpress-image <image>", "set default Docker WordPress image"},
@@ -130,13 +129,6 @@ func runConfigHelp() int {
 		{"set-linode-default-type <type>", "set default Linode type"},
 		{"set-linode-default-image <image>", "set default Linode image"},
 		{"set-linode-default-user <user>", "set default Linode SSH user"},
-	})
-	return 0
-}
-
-func runTargetAdminerHelp() int {
-	printGroupHelp("target adminer", []helpLine{
-		{"show [target]", "show target Adminer URL and credentials"},
 	})
 	return 0
 }
