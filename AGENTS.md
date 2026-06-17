@@ -86,6 +86,7 @@ config.json     non-secret global config, including base_domain, dnsimple_accoun
 providers.json  provider check metadata and targets
 sites.json      cached remote site/env records
 projects.json   disposable project cache if needed
+plugins/        local plugin cache zips under NF_DATA_HOME
 ```
 
 Local state is disposable. Provider truth is canonical remotely.
@@ -120,7 +121,7 @@ Local state is disposable. Provider truth is canonical remotely.
 * `nf env logs [remote]` tails local Docker WordPress logs with no remote, or tails remote `wp-content/debug.log` over SSH for a configured repo remote.
 * `nf env password [remote] [--wp|--db|--basicauth]` prints only one selected local or remote env password. `--wp` is the default.
 * `nf env push/pull [remote]` defaults to an interactive confirmation before executing remote sync. Use `--dry-run` or `--non-interactive` without `--execute` for preflight-only output. Non-interactive execution requires `--execute --yes`.
-* `wordpress.plugins` in `nf.json` is an env bootstrap checklist, not a full lifecycle manager. String entries install from wordpress.org, activate, and enable auto-updates by default; object entries require `slug`, support `source`, `install`, `note`, and `auto_update`, and default `install`, `activate`, and `auto_update` to true. Use `install: false` for manual/documentation-only plugins that nf should check but never install. Use `source: "repo"` for project-specific plugin source directories at `plugins/<slug>/`; nf zips them on demand during local or remote install and cleans up the temporary artifacts.
+* `wordpress.plugins` in `nf.json` is an env bootstrap checklist, not a full lifecycle manager. String entries install from wordpress.org, activate, and enable auto-updates by default; object entries require `slug`, support `source`, `install`, `note`, and `auto_update`, and default `install`, `activate`, and `auto_update` to true. Use `install: false` for manual/documentation-only plugins that nf should check but never install. Use `source: "repo"` for project-specific plugin source directories at `plugins/<slug>/`; local envs bind mount configured repo plugins for live development, while remote installs zip/upload them on demand and clean up temporary artifacts. Use `source: "cache"` for explicit local cached zips under `$NF_DATA_HOME/plugins/<slug>/<slug>.zip`; nf does not silently fall back to cache for wordpress.org plugins.
 
 ## Project-context gotchas
 

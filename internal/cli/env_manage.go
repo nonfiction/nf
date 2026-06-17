@@ -304,13 +304,25 @@ func envWpContentPermissionsArgs(cfg envConfig) []string {
 	return append(envWordpressRootExecArgs(cfg, "sh", "-lc"), fmt.Sprintf(`set -eu
 cd /var/www/html
 mkdir -p wp-content/uploads
+repo_plugins=%s
 for dir in wp-content/uploads wp-content/plugins wp-content/mu-plugins wp-content/languages; do
   if [ -e "$dir" ]; then
-    chown -R %s:www-data "$dir"
-    chmod -R u+rwX,g+rwX,o-rwx "$dir"
-    find "$dir" -type d -exec chmod g+s {} +
+    if [ "$dir" = "wp-content/plugins" ] && [ -n "$repo_plugins" ]; then
+      for entry in "$dir"/* "$dir"/.[!.]* "$dir"/..?*; do
+        [ -e "$entry" ] || continue
+        base="${entry##*/}"
+        case " $repo_plugins " in *" $base "*) continue ;; esac
+        chown -R %s:www-data "$entry"
+        chmod -R u+rwX,g+rwX,o-rwx "$entry"
+        find "$entry" -type d -exec chmod g+s {} +
+      done
+    else
+      chown -R %s:www-data "$dir"
+      chmod -R u+rwX,g+rwX,o-rwx "$dir"
+      find "$dir" -type d -exec chmod g+s {} +
+    fi
   fi
-done`, dockerUser))
+done`, shellQuoteArg(envRepoPluginSlugList(cfg)), dockerUser, dockerUser))
 }
 
 func envWpThemeActivateArgs(cfg envConfig, slug string) []string {

@@ -69,6 +69,17 @@ func SnapshotsDir() string { return filepath.Join(DataHome(), "snapshots") }
 
 func ExportsDir() string { return filepath.Join(DataHome(), "exports") }
 
+func PluginCacheDir() string { return filepath.Join(DataHome(), "plugins") }
+
+func PluginCachePluginDir(slug string) string {
+	return filepath.Join(PluginCacheDir(), strings.TrimSpace(slug))
+}
+
+func PluginCacheZip(slug string) string {
+	slug = strings.TrimSpace(slug)
+	return filepath.Join(PluginCachePluginDir(slug), slug+".zip")
+}
+
 func LocalSnapshotsDir() string { return filepath.Join(SnapshotsDir(), "local") }
 
 func RemoteSnapshotsDir() string { return filepath.Join(SnapshotsDir(), "remote") }

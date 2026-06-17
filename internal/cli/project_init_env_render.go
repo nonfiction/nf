@@ -185,6 +185,7 @@ func renderEnvCompose(cfg envConfig) string {
 	dockerUser := firstNonEmpty(cfg.DockerUser, defaultDockerUser)
 	themePath := cfg.ThemePath
 	uploadsPath := firstNonEmpty(cfg.UploadsPath, "uploads")
+	pluginMounts := renderEnvRepoPluginMounts(cfg)
 	return fmt.Sprintf(`services:
   db:
     image: %s
@@ -233,6 +234,7 @@ func renderEnvCompose(cfg envConfig) string {
     volumes:
       - wp_data:/var/www/html
       - %s:/var/www/html/wp-content/themes/%s
+%s
       - ./php/uploads.ini:/usr/local/etc/php/conf.d/uploads.ini:ro
       - ./%s:%s
       - %s:/env-snapshots
@@ -259,7 +261,30 @@ func renderEnvCompose(cfg envConfig) string {
 volumes:
   db_data:
   wp_data:
-`, dbImage, wordpressService, dockerUser, themePath, themeMountSlug, uploadsPath, path.Join("/", "env", uploadsPath), envSnapshotComposeMount(cfg), wordpressImage)
+`, dbImage, wordpressService, dockerUser, themePath, themeMountSlug, pluginMounts, uploadsPath, path.Join("/", "env", uploadsPath), envSnapshotComposeMount(cfg), wordpressImage)
+}
+
+func renderEnvRepoPluginMounts(cfg envConfig) string {
+	if len(cfg.RepoPluginMounts) == 0 {
+		return ""
+	}
+	mounts := make([]envPluginMount, 0, len(cfg.RepoPluginMounts))
+	for _, mount := range cfg.RepoPluginMounts {
+		if strings.TrimSpace(mount.Slug) == "" || strings.TrimSpace(mount.Host) == "" {
+			continue
+		}
+		mounts = append(mounts, mount)
+	}
+	sort.Slice(mounts, func(i, j int) bool { return mounts[i].Slug < mounts[j].Slug })
+	var builder strings.Builder
+	for _, mount := range mounts {
+		builder.WriteString("      - ")
+		builder.WriteString(mount.Host)
+		builder.WriteString(":/var/www/html/wp-content/plugins/")
+		builder.WriteString(mount.Slug)
+		builder.WriteByte('\n')
+	}
+	return strings.TrimRight(builder.String(), "\n")
 }
 
 func renderEnvFile(cfg envConfig) string {

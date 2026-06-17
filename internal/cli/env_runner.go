@@ -182,9 +182,10 @@ func createPreRestoreSnapshot(cfg envConfig) (string, error) {
 	return safetyName, nil
 }
 
-func envSnapshotCreateScript(name string) string {
+func envSnapshotCreateScript(cfg envConfig, name string) string {
 	containerDir := envSnapshotContainerDir(name)
 	wpContentArchive := envSnapshotContainerWpContentArchive(name)
+	excludes := envRepoPluginTarExcludeArgs(cfg)
 	return fmt.Sprintf(`set -eu
 mkdir -p "%s"
 wp db export "%s/database.sql"
@@ -197,26 +198,36 @@ for dir in wp-content/uploads wp-content/plugins wp-content/mu-plugins wp-conten
 done
 if [ -n "$dirs" ]; then
   # shellcheck disable=SC2086
-  tar -C /var/www/html -czf "%s" $dirs
+  tar -C /var/www/html %s -czf "%s" $dirs
 else
   tar -C /var/www/html -czf "%s" --files-from /dev/null
 fi
-`, containerDir, containerDir, containerDir, wpContentArchive, wpContentArchive)
+`, containerDir, containerDir, containerDir, excludes, wpContentArchive, wpContentArchive)
 }
 
-func envSnapshotRestoreScript(name string) string {
+func envSnapshotRestoreScript(cfg envConfig, name string) string {
 	databaseArchive := envSnapshotContainerDatabaseArchive(name)
 	wpContentArchive := envSnapshotContainerWpContentArchive(name)
+	repoPlugins := shellQuoteArg(envRepoPluginSlugList(cfg))
+	excludes := envRepoPluginTarExcludeArgs(cfg)
 	return fmt.Sprintf(`set -eu
 tmpdir="$(mktemp -d)"
 trap 'rm -rf "$tmpdir"' EXIT
 gzip -cd "%s" > "$tmpdir/database.sql"
 wp db import "$tmpdir/database.sql"
 if [ -f "%s" ]; then
-  rm -rf /var/www/html/wp-content/uploads /var/www/html/wp-content/plugins /var/www/html/wp-content/mu-plugins /var/www/html/wp-content/languages
-  tar -xzf "%s" -C /var/www/html
+  rm -rf /var/www/html/wp-content/uploads /var/www/html/wp-content/mu-plugins /var/www/html/wp-content/languages
+  mkdir -p /var/www/html/wp-content/plugins
+  repo_plugins=%s
+  for entry in /var/www/html/wp-content/plugins/* /var/www/html/wp-content/plugins/.[!.]* /var/www/html/wp-content/plugins/..?*; do
+    [ -e "$entry" ] || continue
+    base="${entry##*/}"
+    case " $repo_plugins " in *" $base "*) continue ;; esac
+    rm -rf "$entry"
+  done
+  tar %s -xzf "%s" -C /var/www/html
 fi
-`, databaseArchive, wpContentArchive, wpContentArchive)
+`, databaseArchive, wpContentArchive, repoPlugins, excludes, wpContentArchive)
 }
 
 func envSnapshotComposeArgs(cfg envConfig, args ...string) []string {
@@ -297,14 +308,14 @@ func envSnapshotCreateArchives(cfg envConfig, name string) error {
 	if err := os.Chmod(envSnapshotDir(cfg, name), 0o777); err != nil {
 		return err
 	}
-	if err := runCommandSpecNoPreview(execSpec{Dir: localEnvDir(cfg), Args: envSnapshotComposeArgs(cfg, envSnapshotCreateScript(name))}); err != nil {
+	if err := runCommandSpecNoPreview(execSpec{Dir: localEnvDir(cfg), Args: envSnapshotComposeArgs(cfg, envSnapshotCreateScript(cfg, name))}); err != nil {
 		return err
 	}
 	return nil
 }
 
 func envSnapshotRestoreArchives(cfg envConfig, name string) error {
-	if err := runCommandSpecNoPreview(execSpec{Dir: localEnvDir(cfg), Args: envSnapshotComposeArgs(cfg, envSnapshotRestoreScript(name))}); err != nil {
+	if err := runCommandSpecNoPreview(execSpec{Dir: localEnvDir(cfg), Args: envSnapshotComposeArgs(cfg, envSnapshotRestoreScript(cfg, name))}); err != nil {
 		return err
 	}
 	return nil

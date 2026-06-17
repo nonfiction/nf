@@ -3,9 +3,12 @@ package cli
 // WordPress plugin bootstrap commands backed by wordpress.plugins in nf.json.
 
 import (
+	"archive/tar"
 	"archive/zip"
 	"bytes"
+	"compress/gzip"
 	"fmt"
+	"io"
 	"io/fs"
 	"os"
 	"os/exec"
@@ -15,9 +18,15 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/nonfiction/nf/internal/config"
 )
 
-const wordpressPluginRepoSource = "repo"
+const (
+	wordpressPluginRepoSource        = "repo"
+	wordpressPluginCacheSource       = "cache"
+	localRepoPluginInstallSourceMark = "__NF_REPO_PLUGIN_MOUNT__"
+)
 
 type wordpressPluginSpec struct {
 	Slug       string
@@ -202,6 +211,149 @@ func cmdEnvPluginsRemove(root string, metadata map[string]any, slug string) int 
 		return 1
 	}
 	fmt.Printf("Removed WordPress plugin %s from nf.json.\n", slug)
+	return 0
+}
+
+type envPluginCacheOptions struct {
+	Command string
+	Slug    string
+	Source  string
+}
+
+func cmdEnvPluginsCache(cfg envConfig, opts envPluginCacheOptions) int {
+	switch opts.Command {
+	case "add":
+		return cmdEnvPluginsCacheAdd(opts.Slug, opts.Source)
+	case "save":
+		return cmdEnvPluginsCacheSave(cfg, opts.Slug)
+	case "list":
+		return cmdEnvPluginsCacheList()
+	case "show":
+		return cmdEnvPluginsCacheShow(opts.Slug)
+	default:
+		fmt.Fprintln(os.Stderr, "unsupported env plugin cache command")
+		return 1
+	}
+}
+
+func cmdEnvPluginsCacheAdd(slug, sourcePath string) int {
+	if err := validatePluginSlug(slug); err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		return 1
+	}
+	sourcePath = os.ExpandEnv(strings.TrimSpace(sourcePath))
+	info, err := os.Stat(sourcePath)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		return 1
+	}
+	if info.IsDir() {
+		fmt.Fprintf(os.Stderr, "plugin cache source for %s must be a zip file, got directory: %s\n", slug, sourcePath)
+		return 1
+	}
+	destination := config.PluginCacheZip(slug)
+	if err := os.MkdirAll(filepath.Dir(destination), 0o755); err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		return 1
+	}
+	if err := copyFile(sourcePath, destination); err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		return 1
+	}
+	fmt.Printf("Cached WordPress plugin %s at %s\n", slug, destination)
+	return 0
+}
+
+func cmdEnvPluginsCacheSave(cfg envConfig, slug string) int {
+	if err := validatePluginSlug(slug); err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		return 1
+	}
+	if err := ensureEnvReadyForSnapshot(cfg); err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		return 1
+	}
+	hostDir := filepath.Join(cfg.managedUploadsDir(), ".nf-plugin-cache-save")
+	if err := os.RemoveAll(hostDir); err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		return 1
+	}
+	if err := os.MkdirAll(hostDir, 0o755); err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		return 1
+	}
+	defer func() { _ = os.RemoveAll(hostDir) }()
+	containerArchive := path.Join(cfg.uploadsContainerPath(), ".nf-plugin-cache-save", slug+".tar.gz")
+	hostArchive := filepath.Join(hostDir, slug+".tar.gz")
+	script := "set -eu\nmkdir -p " + shellQuoteArg(path.Dir(containerArchive)) + "\ntar -C /var/www/html/wp-content/plugins -czf " + shellQuoteArg(containerArchive) + " " + shellQuoteArg(slug) + "\n"
+	args := envWordpressRootExecArgs(cfg, "sh", "-lc", script)
+	preview := envWordpressRootExecArgs(cfg, "<save plugin cache archive>")
+	if err := runCommandSpecWithPreview(execSpec{Dir: localEnvDir(cfg), Args: args}, preview); err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		return 1
+	}
+	tmpDir, err := os.MkdirTemp("", "nf-plugin-cache-save-*")
+	if err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		return 1
+	}
+	defer func() { _ = os.RemoveAll(tmpDir) }()
+	if err := extractPluginTarGz(hostArchive, tmpDir); err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		return 1
+	}
+	destination := config.PluginCacheZip(slug)
+	if _, err := packagePluginSource(filepath.Join(tmpDir, slug), destination, slug); err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		return 1
+	}
+	fmt.Printf("Cached WordPress plugin %s at %s\n", slug, destination)
+	return 0
+}
+
+func cmdEnvPluginsCacheList() int {
+	entries, err := os.ReadDir(config.PluginCacheDir())
+	if err != nil {
+		if os.IsNotExist(err) {
+			fmt.Println("No cached WordPress plugins.")
+			return 0
+		}
+		fmt.Fprintln(os.Stderr, err)
+		return 1
+	}
+	rows := [][]string{{"plugin", "zip"}}
+	for _, entry := range entries {
+		if !entry.IsDir() {
+			continue
+		}
+		slug := entry.Name()
+		zipPath := config.PluginCacheZip(slug)
+		if _, err := os.Stat(zipPath); err == nil {
+			rows = append(rows, []string{slug, zipPath})
+		}
+	}
+	if len(rows) == 1 {
+		fmt.Println("No cached WordPress plugins.")
+		return 0
+	}
+	fmt.Println(formatTable(rows))
+	return 0
+}
+
+func cmdEnvPluginsCacheShow(slug string) int {
+	if err := validatePluginSlug(slug); err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		return 1
+	}
+	zipPath := config.PluginCacheZip(slug)
+	status := "missing"
+	if _, err := os.Stat(zipPath); err == nil {
+		status = "available"
+	} else if !os.IsNotExist(err) {
+		fmt.Fprintln(os.Stderr, err)
+		return 1
+	}
+	fmt.Printf("Plugin cache:\n  plugin: %s\n  status: %s\n  zip:    %s\n", slug, status, zipPath)
 	return 0
 }
 
@@ -393,7 +545,7 @@ func cmdEnvPluginsInstall(cfg envConfig, metadata map[string]any) int {
 		fmt.Fprintln(os.Stderr, err)
 		return 1
 	}
-	localSources, cleanup, err := prepareLocalRepoPluginZips(cfg, plugins)
+	localSources, cleanup, err := prepareLocalPluginInstallSources(cfg, plugins)
 	if cleanup != nil {
 		defer cleanup()
 	}
@@ -638,39 +790,121 @@ func pluginSourceIsRepo(plugin wordpressPluginSpec) bool {
 	return strings.EqualFold(strings.TrimSpace(plugin.Source), wordpressPluginRepoSource)
 }
 
+func pluginSourceIsCache(plugin wordpressPluginSpec) bool {
+	return strings.EqualFold(strings.TrimSpace(plugin.Source), wordpressPluginCacheSource)
+}
+
+func validatePluginSlug(slug string) error {
+	slug = strings.TrimSpace(slug)
+	if slug == "" || filepath.IsAbs(slug) || strings.ContainsAny(slug, `/\`) || strings.Contains(slug, "..") {
+		return ProjectError{Msg: fmt.Sprintf("plugin slug %q must be one safe directory name", slug)}
+	}
+	return nil
+}
+
 func repoPluginSourceDir(root string, plugin wordpressPluginSpec) (string, error) {
 	slug := strings.TrimSpace(plugin.Slug)
-	if slug == "" || filepath.IsAbs(slug) || strings.ContainsAny(slug, `/\`) || strings.Contains(slug, "..") {
-		return "", ProjectError{Msg: fmt.Sprintf("repo plugin slug %q must be one safe directory name", plugin.Slug)}
+	if err := validatePluginSlug(slug); err != nil {
+		return "", err
 	}
 	return filepath.Join(root, "plugins", slug), nil
 }
 
-func prepareLocalRepoPluginZips(cfg envConfig, plugins []wordpressPluginSpec) (map[string]string, func(), error) {
+func repoPluginMountsFromMetadata(root string, metadata map[string]any) []envPluginMount {
+	plugins, err := loadWordPressPluginSpecs(metadata)
+	if err != nil {
+		return nil
+	}
+	mounts := []envPluginMount{}
+	for _, plugin := range plugins {
+		if !pluginSourceIsRepo(plugin) {
+			continue
+		}
+		sourceDir, err := repoPluginSourceDir(root, plugin)
+		if err != nil {
+			continue
+		}
+		if info, err := os.Stat(sourceDir); err != nil || !info.IsDir() {
+			continue
+		}
+		mounts = append(mounts, envPluginMount{Slug: plugin.Slug, Host: sourceDir})
+	}
+	return mounts
+}
+
+func envRepoPluginSlugList(cfg envConfig) string {
+	slugs := make([]string, 0, len(cfg.RepoPluginMounts))
+	for _, mount := range cfg.RepoPluginMounts {
+		if strings.TrimSpace(mount.Slug) != "" {
+			slugs = append(slugs, mount.Slug)
+		}
+	}
+	sort.Strings(slugs)
+	return strings.Join(slugs, " ")
+}
+
+func envRepoPluginTarExcludeArgs(cfg envConfig) string {
+	slugs := strings.Fields(envRepoPluginSlugList(cfg))
+	if len(slugs) == 0 {
+		return ""
+	}
+	parts := make([]string, 0, len(slugs))
+	for _, slug := range slugs {
+		parts = append(parts, "--exclude="+shellQuoteArg("wp-content/plugins/"+slug))
+	}
+	return strings.Join(parts, " ")
+}
+
+func prepareLocalPluginInstallSources(cfg envConfig, plugins []wordpressPluginSpec) (map[string]string, func(), error) {
 	sources := map[string]string{}
-	if !hasInstallableRepoPlugin(plugins) {
+	if !hasLocalPreparedPluginSource(plugins) {
 		return sources, nil, nil
 	}
-	outputDir := filepath.Join(localEnvDir(cfg), firstNonEmpty(cfg.UploadsPath, "uploads"), ".nf-plugin-zips")
+	outputDir := filepath.Join(localEnvDir(cfg), firstNonEmpty(cfg.UploadsPath, "uploads"), ".nf-plugin-cache")
 	if err := os.RemoveAll(outputDir); err != nil {
 		return nil, nil, err
 	}
 	cleanup := func() { _ = os.RemoveAll(outputDir) }
 	for _, plugin := range plugins {
-		if !plugin.Install || !pluginSourceIsRepo(plugin) {
+		if !plugin.Install {
 			continue
 		}
-		sourceDir, err := repoPluginSourceDir(cfg.RepoRoot, plugin)
-		if err != nil {
-			cleanup()
-			return nil, nil, err
+		if pluginSourceIsRepo(plugin) {
+			sourceDir, err := repoPluginSourceDir(cfg.RepoRoot, plugin)
+			if err != nil {
+				cleanup()
+				return nil, nil, err
+			}
+			info, err := os.Stat(sourceDir)
+			if err != nil || !info.IsDir() {
+				cleanup()
+				return nil, nil, ProjectError{Msg: fmt.Sprintf("repo plugin source directory does not exist: %s", sourceDir)}
+			}
+			sources[plugin.Slug] = localRepoPluginInstallSourceMark
+			continue
 		}
-		zipPath := filepath.Join(outputDir, plugin.Slug+".zip")
-		if _, err := packagePluginSource(sourceDir, zipPath, plugin.Slug); err != nil {
-			cleanup()
-			return nil, nil, err
+		if pluginSourceIsCache(plugin) {
+			cacheZip := config.PluginCacheZip(plugin.Slug)
+			info, err := os.Stat(cacheZip)
+			if err != nil {
+				cleanup()
+				return nil, nil, ProjectError{Msg: fmt.Sprintf("plugin cache for %s does not exist: %s", plugin.Slug, cacheZip)}
+			}
+			if info.IsDir() {
+				cleanup()
+				return nil, nil, ProjectError{Msg: fmt.Sprintf("plugin cache for %s must be a zip file, got directory: %s", plugin.Slug, cacheZip)}
+			}
+			zipPath := filepath.Join(outputDir, plugin.Slug+".zip")
+			if err := os.MkdirAll(filepath.Dir(zipPath), 0o755); err != nil {
+				cleanup()
+				return nil, nil, err
+			}
+			if err := copyFile(cacheZip, zipPath); err != nil {
+				cleanup()
+				return nil, nil, err
+			}
+			sources[plugin.Slug] = path.Join(cfg.uploadsContainerPath(), ".nf-plugin-cache", plugin.Slug+".zip")
 		}
-		sources[plugin.Slug] = path.Join(cfg.uploadsContainerPath(), ".nf-plugin-zips", plugin.Slug+".zip")
 	}
 	return sources, cleanup, nil
 }
@@ -724,6 +958,67 @@ func hasInstallableRepoPlugin(plugins []wordpressPluginSpec) bool {
 		}
 	}
 	return false
+}
+
+func hasLocalPreparedPluginSource(plugins []wordpressPluginSpec) bool {
+	for _, plugin := range plugins {
+		if plugin.Install && (pluginSourceIsRepo(plugin) || pluginSourceIsCache(plugin)) {
+			return true
+		}
+	}
+	return false
+}
+
+func extractPluginTarGz(sourcePath, destinationDir string) error {
+	input, err := os.Open(sourcePath)
+	if err != nil {
+		return err
+	}
+	defer input.Close()
+	gz, err := gzip.NewReader(input)
+	if err != nil {
+		return err
+	}
+	defer gz.Close()
+	reader := tar.NewReader(gz)
+	for {
+		header, err := reader.Next()
+		if err == io.EOF {
+			return nil
+		}
+		if err != nil {
+			return err
+		}
+		name := filepath.Clean(header.Name)
+		if name == "." || filepath.IsAbs(name) || strings.HasPrefix(name, ".."+string(filepath.Separator)) || name == ".." {
+			return ProjectError{Msg: fmt.Sprintf("plugin cache archive contains unsafe path: %s", header.Name)}
+		}
+		target := filepath.Join(destinationDir, name)
+		if header.FileInfo().IsDir() {
+			if err := os.MkdirAll(target, 0o755); err != nil {
+				return err
+			}
+			continue
+		}
+		if !header.FileInfo().Mode().IsRegular() {
+			continue
+		}
+		if err := os.MkdirAll(filepath.Dir(target), 0o755); err != nil {
+			return err
+		}
+		output, err := os.Create(target)
+		if err != nil {
+			return err
+		}
+		_, copyErr := io.Copy(output, reader)
+		closeErr := output.Close()
+		if copyErr != nil {
+			return copyErr
+		}
+		if closeErr != nil {
+			return closeErr
+		}
+	}
 }
 
 func packagePluginSource(sourceDir, outputPath, archiveRoot string) (int, error) {
@@ -819,6 +1114,22 @@ func remotePluginInstallSpecs(root string, plugins []wordpressPluginSpec, remote
 				localPath, err = repoPluginSourceDir(root, plugin)
 				if err != nil {
 					return nil, nil, err
+				}
+			}
+			remotePath := path.Join(remoteTmp, plugin.Slug+".zip")
+			uploads = append(uploads, remotePluginUpload{Plugin: plugin, LocalPath: localPath, RemotePath: remotePath})
+			remotePlugins = append(remotePlugins, remotePluginInstallSpec{Plugin: plugin, InstallSource: remotePath})
+			continue
+		}
+		if pluginSourceIsCache(plugin) {
+			localPath := config.PluginCacheZip(plugin.Slug)
+			if requireFiles {
+				info, err := os.Stat(localPath)
+				if err != nil {
+					return nil, nil, ProjectError{Msg: fmt.Sprintf("plugin cache for %s does not exist: %s", plugin.Slug, localPath)}
+				}
+				if info.IsDir() {
+					return nil, nil, ProjectError{Msg: fmt.Sprintf("plugin cache for %s must be a zip file, got directory: %s", plugin.Slug, localPath)}
 				}
 			}
 			remotePath := path.Join(remoteTmp, plugin.Slug+".zip")
@@ -984,6 +1295,10 @@ func pluginLocalSourceMissing(plugin wordpressPluginSpec, root string) bool {
 		info, err := os.Stat(sourceDir)
 		return err != nil || !info.IsDir()
 	}
+	if pluginSourceIsCache(plugin) {
+		info, err := os.Stat(config.PluginCacheZip(plugin.Slug))
+		return err != nil || info.IsDir()
+	}
 	installSource := pluginInstallSource(plugin)
 	if !remotePluginSourceLooksLocal(plugin, installSource) {
 		return false
@@ -1106,6 +1421,36 @@ func localPluginInstallScript(plugins []wordpressPluginSpec, installSources map[
 		installSource := pluginInstallSource(plugin)
 		if override := installSources[plugin.Slug]; override != "" {
 			installSource = override
+		}
+		if installSource == localRepoPluginInstallSourceMark {
+			builder.WriteString("if ! wp plugin is-installed ")
+			builder.WriteString(slug)
+			builder.WriteString("; then\n")
+			builder.WriteString("  printf 'Repo plugin %s is not available in the local WordPress env. Run nf env up to refresh mounts.\\n' ")
+			builder.WriteString(slug)
+			builder.WriteString(" >&2\n")
+			builder.WriteString("  exit 1\n")
+			if plugin.Activate {
+				builder.WriteString("elif ! wp plugin is-active ")
+				builder.WriteString(slug)
+				builder.WriteString("; then\n")
+				builder.WriteString("  wp plugin activate ")
+				builder.WriteString(slug)
+				builder.WriteString("\n")
+			}
+			builder.WriteString("fi\n")
+			if plugin.AutoUpdate {
+				builder.WriteString("if ! wp plugin auto-updates status ")
+				builder.WriteString(slug)
+				builder.WriteString(" --enabled-only --field=name 2>/dev/null | grep -qx ")
+				builder.WriteString(slug)
+				builder.WriteString("; then\n")
+				builder.WriteString("  wp plugin auto-updates enable ")
+				builder.WriteString(slug)
+				builder.WriteString("\n")
+				builder.WriteString("fi\n")
+			}
+			continue
 		}
 		source := shellQuoteArg(installSource)
 		builder.WriteString("if ! wp plugin is-installed ")

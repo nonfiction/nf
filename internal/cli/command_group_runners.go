@@ -516,6 +516,10 @@ func runEnvPlugin(argv []string) int {
 			{"remove, rm <plugin>", "remove a WordPress plugin from nf.json"},
 			{},
 			{"install [remote] [--dry-run] [--yes]", "install and activate configured WordPress plugins"},
+			{"cache add <plugin> <zip>", "add a plugin zip to the local nf plugin cache"},
+			{"cache save <plugin>", "save an installed local plugin to the local nf plugin cache"},
+			{"cache list, cache ls", "list cached WordPress plugin zips"},
+			{"cache show <plugin>", "show local plugin cache details"},
 		})
 		return 0
 	}
@@ -523,6 +527,7 @@ func runEnvPlugin(argv []string) int {
 	args := argv[1:]
 	var addOpts envPluginAddOptions
 	var installOpts envPluginInstallOptions
+	var cacheOpts envPluginCacheOptions
 	remoteName := ""
 	removeSlug := ""
 	switch cmd {
@@ -561,6 +566,12 @@ func runEnvPlugin(argv []string) int {
 		if !ok {
 			return 1
 		}
+	case "cache":
+		var ok bool
+		cacheOpts, ok = parseEnvPluginCacheArgs(args)
+		if !ok {
+			return 1
+		}
 	default:
 		fmt.Fprintln(os.Stderr, "unsupported env plugin command")
 		return 1
@@ -593,6 +604,17 @@ func runEnvPlugin(argv []string) int {
 	}
 	if cmd == "diff" {
 		return cmdEnvPluginsDiffWithOptions(root, metadata, remoteName)
+	}
+	if cmd == "cache" {
+		if cacheOpts.Command != "save" {
+			return cmdEnvPluginsCache(envConfig{}, cacheOpts)
+		}
+		cfg, ok := loadEnvConfig(root, metadata)
+		if !ok {
+			fmt.Fprintln(os.Stderr, "Missing env metadata in nf.json. Run nf env up first.")
+			return 1
+		}
+		return cmdEnvPluginsCache(cfg, cacheOpts)
 	}
 	return cmdEnvPluginsInstallWithOptions(root, metadata, installOpts)
 }
@@ -690,6 +712,48 @@ func parseEnvPluginInstallArgs(args []string) (envPluginInstallOptions, bool) {
 	}
 	if len(positionals) == 1 {
 		opts.RemoteName = positionals[0]
+	}
+	return opts, true
+}
+
+func parseEnvPluginCacheArgs(args []string) (envPluginCacheOptions, bool) {
+	var opts envPluginCacheOptions
+	if len(args) == 0 {
+		fmt.Fprintln(os.Stderr, "env plugin cache requires a command")
+		return opts, false
+	}
+	cmd := cliCommandAlias(args[0])
+	opts.Command = cmd
+	switch cmd {
+	case "add":
+		if len(args) != 3 {
+			fmt.Fprintln(os.Stderr, "env plugin cache add requires a plugin slug and zip path")
+			return opts, false
+		}
+		opts.Slug = strings.TrimSpace(args[1])
+		opts.Source = strings.TrimSpace(args[2])
+		if opts.Slug == "" || opts.Source == "" || strings.HasPrefix(opts.Slug, "-") || strings.HasPrefix(opts.Source, "-") {
+			fmt.Fprintln(os.Stderr, "env plugin cache add requires a plugin slug and zip path")
+			return opts, false
+		}
+	case "save", "show":
+		if len(args) != 2 {
+			fmt.Fprintf(os.Stderr, "env plugin cache %s requires exactly one plugin slug\n", cmd)
+			return opts, false
+		}
+		opts.Slug = strings.TrimSpace(args[1])
+		if opts.Slug == "" || strings.HasPrefix(opts.Slug, "-") {
+			fmt.Fprintf(os.Stderr, "env plugin cache %s requires exactly one plugin slug\n", cmd)
+			return opts, false
+		}
+	case "list":
+		if len(args) != 1 {
+			fmt.Fprintln(os.Stderr, "env plugin cache list takes no arguments")
+			return opts, false
+		}
+	default:
+		fmt.Fprintln(os.Stderr, "unsupported env plugin cache command")
+		return opts, false
 	}
 	return opts, true
 }

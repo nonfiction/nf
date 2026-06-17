@@ -11240,6 +11240,41 @@ func TestRenderEnvComposeUsesMetadataDefaults(t *testing.T) {
 	}
 }
 
+func TestRenderEnvComposeMountsConfiguredRepoPlugins(t *testing.T) {
+	root := t.TempDir()
+	for _, slug := range []string{"client-plugin", "client-tools"} {
+		if err := os.MkdirAll(filepath.Join(root, "plugins", slug), 0o755); err != nil {
+			t.Fatalf("MkdirAll(plugin) error = %v", err)
+		}
+	}
+	metadata := map[string]any{
+		"project": map[string]any{"slug": "client"},
+		"wordpress": map[string]any{"theme_path": "theme", "plugins": []any{
+			map[string]any{"slug": "client-plugin", "source": "repo"},
+			map[string]any{"slug": "client-tools", "source": "repo"},
+			map[string]any{"slug": "missing-plugin", "source": "repo"},
+			"stream",
+		}},
+		"env": map[string]any{"compose": "docker compose", "wordpress_service": "wp-app", "theme_mount_slug": "theme-slot", "uploads_path": "uploads"},
+	}
+	cfg, ok := loadEnvConfig(root, metadata)
+	if !ok {
+		t.Fatalf("loadEnvConfig() = false, want true")
+	}
+	compose := renderEnvCompose(cfg)
+	for _, want := range []string{
+		filepath.Join(root, "plugins", "client-plugin") + ":/var/www/html/wp-content/plugins/client-plugin",
+		filepath.Join(root, "plugins", "client-tools") + ":/var/www/html/wp-content/plugins/client-tools",
+	} {
+		if !strings.Contains(compose, want) {
+			t.Fatalf("renderEnvCompose() missing %q:\n%s", want, compose)
+		}
+	}
+	if strings.Contains(compose, "missing-plugin:/var/www/html") || strings.Contains(compose, "stream:/var/www/html") {
+		t.Fatalf("renderEnvCompose() mounted a non-existent or non-repo plugin:\n%s", compose)
+	}
+}
+
 func TestEnsureManagedEnvUsesConfiguredDockerImages(t *testing.T) {
 	configHome := t.TempDir()
 	t.Setenv("NF_CONFIG_HOME", configHome)
@@ -12184,7 +12219,7 @@ func TestRunEnvPluginsInstallInstallsMissingAndActivatesInstalled(t *testing.T) 
 	}
 }
 
-func TestRunEnvPluginsInstallPackagesRepoPluginSource(t *testing.T) {
+func TestRunEnvPluginsInstallUsesMountedRepoPluginSource(t *testing.T) {
 	repoRoot := t.TempDir()
 	if err := os.Mkdir(filepath.Join(repoRoot, ".git"), 0o755); err != nil {
 		t.Fatalf("Mkdir(.git) error = %v", err)
@@ -12244,13 +12279,268 @@ func TestRunEnvPluginsInstallPackagesRepoPluginSource(t *testing.T) {
 		t.Fatalf("ReadFile(log) error = %v", err)
 	}
 	logText := string(logData)
-	for _, want := range []string{"wp plugin install /env/uploads/.nf-plugin-zips/client-plugin.zip --activate", "wp plugin auto-updates enable client-plugin"} {
+	for _, want := range []string{"wp plugin is-installed client-plugin", "wp plugin activate client-plugin", "wp plugin auto-updates enable client-plugin"} {
 		if !strings.Contains(logText, want) {
 			t.Fatalf("repo plugin install script missing %q:\n%s", want, logText)
 		}
 	}
-	if _, err := os.Stat(filepath.Join(dataDir, "envs", "client", "uploads", ".nf-plugin-zips")); !os.IsNotExist(err) {
-		t.Fatalf("temporary repo plugin zip directory was not cleaned up: %v", err)
+	if strings.Contains(logText, "wp plugin install") || strings.Contains(logText, ".nf-plugin-zips") {
+		t.Fatalf("repo plugin should be activated from mount, not zip-installed:\n%s", logText)
+	}
+	if _, err := os.Stat(filepath.Join(dataDir, "envs", "client", "uploads", ".nf-plugin-cache")); !os.IsNotExist(err) {
+		t.Fatalf("temporary plugin cache directory was not cleaned up: %v", err)
+	}
+}
+
+func TestRunEnvPluginsCacheAddListShow(t *testing.T) {
+	repoRoot := t.TempDir()
+	if err := os.Mkdir(filepath.Join(repoRoot, ".git"), 0o755); err != nil {
+		t.Fatalf("Mkdir(.git) error = %v", err)
+	}
+	project := map[string]any{
+		"version":   1,
+		"project":   map[string]any{"slug": "client", "name": "Client"},
+		"wordpress": map[string]any{"theme_path": "theme", "theme_slug": "theme", "plugins": []any{}},
+		"env":       map[string]any{"compose": "docker compose", "wordpress_service": "wordpress", "cli_service": "cli", "theme_mount_slug": "theme", "uploads_path": "uploads"},
+	}
+	data, err := json.MarshalIndent(project, "", "  ")
+	if err != nil {
+		t.Fatalf("MarshalIndent(project) error = %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(repoRoot, "nf.json"), append(data, '\n'), 0o644); err != nil {
+		t.Fatalf("WriteFile(nf.json) error = %v", err)
+	}
+	sourceDir := filepath.Join(t.TempDir(), "acf-pro")
+	if err := os.MkdirAll(sourceDir, 0o755); err != nil {
+		t.Fatalf("MkdirAll(source plugin) error = %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(sourceDir, "acf-pro.php"), []byte("<?php\n/* Plugin Name: ACF Pro */\n"), 0o644); err != nil {
+		t.Fatalf("WriteFile(plugin) error = %v", err)
+	}
+	sourceZip := filepath.Join(t.TempDir(), "acf-pro.zip")
+	if _, err := packagePluginSource(sourceDir, sourceZip, "acf-pro"); err != nil {
+		t.Fatalf("packagePluginSource() error = %v", err)
+	}
+	dataDir := t.TempDir()
+	t.Setenv("NF_DATA_HOME", dataDir)
+	oldwd, err := os.Getwd()
+	if err != nil {
+		t.Fatalf("Getwd() error = %v", err)
+	}
+	if err := os.Chdir(repoRoot); err != nil {
+		t.Fatalf("Chdir() error = %v", err)
+	}
+	t.Cleanup(func() { _ = os.Chdir(oldwd) })
+
+	addOutput := captureStdout(t, func() {
+		if got := Run([]string{"env", "plugin", "cache", "add", "acf-pro", sourceZip}); got != 0 {
+			t.Fatalf("Run(cache add) = %d, want 0", got)
+		}
+	})
+	cacheZip := filepath.Join(dataDir, "plugins", "acf-pro", "acf-pro.zip")
+	if !strings.Contains(addOutput, "Cached WordPress plugin acf-pro at "+cacheZip) {
+		t.Fatalf("cache add output missing cache path:\n%s", addOutput)
+	}
+	if _, err := os.Stat(cacheZip); err != nil {
+		t.Fatalf("cached zip missing: %v", err)
+	}
+	listOutput := captureStdout(t, func() {
+		if got := Run([]string{"env", "plugin", "cache", "list"}); got != 0 {
+			t.Fatalf("Run(cache list) = %d, want 0", got)
+		}
+	})
+	for _, want := range []string{"plugin", "zip", "acf-pro", cacheZip} {
+		if !strings.Contains(listOutput, want) {
+			t.Fatalf("cache list output missing %q:\n%s", want, listOutput)
+		}
+	}
+	showOutput := captureStdout(t, func() {
+		if got := Run([]string{"env", "plugin", "cache", "show", "acf-pro"}); got != 0 {
+			t.Fatalf("Run(cache show) = %d, want 0", got)
+		}
+	})
+	for _, want := range []string{"plugin: acf-pro", "status: available", cacheZip} {
+		if !strings.Contains(showOutput, want) {
+			t.Fatalf("cache show output missing %q:\n%s", want, showOutput)
+		}
+	}
+}
+
+func TestRunEnvPluginsCacheSaveArchivesInstalledPlugin(t *testing.T) {
+	repoRoot := t.TempDir()
+	if err := os.Mkdir(filepath.Join(repoRoot, ".git"), 0o755); err != nil {
+		t.Fatalf("Mkdir(.git) error = %v", err)
+	}
+	project := map[string]any{
+		"version":   1,
+		"project":   map[string]any{"slug": "client", "name": "Client"},
+		"wordpress": map[string]any{"theme_path": "theme", "theme_slug": "theme", "plugins": []any{}},
+		"env":       map[string]any{"compose": "docker compose", "wordpress_service": "wordpress", "cli_service": "cli", "theme_mount_slug": "theme", "uploads_path": "uploads"},
+	}
+	data, err := json.MarshalIndent(project, "", "  ")
+	if err != nil {
+		t.Fatalf("MarshalIndent(project) error = %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(repoRoot, "nf.json"), append(data, '\n'), 0o644); err != nil {
+		t.Fatalf("WriteFile(nf.json) error = %v", err)
+	}
+	cacheSource := t.TempDir()
+	installedPlugin := filepath.Join(cacheSource, "sitepress-multilingual-cms")
+	if err := os.MkdirAll(filepath.Join(installedPlugin, "classes"), 0o755); err != nil {
+		t.Fatalf("MkdirAll(installed plugin) error = %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(installedPlugin, "sitepress.php"), []byte("<?php\n/* Plugin Name: WPML */\n"), 0o644); err != nil {
+		t.Fatalf("WriteFile(plugin main) error = %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(installedPlugin, "classes", "loader.php"), []byte("<?php\n"), 0o644); err != nil {
+		t.Fatalf("WriteFile(plugin include) error = %v", err)
+	}
+	dockerDir := t.TempDir()
+	logPath := filepath.Join(dockerDir, "docker-args.txt")
+	dockerScript := []byte("#!/bin/sh\nprintf '%s\n' \"$@\" >> \"$DOCKER_LOG\"\ncase \"$*\" in\n  *\".nf-plugin-cache-save\"*) mkdir -p \"$NF_DATA_HOME/envs/client/uploads/.nf-plugin-cache-save\"; tar -C \"$CACHE_SOURCE\" -czf \"$NF_DATA_HOME/envs/client/uploads/.nf-plugin-cache-save/sitepress-multilingual-cms.tar.gz\" sitepress-multilingual-cms ;;\nesac\nexit 0\n")
+	if err := os.WriteFile(filepath.Join(dockerDir, "docker"), dockerScript, 0o755); err != nil {
+		t.Fatalf("WriteFile(docker) error = %v", err)
+	}
+	dataDir := t.TempDir()
+	t.Setenv("CACHE_SOURCE", cacheSource)
+	t.Setenv("DOCKER_LOG", logPath)
+	t.Setenv("NF_DATA_HOME", dataDir)
+	t.Setenv("PATH", dockerDir+string(os.PathListSeparator)+os.Getenv("PATH"))
+	oldwd, err := os.Getwd()
+	if err != nil {
+		t.Fatalf("Getwd() error = %v", err)
+	}
+	if err := os.Chdir(repoRoot); err != nil {
+		t.Fatalf("Chdir() error = %v", err)
+	}
+	t.Cleanup(func() { _ = os.Chdir(oldwd) })
+
+	output := captureStdout(t, func() {
+		if got := Run([]string{"env", "plugin", "cache", "save", "sitepress-multilingual-cms"}); got != 0 {
+			t.Fatalf("Run(cache save) = %d, want 0", got)
+		}
+	})
+	cacheZip := filepath.Join(dataDir, "plugins", "sitepress-multilingual-cms", "sitepress-multilingual-cms.zip")
+	if !strings.Contains(output, "Cached WordPress plugin sitepress-multilingual-cms at "+cacheZip) {
+		t.Fatalf("cache save output missing cache path:\n%s", output)
+	}
+	names := readZipNames(t, cacheZip)
+	for _, want := range []string{"sitepress-multilingual-cms/sitepress.php", "sitepress-multilingual-cms/classes/loader.php"} {
+		if !names[want] {
+			t.Fatalf("cached zip missing %q; names=%v", want, names)
+		}
+	}
+}
+
+func TestRunEnvPluginsInstallUsesCachePluginSource(t *testing.T) {
+	repoRoot := t.TempDir()
+	if err := os.Mkdir(filepath.Join(repoRoot, ".git"), 0o755); err != nil {
+		t.Fatalf("Mkdir(.git) error = %v", err)
+	}
+	project := map[string]any{
+		"version":   1,
+		"project":   map[string]any{"slug": "client", "name": "Client"},
+		"wordpress": map[string]any{"theme_path": "theme", "theme_slug": "theme", "plugins": []any{map[string]any{"slug": "acf-pro", "source": "cache", "auto_update": false}}},
+		"env":       map[string]any{"compose": "docker compose", "wordpress_service": "wordpress", "cli_service": "cli", "theme_mount_slug": "theme", "uploads_path": "uploads"},
+	}
+	data, err := json.MarshalIndent(project, "", "  ")
+	if err != nil {
+		t.Fatalf("MarshalIndent(project) error = %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(repoRoot, "nf.json"), append(data, '\n'), 0o644); err != nil {
+		t.Fatalf("WriteFile(nf.json) error = %v", err)
+	}
+	dataDir := t.TempDir()
+	t.Setenv("NF_DATA_HOME", dataDir)
+	sourceDir := filepath.Join(t.TempDir(), "acf-pro")
+	if err := os.MkdirAll(sourceDir, 0o755); err != nil {
+		t.Fatalf("MkdirAll(source plugin) error = %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(sourceDir, "acf-pro.php"), []byte("<?php\n"), 0o644); err != nil {
+		t.Fatalf("WriteFile(plugin) error = %v", err)
+	}
+	if _, err := packagePluginSource(sourceDir, config.PluginCacheZip("acf-pro"), "acf-pro"); err != nil {
+		t.Fatalf("packagePluginSource(cache) error = %v", err)
+	}
+	dockerDir := t.TempDir()
+	logPath := filepath.Join(dockerDir, "docker-args.txt")
+	dockerScript := []byte("#!/bin/sh\nprintf '%s\n' \"$@\" >> \"$DOCKER_LOG\"\nexit 0\n")
+	if err := os.WriteFile(filepath.Join(dockerDir, "docker"), dockerScript, 0o755); err != nil {
+		t.Fatalf("WriteFile(docker) error = %v", err)
+	}
+	t.Setenv("DOCKER_LOG", logPath)
+	t.Setenv("PATH", dockerDir+string(os.PathListSeparator)+os.Getenv("PATH"))
+	oldwd, err := os.Getwd()
+	if err != nil {
+		t.Fatalf("Getwd() error = %v", err)
+	}
+	if err := os.Chdir(repoRoot); err != nil {
+		t.Fatalf("Chdir() error = %v", err)
+	}
+	t.Cleanup(func() { _ = os.Chdir(oldwd) })
+
+	if got := Run([]string{"env", "plugin", "install"}); got != 0 {
+		t.Fatalf("Run(env plugin install cache source) = %d, want 0", got)
+	}
+	logData, err := os.ReadFile(logPath)
+	if err != nil {
+		t.Fatalf("ReadFile(log) error = %v", err)
+	}
+	logText := string(logData)
+	for _, want := range []string{"wp plugin install /env/uploads/.nf-plugin-cache/acf-pro.zip --activate", "wp plugin is-installed acf-pro"} {
+		if !strings.Contains(logText, want) {
+			t.Fatalf("cache plugin install script missing %q:\n%s", want, logText)
+		}
+	}
+	if strings.Contains(logText, "wp plugin auto-updates enable acf-pro") {
+		t.Fatalf("cache plugin with auto_update false should not enable auto-updates:\n%s", logText)
+	}
+	if _, err := os.Stat(filepath.Join(dataDir, "envs", "client", "uploads", ".nf-plugin-cache")); !os.IsNotExist(err) {
+		t.Fatalf("temporary plugin cache directory was not cleaned up: %v", err)
+	}
+}
+
+func TestRemotePluginInstallSpecsUploadsCacheSource(t *testing.T) {
+	dataDir := t.TempDir()
+	t.Setenv("NF_DATA_HOME", dataDir)
+	sourceDir := filepath.Join(t.TempDir(), "acf-pro")
+	if err := os.MkdirAll(sourceDir, 0o755); err != nil {
+		t.Fatalf("MkdirAll(source plugin) error = %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(sourceDir, "acf-pro.php"), []byte("<?php\n"), 0o644); err != nil {
+		t.Fatalf("WriteFile(plugin) error = %v", err)
+	}
+	cacheZip := config.PluginCacheZip("acf-pro")
+	if _, err := packagePluginSource(sourceDir, cacheZip, "acf-pro"); err != nil {
+		t.Fatalf("packagePluginSource(cache) error = %v", err)
+	}
+	plugins := []wordpressPluginSpec{{Slug: "acf-pro", Source: "cache", Install: true, Activate: true}}
+	remotePlugins, uploads, err := remotePluginInstallSpecs(t.TempDir(), plugins, "/tmp/nf-plugins-client", true, nil)
+	if err != nil {
+		t.Fatalf("remotePluginInstallSpecs() error = %v", err)
+	}
+	if len(remotePlugins) != 1 || remotePlugins[0].InstallSource != "/tmp/nf-plugins-client/acf-pro.zip" {
+		t.Fatalf("remotePlugins = %#v, want cache remote install source", remotePlugins)
+	}
+	if len(uploads) != 1 || uploads[0].LocalPath != cacheZip || uploads[0].RemotePath != "/tmp/nf-plugins-client/acf-pro.zip" {
+		t.Fatalf("uploads = %#v, want cache zip upload", uploads)
+	}
+}
+
+func TestEnvSnapshotScriptsExcludeRepoPluginMounts(t *testing.T) {
+	cfg := envConfig{RepoPluginMounts: []envPluginMount{{Slug: "client-plugin", Host: "/repo/plugins/client-plugin"}}}
+	createScript := envSnapshotCreateScript(cfg, "snapshot")
+	if !strings.Contains(createScript, "--exclude=wp-content/plugins/client-plugin") {
+		t.Fatalf("snapshot create script missing repo plugin exclude:\n%s", createScript)
+	}
+	restoreScript := envSnapshotRestoreScript(cfg, "snapshot")
+	for _, want := range []string{"repo_plugins=client-plugin", "case \" $repo_plugins \" in *\" $base \"*) continue", "--exclude=wp-content/plugins/client-plugin"} {
+		if !strings.Contains(restoreScript, want) {
+			t.Fatalf("snapshot restore script missing %q:\n%s", want, restoreScript)
+		}
+	}
+	if strings.Contains(restoreScript, "rm -rf /var/www/html/wp-content/uploads /var/www/html/wp-content/plugins") {
+		t.Fatalf("snapshot restore script should not remove the whole plugins directory:\n%s", restoreScript)
 	}
 }
 

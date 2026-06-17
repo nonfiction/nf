@@ -35,6 +35,12 @@ type envConfig struct {
 	AdminUser        string
 	AdminEmail       string
 	AdminPassword    string
+	RepoPluginMounts []envPluginMount
+}
+
+type envPluginMount struct {
+	Slug string
+	Host string
 }
 
 type envSnapshotContents struct {

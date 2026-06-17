@@ -264,6 +264,7 @@ func loadEnvConfig(root string, metadata map[string]any) (envConfig, bool) {
 		ThemeMountSlug:   firstNonEmpty(mapStringAtPath(raw, "theme_mount_slug"), "theme"),
 		UploadsPath:      firstNonEmpty(mapStringAtPath(raw, "uploads_path"), "uploads"),
 		ThemeSlug:        firstNonEmpty(recordValueString(wordpress["theme_slug"]), projectSlug, "theme"),
+		RepoPluginMounts: repoPluginMountsFromMetadata(root, metadata),
 	}, true
 }
 
