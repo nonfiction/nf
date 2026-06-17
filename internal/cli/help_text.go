@@ -135,7 +135,7 @@ func runConfigHelp() int {
 
 func runPasswordHelp() int {
 	printGroupHelp("password", []helpLine{
-		{"derive <scope> [args...]", "derive a password"},
+		{"derive <scope> <value...> [--password-version N]", "derive a password"},
 		{},
 		{"show-salt", "show the masked password salt"},
 		{"set-salt <salt>", "save the shared password salt"},

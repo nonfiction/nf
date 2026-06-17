@@ -468,7 +468,16 @@ func renderEnvRewritesConf() string {
 `
 }
 
-func cmdPasswordDerive(slug, purpose string, nonInteractive bool) int {
+func cmdPasswordDerive(scope, identity, version string, versionSet, nonInteractive bool) int {
+	scope = strings.TrimSpace(scope)
+	identity = strings.TrimSpace(identity)
+	if scope == "" || identity == "" {
+		fmt.Fprintln(os.Stderr, "password derive requires a scope and at least one value")
+		return 1
+	}
+	if passwordDeriveScopeUsesProjectVersion(scope) && !versionSet {
+		version = passwordDeriveDefaultVersion(scope, identity)
+	}
 	if err := envwizard.Ensure(passwordRequirements(), nonInteractive); err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		return 1
@@ -478,7 +487,7 @@ func cmdPasswordDerive(slug, purpose string, nonInteractive bool) int {
 		fmt.Fprintln(os.Stderr, err)
 		return 1
 	}
-	fmt.Println(passwords.DerivePassword(slug, purpose, salt))
+	fmt.Println(passwords.DerivePassword(passwordDeriveIdentity(scope, identity, version), scope, salt))
 	return 0
 }
 

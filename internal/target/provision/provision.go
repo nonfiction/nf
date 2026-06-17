@@ -290,7 +290,7 @@ func adminerCredentialState(plan Plan) map[string]any {
 	return map[string]any{
 		"derived":  true,
 		"identity": plan.Hostname,
-		"purpose":  "db",
+		"purpose":  "db-admin",
 		"stored":   false,
 		"user":     plan.AdminerUser,
 	}
@@ -1377,7 +1377,7 @@ write_files:
         "php_version": "__PHP_VERSION__",
         "php_service": "__PHP_FPM_SERVICE__",
         "php_socket": "__PHP_FPM_SOCKET__",
-        "db": {"tool":"__ADMINER_TOOL__","version":"__ADMINER_VERSION__","hostname":"__ADMINER_HOSTNAME__","url":"__ADMINER_URL__","path":"/var/www/shared/db/index.php","config_path":"/var/www/shared/db/adminneo-config.php","download_url":"__ADMINER_DOWNLOAD_URL__","user":"__ADMINER_USER__","auth":{"type":"basic","user":"__ADMINER_USER__","password":{"derived":true,"identity":"__HOSTNAME__","purpose":"db","stored":false}},"database":{"host":"localhost","user":"__ADMINER_USER__","grants":"site-env-databases"}},
+        "db": {"tool":"__ADMINER_TOOL__","version":"__ADMINER_VERSION__","hostname":"__ADMINER_HOSTNAME__","url":"__ADMINER_URL__","path":"/var/www/shared/db/index.php","config_path":"/var/www/shared/db/adminneo-config.php","download_url":"__ADMINER_DOWNLOAD_URL__","user":"__ADMINER_USER__","auth":{"type":"basic","user":"__ADMINER_USER__","password":{"derived":true,"identity":"__HOSTNAME__","purpose":"db-admin","stored":false}},"database":{"host":"localhost","user":"__ADMINER_USER__","grants":"site-env-databases"}},
         "sites_path": "/var/lib/nf/sites.json",
         "created_at": "${created_at}"
       }
@@ -1821,7 +1821,7 @@ func adminerPlanBlock(plan Plan) []string {
 		"  url: " + plan.AdminerURL,
 		"  hostname: " + plan.AdminerHostname,
 		"  user: " + plan.AdminerUser,
-		"  password: derived from hostname + purpose db",
+		"  password: derived from hostname + purpose db-admin",
 		"  reveal: nf target show " + plan.Name,
 		"  mysql grants: site env databases only",
 	}
@@ -3080,7 +3080,7 @@ func ProvisionServer(plan Plan) (*ServerCreateResult, error) {
 		return nil, err
 	}
 	rootPass := passwords.DerivePassword(effectivePlan.Hostname, "linode-root", salt)
-	dbPass := passwords.DerivePassword(effectivePlan.Hostname, "db", salt)
+	dbPass := passwords.DerivePassword(effectivePlan.Hostname, "db-admin", salt)
 	effectivePlan.AdminerHTPasswd = adminerHtpasswdHash(dbPass)
 	effectivePlan.AdminerMySQLHash = adminerMySQLPasswordHash(dbPass)
 	dnsimpleToken, err := requiredEnv("DNSIMPLE_TOKEN")

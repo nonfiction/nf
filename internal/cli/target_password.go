@@ -77,7 +77,7 @@ func targetPassword(needle string, scope passwordScope) (string, error) {
 		if identity == "" {
 			return "", ProjectError{Msg: fmt.Sprintf("Target %q is missing database password identity.", needle)}
 		}
-		purpose := firstNonEmpty(mapStringAtPath(remote, "db", "auth", "password", "purpose"), mapStringAtPath(remote, "adminer", "auth", "password", "purpose"), "db")
+		purpose := firstNonEmpty(mapStringAtPath(remote, "db", "auth", "password", "purpose"), mapStringAtPath(remote, "adminer", "auth", "password", "purpose"), passwordDeriveScopeDBAdmin)
 		return passwords.DerivePassword(identity, purpose, salt), nil
 	default:
 		return "", ProjectError{Msg: "unsupported target password scope"}

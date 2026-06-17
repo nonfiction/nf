@@ -112,7 +112,7 @@ func completeContextCandidates(args []string) []string {
 	case "config":
 		return []string{"init", "show", "set-base-domain", "set-default-wp-email", "set-default-wp-user", "set-basicauth-default-user", "set-db-default-user", "set-docker-db-image", "set-docker-wordpress-image", "set-docker-user", "set-kinsta-default-region", "set-kinsta-default-php", "set-linode-default-region", "set-linode-default-type", "set-linode-default-image", "set-linode-default-user", "help"}
 	case "password":
-		return []string{"show-salt", "set-salt", "derive", "help"}
+		return passwordCompletionCandidates(args[1:])
 	case "remote":
 		return remoteCompletionCandidates(args[1:])
 	case "env":
@@ -121,6 +121,42 @@ func completeContextCandidates(args []string) []string {
 		return themeCompletionCandidates(args[1:])
 	case "public":
 		return publicCompletionCandidates(args[1:])
+	default:
+		return nil
+	}
+}
+
+func passwordCompletionCandidates(args []string) []string {
+	if len(args) == 0 {
+		return []string{"show-salt", "set-salt", "derive", "help"}
+	}
+	if args[0] != "derive" {
+		return nil
+	}
+	if len(args) == 1 {
+		return append(passwordDeriveScopeCandidates(), "--password-version")
+	}
+	if args[len(args)-1] == "--password-version" {
+		return []string{"0"}
+	}
+	if len(args) == 2 {
+		return append(passwordDeriveIdentityCompletionNames(args[1]), "--password-version")
+	}
+	return []string{"--password-version"}
+}
+
+func passwordDeriveIdentityCompletionNames(scope string) []string {
+	switch strings.TrimSpace(scope) {
+	case passwordDeriveScopeWPAdmin, passwordDeriveScopeMySQL, passwordDeriveScopeBasicAuth:
+		values := cachedSitePasswordSlugCompletionNames()
+		if root, ok := currentNFProjectRoot(); ok {
+			if metadata, err := loadProjectMetadataOrError(root); err == nil {
+				values = append(values, mapStringAtPath(metadata, "project", "slug"))
+			}
+		}
+		return uniqueSortedStrings(values)
+	case passwordDeriveScopeLinodeRoot, passwordDeriveScopeDBAdmin:
+		return cachedLinodeTargetHostCompletionNames()
 	default:
 		return nil
 	}
@@ -448,6 +484,21 @@ func cachedLinodeTargetCompletionNames() []string {
 	return uniqueSortedStrings(values)
 }
 
+func cachedLinodeTargetHostCompletionNames() []string {
+	targets, err := completionCachedTargets()
+	if err != nil {
+		return nil
+	}
+	values := make([]string, 0, len(targets))
+	for _, target := range targets {
+		if !strings.EqualFold(strings.TrimSpace(recordValueString(target["provider"])), "linode") {
+			continue
+		}
+		values = append(values, firstRecordString(target, "hostname", "host"))
+	}
+	return uniqueSortedStrings(values)
+}
+
 func completionCachedTargets() ([]map[string]any, error) {
 	providers, err := state.LoadStateRecords("providers")
 	if err != nil {
@@ -467,6 +518,18 @@ func cachedSiteCompletionNames() []string {
 	values := make([]string, 0, len(sites))
 	for _, site := range sites {
 		values = append(values, siteRecordID(site))
+	}
+	return uniqueSortedStrings(values)
+}
+
+func cachedSitePasswordSlugCompletionNames() []string {
+	sites, err := state.LoadStateRecords("sites")
+	if err != nil {
+		return nil
+	}
+	values := make([]string, 0, len(sites))
+	for _, site := range sites {
+		values = append(values, sitePasswordSlug(site))
 	}
 	return uniqueSortedStrings(values)
 }

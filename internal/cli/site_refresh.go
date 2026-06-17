@@ -130,7 +130,7 @@ func targetDBLogin(record map[string]any) (string, string, string) {
 	if err != nil {
 		return url, user, ""
 	}
-	purpose := firstNonEmpty(mapStringAtPath(record, "db", "auth", "password", "purpose"), mapStringAtPath(record, "adminer", "auth", "password", "purpose"), "db")
+	purpose := firstNonEmpty(mapStringAtPath(record, "db", "auth", "password", "purpose"), mapStringAtPath(record, "adminer", "auth", "password", "purpose"), passwordDeriveScopeDBAdmin)
 	return url, user, passwords.DerivePassword(identity, purpose, salt)
 }
 
