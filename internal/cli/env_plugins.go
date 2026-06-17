@@ -3,16 +3,21 @@ package cli
 // WordPress plugin bootstrap commands backed by wordpress.plugins in nf.json.
 
 import (
+	"archive/zip"
 	"bytes"
 	"fmt"
+	"io/fs"
 	"os"
 	"os/exec"
 	"path"
 	"path/filepath"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
 )
+
+const wordpressPluginRepoSource = "repo"
 
 type wordpressPluginSpec struct {
 	Slug       string
@@ -90,7 +95,7 @@ func parseWordPressPluginSpec(index int, value any) (wordpressPluginSpec, error)
 			autoUpdate = boolValue
 		}
 		source := strings.TrimSpace(recordValueString(typed["source"]))
-		if source == "" {
+		if source == "" && install {
 			source = "wordpress.org"
 		}
 		note := strings.TrimSpace(recordValueString(typed["note"]))
@@ -269,7 +274,7 @@ func cmdEnvPluginsDiffWithOptions(root string, metadata map[string]any, remoteNa
 		}
 		return cmdEnvPluginsDiffLocal(cfg, metadata)
 	}
-	return cmdEnvPluginsDiffRemote(metadata, remoteName)
+	return cmdEnvPluginsDiffRemote(root, metadata, remoteName)
 }
 
 func cmdEnvPluginsStatusLocal(cfg envConfig, metadata map[string]any) int {
@@ -316,7 +321,7 @@ func cmdEnvPluginsDiffLocal(cfg envConfig, metadata map[string]any) int {
 		fmt.Fprintln(os.Stderr, "Local env is not ready. Run nf env up first.")
 		return 1
 	}
-	return printWordPressPluginDiff("Plugin diff:", nil, statuses)
+	return printWordPressPluginDiff("Plugin diff:", nil, statuses, cfg.RepoRoot)
 }
 
 func cmdEnvPluginsStatusRemote(metadata map[string]any, remoteName string) int {
@@ -350,7 +355,7 @@ func cmdEnvPluginsStatusRemote(metadata map[string]any, remoteName string) int {
 	return 0
 }
 
-func cmdEnvPluginsDiffRemote(metadata map[string]any, remoteName string) int {
+func cmdEnvPluginsDiffRemote(root string, metadata map[string]any, remoteName string) int {
 	plugins, err := loadWordPressPluginSpecs(metadata)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, err)
@@ -371,7 +376,7 @@ func cmdEnvPluginsDiffRemote(metadata map[string]any, remoteName string) int {
 		return 1
 	}
 	statuses := parseWordPressPluginDiffStatusOutput(plugins, string(output))
-	return printWordPressPluginDiff("Plugin diff:", &target, statuses)
+	return printWordPressPluginDiff("Plugin diff:", &target, statuses, root)
 }
 
 func cmdEnvPluginsInstall(cfg envConfig, metadata map[string]any) int {
@@ -388,8 +393,16 @@ func cmdEnvPluginsInstall(cfg envConfig, metadata map[string]any) int {
 		fmt.Fprintln(os.Stderr, err)
 		return 1
 	}
+	localSources, cleanup, err := prepareLocalRepoPluginZips(cfg, plugins)
+	if cleanup != nil {
+		defer cleanup()
+	}
+	if err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		return 1
+	}
 	runner := envPluginInstaller{cfg: cfg}
-	if err := runner.Install(plugins); err != nil {
+	if err := runner.Install(plugins, localSources); err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		return 1
 	}
@@ -416,10 +429,10 @@ func cmdEnvPluginsInstallWithOptions(root string, metadata map[string]any, opts 
 		}
 		return cmdEnvPluginsInstall(cfg, metadata)
 	}
-	return cmdEnvPluginsInstallRemote(metadata, opts)
+	return cmdEnvPluginsInstallRemote(root, metadata, opts)
 }
 
-func cmdEnvPluginsInstallRemote(metadata map[string]any, opts envPluginInstallOptions) int {
+func cmdEnvPluginsInstallRemote(root string, metadata map[string]any, opts envPluginInstallOptions) int {
 	plugins, err := loadWordPressPluginSpecs(metadata)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, err)
@@ -435,7 +448,15 @@ func cmdEnvPluginsInstallRemote(metadata map[string]any, opts envPluginInstallOp
 		return 1
 	}
 	remoteTmp := remotePluginInstallTempDir(target)
-	remotePlugins, uploads, err := remotePluginInstallSpecs(plugins, remoteTmp, !opts.DryRun)
+	repoZips, cleanup, err := prepareRemoteRepoPluginZips(root, plugins, opts.DryRun)
+	if cleanup != nil {
+		defer cleanup()
+	}
+	if err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		return 1
+	}
+	remotePlugins, uploads, err := remotePluginInstallSpecs(root, plugins, remoteTmp, !opts.DryRun, repoZips)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		return 1
@@ -549,9 +570,9 @@ type envPluginInstaller struct {
 	cfg envConfig
 }
 
-func (i envPluginInstaller) Install(plugins []wordpressPluginSpec) error {
+func (i envPluginInstaller) Install(plugins []wordpressPluginSpec, installSources map[string]string) error {
 	envDir := localEnvDir(i.cfg)
-	args := envWordpressExecArgs(i.cfg, "sh", "-lc", localPluginInstallScript(plugins))
+	args := envWordpressExecArgs(i.cfg, "sh", "-lc", localPluginInstallScript(plugins, installSources))
 	preview := envWordpressExecArgs(i.cfg, "<wp plugin bootstrap script>")
 	return runCommandSpecWithPreview(execSpec{Dir: envDir, Args: args}, preview)
 }
@@ -613,16 +634,201 @@ func pluginInstallSource(plugin wordpressPluginSpec) string {
 	return source
 }
 
-func remotePluginInstallSpecs(plugins []wordpressPluginSpec, remoteTmp string, requireFiles bool) ([]remotePluginInstallSpec, []remotePluginUpload, error) {
+func pluginSourceIsRepo(plugin wordpressPluginSpec) bool {
+	return strings.EqualFold(strings.TrimSpace(plugin.Source), wordpressPluginRepoSource)
+}
+
+func repoPluginSourceDir(root string, plugin wordpressPluginSpec) (string, error) {
+	slug := strings.TrimSpace(plugin.Slug)
+	if slug == "" || filepath.IsAbs(slug) || strings.ContainsAny(slug, `/\`) || strings.Contains(slug, "..") {
+		return "", ProjectError{Msg: fmt.Sprintf("repo plugin slug %q must be one safe directory name", plugin.Slug)}
+	}
+	return filepath.Join(root, "plugins", slug), nil
+}
+
+func prepareLocalRepoPluginZips(cfg envConfig, plugins []wordpressPluginSpec) (map[string]string, func(), error) {
+	sources := map[string]string{}
+	if !hasInstallableRepoPlugin(plugins) {
+		return sources, nil, nil
+	}
+	outputDir := filepath.Join(localEnvDir(cfg), firstNonEmpty(cfg.UploadsPath, "uploads"), ".nf-plugin-zips")
+	if err := os.RemoveAll(outputDir); err != nil {
+		return nil, nil, err
+	}
+	cleanup := func() { _ = os.RemoveAll(outputDir) }
+	for _, plugin := range plugins {
+		if !plugin.Install || !pluginSourceIsRepo(plugin) {
+			continue
+		}
+		sourceDir, err := repoPluginSourceDir(cfg.RepoRoot, plugin)
+		if err != nil {
+			cleanup()
+			return nil, nil, err
+		}
+		zipPath := filepath.Join(outputDir, plugin.Slug+".zip")
+		if _, err := packagePluginSource(sourceDir, zipPath, plugin.Slug); err != nil {
+			cleanup()
+			return nil, nil, err
+		}
+		sources[plugin.Slug] = path.Join(cfg.uploadsContainerPath(), ".nf-plugin-zips", plugin.Slug+".zip")
+	}
+	return sources, cleanup, nil
+}
+
+func prepareRemoteRepoPluginZips(root string, plugins []wordpressPluginSpec, dryRun bool) (map[string]string, func(), error) {
+	zips := map[string]string{}
+	if !hasInstallableRepoPlugin(plugins) {
+		return zips, nil, nil
+	}
+	if dryRun {
+		for _, plugin := range plugins {
+			if !plugin.Install || !pluginSourceIsRepo(plugin) {
+				continue
+			}
+			sourceDir, err := repoPluginSourceDir(root, plugin)
+			if err != nil {
+				return nil, nil, err
+			}
+			zips[plugin.Slug] = sourceDir
+		}
+		return zips, nil, nil
+	}
+	outputDir, err := os.MkdirTemp("", "nf-plugin-zips-*")
+	if err != nil {
+		return nil, nil, err
+	}
+	cleanup := func() { _ = os.RemoveAll(outputDir) }
+	for _, plugin := range plugins {
+		if !plugin.Install || !pluginSourceIsRepo(plugin) {
+			continue
+		}
+		sourceDir, err := repoPluginSourceDir(root, plugin)
+		if err != nil {
+			cleanup()
+			return nil, nil, err
+		}
+		zipPath := filepath.Join(outputDir, plugin.Slug+".zip")
+		if _, err := packagePluginSource(sourceDir, zipPath, plugin.Slug); err != nil {
+			cleanup()
+			return nil, nil, err
+		}
+		zips[plugin.Slug] = zipPath
+	}
+	return zips, cleanup, nil
+}
+
+func hasInstallableRepoPlugin(plugins []wordpressPluginSpec) bool {
+	for _, plugin := range plugins {
+		if plugin.Install && pluginSourceIsRepo(plugin) {
+			return true
+		}
+	}
+	return false
+}
+
+func packagePluginSource(sourceDir, outputPath, archiveRoot string) (int, error) {
+	info, err := os.Stat(sourceDir)
+	if err != nil || !info.IsDir() {
+		return 0, ProjectError{Msg: fmt.Sprintf("repo plugin source directory does not exist: %s", sourceDir)}
+	}
+	if archiveRoot == "" || filepath.IsAbs(archiveRoot) || strings.ContainsAny(archiveRoot, `/\`) || strings.Contains(archiveRoot, "..") {
+		return 0, ProjectError{Msg: fmt.Sprintf("plugin archive root %q must be one safe directory name", archiveRoot)}
+	}
+	files := []string{}
+	err = filepath.WalkDir(sourceDir, func(path string, d fs.DirEntry, walkErr error) error {
+		if walkErr != nil {
+			return walkErr
+		}
+		if d.IsDir() {
+			if d.Name() == ".git" {
+				return filepath.SkipDir
+			}
+			return nil
+		}
+		info, err := d.Info()
+		if err != nil {
+			return err
+		}
+		if info.Mode().IsRegular() {
+			files = append(files, path)
+		}
+		return nil
+	})
+	if err != nil {
+		return 0, err
+	}
+	sort.Strings(files)
+	if err := writePluginZip(sourceDir, outputPath, archiveRoot, files); err != nil {
+		return 0, err
+	}
+	return len(files), nil
+}
+
+func writePluginZip(sourceDir, outputPath, archiveRoot string, files []string) error {
+	if err := os.MkdirAll(filepath.Dir(outputPath), 0o755); err != nil {
+		return err
+	}
+	out, err := os.Create(outputPath)
+	if err != nil {
+		return err
+	}
+	zw := zip.NewWriter(out)
+	for _, file := range files {
+		rel, err := filepath.Rel(sourceDir, file)
+		if err != nil {
+			_ = zw.Close()
+			_ = out.Close()
+			return err
+		}
+		writer, err := zw.Create(filepath.ToSlash(filepath.Join(archiveRoot, rel)))
+		if err != nil {
+			_ = zw.Close()
+			_ = out.Close()
+			return err
+		}
+		data, err := os.ReadFile(file)
+		if err != nil {
+			_ = zw.Close()
+			_ = out.Close()
+			return err
+		}
+		if _, err := writer.Write(data); err != nil {
+			_ = zw.Close()
+			_ = out.Close()
+			return err
+		}
+	}
+	if err := zw.Close(); err != nil {
+		_ = out.Close()
+		return err
+	}
+	return out.Close()
+}
+
+func remotePluginInstallSpecs(root string, plugins []wordpressPluginSpec, remoteTmp string, requireFiles bool, repoZips map[string]string) ([]remotePluginInstallSpec, []remotePluginUpload, error) {
 	remotePlugins := make([]remotePluginInstallSpec, 0, len(plugins))
 	uploads := []remotePluginUpload{}
 	for _, plugin := range plugins {
 		if !plugin.Install {
 			continue
 		}
+		if pluginSourceIsRepo(plugin) {
+			localPath := repoZips[plugin.Slug]
+			if localPath == "" {
+				var err error
+				localPath, err = repoPluginSourceDir(root, plugin)
+				if err != nil {
+					return nil, nil, err
+				}
+			}
+			remotePath := path.Join(remoteTmp, plugin.Slug+".zip")
+			uploads = append(uploads, remotePluginUpload{Plugin: plugin, LocalPath: localPath, RemotePath: remotePath})
+			remotePlugins = append(remotePlugins, remotePluginInstallSpec{Plugin: plugin, InstallSource: remotePath})
+			continue
+		}
 		installSource := pluginInstallSource(plugin)
 		if remotePluginSourceLooksLocal(plugin, installSource) {
-			localPath, err := filepath.Abs(installSource)
+			localPath, err := pluginLocalSourcePath(root, installSource)
 			if err != nil {
 				return nil, nil, err
 			}
@@ -644,6 +850,13 @@ func remotePluginInstallSpecs(plugins []wordpressPluginSpec, remoteTmp string, r
 		remotePlugins = append(remotePlugins, remotePluginInstallSpec{Plugin: plugin, InstallSource: installSource})
 	}
 	return remotePlugins, uploads, nil
+}
+
+func pluginLocalSourcePath(root, installSource string) (string, error) {
+	if filepath.IsAbs(installSource) || strings.TrimSpace(root) == "" {
+		return filepath.Abs(installSource)
+	}
+	return filepath.Abs(filepath.Join(root, installSource))
 }
 
 func remotePluginSourceLooksLocal(plugin wordpressPluginSpec, installSource string) bool {
@@ -684,7 +897,11 @@ func formatWordPressPluginTable(plugins []wordpressPluginSpec) string {
 			activate = "-"
 			autoUpdate = "-"
 		}
-		rows = append(rows, []string{plugin.Slug, plugin.Source, install, activate, autoUpdate, plugin.Note})
+		source := plugin.Source
+		if source == "" {
+			source = "-"
+		}
+		rows = append(rows, []string{plugin.Slug, source, install, activate, autoUpdate, plugin.Note})
 	}
 	return formatTable(rows)
 }
@@ -705,7 +922,7 @@ func formatWordPressPluginDiffTable(diffs []wordpressPluginDiff) string {
 	return formatTable(rows)
 }
 
-func wordpressPluginDiffs(statuses []wordpressPluginStatus) ([]wordpressPluginDiff, bool) {
+func wordpressPluginDiffs(statuses []wordpressPluginStatus, root string) ([]wordpressPluginDiff, bool) {
 	diffs := make([]wordpressPluginDiff, 0, len(statuses))
 	drift := false
 	for _, status := range statuses {
@@ -717,7 +934,7 @@ func wordpressPluginDiffs(statuses []wordpressPluginStatus) ([]wordpressPluginDi
 				changes = append(changes, "manual install required")
 			}
 		} else if !status.Installed {
-			if pluginLocalSourceMissing(status.Plugin) {
+			if pluginLocalSourceMissing(status.Plugin, root) {
 				changes = append(changes, "source unavailable locally")
 			} else {
 				changes = append(changes, "install")
@@ -758,12 +975,20 @@ func extraPluginDiffChange(status wordpressPluginStatus) string {
 	return "extra (" + active + ", " + autoUpdate + ")"
 }
 
-func pluginLocalSourceMissing(plugin wordpressPluginSpec) bool {
+func pluginLocalSourceMissing(plugin wordpressPluginSpec, root string) bool {
+	if pluginSourceIsRepo(plugin) {
+		sourceDir, err := repoPluginSourceDir(root, plugin)
+		if err != nil {
+			return true
+		}
+		info, err := os.Stat(sourceDir)
+		return err != nil || !info.IsDir()
+	}
 	installSource := pluginInstallSource(plugin)
 	if !remotePluginSourceLooksLocal(plugin, installSource) {
 		return false
 	}
-	localPath, err := filepath.Abs(installSource)
+	localPath, err := pluginLocalSourcePath(root, installSource)
 	if err != nil {
 		return true
 	}
@@ -771,8 +996,8 @@ func pluginLocalSourceMissing(plugin wordpressPluginSpec) bool {
 	return err != nil || info.IsDir()
 }
 
-func printWordPressPluginDiff(title string, target *envRemoteSyncTarget, statuses []wordpressPluginStatus) int {
-	diffs, drift := wordpressPluginDiffs(statuses)
+func printWordPressPluginDiff(title string, target *envRemoteSyncTarget, statuses []wordpressPluginStatus, root string) int {
+	diffs, drift := wordpressPluginDiffs(statuses, root)
 	fmt.Println(title)
 	if target != nil {
 		fmt.Printf("  remote:   %s\n", target.RemoteName)
@@ -870,7 +1095,7 @@ func localPluginStatusScript(plugins []wordpressPluginSpec) string {
 	return builder.String()
 }
 
-func localPluginInstallScript(plugins []wordpressPluginSpec) string {
+func localPluginInstallScript(plugins []wordpressPluginSpec, installSources map[string]string) string {
 	var builder strings.Builder
 	builder.WriteString("set -eu\n")
 	for _, plugin := range plugins {
@@ -878,7 +1103,11 @@ func localPluginInstallScript(plugins []wordpressPluginSpec) string {
 			continue
 		}
 		slug := shellQuoteArg(plugin.Slug)
-		source := shellQuoteArg(pluginInstallSource(plugin))
+		installSource := pluginInstallSource(plugin)
+		if override := installSources[plugin.Slug]; override != "" {
+			installSource = override
+		}
+		source := shellQuoteArg(installSource)
 		builder.WriteString("if ! wp plugin is-installed ")
 		builder.WriteString(slug)
 		builder.WriteString("; then\n")

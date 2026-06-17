@@ -11837,6 +11837,7 @@ func TestRunEnvPluginsListReadsWordPressPlugins(t *testing.T) {
 			"stream",
 			map[string]any{"slug": "acf-pro", "source": "$NF_PLUGIN_ACF_PRO_ZIP", "activate": true},
 			map[string]any{"slug": "query-monitor", "activate": false},
+			map[string]any{"slug": "sitepress-multilingual-cms", "install": false, "note": "Install manually from wpml.org account"},
 		}},
 	}
 	data, err := json.MarshalIndent(project, "", "  ")
@@ -11860,10 +11861,23 @@ func TestRunEnvPluginsListReadsWordPressPlugins(t *testing.T) {
 			t.Fatalf("Run(env plugin list) = %d, want 0", got)
 		}
 	})
-	for _, want := range []string{"plugin", "source", "install", "activate", "auto-update", "note", "acf-pro", "$NF_PLUGIN_ACF_PRO_ZIP", "query-monitor", "no", "stream", "wordpress.org", "yes"} {
+	for _, want := range []string{"plugin", "source", "install", "activate", "auto-update", "note", "acf-pro", "$NF_PLUGIN_ACF_PRO_ZIP", "query-monitor", "no", "stream", "wordpress.org", "yes", "sitepress-multilingual-cms", "-", "Install manually from wpml.org account"} {
 		if !strings.Contains(output, want) {
 			t.Fatalf("env plugin list output missing %q:\n%s", want, output)
 		}
+	}
+	manualLine := ""
+	for _, line := range strings.Split(output, "\n") {
+		if strings.Contains(line, "sitepress-multilingual-cms") {
+			manualLine = line
+			break
+		}
+	}
+	if manualLine == "" {
+		t.Fatalf("env plugin list output missing manual plugin line:\n%s", output)
+	}
+	if strings.Contains(manualLine, "wordpress.org") {
+		t.Fatalf("manual plugin source should not default to wordpress.org:\n%s", output)
 	}
 }
 
@@ -12169,6 +12183,76 @@ func TestRunEnvPluginsInstallInstallsMissingAndActivatesInstalled(t *testing.T) 
 	}
 }
 
+func TestRunEnvPluginsInstallPackagesRepoPluginSource(t *testing.T) {
+	repoRoot := t.TempDir()
+	if err := os.Mkdir(filepath.Join(repoRoot, ".git"), 0o755); err != nil {
+		t.Fatalf("Mkdir(.git) error = %v", err)
+	}
+	pluginDir := filepath.Join(repoRoot, "plugins", "client-plugin")
+	if err := os.MkdirAll(filepath.Join(pluginDir, "includes"), 0o755); err != nil {
+		t.Fatalf("MkdirAll(plugin) error = %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(pluginDir, "client-plugin.php"), []byte("<?php\n/* Plugin Name: Client Plugin */\n"), 0o644); err != nil {
+		t.Fatalf("WriteFile(plugin main) error = %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(pluginDir, "includes", "feature.php"), []byte("<?php\n"), 0o644); err != nil {
+		t.Fatalf("WriteFile(plugin include) error = %v", err)
+	}
+	project := map[string]any{
+		"version":   1,
+		"project":   map[string]any{"slug": "client", "name": "Client"},
+		"wordpress": map[string]any{"theme_path": "theme", "theme_slug": "theme", "plugins": []any{map[string]any{"slug": "client-plugin", "source": "repo"}}},
+		"env":       map[string]any{"compose": "docker compose", "wordpress_service": "wordpress", "cli_service": "cli", "theme_mount_slug": "theme", "uploads_path": "uploads"},
+	}
+	data, err := json.MarshalIndent(project, "", "  ")
+	if err != nil {
+		t.Fatalf("MarshalIndent(project) error = %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(repoRoot, "nf.json"), append(data, '\n'), 0o644); err != nil {
+		t.Fatalf("WriteFile(nf.json) error = %v", err)
+	}
+	dockerDir := t.TempDir()
+	logPath := filepath.Join(dockerDir, "docker-args.txt")
+	dockerScript := []byte("#!/bin/sh\nprintf '%s\n' \"$@\" >> \"$DOCKER_LOG\"\nexit 0\n")
+	if err := os.WriteFile(filepath.Join(dockerDir, "docker"), dockerScript, 0o755); err != nil {
+		t.Fatalf("WriteFile(docker) error = %v", err)
+	}
+	dataDir := t.TempDir()
+	t.Setenv("DOCKER_LOG", logPath)
+	t.Setenv("NF_DATA_HOME", dataDir)
+	t.Setenv("PATH", dockerDir+string(os.PathListSeparator)+os.Getenv("PATH"))
+	oldwd, err := os.Getwd()
+	if err != nil {
+		t.Fatalf("Getwd() error = %v", err)
+	}
+	if err := os.Chdir(repoRoot); err != nil {
+		t.Fatalf("Chdir() error = %v", err)
+	}
+	t.Cleanup(func() { _ = os.Chdir(oldwd) })
+
+	output := captureStdout(t, func() {
+		if got := Run([]string{"env", "plugin", "install"}); got != 0 {
+			t.Fatalf("Run(env plugin install repo source) = %d, want 0", got)
+		}
+	})
+	if !strings.Contains(output, "WordPress plugins installed.") {
+		t.Fatalf("env plugin install output missing success:\n%s", output)
+	}
+	logData, err := os.ReadFile(logPath)
+	if err != nil {
+		t.Fatalf("ReadFile(log) error = %v", err)
+	}
+	logText := string(logData)
+	for _, want := range []string{"wp plugin install /env/uploads/.nf-plugin-zips/client-plugin.zip --activate", "wp plugin auto-updates enable client-plugin"} {
+		if !strings.Contains(logText, want) {
+			t.Fatalf("repo plugin install script missing %q:\n%s", want, logText)
+		}
+	}
+	if _, err := os.Stat(filepath.Join(dataDir, "envs", "client", "uploads", ".nf-plugin-zips")); !os.IsNotExist(err) {
+		t.Fatalf("temporary repo plugin zip directory was not cleaned up: %v", err)
+	}
+}
+
 func TestRunEnvPluginsInstallSkipsSatisfiedPlugins(t *testing.T) {
 	repoRoot := t.TempDir()
 	if err := os.Mkdir(filepath.Join(repoRoot, ".git"), 0o755); err != nil {
@@ -12354,12 +12438,27 @@ func TestRunEnvPluginsDiffShowsLocalDrift(t *testing.T) {
 func TestRunEnvPluginsDiffReturnsZeroWhenLocalSatisfied(t *testing.T) {
 	statuses := []wordpressPluginStatus{{Plugin: wordpressPluginSpec{Slug: "stream", Source: "wordpress.org", Install: true, Activate: true, AutoUpdate: true}, Installed: true, Active: true, AutoUpdate: true}}
 	output := captureStdout(t, func() {
-		if got := printWordPressPluginDiff("Plugin diff:", nil, statuses); got != 0 {
+		if got := printWordPressPluginDiff("Plugin diff:", nil, statuses, ""); got != 0 {
 			t.Fatalf("printWordPressPluginDiff() = %d, want 0", got)
 		}
 	})
 	if !strings.Contains(output, "ok") {
 		t.Fatalf("plugin diff output missing ok:\n%s", output)
+	}
+}
+
+func TestRunEnvPluginsDiffReportsMissingRepoSource(t *testing.T) {
+	repoRoot := t.TempDir()
+	statuses := []wordpressPluginStatus{{Plugin: wordpressPluginSpec{Slug: "client-plugin", Source: "repo", Install: true, Activate: true, AutoUpdate: true}, Installed: false, Active: false, AutoUpdate: false}}
+	output := captureStdout(t, func() {
+		if got := printWordPressPluginDiff("Plugin diff:", nil, statuses, repoRoot); got != 2 {
+			t.Fatalf("printWordPressPluginDiff() = %d, want 2", got)
+		}
+	})
+	for _, want := range []string{"client-plugin", "source unavailable locally"} {
+		if !strings.Contains(output, want) {
+			t.Fatalf("plugin diff output missing %q:\n%s", want, output)
+		}
 	}
 }
 
@@ -12587,6 +12686,101 @@ func TestRunEnvPluginsInstallRemoteUploadsLocalZipSource(t *testing.T) {
 	}
 	if !strings.Contains(sshCommands[2][len(sshCommands[2])-1], "rm -rf /tmp/nf-plugins-client-kinsta-live-") {
 		t.Fatalf("cleanup ssh command = %#v", sshCommands[2])
+	}
+}
+
+func TestRunEnvPluginsInstallRemotePackagesRepoPluginSource(t *testing.T) {
+	stateDir := t.TempDir()
+	t.Setenv("NF_STATE_HOME", stateDir)
+	if err := state.SaveStateRecords("sites", []map[string]any{{"provider": "kinsta", "site_id": "client-kinsta", "env": "live", "path": "/www/client/public", "ssh": map[string]any{"host": "203.0.113.10", "port": "12345", "user": "client"}}}); err != nil {
+		t.Fatalf("SaveStateRecords(sites) error = %v", err)
+	}
+	repoRoot := t.TempDir()
+	if err := os.Mkdir(filepath.Join(repoRoot, ".git"), 0o755); err != nil {
+		t.Fatalf("Mkdir(.git) error = %v", err)
+	}
+	pluginDir := filepath.Join(repoRoot, "plugins", "client-plugin")
+	if err := os.MkdirAll(filepath.Join(pluginDir, "includes"), 0o755); err != nil {
+		t.Fatalf("MkdirAll(plugin) error = %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(pluginDir, "client-plugin.php"), []byte("<?php\n/* Plugin Name: Client Plugin */\n"), 0o644); err != nil {
+		t.Fatalf("WriteFile(plugin main) error = %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(pluginDir, "includes", "feature.php"), []byte("<?php\n"), 0o644); err != nil {
+		t.Fatalf("WriteFile(plugin include) error = %v", err)
+	}
+	project := map[string]any{"version": 1, "project": map[string]any{"slug": "client"}, "wordpress": map[string]any{"plugins": []any{map[string]any{"slug": "client-plugin", "source": "repo"}}}, "remotes": map[string]any{"production": "client-kinsta:live"}}
+	data, err := json.MarshalIndent(project, "", "  ")
+	if err != nil {
+		t.Fatalf("MarshalIndent(project) error = %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(repoRoot, "nf.json"), append(data, '\n'), 0o644); err != nil {
+		t.Fatalf("WriteFile(nf.json) error = %v", err)
+	}
+	oldwd, err := os.Getwd()
+	if err != nil {
+		t.Fatalf("Getwd() error = %v", err)
+	}
+	if err := os.Chdir(repoRoot); err != nil {
+		t.Fatalf("Chdir() error = %v", err)
+	}
+	t.Cleanup(func() { _ = os.Chdir(oldwd) })
+	oldRunSSH := runSSHCommandFn
+	var sshCommands [][]string
+	runSSHCommandFn = func(args []string) error {
+		sshCommands = append(sshCommands, append([]string(nil), args...))
+		return nil
+	}
+	t.Cleanup(func() { runSSHCommandFn = oldRunSSH })
+	oldRunRsync := runRsyncCommandFn
+	var rsyncCommands [][]string
+	var uploadedZip string
+	runRsyncCommandFn = func(args []string) error {
+		rsyncCommands = append(rsyncCommands, append([]string(nil), args...))
+		uploadedZip = args[4]
+		names := readZipNames(t, uploadedZip)
+		for _, want := range []string{"client-plugin/client-plugin.php", "client-plugin/includes/feature.php"} {
+			if !names[want] {
+				t.Fatalf("repo plugin zip missing %q: %#v", want, names)
+			}
+		}
+		return nil
+	}
+	t.Cleanup(func() { runRsyncCommandFn = oldRunRsync })
+
+	stdout := captureStdout(t, func() {
+		if got := Run([]string{"env", "plugin", "install", "production", "--yes"}); got != 0 {
+			t.Fatalf("Run(env plugin install remote repo --yes) = %d, want 0", got)
+		}
+	})
+	for _, want := range []string{"uploads:       1 local plugin zip(s)", "client-plugin -> /tmp/nf-plugins-client-kinsta-live-", "Remote WordPress plugins installed."} {
+		if !strings.Contains(stdout, want) {
+			t.Fatalf("remote repo plugin stdout missing %q:\n%s", want, stdout)
+		}
+	}
+	if len(rsyncCommands) != 1 {
+		t.Fatalf("rsync commands len = %d, want 1: %#v", len(rsyncCommands), rsyncCommands)
+	}
+	if !strings.HasSuffix(rsyncCommands[0][4], "client-plugin.zip") {
+		t.Fatalf("rsync source = %q, want generated client-plugin.zip", rsyncCommands[0][4])
+	}
+	if !strings.Contains(rsyncCommands[0][5], "client@203.0.113.10:/tmp/nf-plugins-client-kinsta-live-") || !strings.HasSuffix(rsyncCommands[0][5], "/client-plugin.zip") {
+		t.Fatalf("rsync destination = %q", rsyncCommands[0][5])
+	}
+	if len(sshCommands) != 3 {
+		t.Fatalf("ssh commands len = %d, want mkdir/install/cleanup: %#v", len(sshCommands), sshCommands)
+	}
+	script := sshCommands[1][len(sshCommands[1])-1]
+	for _, want := range []string{"wp_cmd plugin is-installed client-plugin", "wp_cmd plugin install /tmp/nf-plugins-client-kinsta-live-", "/client-plugin.zip --activate", "wp_cmd plugin auto-updates enable client-plugin"} {
+		if !strings.Contains(script, want) {
+			t.Fatalf("remote repo plugin script missing %q:\n%s", want, script)
+		}
+	}
+	if uploadedZip == "" {
+		t.Fatal("runRsyncCommandFn did not capture generated zip path")
+	}
+	if _, err := os.Stat(uploadedZip); !os.IsNotExist(err) {
+		t.Fatalf("temporary repo plugin zip was not cleaned up: %v", err)
 	}
 }
 
