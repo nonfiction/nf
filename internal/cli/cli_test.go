@@ -11998,6 +11998,88 @@ func TestRunEnvPluginsAddUpdatesProjectMetadata(t *testing.T) {
 	}
 }
 
+func TestRunPluginsAddRepoScaffoldsMissingPlugin(t *testing.T) {
+	repoRoot := t.TempDir()
+	if err := os.Mkdir(filepath.Join(repoRoot, ".git"), 0o755); err != nil {
+		t.Fatalf("Mkdir(.git) error = %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(repoRoot, "nf.json"), []byte("{\n  \"version\": 1,\n  \"project\": {\n    \"slug\": \"client\"\n  }\n}\n"), 0o644); err != nil {
+		t.Fatalf("WriteFile(nf.json) error = %v", err)
+	}
+	oldwd, err := os.Getwd()
+	if err != nil {
+		t.Fatalf("Getwd() error = %v", err)
+	}
+	if err := os.Chdir(repoRoot); err != nil {
+		t.Fatalf("Chdir() error = %v", err)
+	}
+	t.Cleanup(func() { _ = os.Chdir(oldwd) })
+
+	if got := Run([]string{"plugin", "add", "client-plugin", "--source", "repo"}); got != 0 {
+		t.Fatalf("Run(plugin add --source repo) = %d, want 0", got)
+	}
+	pluginFile := filepath.Join(repoRoot, "plugins", "client-plugin", "client-plugin.php")
+	data, err := os.ReadFile(pluginFile)
+	if err != nil {
+		t.Fatalf("ReadFile(scaffolded plugin) error = %v", err)
+	}
+	text := string(data)
+	for _, want := range []string{"Plugin Name: Client Plugin", "Version: 0.1.0", "if (!defined('ABSPATH'))"} {
+		if !strings.Contains(text, want) {
+			t.Fatalf("scaffolded plugin missing %q:\n%s", want, text)
+		}
+	}
+	metadata, err := loadProjectMetadataOrError(repoRoot)
+	if err != nil {
+		t.Fatalf("loadProjectMetadataOrError() error = %v", err)
+	}
+	plugins := mapMapAtPath(metadata, "wordpress")["plugins"].([]any)
+	plugin, ok := plugins[0].(map[string]any)
+	if !ok || plugin["slug"] != "client-plugin" || plugin["source"] != "repo" {
+		t.Fatalf("wordpress.plugins[0] = %#v, want repo plugin object", plugins[0])
+	}
+}
+
+func TestRunPluginsAddRepoLeavesExistingPluginDirectoryUntouched(t *testing.T) {
+	repoRoot := t.TempDir()
+	if err := os.Mkdir(filepath.Join(repoRoot, ".git"), 0o755); err != nil {
+		t.Fatalf("Mkdir(.git) error = %v", err)
+	}
+	pluginDir := filepath.Join(repoRoot, "plugins", "client-plugin")
+	if err := os.MkdirAll(pluginDir, 0o755); err != nil {
+		t.Fatalf("MkdirAll(pluginDir) error = %v", err)
+	}
+	existingFile := filepath.Join(pluginDir, "custom.php")
+	if err := os.WriteFile(existingFile, []byte("existing"), 0o644); err != nil {
+		t.Fatalf("WriteFile(existing plugin) error = %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(repoRoot, "nf.json"), []byte("{\n  \"version\": 1,\n  \"project\": {\n    \"slug\": \"client\"\n  }\n}\n"), 0o644); err != nil {
+		t.Fatalf("WriteFile(nf.json) error = %v", err)
+	}
+	oldwd, err := os.Getwd()
+	if err != nil {
+		t.Fatalf("Getwd() error = %v", err)
+	}
+	if err := os.Chdir(repoRoot); err != nil {
+		t.Fatalf("Chdir() error = %v", err)
+	}
+	t.Cleanup(func() { _ = os.Chdir(oldwd) })
+
+	if got := Run([]string{"plugin", "add", "client-plugin", "--source", "repo"}); got != 0 {
+		t.Fatalf("Run(plugin add --source repo) = %d, want 0", got)
+	}
+	if _, err := os.Stat(filepath.Join(pluginDir, "client-plugin.php")); !os.IsNotExist(err) {
+		t.Fatalf("existing plugin directory should not be scaffolded, stat err = %v", err)
+	}
+	data, err := os.ReadFile(existingFile)
+	if err != nil {
+		t.Fatalf("ReadFile(existing plugin) error = %v", err)
+	}
+	if string(data) != "existing" {
+		t.Fatalf("existing plugin file was modified: %q", data)
+	}
+}
+
 func TestRunEnvPluginsAddCreatesWordPressPlugins(t *testing.T) {
 	repoRoot := t.TempDir()
 	if err := os.Mkdir(filepath.Join(repoRoot, ".git"), 0o755); err != nil {
@@ -12025,6 +12107,9 @@ func TestRunEnvPluginsAddCreatesWordPressPlugins(t *testing.T) {
 	plugins := mapMapAtPath(metadata, "wordpress")["plugins"].([]any)
 	if len(plugins) != 1 || plugins[0] != "stream" {
 		t.Fatalf("wordpress.plugins = %#v, want [stream]", plugins)
+	}
+	if _, err := os.Stat(filepath.Join(repoRoot, "plugins")); !os.IsNotExist(err) {
+		t.Fatalf("non-repo plugin add should not scaffold plugins directory, stat err = %v", err)
 	}
 }
 

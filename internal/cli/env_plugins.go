@@ -161,6 +161,12 @@ func cmdEnvPluginsAdd(root string, metadata map[string]any, opts envPluginAddOpt
 			return 1
 		}
 	}
+	if strings.EqualFold(strings.TrimSpace(opts.Source), wordpressPluginRepoSource) {
+		if err := scaffoldRepoPlugin(root, opts.Slug); err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			return 1
+		}
+	}
 	plugins = append(plugins, wordpressPluginAddValue(opts))
 	wordpress := metadata["wordpress"].(map[string]any)
 	wordpress["plugins"] = plugins
@@ -212,6 +218,37 @@ func cmdEnvPluginsRemove(root string, metadata map[string]any, slug string) int 
 	}
 	fmt.Printf("Removed WordPress plugin %s from nf.json.\n", slug)
 	return 0
+}
+
+func scaffoldRepoPlugin(root, slug string) error {
+	if err := validatePluginSlug(slug); err != nil {
+		return err
+	}
+	pluginDir := filepath.Join(root, "plugins", slug)
+	if info, err := os.Stat(pluginDir); err == nil {
+		if !info.IsDir() {
+			return ProjectError{Msg: fmt.Sprintf("repo plugin path exists but is not a directory: %s", pluginDir)}
+		}
+		return nil
+	} else if !os.IsNotExist(err) {
+		return err
+	}
+	if err := os.MkdirAll(pluginDir, 0o755); err != nil {
+		return err
+	}
+	pluginFile := filepath.Join(pluginDir, slug+".php")
+	contents := fmt.Sprintf(`<?php
+/**
+ * Plugin Name: %s
+ * Description: Project plugin for %s.
+ * Version: 0.1.0
+ */
+
+if (!defined('ABSPATH')) {
+    exit;
+}
+`, slugToTitle(slug), slugToTitle(slug))
+	return os.WriteFile(pluginFile, []byte(contents), 0o644)
 }
 
 type envPluginCacheOptions struct {

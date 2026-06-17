@@ -53,7 +53,7 @@ nf plugin add sitepress-multilingual-cms --manual --note 'WPML; install manually
 nf plugin remove stream
 ```
 
-`nf plugin add <plugin>` appends a plugin to `nf.json` without installing it. Add `--source <source>`, `--manual`, `--note <note>`, `--no-activate`, or `--no-auto-update` when defaults are not enough.
+`nf plugin add <plugin>` appends a plugin to `nf.json` without installing it. Add `--source <source>`, `--manual`, `--note <note>`, `--no-activate`, or `--no-auto-update` when defaults are not enough. With `--source repo`, nf also creates a minimal `plugins/<slug>/<slug>.php` plugin scaffold when that plugin directory does not exist yet.
 
 `nf plugin remove <plugin>` removes a plugin from `nf.json` without uninstalling it.
 
