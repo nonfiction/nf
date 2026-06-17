@@ -56,16 +56,16 @@ func runConfig(argv []string) int {
 			return 1
 		}
 		return cmdConfigSet("basicauth_default_user", argv[1])
-	case "set-adminer-default-user":
+	case "set-db-default-user":
 		if len(argv) != 2 || strings.TrimSpace(argv[1]) == "" {
-			fmt.Fprintln(os.Stderr, "config set-adminer-default-user takes exactly one user")
+			fmt.Fprintln(os.Stderr, "config set-db-default-user takes exactly one user")
 			return 1
 		}
-		if err := validateAdminerDefaultUser(argv[1]); err != nil {
+		if err := validateDBDefaultUser(argv[1]); err != nil {
 			fmt.Fprintln(os.Stderr, err)
 			return 1
 		}
-		return cmdConfigSet("adminer_default_user", argv[1])
+		return cmdConfigSet("db_default_user", argv[1])
 	case "set-docker-db-image":
 		if len(argv) != 2 || strings.TrimSpace(argv[1]) == "" {
 			fmt.Fprintln(os.Stderr, "config set-docker-db-image takes exactly one image")
@@ -265,7 +265,7 @@ func initGlobalConfig(settings []configInitSetting, nonInteractive bool) error {
 	}
 	updates := map[string]string{}
 	for _, setting := range settings {
-		if strings.TrimSpace(values[setting.Key]) != "" {
+		if configInitSettingHasValue(values, setting) {
 			continue
 		}
 		if nonInteractive || !configIsInteractive() {
@@ -311,6 +311,18 @@ func initGlobalConfig(settings []configInitSetting, nonInteractive bool) error {
 	}
 	fmt.Printf("Updated %s\n", config.ConfigFile())
 	return nil
+}
+
+func configInitSettingHasValue(values map[string]string, setting configInitSetting) bool {
+	if strings.TrimSpace(values[setting.Key]) != "" {
+		return true
+	}
+	for _, key := range setting.LegacyKeys {
+		if strings.TrimSpace(values[key]) != "" {
+			return true
+		}
+	}
+	return false
 }
 
 func validateConfigInitSetting(setting configInitSetting, value string) error {
@@ -362,9 +374,9 @@ func cmdConfigShow() int {
 		{label: "Basic auth user", value: configShowValue(values, "basicauth_default_user", "nonfiction")},
 	}, 2)
 	fmt.Println()
-	fmt.Println("Adminer")
+	fmt.Println("Database")
 	printIndentedDetailRows([]detailRow{
-		{label: "User", value: configShowValue(values, "adminer_default_user", "adminer")},
+		{label: "User", value: configShowValueAny(values, []string{"db_default_user", "adminer_default_user"}, "admin")},
 	}, 2)
 	fmt.Println()
 	fmt.Println("Docker")
@@ -396,6 +408,18 @@ func cmdConfigShow() int {
 func configShowValue(values map[string]string, key, fallback string) string {
 	if value := strings.TrimSpace(values[key]); value != "" {
 		return value
+	}
+	if fallback != "" {
+		return fallback + " (default)"
+	}
+	return "unset"
+}
+
+func configShowValueAny(values map[string]string, keys []string, fallback string) string {
+	for _, key := range keys {
+		if value := strings.TrimSpace(values[key]); value != "" {
+			return value
+		}
 	}
 	if fallback != "" {
 		return fallback + " (default)"

@@ -242,7 +242,7 @@ func renderEnvCompose(cfg envConfig) string {
     ports:
       - "${MAILPIT_PORT}:8025"
 
-  adminer:
+  db-ui:
     image: %s
     depends_on:
       db:
@@ -252,7 +252,7 @@ func renderEnvCompose(cfg envConfig) string {
       && php -r 'copy(\"https://www.adminneo.org/files/5.4.1/mysql_en_default/adminneo-5.4.1.php\", \"/var/www/html/index.php\");'
       && php -S 0.0.0.0:80 -t /var/www/html"
     ports:
-      - "${ADMINER_PORT}:80"
+      - "${DB_UI_PORT}:80"
     volumes:
       - ./php/uploads.ini:/usr/local/etc/php/conf.d/uploads.ini:ro
 
@@ -272,7 +272,7 @@ func renderEnvFile(cfg envConfig) string {
 	return fmt.Sprintf(`COMPOSE_PROJECT_NAME=%s
 WP_PORT=%d
 MAILPIT_PORT=%d
-ADMINER_PORT=%d
+DB_UI_PORT=%d
 DB_NAME=%s
 DB_USER=%s
 DB_PASSWORD=%s
@@ -304,7 +304,7 @@ func envComposeProjectName(projectSlug string) string {
 func renderEnvInfo(cfg envConfig, includeURLs bool, remoteRows ...detailRow) string {
 	title := cfg.ProjectSlug + ":local"
 	siteURL := fmt.Sprintf("http://localhost:%d", cfg.WordpressPort)
-	adminerURL := localEnvAdminerURL(cfg)
+	dbURL := localEnvDBURL(cfg)
 	mailpitURL := fmt.Sprintf("http://localhost:%d", cfg.MailpitPort)
 	lines := []string{title, strings.Repeat("─", len(title))}
 	rows := []detailRow{
@@ -321,7 +321,7 @@ func renderEnvInfo(cfg envConfig, includeURLs bool, remoteRows ...detailRow) str
 		return strings.Join(lines, "\n")
 	}
 	dbRows := []detailRow{
-		{label: "Adminer URL", value: adminerURL},
+		{label: "DB URL", value: dbURL},
 		{label: "DB user", value: firstNonEmpty(cfg.DBUser, cfg.ProjectSlug)},
 		{label: "DB pass", value: cfg.DBPassword},
 	}
@@ -410,7 +410,7 @@ func envRemoteURLLabel(remoteName string) string {
 	return label + " URL"
 }
 
-func localEnvAdminerURL(cfg envConfig) string {
+func localEnvDBURL(cfg envConfig) string {
 	dbName := cfg.ProjectSlug
 	dbUser := firstNonEmpty(cfg.DBUser, cfg.ProjectSlug)
 	return fmt.Sprintf("http://localhost:%d/?mysql=db&username=%s&db=%s", cfg.AdminerPort, url.QueryEscape(dbUser), url.QueryEscape(dbName))

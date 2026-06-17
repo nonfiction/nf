@@ -19,11 +19,12 @@ func configInitRequirements() []envwizard.Requirement {
 }
 
 type configInitSetting struct {
-	Key      string
-	Prompt   string
-	Default  string
-	Required bool
-	Validate func(string) error
+	Key        string
+	LegacyKeys []string
+	Prompt     string
+	Default    string
+	Required   bool
+	Validate   func(string) error
 }
 
 func configInitSettings() []configInitSetting {
@@ -32,7 +33,7 @@ func configInitSettings() []configInitSetting {
 		{Key: "default_wp_email", Prompt: "Default WordPress email: ", Required: true},
 		{Key: "default_wp_user", Prompt: "Default WordPress user: ", Default: "admin", Required: true},
 		{Key: "basicauth_default_user", Prompt: "Basic auth default user: ", Default: "nonfiction", Required: true},
-		{Key: "adminer_default_user", Prompt: "Adminer default user: ", Default: "adminer", Required: true, Validate: validateAdminerDefaultUser},
+		{Key: "db_default_user", LegacyKeys: []string{"adminer_default_user"}, Prompt: "Database default user: ", Default: "admin", Required: true, Validate: validateDBDefaultUser},
 		{Key: "kinsta_default_php", Prompt: "Kinsta default PHP version: ", Default: "8.3", Required: true},
 		{Key: "linode_default_region", Prompt: "Linode default region: ", Default: "ca-central", Required: true},
 		{Key: "linode_default_user", Prompt: "Linode default SSH user: ", Default: "nonfiction", Required: true},
