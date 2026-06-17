@@ -27,76 +27,80 @@ func runInitHelp() int {
 }
 
 func runEnvHelp() int {
-	printGroupHelp("env", []helpLine{
-		{"up [--rebuild]", "start the local env"},
+	printCommandHelp("env", []helpLine{
+		{"up", "start the local env"},
 		{"down", "stop the local env"},
 		{"show", "show paths, ports, and URLs"},
-		{"password [remote] [--wp|--db|--basicauth]", "show a local or remote env password only"},
+		{"password [remote]", "show a local or remote env password only"},
 		{"logs [remote]", "tail local or remote WordPress logs"},
 		{"shell, sh [remote]", "open a local or remote shell"},
 		{"wp -- <args>", "run wp-cli in the local env"},
 		{},
 		{"snapshot", "manage env snapshots"},
 		{},
-		{"pull [remote] [--dry-run] [--execute] [--yes]", "pull database and mutable wp-content from a remote env"},
-		{"push [remote] [--dry-run] [--execute] [--yes]", "push database and mutable wp-content to a remote env"},
-		{"import <source> [--db path] [--source-url url] [--dry-run] [--yes]", "import an external WordPress site into local env"},
+		{"pull [remote]", "pull database and mutable wp-content from a remote env"},
+		{"push [remote]", "push database and mutable wp-content to a remote env"},
+		{"import <source>", "import an external WordPress site into local env"},
 		{},
-		{"reset [--rebuild]", "destroy and recreate the local env"},
-	})
+		{"reset", "destroy and recreate the local env"},
+	}, helpSection{"Options", []helpLine{
+		{"--rebuild", "rebuild the local WordPress image"},
+		{"--wp", "show WordPress admin password"},
+		{"--db", "show database password, or import DB path"},
+		{"--basicauth", "show basic-auth password"},
+		{"--source-url <url>", "source URL for import search-replace"},
+	}}, helpSection{"Sync Options", []helpLine{
+		{"--dry-run", "show the sync/import plan only"},
+		{"--execute", "execute push or pull"},
+		{"--yes", "confirm destructive local import/reset"},
+		{"--non-interactive", "fail instead of prompting"},
+	}})
 	return 0
 }
 
 func runPluginHelp() int {
-	fmt.Println("plugin")
-	fmt.Println("\nCommands:")
-	for _, line := range []helpLine{
+	printCommandHelp("plugin", []helpLine{
 		{"list, ls", "list configured WordPress plugins"},
 		{"status [remote]", "show configured WordPress plugin status"},
 		{"diff [remote]", "show configured WordPress plugin drift"},
-	} {
-		fmt.Printf("  %-22s  %s\n", line.Command, line.Description)
-	}
-	fmt.Println()
-	fmt.Printf("  %-22s  %s\n", "add <plugin>", "add a WordPress plugin to nf.json")
-	for _, line := range []helpLine{
+		{},
+		{"add <plugin>", "add a WordPress plugin to nf.json"},
+		{"remove, rm <plugin>", "remove a WordPress plugin from nf.json"},
+		{},
+		{"install [remote]", "install and activate configured WordPress plugins"},
+	}, helpSection{"Add Options", []helpLine{
 		{"--source <source>", "wordpress.org, repo, cache, URL/path, or env-var zip"},
 		{"--manual", "check only; never install this plugin"},
 		{"--note <note>", "store an install note for humans"},
 		{"--no-activate", "install without activating"},
 		{"--no-auto-update", "do not enable WordPress auto-updates"},
-	} {
-		fmt.Printf("    %-20s  %s\n", line.Command, line.Description)
-	}
-	fmt.Printf("  %-22s  %s\n", "remove, rm <plugin>", "remove a WordPress plugin from nf.json")
-	fmt.Println()
-	fmt.Printf("  %-22s  %s\n", "install [remote]", "install and activate configured WordPress plugins")
-	for _, line := range []helpLine{
+	}}, helpSection{"Install Options", []helpLine{
 		{"--dry-run", "preview a remote install"},
 		{"--yes", "skip remote install confirmation"},
-	} {
-		fmt.Printf("    %-20s  %s\n", line.Command, line.Description)
-	}
-	for _, line := range []helpLine{
+	}}, helpSection{"Cache Commands", []helpLine{
 		{"cache add <plugin> <zip>", "add a plugin zip to the local nf plugin cache"},
 		{"cache save <plugin>", "save an installed local plugin to the local nf plugin cache"},
 		{"cache list, cache ls", "list cached WordPress plugin zips"},
 		{"cache show <plugin>", "show local plugin cache details"},
-	} {
-		fmt.Printf("  %-22s  %s\n", line.Command, line.Description)
-	}
+	}})
 	return 0
 }
 
 func runThemeHelp() int {
 	lines := []helpLine{
 		{"tasks", "list configured theme tasks"},
-		{"package [--dry-run] [--source] [--output]", "package a clean theme artifact"},
+		{"package", "package a clean theme artifact"},
 		{},
-		{"deploy <remote> [--dry-run]", "deploy a packaged theme release"},
-		{"rollback <remote> [--dry-run]", "roll back to the previous theme release"},
+		{"deploy <remote>", "deploy a packaged theme release"},
+		{"rollback <remote>", "roll back to the previous theme release"},
 	}
-	printGroupHelp("theme", lines)
+	printCommandHelp("theme", lines, helpSection{"Package Options", []helpLine{
+		{"--dry-run", "show package actions without writing a zip"},
+		{"--source <path>", "theme source directory"},
+		{"--output <path>", "package output path"},
+	}}, helpSection{"Deploy Options", []helpLine{
+		{"--dry-run", "preview deploy or rollback"},
+	}})
 	if projectContextAvailable() {
 		if root, ok := currentGitRoot(); ok {
 			if tasks, err := loadProjectTasks(root); err == nil && len(tasks) > 0 {
@@ -111,9 +115,12 @@ func runThemeHelp() int {
 }
 
 func runPublicHelp() int {
-	printGroupHelp("public", []helpLine{
-		{"deploy <remote> [--dry-run] [--yes]", "deploy configured static public paths"},
-	})
+	printCommandHelp("public", []helpLine{
+		{"deploy <remote>", "deploy configured static public paths"},
+	}, helpSection{"Options", []helpLine{
+		{"--dry-run", "preview public file changes"},
+		{"--yes", "confirm deletes when configured"},
+	}})
 	return 0
 }
 

@@ -108,13 +108,13 @@ func runDomain(argv []string) int {
 }
 
 func runSiteDomainHelp() int {
-	printGroupHelp("domain", []helpLine{
+	printCommandHelp("domain", []helpLine{
 		{"list, ls [site|env|remote]", "list cached domain bindings"},
-		{"add <env|remote> <domain> [domain...] [flags]", "add external domains; secondary unless --primary"},
-		{"check <env|remote> [domain...] [flags]", "check DNS, provider, HTTP, and HTTPS readiness"},
-		{"primary <env|remote> <domain> [flags]", "make one domain primary"},
-		{"remove, rm <env|remote> <domain> [domain...] [flags]", "remove external domain bindings"},
-		{},
+		{"add <env|remote> <domain>...", "add external domains; secondary unless --primary"},
+		{"check <env|remote> [domain]...", "check DNS, provider, HTTP, and HTTPS readiness"},
+		{"primary <env|remote> <domain>", "make one domain primary"},
+		{"remove, rm <env|remote> <domain>...", "remove external domain bindings"},
+	}, helpSection{"Domain Options", []helpLine{
 		{"--primary", "make the first added domain primary"},
 		{"--proxy <mode>", "Linode proxy mode: cloudflare"},
 		{"--setup <type>", "Kinsta setup type for add/primary: avoid-downtime or quick"},
@@ -123,12 +123,12 @@ func runSiteDomainHelp() int {
 		{"--wait-timeout <duration>", "maximum primary readiness wait; default 30m"},
 		{"--wait-interval <duration>", "primary readiness poll interval; default 30s"},
 		{"--delete-cert", "also delete the Linode Let's Encrypt certificate lineage"},
-		{},
+	}}, helpSection{"Mutation Options", []helpLine{
 		{"--dry-run", "show the mutation plan only"},
 		{"--execute", "execute the mutation plan"},
 		{"--yes", "confirm mutation execution"},
 		{"--non-interactive", "fail instead of prompting"},
-	})
+	}})
 	return 0
 }
 
