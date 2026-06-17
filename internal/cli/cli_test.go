@@ -12,6 +12,7 @@ import (
 	"net/http/httptest"
 	"net/netip"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"reflect"
 	"strings"
@@ -12458,6 +12459,51 @@ func TestRunEnvPluginsDiffReportsMissingRepoSource(t *testing.T) {
 	for _, want := range []string{"client-plugin", "source unavailable locally"} {
 		if !strings.Contains(output, want) {
 			t.Fatalf("plugin diff output missing %q:\n%s", want, output)
+		}
+	}
+}
+
+func TestWordPressPluginDiffIgnoresMustUseAndDropInExtras(t *testing.T) {
+	plugins := []wordpressPluginSpec{{Slug: "stream", Source: "wordpress.org", Install: true, Activate: true, AutoUpdate: true}}
+	fakeBin := t.TempDir()
+	wpScript := `#!/bin/sh
+case "$*" in
+  "core is-installed") exit 0 ;;
+  "plugin is-installed stream") exit 0 ;;
+  "plugin is-active stream") exit 0 ;;
+  "plugin auto-updates status stream --enabled-only --field=name") printf 'stream\n'; exit 0 ;;
+  "plugin list --fields=name,status --format=csv") printf 'name,status\nstream,active\nakismet,inactive\nhello,inactive\nnf-mailpit,must-use\ndb.php,dropin\n'; exit 0 ;;
+  "plugin is-active akismet") exit 1 ;;
+  "plugin is-active hello") exit 1 ;;
+  "plugin auto-updates status akismet --enabled-only --field=name") exit 0 ;;
+  "plugin auto-updates status hello --enabled-only --field=name") exit 0 ;;
+esac
+printf 'unexpected wp args: %s\n' "$*" >&2
+exit 1
+`
+	if err := os.WriteFile(filepath.Join(fakeBin, "wp"), []byte(wpScript), 0o755); err != nil {
+		t.Fatalf("WriteFile(wp) error = %v", err)
+	}
+	cmd := exec.Command("sh", "-lc", localPluginStatusScript(plugins))
+	cmd.Env = append(os.Environ(), "PATH="+fakeBin+string(os.PathListSeparator)+os.Getenv("PATH"))
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("localPluginStatusScript failed: %v\n%s", err, output)
+	}
+	statuses := parseWordPressPluginDiffStatusOutput(plugins, string(output))
+	diffOutput := captureStdout(t, func() {
+		if got := printWordPressPluginDiff("Plugin diff:", nil, statuses, ""); got != 2 {
+			t.Fatalf("printWordPressPluginDiff() = %d, want 2", got)
+		}
+	})
+	for _, want := range []string{"akismet", "hello", "extra (inactive, auto-update off)"} {
+		if !strings.Contains(diffOutput, want) {
+			t.Fatalf("plugin diff output missing %q:\n%s", want, diffOutput)
+		}
+	}
+	for _, notWant := range []string{"nf-mailpit", "db.php"} {
+		if strings.Contains(diffOutput, notWant) {
+			t.Fatalf("plugin diff output should ignore %q:\n%s", notWant, diffOutput)
 		}
 	}
 }

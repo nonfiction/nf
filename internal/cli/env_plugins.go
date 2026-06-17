@@ -1186,11 +1186,14 @@ func writeExtraPluginStatusScript(builder *strings.Builder, plugins []wordpressP
 	builder.WriteString(shellQuoteArg(configured.String()))
 	builder.WriteString("\n")
 	builder.WriteString(wpCommand)
-	builder.WriteString(" plugin list --field=name")
+	builder.WriteString(" plugin list --fields=name,status --format=csv")
 	if allowRoot {
 		builder.WriteString(" --allow-root")
 	}
-	builder.WriteString(" 2>/dev/null | while IFS= read -r slug; do\n")
+	builder.WriteString(" 2>/dev/null | while IFS=, read -r slug status _; do\n")
+	builder.WriteString("  [ \"$slug\" = \"name\" ] && continue\n")
+	builder.WriteString("  [ \"$status\" = \"must-use\" ] && continue\n")
+	builder.WriteString("  [ \"$status\" = \"dropin\" ] && continue\n")
 	builder.WriteString("  case \"$configured_plugins\" in *\" $slug \"*) continue ;; esac\n")
 	builder.WriteString("  active=no auto_update=no\n")
 	builder.WriteString("  if ")
