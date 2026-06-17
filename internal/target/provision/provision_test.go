@@ -274,13 +274,13 @@ func TestBuildPlanDefaults(t *testing.T) {
 	if got, want := plan.SshUser, "nonfiction"; got != want {
 		t.Fatalf("SshUser = %q, want %q", got, want)
 	}
-	if got, want := plan.AdminerUser, "adminer"; got != want {
+	if got, want := plan.AdminerUser, "admin"; got != want {
 		t.Fatalf("AdminerUser = %q, want %q", got, want)
 	}
-	if got, want := plan.AdminerHostname, "adminer.app1.nonfiction.dev"; got != want {
+	if got, want := plan.AdminerHostname, "admin.app1.nonfiction.dev"; got != want {
 		t.Fatalf("AdminerHostname = %q, want %q", got, want)
 	}
-	if got, want := plan.AdminerURL, "https://adminer.app1.nonfiction.dev/"; got != want {
+	if got, want := plan.AdminerURL, "https://admin.app1.nonfiction.dev/"; got != want {
 		t.Fatalf("AdminerURL = %q, want %q", got, want)
 	}
 	if got, want := plan.SshKeySource, "linode-profile"; got != want {
@@ -395,7 +395,7 @@ func TestBuildPlanInteractivePromptsForAdminerUser(t *testing.T) {
 	if err != nil {
 		t.Fatalf("BuildPlan() error = %v", err)
 	}
-	if got, want := promptTitle, "Adminer user: "; got != want {
+	if got, want := promptTitle, "Database user: "; got != want {
 		t.Fatalf("prompt title = %q, want %q", got, want)
 	}
 	if got, want := promptDefault, "dbadmin"; got != want {
@@ -1120,15 +1120,15 @@ func TestCloudInitTemplateIsServerOnly(t *testing.T) {
 		"listen 443 ssl http2 default_server;",
 		"listen [::]:443 ssl http2 default_server;",
 		"include /etc/nginx/snippets/nf-wildcard-cert.conf;",
-		"/usr/local/bin/nf-install-adminer",
+		"/usr/local/bin/nf-install-db-ui",
 		"https://www.adminneo.org/files/5.4.1/mysql_en_default/adminneo-5.4.1.php",
-		"/var/www/shared/adminer/index.php",
-		"/var/lib/nf/adminer.htpasswd",
-		"server_name adminer.app1.nonfiction.dev;",
+		"/var/www/shared/db/index.php",
+		"/var/lib/nf/db.htpasswd",
+		"server_name admin.app1.nonfiction.dev;",
 		"client_max_body_size 1024M;",
-		"auth_basic \"nf adminer\";",
-		"CREATE USER IF NOT EXISTS 'adminer'@'localhost' IDENTIFIED BY PASSWORD '<adminer mysql password hash>';",
-		`"purpose":"adminer"`,
+		"auth_basic \"nf database\";",
+		"CREATE USER IF NOT EXISTS 'admin'@'localhost' IDENTIFIED BY PASSWORD '<adminer mysql password hash>';",
+		`"purpose":"db"`,
 	} {
 		if !strings.Contains(rendered, want) {
 			t.Fatalf("renderCloudInit() output missing %q:\n%s", want, rendered)
@@ -1359,7 +1359,7 @@ func TestServerStateRecordShapeDoesNotContainSecrets(t *testing.T) {
 	if phpBlock, ok := record["php"].(map[string]any); !ok || phpBlock["version"] != "8.3" || phpBlock["service"] != "php8.3-fpm" || phpBlock["socket"] != filepath.Clean("/run/php/php8.3-fpm.sock") || phpBlock["package_source"] != packageSourceUbuntuNative {
 		t.Fatalf("php block = %#v, want php metadata", record["php"])
 	}
-	if services, ok := record["services"].(map[string]any); !ok || services["nginx"] != true || services["mariadb"] != true || services["adminer"] != adminerToolName || services["php_fpm"] != "php8.3-fpm" || services["wp_cli"] != "/usr/local/bin/wp" {
+	if services, ok := record["services"].(map[string]any); !ok || services["nginx"] != true || services["mariadb"] != true || services["database_ui"] != adminerToolName || services["php_fpm"] != "php8.3-fpm" || services["wp_cli"] != "/usr/local/bin/wp" {
 		t.Fatalf("services block = %#v, want nginx/mariadb/php_fpm/wp_cli", record["services"])
 	}
 	if credentials, ok := record["credentials"].(map[string]any); !ok {
@@ -1368,15 +1368,15 @@ func TestServerStateRecordShapeDoesNotContainSecrets(t *testing.T) {
 		t.Fatalf("credentials.root = %#v, want derived metadata", credentials["root"])
 	} else if _, ok := root["password"]; ok {
 		t.Fatalf("credentials.root unexpectedly stored a password: %#v", root)
-	} else if adminer, ok := credentials["adminer"].(map[string]any); !ok || adminer["derived"] != true || adminer["identity"] != "app1.nonfiction.dev" || adminer["purpose"] != "adminer" || adminer["stored"] != false || adminer["user"] != "adminer" {
-		t.Fatalf("credentials.adminer = %#v, want derived metadata", credentials["adminer"])
-	} else if _, ok := adminer["password"]; ok {
-		t.Fatalf("credentials.adminer unexpectedly stored a password: %#v", adminer)
+	} else if db, ok := credentials["db"].(map[string]any); !ok || db["derived"] != true || db["identity"] != "app1.nonfiction.dev" || db["purpose"] != "db" || db["stored"] != false || db["user"] != "admin" {
+		t.Fatalf("credentials.db = %#v, want derived metadata", credentials["db"])
+	} else if _, ok := db["password"]; ok {
+		t.Fatalf("credentials.db unexpectedly stored a password: %#v", db)
 	}
-	if adminer, ok := record["adminer"].(map[string]any); !ok || adminer["tool"] != adminerToolName || adminer["version"] != adminerVersion || adminer["hostname"] != "adminer.app1.nonfiction.dev" || adminer["url"] != "https://adminer.app1.nonfiction.dev/" || adminer["user"] != "adminer" {
-		t.Fatalf("adminer block = %#v, want AdminNeo metadata", record["adminer"])
-	} else if password, ok := adminer["auth"].(map[string]any)["password"].(map[string]any); !ok || password["purpose"] != "adminer" || password["stored"] != false {
-		t.Fatalf("adminer auth password = %#v, want derived metadata", adminer["auth"])
+	if db, ok := record["db"].(map[string]any); !ok || db["tool"] != adminerToolName || db["version"] != adminerVersion || db["hostname"] != "admin.app1.nonfiction.dev" || db["url"] != "https://admin.app1.nonfiction.dev/" || db["user"] != "admin" {
+		t.Fatalf("db block = %#v, want AdminNeo metadata", record["db"])
+	} else if password, ok := db["auth"].(map[string]any)["password"].(map[string]any); !ok || password["purpose"] != "db" || password["stored"] != false {
+		t.Fatalf("db auth password = %#v, want derived metadata", db["auth"])
 	}
 	if firewall, ok := record["firewall"].(map[string]any); !ok || firewall["mode"] != "managed" || firewall["id"] != "fw-123" {
 		t.Fatalf("firewall block = %#v, want managed firewall metadata", record["firewall"])

@@ -180,7 +180,7 @@ Linode targets also write non-secret target metadata to:
 /var/lib/nf/target.json
 ```
 
-That file includes Adminer/AdminNeo metadata such as URL, username, engine version, and derived credential identity/purpose, but never the raw password. Adminer is exposed at `https://<adminer-user>.<target-hostname>/` through the target wildcard certificate. The shared Adminer MySQL user is created during target provisioning and granted privileges per site-env database during site creation; site creation refuses a DB username that would collide with the shared Adminer MySQL user.
+That file includes database UI metadata such as URL, username, engine version, and derived credential identity/purpose, but never the raw password. The database UI is exposed at `https://<db-user>.<target-hostname>/` through the target wildcard certificate. The shared database access MySQL user is created during target provisioning and granted privileges per site-env database during site creation; site creation refuses a DB username that would collide with the shared database access MySQL user.
 
 ## State and config layout
 
@@ -273,8 +273,7 @@ Do not add old compatibility routes unless explicitly requested.
 * [x] `nf target refresh` refreshes target provider metadata
 * [x] `nf target list`
 * [x] `nf target show <target>`
-* [x] `nf target adminer show <target>`
-* [x] `nf target password [target] [--root|--adminer]`
+* [x] `nf target password [target] [--root|--db]`
 * [x] `nf target add linode <name>` create/ensure target scaffold
 * [x] `nf target remove <target>` remove an empty Linode target
 * [x] `nf site add <target> <site> [--with-staging] [--password-version <version>] [--kinsta-slug <slug>]` create live env scaffolding by default, with optional staging, password-version override, and Kinsta provider-slug override
@@ -329,7 +328,7 @@ Do not add old compatibility routes unless explicitly requested.
 * [x] `nf config set-default-wp-email <email>`
 * [x] `nf config set-default-wp-user <user>`
 * [x] `nf config set-basicauth-default-user <user>`
-* [x] `nf config set-adminer-default-user <user>`
+* [x] `nf config set-db-default-user <user>`
 * [x] `nf config set-docker-db-image <image>`
 * [x] `nf config set-docker-wordpress-image <image>`
 * [x] `nf config set-docker-user <user>`
@@ -613,19 +612,19 @@ Rules:
 
 * env ports are derived deterministically from project slug
 * `env.ports.wordpress` and `env.ports.mailpit` may override individually
-* `env.ports.adminer` may override the local Adminer/AdminNeo port
+* `env.ports.db` may override the local database UI port
 * zero or missing ports fall back to derived ports
 * `nf env up` should be idempotent
 * `nf env up --rebuild` rebuilds the generated WordPress image before starting Compose
 * `nf env reset --rebuild` recreates the env after rebuilding the generated WordPress image
-* `nf env up` preflights WordPress, Mailpit, and Adminer host ports before Docker Compose starts
+* `nf env up` preflights WordPress, Mailpit, and database UI host ports before Docker Compose starts
 * `nf env up` configures WordPress to send local mail through Mailpit
 * generated WordPress config enables `WP_DEBUG` and `WP_DEBUG_LOG` and disables debug display
-* generated local env includes WordPress, MariaDB, Mailpit, and Adminer/AdminNeo containers
+* generated local env includes WordPress, MariaDB, Mailpit, and database UI containers
 * generated local WordPress image includes useful CLI tools and wp-cli
 * Docker DB and WordPress image defaults can be overridden by `docker_db_image` and `docker_wordpress_image` in global config
 * local shell/wp-cli user defaults to `docker_user` from global config, falling back to `nonfiction`
-* `nf env show` prints paths, compose project name, Adminer URL, Mailpit URL, and WordPress URLs without starting Docker
+* `nf env show` prints paths, compose project name, DB URL, Mailpit URL, and WordPress URLs without starting Docker
 * `nf env logs` tails Docker logs for the local WordPress service
 * `nf env logs <remote>` resolves a repo remote and tails remote `wp-content/debug.log` over SSH after creating the file if needed
 * `nf env password [remote] [--wp|--db|--basicauth]` prints only the selected local or remote env password; `--wp` is the default
@@ -721,8 +720,7 @@ Status:
 * [x] Kinsta read-only healthcheck and `kinsta` target
 * [x] Linode read-only healthcheck and tagged target discovery
 * [x] `nf target list/show` from `providers.json`
-* [x] `nf target add linode <name>` creates Linode targets with DNS, queued TLS retry, Adminer/AdminNeo at `https://<adminer-user>.<target-hostname>/`, a per-target `--adminer-user` override, and empty remote site inventory. Existing completed pre-Adminer targets are not reconciled in place by provider checks or target refresh.
-* [x] `nf target adminer show <target>` reads `/var/lib/nf/target.json` and derives the Adminer password locally
+* [x] `nf target add linode <name>` creates Linode targets with DNS, queued TLS retry, database UI at `https://<db-user>.<target-hostname>/`, a per-target `--db-user` override, and empty remote site inventory. Existing completed targets that predate the database UI are not reconciled in place by provider checks or target refresh.
 * [x] legacy `servers.json` fallback during cache migration
 
 ### Phase 4: Site/env inventory

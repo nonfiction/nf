@@ -56,13 +56,12 @@ nf provider list
 nf provider show <provider>
 nf provider check <provider>
 nf refresh
-nf target add linode <name> [--region region] [--type type] [--image image] [--adminer-user user] [--user user] [--keys all] [--execute --yes] [--wait]
+nf target add linode <name> [--region region] [--type type] [--image image] [--db-user user] [--user user] [--keys all] [--execute --yes] [--wait]
 nf target remove <target> [--dry-run] [--execute --yes]
 nf target refresh
 nf target list
 nf target show <target>
-nf target adminer show <target>
-nf target password [target] [--root|--adminer]
+nf target password [target] [--root|--db]
 nf site add <target> <site> [--with-staging] [--password-version version] [--kinsta-slug slug] [--region region] [--php version] [--execute --yes]
 nf site refresh
 nf site list [--refresh] [--envs]
@@ -101,7 +100,7 @@ nf target add linode app1 \
   --region ca-central \
   --type g6-standard-1 \
   --image linode/ubuntu24.04 \
-  --adminer-user adminer \
+  --db-user admin \
   --user nonfiction \
   --keys all
 ```
@@ -112,18 +111,18 @@ nf target add linode app1 \
 * `nf provider check` calls safe read-only provider health endpoints and writes `providers.json`.
 * `nf provider show <provider>` reads cached provider metadata.
 * `nf refresh` best-effort refreshes all configured provider metadata, target records, and site/env records. It runs every provider check, including DNSimple, then runs site discovery from whatever target cache is available, and exits non-zero if any provider or site refresh phase failed.
-* `nf target add linode <name>` creates a Linode target named `<name>-linode`, tags it `nf`, creates host and wildcard DNS records under `base_domain`, queues HTTPS setup on the target with a systemd retry timer, installs AdminNeo at `https://<adminer-user>.<target-hostname>/` behind HTTP Basic auth during target provisioning, and records the target under the Linode provider in `providers.json`. Add `--adminer-user` to override `adminer_default_user` for that target only; the same value controls the Adminer HTTP Basic user, shared MySQL user, and Adminer subdomain label. Add `--wait` to keep the CLI attached through SSH, TLS, and health checks. Existing completed targets that predate AdminNeo are not upgraded in place by provider checks or target refresh.
+* `nf target add linode <name>` creates a Linode target named `<name>-linode`, tags it `nf`, creates host and wildcard DNS records under `base_domain`, queues HTTPS setup on the target with a systemd retry timer, installs the database UI at `https://<db-user>.<target-hostname>/` behind HTTP Basic auth during target provisioning, and records the target under the Linode provider in `providers.json`. Add `--db-user` to override `db_default_user` for that target only; the same value controls the database UI HTTP Basic user, shared MySQL user, and database UI subdomain label. Add `--wait` to keep the CLI attached through SSH, TLS, and health checks. Existing completed targets that predate the database UI are not upgraded in place by provider checks or target refresh.
 * `nf target remove <target>` removes an empty Linode target.
 * `nf target refresh` updates target records from configured target providers so added and removed targets are reflected in `providers.json`.
 * `nf target list/show` read target records from `providers.json`, with a legacy `servers.json` fallback.
-* `nf target adminer show <target>` reads `/var/lib/nf/target.json` over SSH and prints the Adminer URL, username, and derived password. The username defaults to `adminer_default_user`; the password is derived from the target metadata identity/purpose and `NF_PASSWORD_SALT`.
-* `nf target password [target] [--root|--adminer]` prints only the derived Linode target root or Adminer password. It does not support Kinsta targets.
+* `nf target show <target>` reads target cache and, for Linode targets, can hydrate `/var/lib/nf/target.json` over SSH to print the database UI URL, username, and derived password. The username defaults to `db_default_user`; the password is derived from the target metadata identity/purpose and `NF_PASSWORD_SALT`.
+* `nf target password [target] [--root|--db]` prints only the derived Linode target root or database UI password. It does not support Kinsta targets.
 * `nf site add <target> <site>` creates the live WordPress env on a target. Add `--with-staging` to create live and staging in one operation. Add `--password-version <version>` when the site must use a non-zero `project.password_version` from a repo that is not available to the command; the value must be an unsigned integer and `0` is the default. For Kinsta, `<site>` is the canonical `nf` project slug; add `--kinsta-slug <slug>` only when the Kinsta provider slug differs. The cache then stores `site_id` and `project_slug` from `<site>` plus `kinsta.slug` for the provider slug.
 * `nf site staging status/add/remove` manages an optional staging env for an existing site. `rm` is a shorthand for `remove`.
 * `nf site refresh` discovers sites from the cached target list. Kinsta refresh uses Kinsta API site/env/domain data and infers the canonical project slug from attached `nf` internal domains under `kinsta.<base_domain>` when present. Remote target site discovery is not implemented yet.
 * `nf site list --envs`, `nf site show`, `nf site shell`, `nf site wp`, `nf site snapshot`, and `nf site export` read the local disposable site cache for now.
 * `nf site password [site|env] [--wp|--db|--basicauth]` prints only one selected site password. `--wp` is the default. Env refs are accepted for `--db`; use a site ref for `--wp` or `--basicauth`. Linode WordPress, DB, and basic-auth passwords are derived from the site slug, purpose, `NF_PASSWORD_SALT`, and `project.password_version`; Kinsta DB password output uses the Kinsta SFTP password endpoint.
-* Linode site/env database creation grants the shared Adminer MySQL user privileges only on created site env databases and refuses to create a site DB user with the same name as the shared Adminer MySQL user. Site removal revokes per-database grants before dropping the databases.
+* Linode site/env database creation grants the shared database access MySQL user privileges only on created site env databases and refuses to create a site DB user with the same name as the shared database access MySQL user. Site removal revokes per-database grants before dropping the databases.
 * `nf site basicauth ...` uses `basicauth_default_user` from `config.json` and a per-site derived password with `project.password_version` as the rotation source. Linode envs are managed over SSH by updating the selected env nginx vhost, including multi-vhost target nginx scripts. Kinsta Password protection exists in MyKinsta, but currently requires manual MyKinsta use because no public API endpoint is exposed.
 * `nf domain list` shows cached domain inventory keyed by full env IDs like `client.app1-linode:live`. Columns are `role` (`primary` or `secondary`), `management` (`internal` or `external`), and `status` (`active`, `verified`, `unverified`, or `pending`). The generated provider hostname is internal and is primary only until an external primary is set; after that it remains listed as an internal secondary fallback. For Kinsta, the internal domain also anchors the canonical `nf` project slug for refresh/adoption.
 * `nf domain add ...` attaches external domains and prints the DNS records the client must create. It never mutates public/client DNS. Pass `--primary` to make the first domain primary and any remaining domains secondary; without `--primary`, domains are added as secondaries and redirect to the current primary. Kinsta domains are added through the Kinsta API and Kinsta-provided verification/pointing records are printed. Linode domains create one nginx vhost, certbot script, and retry timer per domain on the target.

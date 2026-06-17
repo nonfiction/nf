@@ -34,7 +34,7 @@ nf env password --db
 nf env logs
 ```
 
-`nf env show` prints the site URL, WordPress login, Mailpit URL, and an Adminer/AdminNeo URL prefilled with the database host/user/name.
+`nf env show` prints the site URL, WordPress login, Mailpit URL, and a DB URL prefilled with the database host/user/name.
 
 Generated WordPress config enables `WP_DEBUG` and `WP_DEBUG_LOG`, disables debug display, and routes local mail through Mailpit. `nf env logs` tails Docker logs for the WordPress service.
 

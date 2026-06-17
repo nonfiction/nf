@@ -43,7 +43,7 @@ nf env up
 nf env show
 ```
 
-Read [Local Development](local-development.md) for Docker env startup, WP-CLI, logs, Mailpit, Adminer/AdminNeo, resets, and local passwords.
+Read [Local Development](local-development.md) for Docker env startup, WP-CLI, logs, Mailpit, the database UI, resets, and local passwords.
 
 Create infrastructure and hosted WordPress envs:
 

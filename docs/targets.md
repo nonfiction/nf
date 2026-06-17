@@ -25,7 +25,7 @@ nf target add linode app1 \
   --region ca-central \
   --type g6-standard-1 \
   --image linode/ubuntu24.04 \
-  --adminer-user adminer \
+  --db-user admin \
   --user nonfiction \
   --keys all \
   --dry-run
@@ -38,13 +38,13 @@ nf target add linode app1 \
   --region ca-central \
   --type g6-standard-1 \
   --image linode/ubuntu24.04 \
-  --adminer-user adminer \
+  --db-user admin \
   --user nonfiction \
   --keys all \
   --execute --yes --wait
 ```
 
-`nf target add linode <name>` creates a target named `<name>-linode`, tags it `nf`, creates host and wildcard DNS records under `base_domain`, queues HTTPS setup on the target with a systemd retry timer, installs AdminNeo at `https://<adminer-user>.<target-hostname>/` behind HTTP Basic auth, and records the target under the Linode provider in `providers.json`.
+`nf target add linode <name>` creates a target named `<name>-linode`, tags it `nf`, creates host and wildcard DNS records under `base_domain`, queues HTTPS setup on the target with a systemd retry timer, installs the database UI at `https://<db-user>.<target-hostname>/` behind HTTP Basic auth, and records the target under the Linode provider in `providers.json`.
 
 Use `--wait` to keep the CLI attached through SSH, TLS, and health checks. Without `--execute`, target add is a dry-run.
 
@@ -53,12 +53,11 @@ Use `--wait` to keep the CLI attached through SSH, TLS, and health checks. Witho
 ```sh
 nf target list
 nf target show app1-linode
-nf target adminer show app1-linode
 nf target password app1-linode --root
-nf target password app1-linode --adminer
+nf target password app1-linode --db
 ```
 
-`nf target adminer show <target>` reads `/var/lib/nf/target.json` over SSH and prints the Adminer URL, username, and derived password. The raw Adminer password is not stored.
+`nf target show <target>` prints the database UI URL, username, and derived password for Linode targets when metadata is available. The raw database UI password is not stored.
 
 ## Remove an Empty Target
 

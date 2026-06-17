@@ -38,7 +38,7 @@ data:   ~/.local/share/nf/
 Current config files:
 
 ```text
-config.json     non-secret global config, including base_domain, dnsimple_account_id, basicauth_default_user, and adminer_default_user
+config.json     non-secret global config, including base_domain, dnsimple_account_id, basicauth_default_user, and db_default_user
 .env            secrets/account tokens
 providers.json  provider check metadata and targets
 sites.json      cached remote site/env records
@@ -64,7 +64,7 @@ Local state is disposable cache, not source of truth. Provider truth is canonica
 * `nf target list/show` read targets from `providers.json`; legacy `servers.json` fallback may remain during cache migration.
 * Remote target site discovery is not implemented yet.
 * Linode-hosted site/env truth is intended to live on each target at `/var/lib/nf/sites.json`, read over SSH as the standard user.
-* Linode target metadata lives at `/var/lib/nf/target.json`. It includes Adminer/AdminNeo metadata but no raw Adminer password.
+* Linode target metadata lives at `/var/lib/nf/target.json`. It includes database UI metadata but no raw database UI password.
 
 Kinsta sites have two possible slug identities:
 
@@ -81,7 +81,7 @@ Project site passwords, including provider basic-auth passwords, also include `p
 
 `basicauth_default_user` belongs in `config.json`, defaults to `nonfiction`, and is used with a per-site derived `basic-auth` password.
 
-`adminer_default_user` belongs in `config.json`, defaults to `adminer`, and is used for Linode target Adminer HTTP Basic auth, the shared MySQL admin user, and the Adminer subdomain label unless `nf target add linode --adminer-user` overrides it for that target.
+`db_default_user` belongs in `config.json`, defaults to `admin`, and is used for Linode target database UI HTTP Basic auth, the shared MySQL admin user, and the database UI subdomain label unless `nf target add linode --db-user` overrides it for that target.
 
 ## Safety Boundaries
 

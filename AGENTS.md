@@ -81,7 +81,7 @@ Do not read or write the user's real config/state in tests. `internal/target/pro
 ## Current cache files
 
 ```text
-config.json     non-secret global config, including base_domain, dnsimple_account_id, basicauth_default_user, and adminer_default_user
+config.json     non-secret global config, including base_domain, dnsimple_account_id, basicauth_default_user, and db_default_user
 .env            secrets/account tokens
 providers.json  provider check metadata and targets
 sites.json      cached remote site/env records
@@ -97,14 +97,13 @@ Local state is disposable. Provider truth is canonical remotely.
 * Password salt is `NF_PASSWORD_SALT`; legacy `NF_SECRET_SALT` is migration-only fallback.
 * `project.password_version` belongs in `nf.json`, defaults to `0`, is safe to commit, and rotates project/site derived passwords when set non-zero without changing `NF_PASSWORD_SALT`.
 * `basicauth_default_user` belongs in `config.json`, defaults to `nonfiction`, and is used with a per-site derived `basic-auth` password.
-* `adminer_default_user` belongs in `config.json`, defaults to `adminer`, and is used for Linode target Adminer HTTP Basic auth, the shared MySQL admin user, and the Adminer subdomain label unless `nf target add linode --adminer-user` overrides it for that target.
+* `db_default_user` belongs in `config.json`, defaults to `admin`, and is used for Linode target database UI HTTP Basic auth, the shared MySQL admin user, and the database UI subdomain label unless `nf target add linode --db-user` overrides it for that target. Legacy `adminer_default_user` may remain as fallback during migration.
 * DNSimple provider check validates it can read the configured `base_domain` zone and writes zero targets.
 * Kinsta provider check writes one target named `kinsta`.
 * Linode provider check discovers targets from Linode instances tagged `nf`.
 * `nf target remove <target>` removes an empty Linode target.
 * `nf target list/show` read targets from `providers.json`; legacy `servers.json` fallback may remain during cache migration.
-* `nf target adminer show <target>` reads `/var/lib/nf/target.json` over SSH and derives the target Adminer password from target metadata identity/purpose; the raw password is not stored.
-* `nf target password [target] [--root|--adminer]` prints only the derived Linode target root or Adminer password.
+* `nf target password [target] [--root|--db]` prints only the derived Linode target root or database UI password.
 * `nf site add <target> <site>` creates the live WordPress env on a target. Use `--with-staging` for one-command live+staging setup.
 * `nf site staging status/add/remove` manages optional staging env lifecycle. `rm` is a shorthand for `remove`.
 * `nf site refresh` fans out from cached targets. It must not claim to refresh providers.
@@ -112,9 +111,9 @@ Local state is disposable. Provider truth is canonical remotely.
 * `nf site remove [site]` removes a whole Linode site and deletes its env data.
 * Remote target site discovery is not implemented yet.
 * Linode-hosted site/env truth is intended to live on each target at `/var/lib/nf/sites.json`, read over SSH as the standard user.
-* Linode target metadata lives at `/var/lib/nf/target.json`. It includes Adminer/AdminNeo metadata but no raw Adminer password.
-* Linode Adminer is deployed as pinned AdminNeo at `https://<adminer-user>.<target-hostname>/` during target provisioning, protected by HTTP Basic auth and the wildcard target certificate.
-* Linode site add grants the shared Adminer MySQL user privileges only on created site/env databases; site remove revokes those per-database grants before dropping DBs.
+* Linode target metadata lives at `/var/lib/nf/target.json`. It includes database UI metadata but no raw database UI password.
+* Linode database UI is deployed as pinned AdminNeo at `https://<db-user>.<target-hostname>/` during target provisioning, protected by HTTP Basic auth and the wildcard target certificate.
+* Linode site add grants the shared database access MySQL user privileges only on created site/env databases; site remove revokes those per-database grants before dropping DBs.
 * `nf remote add` validates the requested site/env exists in local cache before writing `nf.json`.
 * `nf site shell/wp` validate the cache, preview the SSH or wp-cli command, then execute the remote command.
 * `nf site export <site:env>` creates a full WordPress handoff export under `NF_DATA_HOME/exports/<env-id-slug>-YYYY-MM-DD-HHMMSS/` by default. It writes `files/` with the full WordPress filesystem, `database.sql.gz`, `manifest.json`, and `README.txt`. This is distinct from snapshots and includes themes, core files, plugins, uploads, and `wp-config.php`.
@@ -149,7 +148,7 @@ Local state is disposable. Provider truth is canonical remotely.
 * Remote snapshot files stay under `NF_DATA_HOME` / `~/.local/share/nf/snapshots/remote/<env-id-slug>-YYYY-MM-DD-HHMMSS/`.
 * `nf env up` should be idempotent: ensure env exists, start Compose, configure Mailpit SMTP, install WordPress if missing, activate mounted theme. `--rebuild` rebuilds the generated WordPress image first.
 * `nf env reset --rebuild` creates the normal safety snapshot, removes Docker Compose volumes, rebuilds the generated WordPress image, and recreates the env.
-* Local env includes WordPress, MariaDB, Mailpit, and Adminer/AdminNeo containers. `nf env show` prints Mailpit and prefilled Adminer URLs.
+* Local env includes WordPress, MariaDB, Mailpit, and database UI containers. `nf env show` prints Mailpit and prefilled DB URLs.
 * Local env generated WordPress config enables `WP_DEBUG` and `WP_DEBUG_LOG`, disables debug display, and routes local mail through Mailpit.
 * Local env generated WordPress Dockerfile installs useful CLI tools and wp-cli. `nf env shell`, `nf env sh`, and `nf env wp` execute in the WordPress container as `docker_user`, defaulting to `nonfiction`.
 * Global config can override local env Docker defaults with `docker_db_image`, `docker_wordpress_image`, and `docker_user`.

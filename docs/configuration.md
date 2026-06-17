@@ -17,7 +17,7 @@ Non-secret config goes in `config.json`:
   "base_domain": "nonfiction.dev",
   "dnsimple_account_id": "14",
   "basicauth_default_user": "nonfiction",
-  "adminer_default_user": "adminer",
+  "db_default_user": "admin",
   "docker_user": "nonfiction",
   "docker_db_image": "mariadb:11",
   "docker_wordpress_image": "wordpress:php8.3-apache"
@@ -43,7 +43,7 @@ nf config set-base-domain nonfiction.dev
 nf config set-default-wp-email dev@example.com
 nf config set-default-wp-user admin
 nf config set-basicauth-default-user nonfiction
-nf config set-adminer-default-user adminer
+nf config set-db-default-user admin
 nf config set-docker-db-image mariadb:11
 nf config set-docker-wordpress-image wordpress:php8.3-apache
 nf config set-docker-user nonfiction
@@ -65,7 +65,7 @@ nf password show-salt
 nf password derive <scope> <value...>
 nf env password [remote] [--wp|--db|--basicauth]
 nf site password [site|env] [--wp|--db|--basicauth]
-nf target password [target] [--root|--adminer]
+nf target password [target] [--root|--db]
 ```
 
 Password derivation uses `NF_PASSWORD_SALT` from the environment or `~/.config/nf/.env`. Legacy `NF_SECRET_SALT` is accepted only as a migration fallback. Project site passwords, including provider basic-auth passwords, also include `project.password_version` from `nf.json` when it is non-zero; missing or `0` preserves the original derivation.
