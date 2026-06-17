@@ -20,6 +20,10 @@ Configured WordPress plugins live in `nf.json` under `wordpress.plugins`. The li
         "auto_update": true
       },
       {
+        "slug": "client-plugin",
+        "source": "repo"
+      },
+      {
         "slug": "sitepress-multilingual-cms",
         "install": false,
         "note": "WPML; install manually from wpml.org account"
@@ -29,7 +33,9 @@ Configured WordPress plugins live in `nf.json` under `wordpress.plugins`. The li
 }
 ```
 
-String entries install from wordpress.org, activate, and enable auto-updates by default. Object entries require `slug`, may set `source` to a zip URL/path or env var, may set `activate` or `auto_update` to `false`, and may set `install` to `false` for manual/documentation-only plugins that nf should check but never install.
+String entries install from wordpress.org, activate, and enable auto-updates by default. Object entries require `slug`, may set `source` to a zip URL/path, env var, or `repo`, may set `activate` or `auto_update` to `false`, and may set `install` to `false` for manual/documentation-only plugins that nf should check but never install.
+
+Use `source: "repo"` for project-specific plugins stored at `plugins/<slug>/` in the repo. During install, nf packages that directory into a temporary zip with `<slug>/` as the archive root, installs or uploads it through WP-CLI, and removes the temporary zip. No plugin artifact is written to `dist/` or committed to the repo.
 
 Keep private plugin URLs and license data in environment variables, not `nf.json`.
 
@@ -39,6 +45,7 @@ Keep private plugin URLs and license data in environment variables, not `nf.json
 nf env plugin list
 nf env plugin add stream
 nf env plugin add acf-pro --source '$NF_PLUGIN_ACF_PRO_ZIP'
+nf env plugin add client-plugin --source repo
 nf env plugin add sitepress-multilingual-cms --manual --note 'WPML; install manually from wpml.org account'
 nf env plugin remove stream
 ```
@@ -87,6 +94,6 @@ Remote install:
 nf env plugin install production --yes
 ```
 
-Remote installs run WP-CLI on the remote host. URL sources must be reachable from that host; local zip sources are uploaded to a temporary remote directory before install and cleaned up afterward.
+Remote installs run WP-CLI on the remote host. URL sources must be reachable from that host; local zip sources are uploaded to a temporary remote directory before install and cleaned up afterward. Repo sources are zipped locally on demand, uploaded like local zip sources, and cleaned up locally and remotely after install.
 
 Plugin install is idempotent: it installs only missing configured plugins where `install` is true, activates only inactive plugins when `activate` is true, and enables native WordPress auto-updates only when not already enabled. It does not install manual plugins, update, remove, pin, disable auto-updates, or manage plugin licenses.

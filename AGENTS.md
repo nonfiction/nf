@@ -120,7 +120,7 @@ Local state is disposable. Provider truth is canonical remotely.
 * `nf env logs [remote]` tails local Docker WordPress logs with no remote, or tails remote `wp-content/debug.log` over SSH for a configured repo remote.
 * `nf env password [remote] [--wp|--db|--basicauth]` prints only one selected local or remote env password. `--wp` is the default.
 * `nf env push/pull [remote]` defaults to an interactive confirmation before executing remote sync. Use `--dry-run` or `--non-interactive` without `--execute` for preflight-only output. Non-interactive execution requires `--execute --yes`.
-* `wordpress.plugins` in `nf.json` is an env bootstrap checklist, not a full lifecycle manager. String entries install from wordpress.org, activate, and enable auto-updates by default; object entries require `slug`, support `source`, `install`, `note`, and `auto_update`, and default `install`, `activate`, and `auto_update` to true. Use `install: false` for manual/documentation-only plugins that nf should check but never install.
+* `wordpress.plugins` in `nf.json` is an env bootstrap checklist, not a full lifecycle manager. String entries install from wordpress.org, activate, and enable auto-updates by default; object entries require `slug`, support `source`, `install`, `note`, and `auto_update`, and default `install`, `activate`, and `auto_update` to true. Use `install: false` for manual/documentation-only plugins that nf should check but never install. Use `source: "repo"` for project-specific plugin source directories at `plugins/<slug>/`; nf zips them on demand during local or remote install and cleans up the temporary artifacts.
 
 ## Project-context gotchas
 
