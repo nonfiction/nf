@@ -257,15 +257,13 @@ func TestRunHelpShowsProjectCommandsInsideNFProject(t *testing.T) {
 }
 
 func TestRunVersionShowsBuildMetadata(t *testing.T) {
-	oldVersion, oldCommit, oldDate := version.Version, version.Commit, version.Date
+	oldVersion, oldCommit := version.Version, version.Commit
 	wantVersion := version.DefaultVersion()
 	version.Version = wantVersion
 	version.Commit = "abc1234"
-	version.Date = "2026-06-09"
 	t.Cleanup(func() {
 		version.Version = oldVersion
 		version.Commit = oldCommit
-		version.Date = oldDate
 	})
 
 	output := captureStdout(t, func() {
@@ -273,10 +271,13 @@ func TestRunVersionShowsBuildMetadata(t *testing.T) {
 			t.Fatalf("Run(version) = %d, want 0", got)
 		}
 	})
-	for _, want := range []string{"version: " + wantVersion + "\n", "commit:  abc1234\n", "date:    2026-06-09\n"} {
+	for _, want := range []string{"version: " + wantVersion + "\n", "commit:  abc1234\n"} {
 		if !strings.Contains(output, want) {
 			t.Fatalf("version output missing %q:\n%s", want, output)
 		}
+	}
+	if strings.Contains(output, "date:") {
+		t.Fatalf("version output unexpectedly included date:\n%s", output)
 	}
 
 	shortOutput := captureStdout(t, func() {

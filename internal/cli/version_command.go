@@ -32,7 +32,7 @@ func runVersion(argv []string) int {
 
 func runVersionHelp() int {
 	printGroupHelp("version", []helpLine{
-		{"version", "show version, commit, and build date"},
+		{"version", "show version and commit"},
 		{"version --short", "show version only"},
 	})
 	return 0

@@ -114,6 +114,5 @@ func Details() []string {
 	return []string{
 		"version: " + Version,
 		"commit:  " + Commit,
-		"date:    " + Date,
 	}
 }
