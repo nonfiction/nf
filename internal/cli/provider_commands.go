@@ -451,7 +451,7 @@ func linodeTargetIdentityValues(target map[string]any) []string {
 }
 
 func preserveLinodeTargetMetadata(existing, refreshed map[string]any) {
-	for _, key := range []string{"adminer", "credentials", "target_path", "sites_path", "health_url", "dns", "tls", "services", "php_version", "type", "linode_type", "image", "created_at", "updated_at", "ssh_user", "ssh_username", "ssh_port"} {
+	for _, key := range []string{"db", "adminer", "credentials", "target_path", "sites_path", "health_url", "dns", "tls", "services", "php_version", "type", "linode_type", "image", "created_at", "updated_at", "ssh_user", "ssh_username", "ssh_port"} {
 		copyExistingTargetValue(existing, refreshed, key)
 	}
 	if phase := recordValueString(existing["phase"]); phase != "" {

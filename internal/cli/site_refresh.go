@@ -56,7 +56,7 @@ func cmdShowTarget(needle string, jsonOutput bool) int {
 		return 1
 	}
 	if !jsonOutput {
-		record = targetWithRemoteAdminerMetadata(record)
+		record = targetWithRemoteDBMetadata(record)
 		printTargetDetails(record)
 		return 0
 	}
@@ -81,32 +81,32 @@ func printTargetDetails(record map[string]any) {
 		{label: "Type", value: firstRecordString(record, "type", "linode_type")},
 		{label: "Image", value: firstRecordString(record, "image")},
 	}, 0)...)
-	adminerURL, adminerUser, adminerPassword := targetAdminerLogin(record)
-	accessRows := []detailRow{{label: "SSH", value: targetSSHCommand(record)}, {label: "Adminer", value: adminerURL}}
+	dbURL, dbUser, dbPassword := targetDBLogin(record)
+	accessRows := []detailRow{{label: "SSH", value: targetSSHCommand(record)}, {label: "Database", value: dbURL}}
 	if hasDetailRows(accessRows) {
 		lines = append(lines, "", "Access")
 		lines = append(lines, detailRowLines(accessRows, 2)...)
-		if adminerURL != "" {
-			lines = append(lines, detailRowLines([]detailRow{{label: "- User", value: adminerUser}, {label: "- Pass", value: adminerPassword}}, 3)...)
+		if dbURL != "" {
+			lines = append(lines, detailRowLines([]detailRow{{label: "- User", value: dbUser}, {label: "- Pass", value: dbPassword}}, 3)...)
 		}
 	}
 	fmt.Println(strings.Join(lines, "\n"))
 }
 
-func targetWithRemoteAdminerMetadata(record map[string]any) map[string]any {
-	if strings.ToLower(strings.TrimSpace(recordValueString(record["provider"]))) != "linode" || targetAdminerURL(record) != "" {
+func targetWithRemoteDBMetadata(record map[string]any) map[string]any {
+	if strings.ToLower(strings.TrimSpace(recordValueString(record["provider"]))) != "linode" || targetDBURL(record) != "" {
 		return record
 	}
 	remote, err := readLinodeTargetFile(record)
 	if err != nil {
 		return record
 	}
-	adminer, ok := remote["adminer"].(map[string]any)
-	if !ok || len(adminer) == 0 {
+	db := targetDBMetadata(remote)
+	if len(db) == 0 {
 		return record
 	}
 	hydrated := cloneRecord(record)
-	hydrated["adminer"] = adminer
+	hydrated["db"] = db
 	for _, key := range []string{"hostname", "host"} {
 		if recordValueString(hydrated[key]) == "" && recordValueString(remote[key]) != "" {
 			hydrated[key] = remote[key]
@@ -115,10 +115,11 @@ func targetWithRemoteAdminerMetadata(record map[string]any) map[string]any {
 	return hydrated
 }
 
-func targetAdminerLogin(record map[string]any) (string, string, string) {
-	url := targetAdminerURL(record)
-	user := targetAdminerUser(record)
+func targetDBLogin(record map[string]any) (string, string, string) {
+	url := targetDBURL(record)
+	user := targetDBUser(record)
 	identity := firstNonEmpty(
+		mapStringAtPath(record, "db", "auth", "password", "identity"),
 		mapStringAtPath(record, "adminer", "auth", "password", "identity"),
 		firstRecordString(record, "hostname", "host"),
 	)
@@ -129,7 +130,7 @@ func targetAdminerLogin(record map[string]any) (string, string, string) {
 	if err != nil {
 		return url, user, ""
 	}
-	purpose := firstNonEmpty(mapStringAtPath(record, "adminer", "auth", "password", "purpose"), "adminer")
+	purpose := firstNonEmpty(mapStringAtPath(record, "db", "auth", "password", "purpose"), mapStringAtPath(record, "adminer", "auth", "password", "purpose"), "db")
 	return url, user, passwords.DerivePassword(identity, purpose, salt)
 }
 

@@ -168,7 +168,7 @@ const firewallOutboundPolicy = "ACCEPT"
 const adminerToolName = "AdminNeo"
 const adminerVersion = "5.4.1"
 const adminerDownloadURL = "https://www.adminneo.org/files/5.4.1/mysql_en_default/adminneo-5.4.1.php"
-const adminerDefaultUser = "adminer"
+const dbDefaultUser = "admin"
 
 var firewallInboundPorts = []string{"22", "80", "443"}
 
@@ -290,7 +290,7 @@ func adminerCredentialState(plan Plan) map[string]any {
 	return map[string]any{
 		"derived":  true,
 		"identity": plan.Hostname,
-		"purpose":  "adminer",
+		"purpose":  "db",
 		"stored":   false,
 		"user":     plan.AdminerUser,
 	}
@@ -327,16 +327,16 @@ func deriveAdminerURL(hostname, user string) string {
 func validateAdminerUser(user string) error {
 	trimmed := strings.TrimSpace(user)
 	if trimmed == "" {
-		return Error{Msg: "Adminer user must be a non-empty MySQL username"}
+		return Error{Msg: "Database user must be a non-empty MySQL username"}
 	}
 	if len(trimmed) > 32 {
-		return Error{Msg: "Adminer user must be 32 characters or fewer"}
+		return Error{Msg: "Database user must be 32 characters or fewer"}
 	}
 	for _, r := range trimmed {
 		if r >= 'a' && r <= 'z' || r >= 'A' && r <= 'Z' || r >= '0' && r <= '9' || r == '_' || r == '-' {
 			continue
 		}
-		return Error{Msg: "Adminer user must use only letters, numbers, underscores, and hyphens"}
+		return Error{Msg: "Database user must use only letters, numbers, underscores, and hyphens"}
 	}
 	return nil
 }
@@ -1230,19 +1230,19 @@ write_files:
     permissions: '0644'
     content: |
       server { listen 80 default_server; listen [::]:80 default_server; server_name __HOSTNAME__; root /var/www/nf; index index.html; location = /healthz { default_type application/json; return 200 '{"server":"__NAME__","hostname":"__HOSTNAME__","status":"ready"}'; } location / { try_files $uri $uri/ /index.html; } }
-  - path: /usr/local/bin/nf-install-adminer
+  - path: /usr/local/bin/nf-install-db-ui
     permissions: '0755'
     content: |
       #!/usr/bin/env bash
       set -euo pipefail
-      install -d -o root -g www-data -m 0750 /var/www/shared/adminer /var/lib/nf
-      curl -fsSL __ADMINER_DOWNLOAD_URL__ -o /var/www/shared/adminer/index.php
-      cat >/var/www/shared/adminer/adminneo-config.php <<'EOF'
+      install -d -o root -g www-data -m 0750 /var/www/shared/db /var/lib/nf
+      curl -fsSL __ADMINER_DOWNLOAD_URL__ -o /var/www/shared/db/index.php
+      cat >/var/www/shared/db/adminneo-config.php <<'EOF'
       <?php return ["defaultDriver"=>"mysql","defaultServer"=>"localhost","navigationMode"=>"dual","preferSelection"=>true,"hiddenDatabases"=>["__system"]];
       EOF
-      printf '%s:%s\n' '__ADMINER_USER__' '__ADMINER_HTPASSWD__' >/var/lib/nf/adminer.htpasswd
-      chown -R root:www-data /var/www/shared/adminer /var/lib/nf/adminer.htpasswd
-      chmod 0640 /var/www/shared/adminer/index.php /var/www/shared/adminer/adminneo-config.php /var/lib/nf/adminer.htpasswd
+      printf '%s:%s\n' '__ADMINER_USER__' '__ADMINER_HTPASSWD__' >/var/lib/nf/db.htpasswd
+      chown -R root:www-data /var/www/shared/db /var/lib/nf/db.htpasswd
+      chmod 0640 /var/www/shared/db/index.php /var/www/shared/db/adminneo-config.php /var/lib/nf/db.htpasswd
       mariadb -uroot <<SQL
       CREATE USER IF NOT EXISTS '__ADMINER_USER__'@'localhost' IDENTIFIED BY PASSWORD '__ADMINER_MYSQL_HASH__';
       ALTER USER '__ADMINER_USER__'@'localhost' IDENTIFIED BY PASSWORD '__ADMINER_MYSQL_HASH__';
@@ -1309,11 +1309,11 @@ write_files:
       server { listen 443 ssl http2 default_server; listen [::]:443 ssl http2 default_server; server_name __HOSTNAME__; include /etc/nginx/snippets/nf-wildcard-cert.conf; root /var/www/nf; index index.html; location = /healthz { default_type application/json; return 200 '{"server":"__NAME__","hostname":"__HOSTNAME__","status":"ready"}'; } location / { try_files $uri $uri/ /index.html; } }
       EOF
 
-      cat >/etc/nginx/sites-available/nf-adminer <<'EOF'
+      cat >/etc/nginx/sites-available/nf-db <<'EOF'
       server { listen 80; listen [::]:80; server_name __ADMINER_HOSTNAME__; return 301 https://__ADMINER_HOSTNAME__$request_uri; }
-      server { listen 443 ssl http2; listen [::]:443 ssl http2; server_name __ADMINER_HOSTNAME__; include /etc/nginx/snippets/nf-wildcard-cert.conf; include /etc/nginx/snippets/nf-security-headers.conf; client_max_body_size 1024M; root /var/www/shared/adminer; index index.php; access_log /var/log/nginx/sites/adminer.access.log; error_log /var/log/nginx/sites/adminer.error.log; auth_basic "nf adminer"; auth_basic_user_file /var/lib/nf/adminer.htpasswd; location / { try_files $uri $uri/ /index.php?$args; } location ~ \.php$ { include /etc/nginx/snippets/nf-fastcgi-php.conf; fastcgi_pass unix:__PHP_FPM_SOCKET__; } }
+      server { listen 443 ssl http2; listen [::]:443 ssl http2; server_name __ADMINER_HOSTNAME__; include /etc/nginx/snippets/nf-wildcard-cert.conf; include /etc/nginx/snippets/nf-security-headers.conf; client_max_body_size 1024M; root /var/www/shared/db; index index.php; access_log /var/log/nginx/sites/db.access.log; error_log /var/log/nginx/sites/db.error.log; auth_basic "nf database"; auth_basic_user_file /var/lib/nf/db.htpasswd; location / { try_files $uri $uri/ /index.php?$args; } location ~ \.php$ { include /etc/nginx/snippets/nf-fastcgi-php.conf; fastcgi_pass unix:__PHP_FPM_SOCKET__; } }
       EOF
-      ln -sf /etc/nginx/sites-available/nf-adminer /etc/nginx/sites-enabled/nf-adminer
+      ln -sf /etc/nginx/sites-available/nf-db /etc/nginx/sites-enabled/nf-db
       nginx -t
       systemctl reload nginx
       systemctl disable --now nf-wildcard-tls.timer || true
@@ -1377,7 +1377,7 @@ write_files:
         "php_version": "__PHP_VERSION__",
         "php_service": "__PHP_FPM_SERVICE__",
         "php_socket": "__PHP_FPM_SOCKET__",
-        "adminer": {"tool":"__ADMINER_TOOL__","version":"__ADMINER_VERSION__","hostname":"__ADMINER_HOSTNAME__","url":"__ADMINER_URL__","path":"/var/www/shared/adminer/index.php","config_path":"/var/www/shared/adminer/adminneo-config.php","download_url":"__ADMINER_DOWNLOAD_URL__","user":"__ADMINER_USER__","auth":{"type":"basic","user":"__ADMINER_USER__","password":{"derived":true,"identity":"__HOSTNAME__","purpose":"adminer","stored":false}},"database":{"host":"localhost","user":"__ADMINER_USER__","grants":"site-env-databases"}},
+        "db": {"tool":"__ADMINER_TOOL__","version":"__ADMINER_VERSION__","hostname":"__ADMINER_HOSTNAME__","url":"__ADMINER_URL__","path":"/var/www/shared/db/index.php","config_path":"/var/www/shared/db/adminneo-config.php","download_url":"__ADMINER_DOWNLOAD_URL__","user":"__ADMINER_USER__","auth":{"type":"basic","user":"__ADMINER_USER__","password":{"derived":true,"identity":"__HOSTNAME__","purpose":"db","stored":false}},"database":{"host":"localhost","user":"__ADMINER_USER__","grants":"site-env-databases"}},
         "sites_path": "/var/lib/nf/sites.json",
         "created_at": "${created_at}"
       }
@@ -1388,7 +1388,7 @@ write_files:
       chown -R __SSH_USER__:www-data /var/lib/nf
       chmod 2775 /var/lib/nf
       chmod 0664 /var/lib/nf/sites.json /var/lib/nf/target.json
-      if [ -f /var/lib/nf/adminer.htpasswd ]; then chown root:www-data /var/lib/nf/adminer.htpasswd && chmod 0640 /var/lib/nf/adminer.htpasswd; fi
+      if [ -f /var/lib/nf/db.htpasswd ]; then chown root:www-data /var/lib/nf/db.htpasswd && chmod 0640 /var/lib/nf/db.htpasswd; fi
   - path: /etc/update-motd.d/99-nf
     permissions: '0755'
     content: |
@@ -1418,7 +1418,7 @@ runcmd:
   - rm -f /etc/nginx/sites-enabled/default
   - ln -sf /etc/nginx/sites-available/nf-server /etc/nginx/sites-enabled/nf-server
   - /usr/local/bin/nf-write-server-health-page
-  - /usr/local/bin/nf-install-adminer
+  - /usr/local/bin/nf-install-db-ui
   - nginx -t
   - systemctl enable nginx
   - systemctl restart nginx
@@ -1816,13 +1816,13 @@ func phpBaselinePlanBlock(plan Plan) []string {
 
 func adminerPlanBlock(plan Plan) []string {
 	return []string{
-		"Adminer",
+		"Database access",
 		"  tool: " + adminerToolName + " " + adminerVersion,
 		"  url: " + plan.AdminerURL,
 		"  hostname: " + plan.AdminerHostname,
 		"  user: " + plan.AdminerUser,
-		"  password: derived from hostname + purpose adminer",
-		"  reveal: nf target adminer show " + plan.Name,
+		"  password: derived from hostname + purpose db",
+		"  reveal: nf target show " + plan.Name,
 		"  mysql grants: site env databases only",
 	}
 }
@@ -1883,8 +1883,8 @@ func sshStateBlock(plan Plan, keys []SSHAuthorizedKey) map[string]any {
 
 func credentialsStateBlock(plan Plan) map[string]any {
 	return map[string]any{
-		"root":    rootCredentialState(plan.Hostname),
-		"adminer": adminerCredentialState(plan),
+		"root": rootCredentialState(plan.Hostname),
+		"db":   adminerCredentialState(plan),
 	}
 }
 
@@ -2324,19 +2324,19 @@ func serverStateRecordWithStatus(plan Plan, created CreatedServer, dns DNSState,
 		"packages":       plan.PHP.Packages,
 	}
 	record["services"] = map[string]any{
-		"nginx":   true,
-		"mariadb": true,
-		"adminer": adminerToolName,
-		"php_fpm": plan.PHP.Service,
-		"wp_cli":  "/usr/local/bin/wp",
+		"nginx":       true,
+		"mariadb":     true,
+		"database_ui": adminerToolName,
+		"php_fpm":     plan.PHP.Service,
+		"wp_cli":      "/usr/local/bin/wp",
 	}
-	record["adminer"] = map[string]any{
+	record["db"] = map[string]any{
 		"tool":         adminerToolName,
 		"version":      adminerVersion,
 		"hostname":     plan.AdminerHostname,
 		"url":          plan.AdminerURL,
-		"path":         "/var/www/shared/adminer/index.php",
-		"config_path":  "/var/www/shared/adminer/adminneo-config.php",
+		"path":         "/var/www/shared/db/index.php",
+		"config_path":  "/var/www/shared/db/adminneo-config.php",
 		"download_url": adminerDownloadURL,
 		"user":         plan.AdminerUser,
 		"auth": map[string]any{
@@ -2540,7 +2540,7 @@ func normalizePlan(plan Plan) Plan {
 		plan.HealthURL = deriveHealthURL(plan.Hostname)
 	}
 	if strings.TrimSpace(plan.AdminerUser) == "" {
-		plan.AdminerUser = firstNonEmpty(globalConfigValue("adminer_default_user"), adminerDefaultUser)
+		plan.AdminerUser = firstNonEmpty(globalConfigValue("db_default_user"), globalConfigValue("adminer_default_user"), dbDefaultUser)
 	}
 	if strings.TrimSpace(plan.AdminerHostname) == "" {
 		plan.AdminerHostname = deriveAdminerHostname(plan.Hostname, plan.AdminerUser)
@@ -2603,7 +2603,7 @@ func BuildPlan(args Args) (Plan, error) {
 	defaultType := firstNonEmpty(globalConfigValue("linode_default_type"), "g6-standard-1")
 	defaultImage := globalConfigValue("linode_default_image")
 	defaultUser := firstNonEmpty(globalConfigValue("linode_default_user"), "nonfiction")
-	defaultAdminerUser := firstNonEmpty(globalConfigValue("adminer_default_user"), adminerDefaultUser)
+	defaultAdminerUser := firstNonEmpty(globalConfigValue("db_default_user"), globalConfigValue("adminer_default_user"), dbDefaultUser)
 	if resumeRecord != nil {
 		status := existingProvisionStatus(resumeRecord)
 		phase := existingProvisionPhase(resumeRecord)
@@ -2645,7 +2645,7 @@ func BuildPlan(args Args) (Plan, error) {
 	if err != nil {
 		return Plan{}, err
 	}
-	adminerUser, err := resolveValue(args.AdminerUser, "Adminer user: ", defaultAdminerUser, nonInteractive, false)
+	adminerUser, err := resolveValue(args.AdminerUser, "Database user: ", defaultAdminerUser, nonInteractive, false)
 	if err != nil {
 		return Plan{}, err
 	}
@@ -3080,9 +3080,9 @@ func ProvisionServer(plan Plan) (*ServerCreateResult, error) {
 		return nil, err
 	}
 	rootPass := passwords.DerivePassword(effectivePlan.Hostname, "linode-root", salt)
-	adminerPass := passwords.DerivePassword(effectivePlan.Hostname, "adminer", salt)
-	effectivePlan.AdminerHTPasswd = adminerHtpasswdHash(adminerPass)
-	effectivePlan.AdminerMySQLHash = adminerMySQLPasswordHash(adminerPass)
+	dbPass := passwords.DerivePassword(effectivePlan.Hostname, "db", salt)
+	effectivePlan.AdminerHTPasswd = adminerHtpasswdHash(dbPass)
+	effectivePlan.AdminerMySQLHash = adminerMySQLPasswordHash(dbPass)
 	dnsimpleToken, err := requiredEnv("DNSIMPLE_TOKEN")
 	if err != nil {
 		return nil, err
