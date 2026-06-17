@@ -231,7 +231,7 @@ func cmdEnvPluginsCache(cfg envConfig, opts envPluginCacheOptions) int {
 	case "show":
 		return cmdEnvPluginsCacheShow(opts.Slug)
 	default:
-		fmt.Fprintln(os.Stderr, "unsupported env plugin cache command")
+		fmt.Fprintln(os.Stderr, "unsupported plugin cache command")
 		return 1
 	}
 }
@@ -571,7 +571,7 @@ type envPluginInstallOptions struct {
 func cmdEnvPluginsInstallWithOptions(root string, metadata map[string]any, opts envPluginInstallOptions) int {
 	if strings.TrimSpace(opts.RemoteName) == "" {
 		if opts.DryRun {
-			fmt.Fprintln(os.Stderr, "env plugin install --dry-run requires a remote")
+			fmt.Fprintln(os.Stderr, "plugin install --dry-run requires a remote")
 			return 1
 		}
 		cfg, ok := loadEnvConfig(root, metadata)

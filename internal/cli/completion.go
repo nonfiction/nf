@@ -115,6 +115,8 @@ func completeContextCandidates(args []string) []string {
 		return passwordCompletionCandidates(args[1:])
 	case "remote":
 		return remoteCompletionCandidates(args[1:])
+	case "plugin":
+		return pluginCompletionCandidates(args[1:])
 	case "env":
 		return envCompletionCandidates(args[1:])
 	case "theme":
@@ -165,7 +167,7 @@ func passwordDeriveIdentityCompletionNames(scope string) []string {
 func rootCompletionCandidates() []string {
 	candidates := []string{"init", "provider", "target", "site", "refresh", "domain", "config", "password", "completion", "version", "help"}
 	if projectContextAvailable() {
-		candidates = append(candidates, "remote", "env", "theme", "public")
+		candidates = append(candidates, "remote", "plugin", "env", "theme", "public")
 	}
 	sort.Strings(candidates)
 	return candidates
@@ -368,7 +370,7 @@ func remoteCompletionCandidates(args []string) []string {
 
 func envCompletionCandidates(args []string) []string {
 	if len(args) == 0 {
-		return []string{"show", "password", "up", "down", "logs", "shell", "sh", "wp", "plugin", "snapshot", "import", "pull", "push", "reset", "help"}
+		return []string{"show", "password", "up", "down", "logs", "shell", "sh", "wp", "snapshot", "import", "pull", "push", "reset", "help"}
 	}
 	args[0] = cliCommandAlias(args[0])
 	switch args[0] {
@@ -380,8 +382,6 @@ func envCompletionCandidates(args []string) []string {
 		return projectRemoteCompletionNames()
 	case "shell":
 		return projectRemoteCompletionNames()
-	case "plugin":
-		return envPluginsCompletionCandidates(args[1:])
 	case "snapshot":
 		return envSnapshotCompletionCandidates(args[1:])
 	case "import":
@@ -391,9 +391,9 @@ func envCompletionCandidates(args []string) []string {
 	}
 }
 
-func envPluginsCompletionCandidates(args []string) []string {
+func pluginCompletionCandidates(args []string) []string {
 	if len(args) == 0 {
-		return []string{"list", "ls", "add", "remove", "rm", "status", "diff", "install", "help"}
+		return []string{"list", "ls", "add", "remove", "rm", "status", "diff", "install", "cache", "help"}
 	}
 	args[0] = cliCommandAlias(args[0])
 	if args[0] == "add" {
@@ -408,7 +408,23 @@ func envPluginsCompletionCandidates(args []string) []string {
 	if args[0] == "status" || args[0] == "diff" {
 		return projectRemoteCompletionNames()
 	}
+	if args[0] == "cache" {
+		return pluginCacheCompletionCandidates(args[1:])
+	}
 	return nil
+}
+
+func pluginCacheCompletionCandidates(args []string) []string {
+	if len(args) == 0 {
+		return []string{"add", "save", "list", "ls", "show", "help"}
+	}
+	args[0] = cliCommandAlias(args[0])
+	switch args[0] {
+	case "save", "show":
+		return projectPluginCompletionNames()
+	default:
+		return nil
+	}
 }
 
 func envSnapshotCompletionCandidates(args []string) []string {

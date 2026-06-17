@@ -242,15 +242,17 @@ func TestRunHelpShowsProjectCommandsInsideNFProject(t *testing.T) {
 		"  provider    manage provider integrations\n",
 		"  target      manage deployable targets\n",
 		"  site        manage remote sites and envs\n",
-		"  password    derive passwords\n",
-		"\n  remote      manage repo remotes\n",
-		"  env         manage the local development env\n",
+		"  domain      manage remote env domains\n",
+		"\n  env         manage the local development env\n",
 		"  theme       package clean artifacts and run theme tasks\n",
+		"  plugin      manage configured WordPress plugins\n",
 		"  public      deploy static public paths\n",
+		"  remote      manage repo remotes\n",
+		"  password    derive passwords\n",
 		"\n  init        initialize project metadata\n",
 		"  config      manage global config\n",
 	})
-	for _, wanted := range []string{"\n  remote      manage repo remotes\n", "\n  env         manage the local development env\n", "\n  theme       package clean artifacts and run theme tasks\n", "\n  public      deploy static public paths\n"} {
+	for _, wanted := range []string{"\n  env         manage the local development env\n", "\n  theme       package clean artifacts and run theme tasks\n", "\n  plugin      manage configured WordPress plugins\n", "\n  public      deploy static public paths\n", "\n  remote      manage repo remotes\n", "\n  password    derive passwords\n"} {
 		if !strings.Contains(output, wanted) {
 			t.Fatalf("runHelp() output missing %q:\n%s", wanted, output)
 		}
@@ -365,9 +367,9 @@ func TestGroupedHelpScreensUseIntendedOrder(t *testing.T) {
 			values: []string{"status <env>", "password [site]", "\n\n  enable <env>", "disable <env>"},
 		},
 		{
-			name:   "env plugin",
-			render: func() string { return captureStdout(t, func() { _ = runEnvPlugin([]string{"help"}) }) },
-			values: []string{"list, ls", "status [remote]", "diff [remote]", "\n\n  add <plugin>", "--manual", "--note <note>", "remove, rm <plugin>", "\n\n  install [remote] [--dry-run] [--yes]"},
+			name:   "plugin",
+			render: func() string { return captureStdout(t, func() { _ = runPlugin([]string{"help"}) }) },
+			values: []string{"list, ls", "status [remote]", "diff [remote]", "\n\n  add <plugin>", "--source <source>", "--manual", "--note <note>", "--no-auto-update", "remove, rm <plugin>", "\n  install [remote]", "--dry-run", "--yes", "cache add <plugin> <zip>"},
 		},
 	}
 
@@ -1044,72 +1046,72 @@ func TestRunCompleteSuggestsProjectValues(t *testing.T) {
 		t.Fatalf("theme deploy completion order = %q, want %q", got, want)
 	}
 
-	envPluginOutput := captureStdout(t, func() {
-		if got := Run([]string{"__complete", "--", "env", "pl"}); got != 0 {
-			t.Fatalf("Run(__complete env pl) = %d, want 0", got)
+	pluginOutput := captureStdout(t, func() {
+		if got := Run([]string{"__complete", "--", "pl"}); got != 0 {
+			t.Fatalf("Run(__complete pl) = %d, want 0", got)
 		}
 	})
-	if strings.TrimSpace(envPluginOutput) != "plugin" {
-		t.Fatalf("env plugin completion = %q, want plugin", envPluginOutput)
+	if strings.TrimSpace(pluginOutput) != "plugin" {
+		t.Fatalf("plugin completion = %q, want plugin", pluginOutput)
 	}
 
-	envPluginCommandOutput := captureStdout(t, func() {
-		if got := Run([]string{"__complete", "--", "env", "plugin", ""}); got != 0 {
-			t.Fatalf("Run(__complete env plugin) = %d, want 0", got)
+	pluginCommandOutput := captureStdout(t, func() {
+		if got := Run([]string{"__complete", "--", "plugin", ""}); got != 0 {
+			t.Fatalf("Run(__complete plugin) = %d, want 0", got)
 		}
 	})
-	for _, want := range []string{"list\n", "ls\n", "add\n", "remove\n", "rm\n", "status\n", "diff\n", "install\n", "help\n"} {
-		if !strings.Contains(envPluginCommandOutput, want) {
-			t.Fatalf("env plugin command completion missing %q:\n%s", want, envPluginCommandOutput)
+	for _, want := range []string{"list\n", "ls\n", "add\n", "remove\n", "rm\n", "status\n", "diff\n", "install\n", "cache\n", "help\n"} {
+		if !strings.Contains(pluginCommandOutput, want) {
+			t.Fatalf("plugin command completion missing %q:\n%s", want, pluginCommandOutput)
 		}
 	}
 
-	envPluginAddOutput := captureStdout(t, func() {
-		if got := Run([]string{"__complete", "--", "env", "plugin", "add", ""}); got != 0 {
-			t.Fatalf("Run(__complete env plugin add) = %d, want 0", got)
+	pluginAddOutput := captureStdout(t, func() {
+		if got := Run([]string{"__complete", "--", "plugin", "add", ""}); got != 0 {
+			t.Fatalf("Run(__complete plugin add) = %d, want 0", got)
 		}
 	})
 	for _, want := range []string{"--source\n", "--manual\n", "--note\n", "--no-activate\n", "--no-auto-update\n"} {
-		if !strings.Contains(envPluginAddOutput, want) {
-			t.Fatalf("env plugin add completion missing %q:\n%s", want, envPluginAddOutput)
+		if !strings.Contains(pluginAddOutput, want) {
+			t.Fatalf("plugin add completion missing %q:\n%s", want, pluginAddOutput)
 		}
 	}
 
-	envPluginRemoveOutput := captureStdout(t, func() {
-		if got := Run([]string{"__complete", "--", "env", "plugin", "remove", ""}); got != 0 {
-			t.Fatalf("Run(__complete env plugin remove) = %d, want 0", got)
-		}
-	})
-	if !strings.Contains(envPluginRemoveOutput, "stream\n") {
-		t.Fatalf("env plugin remove completion missing stream:\n%s", envPluginRemoveOutput)
-	}
-
-	envPluginStatusOutput := captureStdout(t, func() {
-		if got := Run([]string{"__complete", "--", "env", "plugin", "status", ""}); got != 0 {
-			t.Fatalf("Run(__complete env plugin status) = %d, want 0", got)
+	pluginRemoveOutput := captureStdout(t, func() {
+		if got := Run([]string{"__complete", "--", "plugin", "remove", ""}); got != 0 {
+			t.Fatalf("Run(__complete plugin remove) = %d, want 0", got)
 		}
 	})
-	if !strings.Contains(envPluginStatusOutput, "production\n") {
-		t.Fatalf("env plugin status completion missing production:\n%s", envPluginStatusOutput)
+	if !strings.Contains(pluginRemoveOutput, "stream\n") {
+		t.Fatalf("plugin remove completion missing stream:\n%s", pluginRemoveOutput)
 	}
 
-	envPluginDiffOutput := captureStdout(t, func() {
-		if got := Run([]string{"__complete", "--", "env", "plugin", "diff", ""}); got != 0 {
-			t.Fatalf("Run(__complete env plugin diff) = %d, want 0", got)
+	pluginStatusOutput := captureStdout(t, func() {
+		if got := Run([]string{"__complete", "--", "plugin", "status", ""}); got != 0 {
+			t.Fatalf("Run(__complete plugin status) = %d, want 0", got)
 		}
 	})
-	if !strings.Contains(envPluginDiffOutput, "production\n") {
-		t.Fatalf("env plugin diff completion missing production:\n%s", envPluginDiffOutput)
+	if !strings.Contains(pluginStatusOutput, "production\n") {
+		t.Fatalf("plugin status completion missing production:\n%s", pluginStatusOutput)
 	}
 
-	envPluginInstallOutput := captureStdout(t, func() {
-		if got := Run([]string{"__complete", "--", "env", "plugin", "install", ""}); got != 0 {
-			t.Fatalf("Run(__complete env plugin install) = %d, want 0", got)
+	pluginDiffOutput := captureStdout(t, func() {
+		if got := Run([]string{"__complete", "--", "plugin", "diff", ""}); got != 0 {
+			t.Fatalf("Run(__complete plugin diff) = %d, want 0", got)
+		}
+	})
+	if !strings.Contains(pluginDiffOutput, "production\n") {
+		t.Fatalf("plugin diff completion missing production:\n%s", pluginDiffOutput)
+	}
+
+	pluginInstallOutput := captureStdout(t, func() {
+		if got := Run([]string{"__complete", "--", "plugin", "install", ""}); got != 0 {
+			t.Fatalf("Run(__complete plugin install) = %d, want 0", got)
 		}
 	})
 	for _, want := range []string{"production\n", "--dry-run\n", "--yes\n"} {
-		if !strings.Contains(envPluginInstallOutput, want) {
-			t.Fatalf("env plugin install completion missing %q:\n%s", want, envPluginInstallOutput)
+		if !strings.Contains(pluginInstallOutput, want) {
+			t.Fatalf("plugin install completion missing %q:\n%s", want, pluginInstallOutput)
 		}
 	}
 }
@@ -9778,16 +9780,43 @@ func assertProjectRemote(t *testing.T, projectPath, remoteName, wantSiteID, want
 
 func TestRunEnvHelpShowsCommandsWithoutShortcuts(t *testing.T) {
 	output := captureStdout(t, func() { _ = runEnvHelp() })
-	assertContainsInOrder(t, output, []string{"up", "down", "show", "password", "logs [remote]", "shell, sh [remote]", "wp -- <args>", "\n\n  plugin", "snapshot", "\n\n  pull [remote] [--dry-run] [--execute] [--yes]", "push [remote] [--dry-run] [--execute] [--yes]", "\n\n  reset"})
-	for _, wanted := range []string{"env\n\nCommands:\n", "show", "show paths, ports, and URLs", "password [remote] [--wp|--db|--basicauth]", "show a local or remote env password only", "up", "start the local env", "down", "stop the local env", "logs [remote]", "tail local or remote WordPress logs", "shell", "open a local or remote shell", "reset", "destroy and recreate the local env", "wp -- <args>", "run wp-cli in the local env", "plugin", "manage configured WordPress plugins", "push [remote] [--dry-run] [--execute] [--yes]", "pull [remote] [--dry-run] [--execute] [--yes]", "snapshot", "manage env snapshots"} {
+	assertContainsInOrder(t, output, []string{"up", "down", "show", "password", "logs [remote]", "shell, sh [remote]", "wp -- <args>", "snapshot", "\n\n  pull [remote] [--dry-run] [--execute] [--yes]", "push [remote] [--dry-run] [--execute] [--yes]", "\n\n  reset"})
+	for _, wanted := range []string{"env\n\nCommands:\n", "show", "show paths, ports, and URLs", "password [remote] [--wp|--db|--basicauth]", "show a local or remote env password only", "up", "start the local env", "down", "stop the local env", "logs [remote]", "tail local or remote WordPress logs", "shell", "open a local or remote shell", "reset", "destroy and recreate the local env", "wp -- <args>", "run wp-cli in the local env", "push [remote] [--dry-run] [--execute] [--yes]", "pull [remote] [--dry-run] [--execute] [--yes]", "snapshot", "manage env snapshots"} {
 		if !strings.Contains(output, wanted) {
 			t.Fatalf("runEnvHelp() output missing %q:\n%s", wanted, output)
 		}
 	}
-	for _, unwanted := range []string{"Shortcuts:", "nf env snapshots", "snapshot create", "snapshot restore", "instance"} {
+	for _, unwanted := range []string{"Shortcuts:", "nf env snapshots", "snapshot create", "snapshot restore", "plugin", "instance"} {
 		if strings.Contains(output, unwanted) {
 			t.Fatalf("runEnvHelp() output unexpectedly contained %q:\n%s", unwanted, output)
 		}
+	}
+}
+
+func TestRunEnvPluginIsRemoved(t *testing.T) {
+	repoRoot := t.TempDir()
+	if err := os.Mkdir(filepath.Join(repoRoot, ".git"), 0o755); err != nil {
+		t.Fatalf("Mkdir(.git) error = %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(repoRoot, "nf.json"), []byte("{\n  \"version\": 1\n}\n"), 0o644); err != nil {
+		t.Fatalf("WriteFile(nf.json) error = %v", err)
+	}
+	oldwd, err := os.Getwd()
+	if err != nil {
+		t.Fatalf("Getwd() error = %v", err)
+	}
+	if err := os.Chdir(repoRoot); err != nil {
+		t.Fatalf("Chdir() error = %v", err)
+	}
+	t.Cleanup(func() { _ = os.Chdir(oldwd) })
+
+	stderr := captureStderr(t, func() {
+		if got := Run([]string{"env", "plugin", "list"}); got != 1 {
+			t.Fatalf("Run(env plugin list) = %d, want 1", got)
+		}
+	})
+	if !strings.Contains(stderr, "unsupported env command") {
+		t.Fatalf("stderr = %q, want unsupported env command", stderr)
 	}
 }
 
@@ -11893,13 +11922,13 @@ func TestRunEnvPluginsListReadsWordPressPlugins(t *testing.T) {
 	t.Cleanup(func() { _ = os.Chdir(oldwd) })
 
 	output := captureStdout(t, func() {
-		if got := Run([]string{"env", "plugin", "list"}); got != 0 {
-			t.Fatalf("Run(env plugin list) = %d, want 0", got)
+		if got := Run([]string{"plugin", "list"}); got != 0 {
+			t.Fatalf("Run(plugin list) = %d, want 0", got)
 		}
 	})
 	for _, want := range []string{"plugin", "source", "install", "activate", "auto-update", "note", "acf-pro", "$NF_PLUGIN_ACF_PRO_ZIP", "query-monitor", "no", "stream", "wordpress.org", "yes", "sitepress-multilingual-cms", "-", "Install manually from wpml.org account"} {
 		if !strings.Contains(output, want) {
-			t.Fatalf("env plugin list output missing %q:\n%s", want, output)
+			t.Fatalf("plugin list output missing %q:\n%s", want, output)
 		}
 	}
 	manualLine := ""
@@ -11910,7 +11939,7 @@ func TestRunEnvPluginsListReadsWordPressPlugins(t *testing.T) {
 		}
 	}
 	if manualLine == "" {
-		t.Fatalf("env plugin list output missing manual plugin line:\n%s", output)
+		t.Fatalf("plugin list output missing manual plugin line:\n%s", output)
 	}
 	if strings.Contains(manualLine, "wordpress.org") {
 		t.Fatalf("manual plugin source should not default to wordpress.org:\n%s", output)
@@ -11947,12 +11976,12 @@ func TestRunEnvPluginsAddUpdatesProjectMetadata(t *testing.T) {
 	t.Cleanup(func() { _ = os.Chdir(oldwd) })
 
 	output := captureStdout(t, func() {
-		if got := Run([]string{"env", "plugin", "add", "acf-pro", "--source", "$NF_PLUGIN_ACF_PRO_ZIP", "--no-auto-update"}); got != 0 {
-			t.Fatalf("Run(env plugin add) = %d, want 0", got)
+		if got := Run([]string{"plugin", "add", "acf-pro", "--source", "$NF_PLUGIN_ACF_PRO_ZIP", "--no-auto-update"}); got != 0 {
+			t.Fatalf("Run(plugin add) = %d, want 0", got)
 		}
 	})
 	if !strings.Contains(output, "Added WordPress plugin acf-pro to nf.json.") {
-		t.Fatalf("env plugin add output unexpected:\n%s", output)
+		t.Fatalf("plugin add output unexpected:\n%s", output)
 	}
 	updated, err := os.ReadFile(projectPath)
 	if err != nil {
@@ -11986,8 +12015,8 @@ func TestRunEnvPluginsAddCreatesWordPressPlugins(t *testing.T) {
 	}
 	t.Cleanup(func() { _ = os.Chdir(oldwd) })
 
-	if got := Run([]string{"env", "plugin", "add", "stream"}); got != 0 {
-		t.Fatalf("Run(env plugin add) = %d, want 0", got)
+	if got := Run([]string{"plugin", "add", "stream"}); got != 0 {
+		t.Fatalf("Run(plugin add) = %d, want 0", got)
 	}
 	metadata, err := loadProjectMetadataOrError(repoRoot)
 	if err != nil {
@@ -12016,8 +12045,8 @@ func TestRunEnvPluginsAddManualPluginUpdatesProjectMetadata(t *testing.T) {
 	}
 	t.Cleanup(func() { _ = os.Chdir(oldwd) })
 
-	if got := Run([]string{"env", "plugin", "add", "sitepress-multilingual-cms", "--manual", "--note", "Install manually from wpml.org account"}); got != 0 {
-		t.Fatalf("Run(env plugin add --manual) = %d, want 0", got)
+	if got := Run([]string{"plugin", "add", "sitepress-multilingual-cms", "--manual", "--note", "Install manually from wpml.org account"}); got != 0 {
+		t.Fatalf("Run(plugin add --manual) = %d, want 0", got)
 	}
 	metadata, err := loadProjectMetadataOrError(repoRoot)
 	if err != nil {
@@ -12061,8 +12090,8 @@ func TestRunEnvPluginsAddRejectsDuplicate(t *testing.T) {
 	t.Cleanup(func() { _ = os.Chdir(oldwd) })
 
 	stderr := captureStderr(t, func() {
-		if got := Run([]string{"env", "plugin", "add", "stream"}); got != 1 {
-			t.Fatalf("Run(env plugin add duplicate) = %d, want 1", got)
+		if got := Run([]string{"plugin", "add", "stream"}); got != 1 {
+			t.Fatalf("Run(plugin add duplicate) = %d, want 1", got)
 		}
 	})
 	if !strings.Contains(stderr, `nf.json wordpress.plugins already contains "stream"`) {
@@ -12094,12 +12123,12 @@ func TestRunEnvPluginsRemoveUpdatesProjectMetadata(t *testing.T) {
 	t.Cleanup(func() { _ = os.Chdir(oldwd) })
 
 	output := captureStdout(t, func() {
-		if got := Run([]string{"env", "plugin", "rm", "stream"}); got != 0 {
-			t.Fatalf("Run(env plugin rm) = %d, want 0", got)
+		if got := Run([]string{"plugin", "rm", "stream"}); got != 0 {
+			t.Fatalf("Run(plugin rm) = %d, want 0", got)
 		}
 	})
 	if !strings.Contains(output, "Removed WordPress plugin stream from nf.json.") {
-		t.Fatalf("env plugin rm output unexpected:\n%s", output)
+		t.Fatalf("plugin rm output unexpected:\n%s", output)
 	}
 	updated, err := os.ReadFile(projectPath)
 	if err != nil {
@@ -12139,8 +12168,8 @@ func TestRunEnvPluginsRemoveRejectsMissing(t *testing.T) {
 	t.Cleanup(func() { _ = os.Chdir(oldwd) })
 
 	stderr := captureStderr(t, func() {
-		if got := Run([]string{"env", "plugin", "remove", "missing"}); got != 1 {
-			t.Fatalf("Run(env plugin remove missing) = %d, want 1", got)
+		if got := Run([]string{"plugin", "remove", "missing"}); got != 1 {
+			t.Fatalf("Run(plugin remove missing) = %d, want 1", got)
 		}
 	})
 	if !strings.Contains(stderr, `nf.json wordpress.plugins does not contain "missing"`) {
@@ -12190,8 +12219,8 @@ func TestRunEnvPluginsInstallInstallsMissingAndActivatesInstalled(t *testing.T) 
 	t.Cleanup(func() { _ = os.Chdir(oldwd) })
 
 	output := captureStdout(t, func() {
-		if got := Run([]string{"env", "plugin", "install"}); got != 0 {
-			t.Fatalf("Run(env plugin install) = %d, want 0", got)
+		if got := Run([]string{"plugin", "install"}); got != 0 {
+			t.Fatalf("Run(plugin install) = %d, want 0", got)
 		}
 	})
 	for _, want := range []string{
@@ -12201,7 +12230,7 @@ func TestRunEnvPluginsInstallInstallsMissingAndActivatesInstalled(t *testing.T) 
 		"WordPress plugins installed.",
 	} {
 		if !strings.Contains(output, want) {
-			t.Fatalf("env plugin install output missing %q:\n%s", want, output)
+			t.Fatalf("plugin install output missing %q:\n%s", want, output)
 		}
 	}
 	logData, err := os.ReadFile(logPath)
@@ -12267,12 +12296,12 @@ func TestRunEnvPluginsInstallUsesMountedRepoPluginSource(t *testing.T) {
 	t.Cleanup(func() { _ = os.Chdir(oldwd) })
 
 	output := captureStdout(t, func() {
-		if got := Run([]string{"env", "plugin", "install"}); got != 0 {
-			t.Fatalf("Run(env plugin install repo source) = %d, want 0", got)
+		if got := Run([]string{"plugin", "install"}); got != 0 {
+			t.Fatalf("Run(plugin install repo source) = %d, want 0", got)
 		}
 	})
 	if !strings.Contains(output, "WordPress plugins installed.") {
-		t.Fatalf("env plugin install output missing success:\n%s", output)
+		t.Fatalf("plugin install output missing success:\n%s", output)
 	}
 	logData, err := os.ReadFile(logPath)
 	if err != nil {
@@ -12333,7 +12362,7 @@ func TestRunEnvPluginsCacheAddListShow(t *testing.T) {
 	t.Cleanup(func() { _ = os.Chdir(oldwd) })
 
 	addOutput := captureStdout(t, func() {
-		if got := Run([]string{"env", "plugin", "cache", "add", "acf-pro", sourceZip}); got != 0 {
+		if got := Run([]string{"plugin", "cache", "add", "acf-pro", sourceZip}); got != 0 {
 			t.Fatalf("Run(cache add) = %d, want 0", got)
 		}
 	})
@@ -12345,7 +12374,7 @@ func TestRunEnvPluginsCacheAddListShow(t *testing.T) {
 		t.Fatalf("cached zip missing: %v", err)
 	}
 	listOutput := captureStdout(t, func() {
-		if got := Run([]string{"env", "plugin", "cache", "list"}); got != 0 {
+		if got := Run([]string{"plugin", "cache", "list"}); got != 0 {
 			t.Fatalf("Run(cache list) = %d, want 0", got)
 		}
 	})
@@ -12355,7 +12384,7 @@ func TestRunEnvPluginsCacheAddListShow(t *testing.T) {
 		}
 	}
 	showOutput := captureStdout(t, func() {
-		if got := Run([]string{"env", "plugin", "cache", "show", "acf-pro"}); got != 0 {
+		if got := Run([]string{"plugin", "cache", "show", "acf-pro"}); got != 0 {
 			t.Fatalf("Run(cache show) = %d, want 0", got)
 		}
 	})
@@ -12416,7 +12445,7 @@ func TestRunEnvPluginsCacheSaveArchivesInstalledPlugin(t *testing.T) {
 	t.Cleanup(func() { _ = os.Chdir(oldwd) })
 
 	output := captureStdout(t, func() {
-		if got := Run([]string{"env", "plugin", "cache", "save", "sitepress-multilingual-cms"}); got != 0 {
+		if got := Run([]string{"plugin", "cache", "save", "sitepress-multilingual-cms"}); got != 0 {
 			t.Fatalf("Run(cache save) = %d, want 0", got)
 		}
 	})
@@ -12479,8 +12508,8 @@ func TestRunEnvPluginsInstallUsesCachePluginSource(t *testing.T) {
 	}
 	t.Cleanup(func() { _ = os.Chdir(oldwd) })
 
-	if got := Run([]string{"env", "plugin", "install"}); got != 0 {
-		t.Fatalf("Run(env plugin install cache source) = %d, want 0", got)
+	if got := Run([]string{"plugin", "install"}); got != 0 {
+		t.Fatalf("Run(plugin install cache source) = %d, want 0", got)
 	}
 	logData, err := os.ReadFile(logPath)
 	if err != nil {
@@ -12581,8 +12610,8 @@ func TestRunEnvPluginsInstallSkipsSatisfiedPlugins(t *testing.T) {
 	t.Cleanup(func() { _ = os.Chdir(oldwd) })
 
 	output := captureStdout(t, func() {
-		if got := Run([]string{"env", "plugin", "install"}); got != 0 {
-			t.Fatalf("Run(env plugin install) = %d, want 0", got)
+		if got := Run([]string{"plugin", "install"}); got != 0 {
+			t.Fatalf("Run(plugin install) = %d, want 0", got)
 		}
 	})
 	for _, want := range []string{
@@ -12590,7 +12619,7 @@ func TestRunEnvPluginsInstallSkipsSatisfiedPlugins(t *testing.T) {
 		"WordPress plugins installed.",
 	} {
 		if !strings.Contains(output, want) {
-			t.Fatalf("env plugin install output missing %q:\n%s", want, output)
+			t.Fatalf("plugin install output missing %q:\n%s", want, output)
 		}
 	}
 	logData, err := os.ReadFile(logPath)
@@ -12646,26 +12675,26 @@ func TestRunEnvPluginsStatusShowsLocalConfiguredState(t *testing.T) {
 	t.Cleanup(func() { _ = os.Chdir(oldwd) })
 
 	output := captureStdout(t, func() {
-		if got := Run([]string{"env", "plugin", "status"}); got != 0 {
-			t.Fatalf("Run(env plugin status) = %d, want 0", got)
+		if got := Run([]string{"plugin", "status"}); got != 0 {
+			t.Fatalf("Run(plugin status) = %d, want 0", got)
 		}
 	})
 	for _, want := range []string{"plugin", "source", "install", "installed", "active", "auto-update", "note", "stream", "wordpress.org", "yes", "acf-pro", "private/acf-pro.zip", "no"} {
 		if !strings.Contains(output, want) {
 			logData, _ := os.ReadFile(logPath)
 			t.Logf("docker log:\n%s", logData)
-			t.Fatalf("env plugin status output missing %q:\n%s", want, output)
+			t.Fatalf("plugin status output missing %q:\n%s", want, output)
 		}
 	}
 	if strings.Contains(output, "> docker") {
-		t.Fatalf("env plugin status printed command previews unexpectedly:\n%s", output)
+		t.Fatalf("plugin status printed command previews unexpectedly:\n%s", output)
 	}
 	logData, err := os.ReadFile(logPath)
 	if err != nil {
 		t.Fatalf("ReadFile(docker log) error = %v", err)
 	}
 	if calls := strings.Count(strings.TrimSpace(string(logData)), "\n") + 1; calls != 1 {
-		t.Fatalf("env plugin status made %d docker calls, want 1:\n%s", calls, logData)
+		t.Fatalf("plugin status made %d docker calls, want 1:\n%s", calls, logData)
 	}
 }
 
@@ -12714,14 +12743,14 @@ func TestRunEnvPluginsDiffShowsLocalDrift(t *testing.T) {
 
 	var got int
 	output := captureStdout(t, func() {
-		got = Run([]string{"env", "plugin", "diff"})
+		got = Run([]string{"plugin", "diff"})
 	})
 	if got != 2 {
-		t.Fatalf("Run(env plugin diff) = %d, want 2", got)
+		t.Fatalf("Run(plugin diff) = %d, want 2", got)
 	}
 	for _, want := range []string{"Plugin diff:", "plugin", "change", "stream", "ok", "wp-crontrol", "enable auto-update", "acf-pro", "source unavailable locally", "sitepress-multilingual-cms", "manual install required", "akismet", "extra (inactive, auto-update off)", "imsanity", "extra (active, auto-update on)"} {
 		if !strings.Contains(output, want) {
-			t.Fatalf("env plugin diff output missing %q:\n%s", want, output)
+			t.Fatalf("plugin diff output missing %q:\n%s", want, output)
 		}
 	}
 }
@@ -12833,13 +12862,13 @@ func TestRunEnvPluginsStatusRemoteShowsConfiguredState(t *testing.T) {
 	t.Cleanup(func() { runSSHOutputFn = oldRunSSHOutput })
 
 	output := captureStdout(t, func() {
-		if got := Run([]string{"env", "plugin", "status", "production"}); got != 0 {
-			t.Fatalf("Run(env plugin status remote) = %d, want 0", got)
+		if got := Run([]string{"plugin", "status", "production"}); got != 0 {
+			t.Fatalf("Run(plugin status remote) = %d, want 0", got)
 		}
 	})
 	for _, want := range []string{"Plugin status:", "remote:   production", "site:     client-kinsta", "env:      live", "provider: kinsta", "stream", "wordpress.org", "yes", "acf-pro", "private/acf-pro.zip", "no"} {
 		if !strings.Contains(output, want) {
-			t.Fatalf("env plugin remote status output missing %q:\n%s", want, output)
+			t.Fatalf("plugin remote status output missing %q:\n%s", want, output)
 		}
 	}
 	if len(sshArgs) != 5 || sshArgs[0] != "ssh" || sshArgs[3] != "client@203.0.113.10" {
@@ -12887,14 +12916,14 @@ func TestRunEnvPluginsDiffRemoteShowsDrift(t *testing.T) {
 
 	var got int
 	output := captureStdout(t, func() {
-		got = Run([]string{"env", "plugin", "diff", "production"})
+		got = Run([]string{"plugin", "diff", "production"})
 	})
 	if got != 2 {
-		t.Fatalf("Run(env plugin diff remote) = %d, want 2", got)
+		t.Fatalf("Run(plugin diff remote) = %d, want 2", got)
 	}
 	for _, want := range []string{"Plugin diff:", "remote:   production", "site:     client-kinsta", "env:      live", "provider: kinsta", "stream", "ok", "wp-crontrol", "install, activate, enable auto-update", "imsanity", "extra (active, auto-update on)"} {
 		if !strings.Contains(output, want) {
-			t.Fatalf("env plugin remote diff output missing %q:\n%s", want, output)
+			t.Fatalf("plugin remote diff output missing %q:\n%s", want, output)
 		}
 	}
 }
@@ -12930,8 +12959,8 @@ func TestRunEnvPluginsInstallRemoteDryRunPrintsPlan(t *testing.T) {
 	t.Cleanup(func() { runSSHCommandFn = oldRunSSH })
 
 	stdout := captureStdout(t, func() {
-		if got := Run([]string{"env", "plugin", "install", "production", "--dry-run"}); got != 0 {
-			t.Fatalf("Run(env plugin install remote --dry-run) = %d, want 0", got)
+		if got := Run([]string{"plugin", "install", "production", "--dry-run"}); got != 0 {
+			t.Fatalf("Run(plugin install remote --dry-run) = %d, want 0", got)
 		}
 	})
 	for _, want := range []string{"Plugin install plan:", "remote:        production", "site:          client-kinsta", "env:           live", "provider:      kinsta", "url:           https://www.example.com/", "environment ssh: client@203.0.113.10", "mode:          dry-run", "uploads:       1 local plugin zip(s)", "stream", "query-monitor", "acf-pro", "private/acf-pro.zip", "Local plugin sources will be uploaded before install:", "acf-pro -> /tmp/nf-plugins-client-kinsta-live-", "No remote plugins were changed."} {
@@ -12990,8 +13019,8 @@ func TestRunEnvPluginsInstallRemoteUploadsLocalZipSource(t *testing.T) {
 	t.Cleanup(func() { runRsyncCommandFn = oldRunRsync })
 
 	stdout := captureStdout(t, func() {
-		if got := Run([]string{"env", "plugin", "install", "production", "--yes"}); got != 0 {
-			t.Fatalf("Run(env plugin install remote local zip --yes) = %d, want 0", got)
+		if got := Run([]string{"plugin", "install", "production", "--yes"}); got != 0 {
+			t.Fatalf("Run(plugin install remote local zip --yes) = %d, want 0", got)
 		}
 	})
 	for _, want := range []string{"uploads:       1 local plugin zip(s)", "Local plugin sources will be uploaded before install:", "acf-pro -> /tmp/nf-plugins-client-kinsta-live-", "> rsync -az -e 'ssh -p 12345' " + localZip + " client@203.0.113.10:/tmp/nf-plugins-client-kinsta-live-", "Remote WordPress plugins installed."} {
@@ -13085,8 +13114,8 @@ func TestRunEnvPluginsInstallRemotePackagesRepoPluginSource(t *testing.T) {
 	t.Cleanup(func() { runRsyncCommandFn = oldRunRsync })
 
 	stdout := captureStdout(t, func() {
-		if got := Run([]string{"env", "plugin", "install", "production", "--yes"}); got != 0 {
-			t.Fatalf("Run(env plugin install remote repo --yes) = %d, want 0", got)
+		if got := Run([]string{"plugin", "install", "production", "--yes"}); got != 0 {
+			t.Fatalf("Run(plugin install remote repo --yes) = %d, want 0", got)
 		}
 	})
 	for _, want := range []string{"uploads:       1 local plugin zip(s)", "client-plugin -> /tmp/nf-plugins-client-kinsta-live-", "Remote WordPress plugins installed."} {
@@ -13160,8 +13189,8 @@ func TestRunEnvPluginsInstallRemoteExecutesBootstrapScriptWithYes(t *testing.T) 
 	t.Cleanup(func() { runSSHCommandFn = oldRunSSH })
 
 	stdout := captureStdout(t, func() {
-		if got := Run([]string{"env", "plugin", "install", "production", "--yes"}); got != 0 {
-			t.Fatalf("Run(env plugin install remote --yes) = %d, want 0", got)
+		if got := Run([]string{"plugin", "install", "production", "--yes"}); got != 0 {
+			t.Fatalf("Run(plugin install remote --yes) = %d, want 0", got)
 		}
 	})
 	for _, want := range []string{"Plugin install plan:", "provider:      linode", "> ssh -p 22 nonfiction@app1-linode.nonfiction.dev '<wp plugin bootstrap script>'", "Remote WordPress plugins installed."} {
@@ -13227,8 +13256,8 @@ func TestRunEnvPluginsInstallRemotePromptsBeforeExecution(t *testing.T) {
 	t.Cleanup(func() { runSSHCommandFn = oldRunSSH })
 
 	stderr := captureStderr(t, func() {
-		if got := Run([]string{"env", "plugin", "install", "production"}); got != 1 {
-			t.Fatalf("Run(env plugin install remote denied) = %d, want 1", got)
+		if got := Run([]string{"plugin", "install", "production"}); got != 1 {
+			t.Fatalf("Run(plugin install remote denied) = %d, want 1", got)
 		}
 	})
 	if !strings.Contains(message, "Install configured WordPress plugins on client-kinsta:live (production)?") {

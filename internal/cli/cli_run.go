@@ -41,6 +41,11 @@ func Run(argv []string) int {
 			return 1
 		}
 		return runRemote(argv[1:])
+	case "plugin":
+		if rejectOutsideProject(argv[0]) {
+			return 1
+		}
+		return runPlugin(argv[1:])
 	case "env":
 		if !envUpCommand(argv[1:]) && rejectOutsideProject(argv[0]) {
 			return 1
@@ -92,6 +97,11 @@ func runTopicHelp(argv []string) int {
 			return 1
 		}
 		return runRemoteHelp()
+	case "plugin":
+		if rejectOutsideProject(argv[0]) {
+			return 1
+		}
+		return runPluginHelp()
 	case "env":
 		if rejectOutsideProject(argv[0]) {
 			return 1

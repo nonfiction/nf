@@ -48,7 +48,7 @@ Commands that accept repo remotes include:
 nf theme deploy production --dry-run
 nf theme rollback production --dry-run
 nf public deploy production --dry-run
-nf env plugin status production
+nf plugin status production
 nf env logs production
 nf env pull production --dry-run
 nf domain list production

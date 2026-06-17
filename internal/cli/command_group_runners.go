@@ -36,7 +36,6 @@ func runEnvHelp() int {
 		{"shell, sh [remote]", "open a local or remote shell"},
 		{"wp -- <args>", "run wp-cli in the local env"},
 		{},
-		{"plugin", "manage configured WordPress plugins"},
 		{"snapshot", "manage env snapshots"},
 		{},
 		{"pull [remote] [--dry-run] [--execute] [--yes]", "pull database and mutable wp-content from a remote env"},
@@ -45,6 +44,47 @@ func runEnvHelp() int {
 		{},
 		{"reset [--rebuild]", "destroy and recreate the local env"},
 	})
+	return 0
+}
+
+func runPluginHelp() int {
+	fmt.Println("plugin")
+	fmt.Println("\nCommands:")
+	for _, line := range []helpLine{
+		{"list, ls", "list configured WordPress plugins"},
+		{"status [remote]", "show configured WordPress plugin status"},
+		{"diff [remote]", "show configured WordPress plugin drift"},
+	} {
+		fmt.Printf("  %-22s  %s\n", line.Command, line.Description)
+	}
+	fmt.Println()
+	fmt.Printf("  %-22s  %s\n", "add <plugin>", "add a WordPress plugin to nf.json")
+	for _, line := range []helpLine{
+		{"--source <source>", "wordpress.org, repo, cache, URL/path, or env-var zip"},
+		{"--manual", "check only; never install this plugin"},
+		{"--note <note>", "store an install note for humans"},
+		{"--no-activate", "install without activating"},
+		{"--no-auto-update", "do not enable WordPress auto-updates"},
+	} {
+		fmt.Printf("    %-20s  %s\n", line.Command, line.Description)
+	}
+	fmt.Printf("  %-22s  %s\n", "remove, rm <plugin>", "remove a WordPress plugin from nf.json")
+	fmt.Println()
+	fmt.Printf("  %-22s  %s\n", "install [remote]", "install and activate configured WordPress plugins")
+	for _, line := range []helpLine{
+		{"--dry-run", "preview a remote install"},
+		{"--yes", "skip remote install confirmation"},
+	} {
+		fmt.Printf("    %-20s  %s\n", line.Command, line.Description)
+	}
+	for _, line := range []helpLine{
+		{"cache add <plugin> <zip>", "add a plugin zip to the local nf plugin cache"},
+		{"cache save <plugin>", "save an installed local plugin to the local nf plugin cache"},
+		{"cache list, cache ls", "list cached WordPress plugin zips"},
+		{"cache show <plugin>", "show local plugin cache details"},
+	} {
+		fmt.Printf("  %-22s  %s\n", line.Command, line.Description)
+	}
 	return 0
 }
 
@@ -268,16 +308,13 @@ func runEnv(argv []string) int {
 	name := argv[0]
 	name = cliCommandAlias(name)
 	switch name {
-	case "show", "password", "up", "down", "logs", "reset", "shell", "wp", "push", "pull", "plugin", "snapshot", "import":
+	case "show", "password", "up", "down", "logs", "reset", "shell", "wp", "push", "pull", "snapshot", "import":
 	default:
 		fmt.Fprintln(os.Stderr, "unsupported env command")
 		return 1
 	}
 	if name == "snapshot" {
 		return runEnvSnapshot(argv[1:])
-	}
-	if name == "plugin" {
-		return runEnvPlugin(argv[1:])
 	}
 	var envImportOpts envImportOptions
 	if name == "import" {
@@ -505,23 +542,9 @@ func runEnv(argv []string) int {
 	return 0
 }
 
-func runEnvPlugin(argv []string) int {
+func runPlugin(argv []string) int {
 	if len(argv) == 0 || argv[0] == "help" {
-		printGroupHelp("env plugin", []helpLine{
-			{"list, ls", "list configured WordPress plugins"},
-			{"status [remote]", "show configured WordPress plugin status"},
-			{"diff [remote]", "show configured WordPress plugin drift"},
-			{},
-			{"add <plugin> [--source <source>] [--manual] [--note <note>] [--no-activate] [--no-auto-update]", "add a WordPress plugin to nf.json"},
-			{"remove, rm <plugin>", "remove a WordPress plugin from nf.json"},
-			{},
-			{"install [remote] [--dry-run] [--yes]", "install and activate configured WordPress plugins"},
-			{"cache add <plugin> <zip>", "add a plugin zip to the local nf plugin cache"},
-			{"cache save <plugin>", "save an installed local plugin to the local nf plugin cache"},
-			{"cache list, cache ls", "list cached WordPress plugin zips"},
-			{"cache show <plugin>", "show local plugin cache details"},
-		})
-		return 0
+		return runPluginHelp()
 	}
 	cmd := cliCommandAlias(argv[0])
 	args := argv[1:]
@@ -533,17 +556,17 @@ func runEnvPlugin(argv []string) int {
 	switch cmd {
 	case "list":
 		if len(args) != 0 {
-			fmt.Fprintf(os.Stderr, "env plugin %s takes no arguments\n", cmd)
+			fmt.Fprintf(os.Stderr, "plugin %s takes no arguments\n", cmd)
 			return 1
 		}
 	case "status", "diff":
 		if len(args) > 1 {
-			fmt.Fprintf(os.Stderr, "env plugin %s takes at most one remote\n", cmd)
+			fmt.Fprintf(os.Stderr, "plugin %s takes at most one remote\n", cmd)
 			return 1
 		}
 		if len(args) == 1 {
 			if strings.HasPrefix(args[0], "-") {
-				fmt.Fprintf(os.Stderr, "unknown env plugin %s flag: %s\n", cmd, args[0])
+				fmt.Fprintf(os.Stderr, "unknown plugin %s flag: %s\n", cmd, args[0])
 				return 1
 			}
 			remoteName = args[0]
@@ -573,10 +596,10 @@ func runEnvPlugin(argv []string) int {
 			return 1
 		}
 	default:
-		fmt.Fprintln(os.Stderr, "unsupported env plugin command")
+		fmt.Fprintln(os.Stderr, "unsupported plugin command")
 		return 1
 	}
-	if err := requireProjectContext("env plugin " + cmd); err != nil {
+	if err := requireProjectContext("plugin " + cmd); err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		return 1
 	}
@@ -621,12 +644,12 @@ func runEnvPlugin(argv []string) int {
 
 func parseEnvPluginRemoveArgs(args []string) (string, bool) {
 	if len(args) != 1 {
-		fmt.Fprintln(os.Stderr, "env plugin remove requires exactly one plugin slug")
+		fmt.Fprintln(os.Stderr, "plugin remove requires exactly one plugin slug")
 		return "", false
 	}
 	slug := strings.TrimSpace(args[0])
 	if slug == "" || strings.HasPrefix(slug, "-") {
-		fmt.Fprintln(os.Stderr, "env plugin remove requires exactly one plugin slug")
+		fmt.Fprintln(os.Stderr, "plugin remove requires exactly one plugin slug")
 		return "", false
 	}
 	return slug, true
@@ -640,13 +663,13 @@ func parseEnvPluginAddArgs(args []string) (envPluginAddOptions, bool) {
 		switch arg {
 		case "--source":
 			if i+1 >= len(args) {
-				fmt.Fprintln(os.Stderr, "env plugin add --source requires a value")
+				fmt.Fprintln(os.Stderr, "plugin add --source requires a value")
 				return opts, false
 			}
 			i++
 			opts.Source = strings.TrimSpace(args[i])
 			if opts.Source == "" {
-				fmt.Fprintln(os.Stderr, "env plugin add --source must not be empty")
+				fmt.Fprintln(os.Stderr, "plugin add --source must not be empty")
 				return opts, false
 			}
 		case "--manual":
@@ -654,13 +677,13 @@ func parseEnvPluginAddArgs(args []string) (envPluginAddOptions, bool) {
 			opts.HasInstall = true
 		case "--note":
 			if i+1 >= len(args) {
-				fmt.Fprintln(os.Stderr, "env plugin add --note requires a value")
+				fmt.Fprintln(os.Stderr, "plugin add --note requires a value")
 				return opts, false
 			}
 			i++
 			opts.Note = strings.TrimSpace(args[i])
 			if opts.Note == "" {
-				fmt.Fprintln(os.Stderr, "env plugin add --note must not be empty")
+				fmt.Fprintln(os.Stderr, "plugin add --note must not be empty")
 				return opts, false
 			}
 		case "--no-activate":
@@ -671,19 +694,19 @@ func parseEnvPluginAddArgs(args []string) (envPluginAddOptions, bool) {
 			opts.HasAutoUpdate = true
 		default:
 			if strings.HasPrefix(arg, "-") {
-				fmt.Fprintf(os.Stderr, "unknown env plugin add flag: %s\n", arg)
+				fmt.Fprintf(os.Stderr, "unknown plugin add flag: %s\n", arg)
 				return opts, false
 			}
 			positionals = append(positionals, arg)
 		}
 	}
 	if len(positionals) != 1 {
-		fmt.Fprintln(os.Stderr, "env plugin add requires exactly one plugin slug")
+		fmt.Fprintln(os.Stderr, "plugin add requires exactly one plugin slug")
 		return opts, false
 	}
 	opts.Slug = strings.TrimSpace(positionals[0])
 	if opts.Slug == "" {
-		fmt.Fprintln(os.Stderr, "env plugin add plugin slug must not be empty")
+		fmt.Fprintln(os.Stderr, "plugin add plugin slug must not be empty")
 		return opts, false
 	}
 	return opts, true
@@ -700,14 +723,14 @@ func parseEnvPluginInstallArgs(args []string) (envPluginInstallOptions, bool) {
 			opts.Yes = true
 		default:
 			if strings.HasPrefix(arg, "-") {
-				fmt.Fprintf(os.Stderr, "unknown env plugin install flag: %s\n", arg)
+				fmt.Fprintf(os.Stderr, "unknown plugin install flag: %s\n", arg)
 				return opts, false
 			}
 			positionals = append(positionals, arg)
 		}
 	}
 	if len(positionals) > 1 {
-		fmt.Fprintln(os.Stderr, "env plugin install takes at most one remote")
+		fmt.Fprintln(os.Stderr, "plugin install takes at most one remote")
 		return opts, false
 	}
 	if len(positionals) == 1 {
@@ -719,7 +742,7 @@ func parseEnvPluginInstallArgs(args []string) (envPluginInstallOptions, bool) {
 func parseEnvPluginCacheArgs(args []string) (envPluginCacheOptions, bool) {
 	var opts envPluginCacheOptions
 	if len(args) == 0 {
-		fmt.Fprintln(os.Stderr, "env plugin cache requires a command")
+		fmt.Fprintln(os.Stderr, "plugin cache requires a command")
 		return opts, false
 	}
 	cmd := cliCommandAlias(args[0])
@@ -727,32 +750,32 @@ func parseEnvPluginCacheArgs(args []string) (envPluginCacheOptions, bool) {
 	switch cmd {
 	case "add":
 		if len(args) != 3 {
-			fmt.Fprintln(os.Stderr, "env plugin cache add requires a plugin slug and zip path")
+			fmt.Fprintln(os.Stderr, "plugin cache add requires a plugin slug and zip path")
 			return opts, false
 		}
 		opts.Slug = strings.TrimSpace(args[1])
 		opts.Source = strings.TrimSpace(args[2])
 		if opts.Slug == "" || opts.Source == "" || strings.HasPrefix(opts.Slug, "-") || strings.HasPrefix(opts.Source, "-") {
-			fmt.Fprintln(os.Stderr, "env plugin cache add requires a plugin slug and zip path")
+			fmt.Fprintln(os.Stderr, "plugin cache add requires a plugin slug and zip path")
 			return opts, false
 		}
 	case "save", "show":
 		if len(args) != 2 {
-			fmt.Fprintf(os.Stderr, "env plugin cache %s requires exactly one plugin slug\n", cmd)
+			fmt.Fprintf(os.Stderr, "plugin cache %s requires exactly one plugin slug\n", cmd)
 			return opts, false
 		}
 		opts.Slug = strings.TrimSpace(args[1])
 		if opts.Slug == "" || strings.HasPrefix(opts.Slug, "-") {
-			fmt.Fprintf(os.Stderr, "env plugin cache %s requires exactly one plugin slug\n", cmd)
+			fmt.Fprintf(os.Stderr, "plugin cache %s requires exactly one plugin slug\n", cmd)
 			return opts, false
 		}
 	case "list":
 		if len(args) != 1 {
-			fmt.Fprintln(os.Stderr, "env plugin cache list takes no arguments")
+			fmt.Fprintln(os.Stderr, "plugin cache list takes no arguments")
 			return opts, false
 		}
 	default:
-		fmt.Fprintln(os.Stderr, "unsupported env plugin cache command")
+		fmt.Fprintln(os.Stderr, "unsupported plugin cache command")
 		return opts, false
 	}
 	return opts, true
@@ -858,16 +881,19 @@ func runHelp() int {
 		{"target", "manage deployable targets"},
 		{"site", "manage remote sites and envs"},
 		{"domain", "manage remote env domains"},
-		{"password", "derive passwords"},
 	}
 	if projectContextAvailable() {
 		lines = append(lines,
 			helpLine{},
-			helpLine{"remote", "manage repo remotes"},
 			helpLine{"env", "manage the local development env"},
 			helpLine{"theme", "package clean artifacts and run theme tasks"},
+			helpLine{"plugin", "manage configured WordPress plugins"},
 			helpLine{"public", "deploy static public paths"},
+			helpLine{"remote", "manage repo remotes"},
+			helpLine{"password", "derive passwords"},
 		)
+	} else {
+		lines = append(lines, helpLine{"password", "derive passwords"})
 	}
 	lines = append(lines,
 		helpLine{},
@@ -884,7 +910,7 @@ func runHelp() int {
 
 func projectOnlyCommand(name string) bool {
 	switch name {
-	case "remote", "theme", "env", "public":
+	case "remote", "plugin", "theme", "env", "public":
 		return true
 	default:
 		return false
