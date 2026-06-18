@@ -12876,10 +12876,13 @@ func TestEnvSnapshotScriptsExcludeRepoPluginMounts(t *testing.T) {
 		t.Fatalf("snapshot create script missing repo plugin exclude:\n%s", createScript)
 	}
 	restoreScript := envSnapshotRestoreScript(cfg, "snapshot")
-	for _, want := range []string{"repo_plugins=client-plugin", "case \" $repo_plugins \" in *\" $base \"*) continue", "--exclude=wp-content/plugins/client-plugin"} {
+	for _, want := range []string{"clear_dir_contents /var/www/html/wp-content/uploads", "find \"$dir\" -mindepth 1 -maxdepth 1 -exec rm -rf {} +", "repo_plugins=client-plugin", "case \" $repo_plugins \" in *\" $base \"*) continue", "--exclude=wp-content/plugins/client-plugin"} {
 		if !strings.Contains(restoreScript, want) {
 			t.Fatalf("snapshot restore script missing %q:\n%s", want, restoreScript)
 		}
+	}
+	if strings.Contains(restoreScript, "rm -rf /var/www/html/wp-content/uploads") {
+		t.Fatalf("snapshot restore script should not remove the uploads mount point:\n%s", restoreScript)
 	}
 	if strings.Contains(restoreScript, "rm -rf /var/www/html/wp-content/uploads /var/www/html/wp-content/plugins") {
 		t.Fatalf("snapshot restore script should not remove the whole plugins directory:\n%s", restoreScript)

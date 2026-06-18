@@ -225,7 +225,17 @@ trap 'rm -rf "$tmpdir"' EXIT
 gzip -cd "%s" > "$tmpdir/database.sql"
 wp db import "$tmpdir/database.sql"
 if [ -f "%s" ]; then
-  rm -rf /var/www/html/wp-content/uploads /var/www/html/wp-content/mu-plugins /var/www/html/wp-content/languages
+  clear_dir_contents() {
+    dir="$1"
+    if [ -e "$dir" ] && [ ! -d "$dir" ]; then
+      rm -f "$dir"
+    fi
+    mkdir -p "$dir"
+    find "$dir" -mindepth 1 -maxdepth 1 -exec rm -rf {} +
+  }
+  clear_dir_contents /var/www/html/wp-content/uploads
+  clear_dir_contents /var/www/html/wp-content/mu-plugins
+  clear_dir_contents /var/www/html/wp-content/languages
   mkdir -p /var/www/html/wp-content/plugins
   repo_plugins=%s
   for entry in /var/www/html/wp-content/plugins/* /var/www/html/wp-content/plugins/.[!.]* /var/www/html/wp-content/plugins/..?*; do
