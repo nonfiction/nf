@@ -87,12 +87,18 @@ func (c envCommandRunner) Execute(root string, extraArgs []string) error {
 	envDir := localEnvDir(c.cfg)
 	switch c.name {
 	case "up":
+		if err := ensureProjectUploadsSymlink(root, c.cfg); err != nil {
+			return err
+		}
 		if err := bootstrapThemeForEnv(root, c.cfg); err != nil {
 			return err
 		}
 		return c.ensureUpInstalledActive(envDir)
 	case "down":
-		return runCommandSpec(execSpec{Dir: envDir, Args: envComposeArgs(c.cfg, "down")})
+		if err := runCommandSpec(execSpec{Dir: envDir, Args: envComposeArgs(c.cfg, "down")}); err != nil {
+			return err
+		}
+		return removeProjectUploadsSymlink(root, c.cfg)
 	case "logs":
 		return runCommandSpec(execSpec{Dir: envDir, Args: envComposeArgs(c.cfg, "logs", "-f", c.cfg.WordpressService)})
 	case "reset":
@@ -105,6 +111,9 @@ func (c envCommandRunner) Execute(root string, extraArgs []string) error {
 			return err
 		}
 		if err := bootstrapThemeForEnv(root, c.cfg); err != nil {
+			return err
+		}
+		if err := ensureProjectUploadsSymlink(root, c.cfg); err != nil {
 			return err
 		}
 		return c.ensureUpInstalledActive(envDir)

@@ -622,6 +622,10 @@ Rules:
 * generated WordPress config enables `WP_DEBUG` and `WP_DEBUG_LOG` and disables debug display
 * generated local env includes WordPress, MariaDB, Mailpit, and database UI containers
 * generated local WordPress image includes useful CLI tools and wp-cli
+* generated local WordPress image runs Apache/PHP as `docker_user` so bind-mounted uploads stay manageable by the host developer user
+* `env.uploads_path` is the managed local WordPress media bind mounted at `wp-content/uploads`
+* `nf env up` creates a project-root `uploads` symlink to the managed local uploads directory; `nf env down` removes only that managed symlink
+* internal local zip handoffs use generated `.nf-transfer` storage mounted at `/env/uploads`; that path is not the WordPress media library
 * Docker DB and WordPress image defaults can be overridden by `docker_db_image` and `docker_wordpress_image` in global config
 * local shell/wp-cli user defaults to `docker_user` from global config, falling back to `nonfiction`
 * `nf env show` prints paths, compose project name, DB URL, Mailpit URL, and WordPress URLs without starting Docker

@@ -236,6 +236,7 @@ func renderEnvCompose(cfg envConfig) string {
       - %s:/var/www/html/wp-content/themes/%s
 %s
       - ./php/uploads.ini:/usr/local/etc/php/conf.d/uploads.ini:ro
+      - ./%s:/var/www/html/wp-content/uploads
       - ./%s:%s
       - %s:/env-snapshots
 
@@ -261,7 +262,7 @@ func renderEnvCompose(cfg envConfig) string {
 volumes:
   db_data:
   wp_data:
-`, dbImage, wordpressService, dockerUser, themePath, themeMountSlug, pluginMounts, uploadsPath, path.Join("/", "env", uploadsPath), envSnapshotComposeMount(cfg), wordpressImage)
+`, dbImage, wordpressService, dockerUser, themePath, themeMountSlug, pluginMounts, uploadsPath, envTransferPath, path.Join("/", "env", "uploads"), envSnapshotComposeMount(cfg), wordpressImage)
 }
 
 func renderEnvRepoPluginMounts(cfg envConfig) string {
@@ -469,12 +470,13 @@ RUN curl -fsSL -o /usr/local/bin/wp https://raw.githubusercontent.com/wp-cli/bui
   && chmod +x /usr/local/bin/wp
 
 RUN useradd --create-home --shell /bin/bash --groups www-data %s \
+  && printf '\nexport APACHE_RUN_USER=%s\nexport APACHE_RUN_GROUP=www-data\numask 0002\n' >> /etc/apache2/envvars \
   && mkdir -p /tmp/wp-cli-cache /home/%s/.wp-cli \
   && chown -R %s:www-data /home/%s /tmp/wp-cli-cache /usr/src/wordpress /var/www/html \
   && chmod -R g+rwX /tmp/wp-cli-cache /usr/src/wordpress /var/www/html
 
 COPY wordpress/wordpress-rewrites.conf /etc/apache2/conf-enabled/wordpress-rewrites.conf
-`, firstNonEmpty(cfg.DockerWPImage, defaultDockerWordpressImage), firstNonEmpty(cfg.DockerUser, defaultDockerUser), firstNonEmpty(cfg.DockerUser, defaultDockerUser), firstNonEmpty(cfg.DockerUser, defaultDockerUser), firstNonEmpty(cfg.DockerUser, defaultDockerUser))
+`, firstNonEmpty(cfg.DockerWPImage, defaultDockerWordpressImage), firstNonEmpty(cfg.DockerUser, defaultDockerUser), firstNonEmpty(cfg.DockerUser, defaultDockerUser), firstNonEmpty(cfg.DockerUser, defaultDockerUser), firstNonEmpty(cfg.DockerUser, defaultDockerUser), firstNonEmpty(cfg.DockerUser, defaultDockerUser))
 }
 
 func renderEnvRewritesConf() string {

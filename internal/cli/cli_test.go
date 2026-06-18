@@ -11259,7 +11259,7 @@ func TestRenderEnvComposeUsesMetadataDefaults(t *testing.T) {
 		t.Fatalf("loadEnvConfig() = false, want true")
 	}
 	compose := renderEnvCompose(cfg)
-	for _, want := range []string{"wp-app:", "condition: service_healthy", "HOME: /home/nonfiction", "WP_CLI_CACHE_DIR: /tmp/wp-cli-cache", filepath.Join(root, "theme-src") + ":/var/www/html/wp-content/themes/theme-slot", "./uploads:/env/uploads", config.SnapshotProjectDir("client") + ":/env-snapshots"} {
+	for _, want := range []string{"wp-app:", "condition: service_healthy", "HOME: /home/nonfiction", "WP_CLI_CACHE_DIR: /tmp/wp-cli-cache", filepath.Join(root, "theme-src") + ":/var/www/html/wp-content/themes/theme-slot", "./uploads:/var/www/html/wp-content/uploads", "./.nf-transfer:/env/uploads", config.SnapshotProjectDir("client") + ":/env-snapshots"} {
 		if !strings.Contains(compose, want) {
 			t.Fatalf("renderEnvCompose() missing %q:\n%s", want, compose)
 		}
@@ -11356,7 +11356,7 @@ func TestEnsureManagedEnvUsesConfiguredDockerImages(t *testing.T) {
 	if !strings.Contains(string(dockerfileData), "FROM wordpress:php8.3-custom-apache") {
 		t.Fatalf("Dockerfile missing configured FROM:\n%s", string(dockerfileData))
 	}
-	for _, want := range []string{"apt-get install -y --no-install-recommends", "iputils-ping", "dnsutils", "mariadb-client", "nano", "vim", "wp-cli.phar", "/usr/local/bin/wp", "useradd --create-home --shell /bin/bash --groups www-data developer", "chown -R developer:www-data"} {
+	for _, want := range []string{"apt-get install -y --no-install-recommends", "iputils-ping", "dnsutils", "mariadb-client", "nano", "vim", "wp-cli.phar", "/usr/local/bin/wp", "useradd --create-home --shell /bin/bash --groups www-data developer", "export APACHE_RUN_USER=developer", "export APACHE_RUN_GROUP=www-data", "umask 0002", "chown -R developer:www-data"} {
 		if !strings.Contains(string(dockerfileData), want) {
 			t.Fatalf("Dockerfile missing %q:\n%s", want, string(dockerfileData))
 		}
@@ -12511,7 +12511,7 @@ func TestRunEnvPluginsCacheSaveArchivesInstalledPlugin(t *testing.T) {
 	}
 	dockerDir := t.TempDir()
 	logPath := filepath.Join(dockerDir, "docker-args.txt")
-	dockerScript := []byte("#!/bin/sh\nprintf '%s\n' \"$@\" >> \"$DOCKER_LOG\"\ncase \"$*\" in\n  *\".nf-plugin-cache-save\"*) mkdir -p \"$NF_DATA_HOME/envs/client/uploads/.nf-plugin-cache-save\"; tar -C \"$CACHE_SOURCE\" -czf \"$NF_DATA_HOME/envs/client/uploads/.nf-plugin-cache-save/sitepress-multilingual-cms.tar.gz\" sitepress-multilingual-cms ;;\nesac\nexit 0\n")
+	dockerScript := []byte("#!/bin/sh\nprintf '%s\n' \"$@\" >> \"$DOCKER_LOG\"\ncase \"$*\" in\n  *\".nf-plugin-cache-save\"*) mkdir -p \"$NF_DATA_HOME/envs/client/.nf-transfer/.nf-plugin-cache-save\"; tar -C \"$CACHE_SOURCE\" -czf \"$NF_DATA_HOME/envs/client/.nf-transfer/.nf-plugin-cache-save/sitepress-multilingual-cms.tar.gz\" sitepress-multilingual-cms ;;\nesac\nexit 0\n")
 	if err := os.WriteFile(filepath.Join(dockerDir, "docker"), dockerScript, 0o755); err != nil {
 		t.Fatalf("WriteFile(docker) error = %v", err)
 	}
@@ -13558,7 +13558,7 @@ func TestEnvCommandHelpersBuildExpectedArgs(t *testing.T) {
 		t.Fatalf("envWpThemeIsActiveArgs() = %#v, want %#v", got, want)
 	}
 	hostPath, containerPath := envThemeArchivePaths(cfg, "/tmp/theme.zip")
-	if hostPath != filepath.Join(cfg.EnvDir, "uploads", "theme.zip") || containerPath != "/env/uploads/theme.zip" {
+	if hostPath != filepath.Join(cfg.EnvDir, ".nf-transfer", "theme.zip") || containerPath != "/env/uploads/theme.zip" {
 		t.Fatalf("envThemeArchivePaths() = (%q, %q), want host and container upload paths", hostPath, containerPath)
 	}
 	if got, want := envCommandDir(cfg), cfg.EnvDir; got != want {
@@ -13655,10 +13655,10 @@ func TestEnsureManagedEnvWritesManagedFiles(t *testing.T) {
 	adminPassword := passwords.DerivePassword("client", "wp-admin", "test-salt")
 	dbPassword := passwords.DerivePassword("client", "mysql", "test-salt")
 	checks := map[string][]string{
-		filepath.Join(cfg.EnvDir, "docker-compose.yml"):                   {filepath.Join(root, "theme") + ":/var/www/html/wp-content/themes/theme", "mailpit", "db-ui:", "wordpress:php8.3-apache", "https://www.adminneo.org/files/5.4.1/mysql_en_default/adminneo-5.4.1.php", "${DB_UI_PORT}:80", "HOME: /home/nonfiction", "WP_CLI_CACHE_DIR: /tmp/wp-cli-cache", "./php/uploads.ini:/usr/local/etc/php/conf.d/uploads.ini:ro", "./uploads:/env/uploads", ":/env-snapshots"},
+		filepath.Join(cfg.EnvDir, "docker-compose.yml"):                   {filepath.Join(root, "theme") + ":/var/www/html/wp-content/themes/theme", "mailpit", "db-ui:", "wordpress:php8.3-apache", "https://www.adminneo.org/files/5.4.1/mysql_en_default/adminneo-5.4.1.php", "${DB_UI_PORT}:80", "HOME: /home/nonfiction", "WP_CLI_CACHE_DIR: /tmp/wp-cli-cache", "./php/uploads.ini:/usr/local/etc/php/conf.d/uploads.ini:ro", "./uploads:/var/www/html/wp-content/uploads", "./.nf-transfer:/env/uploads", ":/env-snapshots"},
 		filepath.Join(cfg.EnvDir, ".env"):                                 {"COMPOSE_PROJECT_NAME=nf_client_env", fmt.Sprintf("WP_PORT=%d", wpPort), fmt.Sprintf("MAILPIT_PORT=%d", mailpitPort), fmt.Sprintf("DB_UI_PORT=%d", adminerPort), fmt.Sprintf("WP_URL=http://localhost:%d", wpPort), "DB_USER=client", "DB_PASSWORD=" + dbPassword, "WP_TITLE=Client", "ADMIN_USER=admin", "ADMIN_PASSWORD=" + adminPassword, "ADMIN_EMAIL=web@nonfiction.ca"},
 		filepath.Join(cfg.EnvDir, "php", "uploads.ini"):                   {"upload_max_filesize=1024M", "post_max_size=1024M", "max_execution_time=120"},
-		filepath.Join(cfg.EnvDir, "wordpress", "Dockerfile"):              {"FROM wordpress:php8.3-apache", "apt-get install -y --no-install-recommends", "iputils-ping", "dnsutils", "mariadb-client", "nano", "vim", "wp-cli.phar", "/usr/local/bin/wp", "useradd --create-home --shell /bin/bash --groups www-data nonfiction", "chown -R nonfiction:www-data", "COPY wordpress/wordpress-rewrites.conf"},
+		filepath.Join(cfg.EnvDir, "wordpress", "Dockerfile"):              {"FROM wordpress:php8.3-apache", "apt-get install -y --no-install-recommends", "iputils-ping", "dnsutils", "mariadb-client", "nano", "vim", "wp-cli.phar", "/usr/local/bin/wp", "useradd --create-home --shell /bin/bash --groups www-data nonfiction", "export APACHE_RUN_USER=nonfiction", "export APACHE_RUN_GROUP=www-data", "umask 0002", "chown -R nonfiction:www-data", "COPY wordpress/wordpress-rewrites.conf"},
 		filepath.Join(cfg.EnvDir, "wordpress", "wordpress-rewrites.conf"): {"RewriteRule . /index.php [L]"},
 	}
 	for path, wants := range checks {
@@ -13677,6 +13677,11 @@ func TestEnsureManagedEnvWritesManagedFiles(t *testing.T) {
 		t.Fatalf("ReadFile(.gitkeep) error = %v", err)
 	} else if len(data) != 0 {
 		t.Fatalf("uploads/.gitkeep = %q, want empty file", string(data))
+	}
+	if data, err := os.ReadFile(filepath.Join(cfg.EnvDir, ".nf-transfer", ".gitkeep")); err != nil {
+		t.Fatalf("ReadFile(.nf-transfer/.gitkeep) error = %v", err)
+	} else if len(data) != 0 {
+		t.Fatalf(".nf-transfer/.gitkeep = %q, want empty file", string(data))
 	}
 }
 
@@ -13746,6 +13751,94 @@ func TestRunEnvUpPrintsUnderlyingCommands(t *testing.T) {
 	}
 	if _, err := os.Stat(logPath); err != nil {
 		t.Fatalf("docker log missing: %v", err)
+	}
+	linkPath := filepath.Join(repoRoot, "uploads")
+	linkTarget, err := os.Readlink(linkPath)
+	if err != nil {
+		t.Fatalf("Readlink(uploads) error = %v", err)
+	}
+	if want := filepath.Join(config.EnvDir("client-site"), "uploads"); linkTarget != want {
+		t.Fatalf("uploads symlink = %q, want %q", linkTarget, want)
+	}
+}
+
+func TestRunEnvDownRemovesManagedUploadsSymlink(t *testing.T) {
+	repoRoot := filepath.Join(t.TempDir(), "client-site")
+	if err := os.MkdirAll(filepath.Join(repoRoot, ".git"), 0o755); err != nil {
+		t.Fatalf("MkdirAll() error = %v", err)
+	}
+	if err := os.MkdirAll(filepath.Join(repoRoot, "theme"), 0o755); err != nil {
+		t.Fatalf("MkdirAll(theme) error = %v", err)
+	}
+	project := map[string]any{
+		"version":   1,
+		"project":   map[string]any{"slug": "client-site", "name": "Client Site", "type": "wordpress-theme"},
+		"wordpress": map[string]any{"deploy_unit": "theme", "theme_slug": "theme", "theme_path": "theme"},
+		"env":       map[string]any{"compose": "docker compose", "wordpress_service": "wordpress", "cli_service": "cli", "theme_mount_slug": "theme", "uploads_path": "uploads"},
+	}
+	data, err := json.MarshalIndent(project, "", "  ")
+	if err != nil {
+		t.Fatalf("MarshalIndent() error = %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(repoRoot, "nf.json"), append(data, '\n'), 0o644); err != nil {
+		t.Fatalf("WriteFile() error = %v", err)
+	}
+
+	dockerDir := t.TempDir()
+	logPath := filepath.Join(dockerDir, "docker-args.txt")
+	if err := os.WriteFile(filepath.Join(dockerDir, "docker"), []byte("#!/bin/sh\nprintf '%s\n' \"$@\" >> \"$DOCKER_LOG\"\nexit 0\n"), 0o755); err != nil {
+		t.Fatalf("WriteFile(docker) error = %v", err)
+	}
+	configHome := t.TempDir()
+	t.Setenv("NF_CONFIG_HOME", configHome)
+	t.Setenv("NF_DATA_HOME", configHome)
+	t.Setenv("DOCKER_LOG", logPath)
+	t.Setenv("PATH", dockerDir+string(os.PathListSeparator)+os.Getenv("PATH"))
+	target := filepath.Join(config.EnvDir("client-site"), "uploads")
+	if err := os.MkdirAll(target, 0o755); err != nil {
+		t.Fatalf("MkdirAll(target) error = %v", err)
+	}
+	linkPath := filepath.Join(repoRoot, "uploads")
+	if err := os.Symlink(target, linkPath); err != nil {
+		t.Fatalf("Symlink() error = %v", err)
+	}
+
+	oldwd, err := os.Getwd()
+	if err != nil {
+		t.Fatalf("Getwd() error = %v", err)
+	}
+	if err := os.Chdir(repoRoot); err != nil {
+		t.Fatalf("Chdir() error = %v", err)
+	}
+	t.Cleanup(func() { _ = os.Chdir(oldwd) })
+
+	if got := Run([]string{"env", "down"}); got != 0 {
+		t.Fatalf("Run() = %d, want 0", got)
+	}
+	if _, err := os.Lstat(linkPath); !os.IsNotExist(err) {
+		t.Fatalf("uploads symlink still exists or stat failed: %v", err)
+	}
+	logData, err := os.ReadFile(logPath)
+	if err != nil {
+		t.Fatalf("ReadFile(log) error = %v", err)
+	}
+	if !strings.Contains(string(logData), "compose\ndown") {
+		t.Fatalf("docker log missing compose down:\n%s", string(logData))
+	}
+}
+
+func TestEnsureProjectUploadsSymlinkRejectsExistingPath(t *testing.T) {
+	root := t.TempDir()
+	cfg := envConfig{EnvDir: t.TempDir(), UploadsPath: "uploads"}
+	if err := os.Mkdir(filepath.Join(root, "uploads"), 0o755); err != nil {
+		t.Fatalf("Mkdir(uploads) error = %v", err)
+	}
+	err := ensureProjectUploadsSymlink(root, cfg)
+	if err == nil {
+		t.Fatal("ensureProjectUploadsSymlink() error = nil, want conflict")
+	}
+	if !strings.Contains(err.Error(), "refusing to replace existing project uploads path") {
+		t.Fatalf("ensureProjectUploadsSymlink() error = %q, want conflict message", err)
 	}
 }
 

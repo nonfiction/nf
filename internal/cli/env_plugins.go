@@ -310,7 +310,7 @@ func cmdEnvPluginsCacheSave(cfg envConfig, slug string) int {
 		fmt.Fprintln(os.Stderr, err)
 		return 1
 	}
-	hostDir := filepath.Join(cfg.managedUploadsDir(), ".nf-plugin-cache-save")
+	hostDir := filepath.Join(cfg.managedTransferDir(), ".nf-plugin-cache-save")
 	if err := os.RemoveAll(hostDir); err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		return 1
@@ -897,7 +897,7 @@ func prepareLocalPluginInstallSources(cfg envConfig, plugins []wordpressPluginSp
 	if !hasLocalPreparedPluginSource(plugins) {
 		return sources, nil, nil
 	}
-	outputDir := filepath.Join(localEnvDir(cfg), firstNonEmpty(cfg.UploadsPath, "uploads"), ".nf-plugin-cache")
+	outputDir := filepath.Join(cfg.managedTransferDir(), ".nf-plugin-cache")
 	if err := os.RemoveAll(outputDir); err != nil {
 		return nil, nil, err
 	}

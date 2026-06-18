@@ -153,8 +153,12 @@ func (c envConfig) managedUploadsDir() string {
 	return filepath.Join(localEnvDir(c), firstNonEmpty(c.UploadsPath, "uploads"))
 }
 
+func (c envConfig) managedTransferDir() string {
+	return filepath.Join(localEnvDir(c), envTransferPath)
+}
+
 func (c envConfig) uploadsContainerPath() string {
-	return path.Join("/", "env", firstNonEmpty(c.UploadsPath, "uploads"))
+	return path.Join("/", "env", "uploads")
 }
 
 func localEnvDir(cfg envConfig) string {

@@ -20,6 +20,8 @@ const (
 	defaultDockerDBImage        = "mariadb:11"
 	defaultDockerWordpressImage = "wordpress:php8.3-apache"
 	defaultDockerUser           = "nonfiction"
+	envTransferPath             = ".nf-transfer"
+	projectUploadsSymlink       = "uploads"
 )
 
 func envCommandDir(cfg envConfig) string {
@@ -50,6 +52,7 @@ func ensureManagedEnv(cfg envConfig) error {
 		filepath.Join(envDir, "wordpress", "Dockerfile"):                             renderEnvDockerfile(cfg),
 		filepath.Join(envDir, "wordpress", "wordpress-rewrites.conf"):                renderEnvRewritesConf(),
 		filepath.Join(envDir, firstNonEmpty(cfg.UploadsPath, "uploads"), ".gitkeep"): "",
+		filepath.Join(envDir, envTransferPath, ".gitkeep"):                           "",
 	}
 	for path, contents := range files {
 		if err := writeManagedFile(path, contents, 0o644); err != nil {
@@ -331,9 +334,78 @@ func envWpThemeActivateArgs(cfg envConfig, slug string) []string {
 
 func envThemeArchivePaths(cfg envConfig, sourcePath string) (string, string) {
 	base := filepath.Base(sourcePath)
-	host := filepath.Join(envCommandDir(cfg), firstNonEmpty(cfg.UploadsPath, "uploads"), base)
-	container := path.Join("/", "env", firstNonEmpty(cfg.UploadsPath, "uploads"), base)
+	host := filepath.Join(envCommandDir(cfg), envTransferPath, base)
+	container := path.Join("/", "env", "uploads", base)
 	return host, container
+}
+
+func ensureProjectUploadsSymlink(root string, cfg envConfig) error {
+	if strings.TrimSpace(root) == "" {
+		return nil
+	}
+	target := cfg.managedUploadsDir()
+	if err := os.MkdirAll(target, 0o755); err != nil {
+		return err
+	}
+	linkPath := filepath.Join(root, projectUploadsSymlink)
+	info, err := os.Lstat(linkPath)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return os.Symlink(target, linkPath)
+		}
+		return err
+	}
+	if info.Mode()&os.ModeSymlink == 0 {
+		return ProjectError{Msg: fmt.Sprintf("refusing to replace existing project uploads path: %s", linkPath)}
+	}
+	if ok, err := projectUploadsSymlinkMatches(linkPath, target); err != nil {
+		return err
+	} else if !ok {
+		return ProjectError{Msg: fmt.Sprintf("refusing to replace existing uploads symlink pointing outside this env: %s", linkPath)}
+	}
+	return nil
+}
+
+func removeProjectUploadsSymlink(root string, cfg envConfig) error {
+	if strings.TrimSpace(root) == "" {
+		return nil
+	}
+	linkPath := filepath.Join(root, projectUploadsSymlink)
+	info, err := os.Lstat(linkPath)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil
+		}
+		return err
+	}
+	if info.Mode()&os.ModeSymlink == 0 {
+		return nil
+	}
+	if ok, err := projectUploadsSymlinkMatches(linkPath, cfg.managedUploadsDir()); err != nil {
+		return err
+	} else if !ok {
+		return ProjectError{Msg: fmt.Sprintf("refusing to remove uploads symlink pointing outside this env: %s", linkPath)}
+	}
+	return os.Remove(linkPath)
+}
+
+func projectUploadsSymlinkMatches(linkPath, target string) (bool, error) {
+	existing, err := os.Readlink(linkPath)
+	if err != nil {
+		return false, err
+	}
+	if !filepath.IsAbs(existing) {
+		existing = filepath.Join(filepath.Dir(linkPath), existing)
+	}
+	existingAbs, err := filepath.Abs(existing)
+	if err != nil {
+		return false, err
+	}
+	targetAbs, err := filepath.Abs(target)
+	if err != nil {
+		return false, err
+	}
+	return filepath.Clean(existingAbs) == filepath.Clean(targetAbs), nil
 }
 
 func envRepoPath(root, sourcePath string) string {
