@@ -230,7 +230,7 @@ Rules:
 
 ## Command surface
 
-Current public command groups:
+Current always-available command groups:
 
 ```text
 nf init
@@ -247,7 +247,7 @@ Project-only command groups are available when the current repo has `nf.json` ne
 nf remote ...
 nf theme ...
 nf env ...
-nf public ...
+nf alias ...
 ```
 
 Remote env operations stay under `nf site ...` as `nf site list --envs`, `nf site show <site:env>`, `nf site shell <site:env>`, `nf site wp <site:env>`, and `nf site snapshot ...`.
@@ -294,7 +294,7 @@ Do not add old compatibility routes unless explicitly requested.
 * [x] `nf remote show <name>`
 * [x] `nf remote remove <name>`
 * [x] `nf remote list`
-* [x] `nf public deploy <remote> [--dry-run] [--yes]`
+* [x] `nf alias list/status/sync/add/remove`
 * [x] `nf theme tasks`
 * [x] `nf theme package`
 * [x] direct theme tasks from `nf.json`
@@ -448,7 +448,7 @@ Tracked fields include:
 * WordPress plugin bootstrap intent
 * local env intent
 * artifact recipe
-* static public path deploy recipe
+* root-level alias map for paths under `wp-content`
 * repo remotes
 * theme tasks
 
@@ -483,16 +483,12 @@ Example shape:
     "theme_mount_slug": "theme",
     "uploads_path": "uploads"
   },
+  "aliases": {
+    "files": "wp-content/uploads/public/files",
+    "annual-report-2026": "wp-content/uploads/public/annual-report-2026"
+  },
   "artifact": {
     "path": "dist/client-v{version}.zip"
-  },
-  "public": {
-    "paths": [
-      {
-        "source": "public/annual-report-2026",
-        "path": "/annual-report-2026"
-      }
-    ]
   },
   "remotes": {
     "production": "client.app1-linode:live"
@@ -527,7 +523,7 @@ Packaging rules:
 
 Deploy rules:
 
-* public UX stays `nf theme deploy <remote> [--dry-run]`
+* deploy UX stays `nf theme deploy <remote> [--dry-run]`
 * deploy is a one-command packaged release deploy, not manual WordPress zip upload
 * deploy uses the same packaging behavior as `nf theme package`; it stages Composer production dependencies but does not run npm or asset builds automatically
 * direct in-place source rsync to the active theme directory is superseded
@@ -537,51 +533,35 @@ Deploy rules:
 * release metadata is recorded at `wp-content/themes/.nf-releases/<theme-slug>/releases.json` without secrets
 * deploy prunes remote release storage after success, keeping the last 5 distinct releases and their matching uploaded artifacts
 * deploy also removes stale extraction/temp release dirs under `.nf-releases/<theme-slug>/`
-* public rollback UX is `nf theme rollback <remote> [--dry-run]`
+* rollback UX is `nf theme rollback <remote> [--dry-run]`
 * rollback selects the previous distinct `release_id` from remote `releases.json`, copies that release back into the active theme directory, runs wp-cli activation, and appends a rollback metadata entry
 * rollback does not rebuild or upload artifacts
 
-## Static public artifacts
+## Root aliases
 
-Static files that must live at non-WordPress URL paths can be tracked in the repo and deployed separately from the WordPress theme.
-
-Convention:
-
-```text
-public/
-  annual-report-2026/
-    index.html
-    assets/...
-```
+Aliases expose existing WordPress content from `wp-content` at root-level URL paths by managing webroot symlinks.
 
 Config:
 
 ```json
 {
-  "public": {
-    "paths": [
-      {
-        "source": "public/annual-report-2026",
-        "path": "/annual-report-2026",
-        "delete": false
-      }
-    ]
+  "aliases": {
+    "files": "wp-content/uploads/public/files",
+    "annual-report-2026": "wp-content/uploads/public/annual-report-2026"
   }
 }
 ```
 
 Rules:
 
-* public deploy UX is `nf public deploy <remote> [--dry-run] [--yes]`
-* `public.paths` is explicit; `nf` never uploads every folder under `public/` by inference
-* `source` must be a repo-relative directory and must not contain symlinks
-* `path` must be an absolute URL path under the remote document root
-* deploy refuses `/`, traversal, backslashes, and reserved WordPress paths such as `/wp-admin`, `/wp-content`, `/wp-includes`, and `/uploads`
-* deploy uses rsync over the configured remote SSH path
-* `delete: true` adds `rsync --delete` and requires `--yes` when not in dry-run mode
-* public deploy does not package, build, activate WordPress themes, update the database, or manage uploads
-* large or remote artifacts should be materialized into the configured repo `source` by a project task before `nf public deploy`
-* HTTP crawling, archive download/extract, and rsync side-loaded source types are intentionally deferred
+* alias UX is `nf alias list`, `nf alias status [remote]`, `nf alias sync [remote]`, `nf alias add <alias> <target>`, and `nf alias remove <alias>`
+* alias names are top-level URL path names stored without a leading slash and displayed with one
+* targets are document-root-relative paths and must be `wp-content` or descendants
+* existing target symlinks are resolved before validation; targets that resolve outside `wp-content` are unsafe
+* status reports missing symlinks, missing targets, real-file or real-directory conflicts, wrong symlink targets, and stale root symlinks
+* sync creates or updates configured root symlinks and prunes stale root symlinks
+* sync never overwrites or removes real files/directories and exits non-zero when unsafe paths prevent reconciliation
+* aliases do not upload files, package artifacts, protect content, route through PHP, activate themes, update the database, or manage WordPress uploads
 
 ## Local env model
 
@@ -770,16 +750,17 @@ Status:
 * [x] release metadata layout for rollback/history
 * [x] public rollback command
 
-### Phase 6b: Static public artifact deployment
+### Phase 6b: Root aliases
 
-Goal: deploy explicit static artifact directories to non-WordPress URL paths under a remote document root.
+Goal: expose existing WordPress content under root-level URL paths through managed webroot symlinks.
 
 Status:
 
-* [x] repo `public.paths` metadata
-* [x] `nf public deploy <remote> [--dry-run] [--yes]`
-* [x] path safety checks for root/traversal/reserved WordPress paths
-* [ ] release metadata and rollback for public artifact deploys
+* [x] repo `aliases` metadata
+* [x] `nf alias list/status/sync/add/remove`
+* [x] local and remote status/sync through project remotes
+* [x] alias and target safety checks for traversal, reserved WordPress names, and targets escaping `wp-content`
+* [x] sync creates/updates configured symlinks and prunes stale root symlinks without touching real files/directories
 
 ### Phase 7: Database/uploads sync
 

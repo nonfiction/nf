@@ -121,8 +121,8 @@ func completeContextCandidates(args []string) []string {
 		return envCompletionCandidates(args[1:])
 	case "theme":
 		return themeCompletionCandidates(args[1:])
-	case "public":
-		return publicCompletionCandidates(args[1:])
+	case "alias":
+		return aliasCompletionCandidates(args[1:])
 	default:
 		return nil
 	}
@@ -167,7 +167,7 @@ func passwordDeriveIdentityCompletionNames(scope string) []string {
 func rootCompletionCandidates() []string {
 	candidates := []string{"init", "provider", "target", "site", "refresh", "domain", "config", "password", "completion", "version", "help"}
 	if projectContextAvailable() {
-		candidates = append(candidates, "remote", "plugin", "env", "theme", "public")
+		candidates = append(candidates, "remote", "plugin", "env", "theme", "alias")
 	}
 	sort.Strings(candidates)
 	return candidates
@@ -463,14 +463,19 @@ func themeCompletionCandidates(args []string) []string {
 	}
 }
 
-func publicCompletionCandidates(args []string) []string {
+func aliasCompletionCandidates(args []string) []string {
 	if len(args) == 0 {
-		return []string{"deploy", "help"}
+		return []string{"list", "ls", "status", "sync", "add", "remove", "rm", "help"}
 	}
-	if args[0] == "deploy" {
-		return append(projectRemoteCompletionNames(), "--dry-run", "--yes")
+	args[0] = cliCommandAlias(args[0])
+	switch args[0] {
+	case "status", "sync":
+		return projectRemoteCompletionNames()
+	case "remove":
+		return projectAliasCompletionNames()
+	default:
+		return nil
 	}
-	return nil
 }
 
 func cachedTargetCompletionNames() []string {

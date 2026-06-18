@@ -123,7 +123,7 @@ func projectInitJSON(metadata map[string]any) string {
 }
 
 func orderedProjectMetadata(metadata map[string]any) orderedObject {
-	order := []string{"version", "project", "wordpress", "env", "artifact", "remotes", "tasks"}
+	order := []string{"version", "project", "wordpress", "env", "aliases", "artifact", "remotes", "tasks"}
 	seen := map[string]struct{}{}
 	pairs := make([]orderedPair, 0, len(metadata))
 	for _, key := range order {

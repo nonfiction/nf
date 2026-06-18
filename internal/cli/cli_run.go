@@ -58,11 +58,11 @@ func Run(argv []string) int {
 			return 1
 		}
 		return runTheme(argv[1:])
-	case "public":
+	case "alias":
 		if rejectOutsideProject(argv[0]) {
 			return 1
 		}
-		return runPublic(argv[1:])
+		return runAlias(argv[1:])
 	case "config":
 		return runConfig(argv[1:])
 	case "password":
@@ -114,11 +114,11 @@ func runTopicHelp(argv []string) int {
 			return 1
 		}
 		return runThemeHelp()
-	case "public":
+	case "alias":
 		if rejectOutsideProject(argv[0]) {
 			return 1
 		}
-		return runPublicHelp()
+		return runAliasHelp()
 	case "config":
 		return runConfigHelp()
 	case "password":

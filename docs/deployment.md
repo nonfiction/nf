@@ -15,20 +15,18 @@ Theme deploy keeps the last 5 releases and matching uploaded zips, so release st
 
 `nf theme rollback <remote>` switches the active theme directory back to the previous recorded release and activates the configured theme slug again. It uses remote `releases.json`; it does not rebuild or upload artifacts. See [Themes](themes.md).
 
-## Static Public Artifacts
+## Root Aliases
 
-Use `public/` for static artifacts that must live at specific non-WordPress URL paths, such as annual report microsites.
+Use aliases when existing WordPress content under `wp-content` must also be reachable from a root-level URL path, such as `/files` or `/annual-report-2026`.
 
-Deploy them separately from the theme:
+Inspect and sync aliases separately from theme releases:
 
 ```sh
-nf public deploy production --dry-run
-nf public deploy production
+nf alias status production
+nf alias sync production
 ```
 
-`nf` only deploys paths explicitly listed in `nf.json`. `source` must be repo-relative and symlink-free. `path` must be an absolute URL path and cannot target `/`, traversal, `/wp-admin`, `/wp-content`, `/wp-includes`, or `/uploads`. Add `"delete": true` to mirror removals with `rsync --delete`; execution then requires `--yes`.
-
-Remote HTTP crawling, archives, and rsync side-loaded sources are intentionally outside this first slice. See [Public Artifacts](public-artifacts.md).
+`nf` manages symlinks only. It does not upload files, manage access control, or route through PHP. `nf alias sync` creates or updates configured symlinks and prunes stale root symlinks, but never overwrites real files/directories. See [Aliases](aliases.md).
 
 ## Public Domain Launches
 

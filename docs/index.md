@@ -20,7 +20,7 @@ This documentation expands on the concise repo [README](https://github.com/nonfi
 - [Staging](staging.md): create, inspect, and remove staging envs.
 - [Remotes](remotes.md): connect a repo to a cached remote env.
 - [Themes](themes.md): run theme tasks, package releases, deploy, and rollback.
-- [Public Artifacts](public-artifacts.md): deploy configured static public paths.
+- [Aliases](aliases.md): expose root-level symlinks to paths under `wp-content`.
 - [Plugins](plugins.md): configure, compare, and install WordPress plugins.
 - [Snapshots](snapshots.md): create, import, restore, prune, and remove env snapshots.
 - [Sync](sync.md): push or pull database and mutable `wp-content` with reviewable preflights.
@@ -43,4 +43,4 @@ nf init
 nf env up
 ```
 
-After `nf init`, run project-local commands from that repo so `theme`, `env`, `remote`, and `public` are available.
+After `nf init`, run project-local commands from that repo so `theme`, `env`, `plugin`, `alias`, and `remote` are available.

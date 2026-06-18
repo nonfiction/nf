@@ -42,7 +42,7 @@ nf provider list
 nf site list --envs
 nf env wp -- plugin list
 nf theme deploy production --dry-run
-nf public deploy production --dry-run
+nf alias status production
 ```
 
 ## Documentation
@@ -57,6 +57,7 @@ Common practical guides:
 - [Staging](docs/staging.md)
 - [Remotes](docs/remotes.md)
 - [Themes](docs/themes.md)
+- [Aliases](docs/aliases.md)
 - [Snapshots](docs/snapshots.md)
 - [Sync](docs/sync.md)
 - [Domains and launch](docs/domains.md)

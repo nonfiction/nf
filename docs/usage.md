@@ -32,7 +32,7 @@ nf init \
   --theme-source theme
 ```
 
-After `nf init`, run project-local commands from that repo so `theme`, `env`, `remote`, and `public` are available.
+After `nf init`, run project-local commands from that repo so `theme`, `env`, `plugin`, `alias`, and `remote` are available.
 
 ## Common Workflows
 
@@ -85,13 +85,15 @@ nf theme deploy production --dry-run
 
 Read [Themes](themes.md) for task execution, clean release artifacts, deploys, and rollback.
 
-Deploy static public artifacts:
+Expose root aliases to existing WordPress content:
 
 ```sh
-nf public deploy production --dry-run
+nf alias add files wp-content/uploads/public/files
+nf alias status production
+nf alias sync production
 ```
 
-Read [Public Artifacts](public-artifacts.md) for configured non-WordPress URL paths.
+Read [Aliases](aliases.md) for root-level symlinks to paths under `wp-content`.
 
 Manage WordPress plugins declared in `nf.json`:
 
@@ -135,4 +137,4 @@ nf <command> --execute --yes
 
 When run interactively without `--yes`, these commands prompt before changing remote infrastructure or content. In non-interactive mode, remote execution requires both `--execute` and `--yes`.
 
-Theme deploy, public deploy, and plugin install also support dry-run or confirmation flags, but their exact execution flags differ. Check the specific guide before changing a remote env.
+Theme deploy and plugin install also support dry-run or confirmation flags, but their exact execution flags differ. `nf alias sync` mutates only root-level symlinks; run `nf alias status` first when reviewing a remote env.

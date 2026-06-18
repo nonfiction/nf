@@ -176,7 +176,7 @@ func TestRunHelpShowsTopLevelCommandsOutsideGit(t *testing.T) {
 			t.Fatalf("runHelp() output missing %q:\n%s", wanted, output)
 		}
 	}
-	for _, unwanted := range []string{"\n  remote  ", "\n  theme   ", "\n  env     ", "\n  public  ", "\n  repo  ", "\n  instance  ", "\n  server  ", "Shortcuts:", "nf up", "nf shell", "snapshot create", "\n  commands\n", "\n  run <name>\n", "\n  build\n"} {
+	for _, unwanted := range []string{"\n  remote  ", "\n  theme   ", "\n  env     ", "\n  alias   ", "\n  public  ", "\n  repo  ", "\n  instance  ", "\n  server  ", "Shortcuts:", "nf up", "nf shell", "snapshot create", "\n  commands\n", "\n  run <name>\n", "\n  build\n"} {
 		if strings.Contains(output, unwanted) {
 			t.Fatalf("runHelp() output unexpectedly contained %q:\n%s", unwanted, output)
 		}
@@ -211,7 +211,7 @@ func TestRunHelpHidesProjectCommandsInsideGitWithoutNFDir(t *testing.T) {
 			t.Fatalf("runHelp() output missing %q:\n%s", wanted, output)
 		}
 	}
-	for _, unwanted := range []string{"\n  remote  ", "\n  theme   ", "\n  env     ", "\n  public  ", "\n  instance  ", "\n  server  ", "Shortcuts:", "nf up", "nf shell", "snapshot create", "\n  commands\n", "\n  run <name>\n", "\n  build\n"} {
+	for _, unwanted := range []string{"\n  remote  ", "\n  theme   ", "\n  env     ", "\n  alias   ", "\n  public  ", "\n  instance  ", "\n  server  ", "Shortcuts:", "nf up", "nf shell", "snapshot create", "\n  commands\n", "\n  run <name>\n", "\n  build\n"} {
 		if strings.Contains(output, unwanted) {
 			t.Fatalf("runHelp() output unexpectedly contained %q:\n%s", unwanted, output)
 		}
@@ -246,13 +246,13 @@ func TestRunHelpShowsProjectCommandsInsideNFProject(t *testing.T) {
 		"\n  env         manage the local development env\n",
 		"  theme       package clean artifacts and run theme tasks\n",
 		"  plugin      manage configured WordPress plugins\n",
-		"  public      deploy static public paths\n",
+		"  alias       manage root-level WordPress content aliases\n",
 		"  remote      manage repo remotes\n",
 		"  password    derive passwords\n",
 		"\n  init        initialize project metadata\n",
 		"  config      manage global config\n",
 	})
-	for _, wanted := range []string{"\n  env         manage the local development env\n", "\n  theme       package clean artifacts and run theme tasks\n", "\n  plugin      manage configured WordPress plugins\n", "\n  public      deploy static public paths\n", "\n  remote      manage repo remotes\n", "\n  password    derive passwords\n"} {
+	for _, wanted := range []string{"\n  env         manage the local development env\n", "\n  theme       package clean artifacts and run theme tasks\n", "\n  plugin      manage configured WordPress plugins\n", "\n  alias       manage root-level WordPress content aliases\n", "\n  remote      manage repo remotes\n", "\n  password    derive passwords\n"} {
 		if !strings.Contains(output, wanted) {
 			t.Fatalf("runHelp() output missing %q:\n%s", wanted, output)
 		}
@@ -930,6 +930,7 @@ func TestRunCompleteSuggestsProjectValues(t *testing.T) {
 		"version":   1,
 		"project":   map[string]any{"slug": "client"},
 		"wordpress": map[string]any{"plugins": []any{"stream"}},
+		"aliases":   map[string]any{"files": "wp-content/uploads/public/files"},
 		"remotes":   map[string]any{"production": "client-app1-linode:live"},
 		"tasks":     map[string]any{"build": map[string]any{"description": "Build assets", "run": "npm run build"}},
 	}
@@ -1113,6 +1114,44 @@ func TestRunCompleteSuggestsProjectValues(t *testing.T) {
 		if !strings.Contains(pluginInstallOutput, want) {
 			t.Fatalf("plugin install completion missing %q:\n%s", want, pluginInstallOutput)
 		}
+	}
+
+	aliasOutput := captureStdout(t, func() {
+		if got := Run([]string{"__complete", "--", "al"}); got != 0 {
+			t.Fatalf("Run(__complete al) = %d, want 0", got)
+		}
+	})
+	if strings.TrimSpace(aliasOutput) != "alias" {
+		t.Fatalf("alias completion = %q, want alias", aliasOutput)
+	}
+
+	aliasCommandOutput := captureStdout(t, func() {
+		if got := Run([]string{"__complete", "--", "alias", ""}); got != 0 {
+			t.Fatalf("Run(__complete alias) = %d, want 0", got)
+		}
+	})
+	for _, want := range []string{"list\n", "ls\n", "status\n", "sync\n", "add\n", "remove\n", "rm\n", "help\n"} {
+		if !strings.Contains(aliasCommandOutput, want) {
+			t.Fatalf("alias command completion missing %q:\n%s", want, aliasCommandOutput)
+		}
+	}
+
+	aliasStatusOutput := captureStdout(t, func() {
+		if got := Run([]string{"__complete", "--", "alias", "status", ""}); got != 0 {
+			t.Fatalf("Run(__complete alias status) = %d, want 0", got)
+		}
+	})
+	if !strings.Contains(aliasStatusOutput, "production\n") {
+		t.Fatalf("alias status completion missing production:\n%s", aliasStatusOutput)
+	}
+
+	aliasRemoveOutput := captureStdout(t, func() {
+		if got := Run([]string{"__complete", "--", "alias", "remove", ""}); got != 0 {
+			t.Fatalf("Run(__complete alias remove) = %d, want 0", got)
+		}
+	})
+	if strings.TrimSpace(aliasRemoveOutput) != "files" {
+		t.Fatalf("alias remove completion = %q, want files", aliasRemoveOutput)
 	}
 }
 
@@ -8624,77 +8663,227 @@ func TestRunThemeDeployDryRunPlansPackagedReleaseToConfiguredRemote(t *testing.T
 	}
 }
 
-func TestRunPublicDeployDryRunPlansConfiguredPaths(t *testing.T) {
+func TestAliasSpecsLoadShortFormTargets(t *testing.T) {
+	metadata := map[string]any{"aliases": map[string]any{
+		"content":           "wp-content",
+		"files":             "wp-content/uploads/public/files",
+		"annual-report.pdf": "wp-content/uploads/2026/annual-report.pdf",
+	}}
+	specs, err := loadAliasSpecs(metadata)
+	if err != nil {
+		t.Fatalf("loadAliasSpecs() error = %v", err)
+	}
+	if got, want := len(specs), 3; got != want {
+		t.Fatalf("len(specs) = %d, want %d", got, want)
+	}
+	if specs[0].Alias != "annual-report.pdf" || specs[0].Target != "wp-content/uploads/2026/annual-report.pdf" {
+		t.Fatalf("specs[0] = %#v, want sorted annual report alias", specs[0])
+	}
+}
+
+func TestRunAliasAddRemoveUpdatesProjectMetadata(t *testing.T) {
+	repoRoot := t.TempDir()
+	if err := os.Mkdir(filepath.Join(repoRoot, ".git"), 0o755); err != nil {
+		t.Fatalf("Mkdir(.git) error = %v", err)
+	}
+	projectPath := filepath.Join(repoRoot, "nf.json")
+	if err := os.WriteFile(projectPath, []byte("{\n  \"version\": 1,\n  \"project\": {\n    \"slug\": \"client\"\n  }\n}\n"), 0o644); err != nil {
+		t.Fatalf("WriteFile(nf.json) error = %v", err)
+	}
+	oldwd, err := os.Getwd()
+	if err != nil {
+		t.Fatalf("Getwd() error = %v", err)
+	}
+	if err := os.Chdir(repoRoot); err != nil {
+		t.Fatalf("Chdir() error = %v", err)
+	}
+	t.Cleanup(func() { _ = os.Chdir(oldwd) })
+
+	stdout := captureStdout(t, func() {
+		if got := Run([]string{"alias", "add", "files", "wp-content/uploads/public/files"}); got != 0 {
+			t.Fatalf("Run(alias add) = %d, want 0", got)
+		}
+	})
+	if !strings.Contains(stdout, "Added alias /files -> wp-content/uploads/public/files to nf.json.") {
+		t.Fatalf("alias add output = %q", stdout)
+	}
+	data, err := os.ReadFile(projectPath)
+	if err != nil {
+		t.Fatalf("ReadFile(nf.json) error = %v", err)
+	}
+	if text := string(data); !strings.Contains(text, `"aliases": {`) || !strings.Contains(text, `"files": "wp-content/uploads/public/files"`) {
+		t.Fatalf("nf.json missing alias:\n%s", text)
+	}
+
+	stdout = captureStdout(t, func() {
+		if got := Run([]string{"alias", "remove", "files"}); got != 0 {
+			t.Fatalf("Run(alias remove) = %d, want 0", got)
+		}
+	})
+	if !strings.Contains(stdout, "Removed alias /files from nf.json.") {
+		t.Fatalf("alias remove output = %q", stdout)
+	}
+	metadata, err := loadProjectMetadataOrError(repoRoot)
+	if err != nil {
+		t.Fatalf("loadProjectMetadataOrError() error = %v", err)
+	}
+	aliases := metadata["aliases"].(map[string]any)
+	if len(aliases) != 0 {
+		t.Fatalf("aliases = %#v, want empty object", aliases)
+	}
+}
+
+func TestAliasValidationRejectsUnsafeNamesAndTargets(t *testing.T) {
+	for _, name := range []string{"", "/files", "foo/bar", "foo\\bar", ".", "..", "bad..name", "wp-admin", "wp-content", "index.php", "uploads", "bad name"} {
+		if _, _, err := normalizeAliasName(name); err == nil {
+			t.Fatalf("normalizeAliasName(%q) succeeded, want error", name)
+		}
+	}
+	for _, name := range []string{"files", "esg-report-2025", "annual-report.pdf"} {
+		if got, _, err := normalizeAliasName(name); err != nil || got != name {
+			t.Fatalf("normalizeAliasName(%q) = %q, %v; want success", name, got, err)
+		}
+	}
+	for _, target := range []string{"", "/wp-content/uploads/file.pdf", "../secret", "wp-content/../wp-config.php", "wp-config.php", "uploads/file.pdf", "wp-content\\uploads\\file.pdf"} {
+		if _, err := normalizeAliasTarget(target); err == nil {
+			t.Fatalf("normalizeAliasTarget(%q) succeeded, want error", target)
+		}
+	}
+	for _, target := range []string{"wp-content", "wp-content/uploads/public/files", "wp-content/themes/client/assets/report.pdf"} {
+		if got, err := normalizeAliasTarget(target); err != nil || got != target {
+			t.Fatalf("normalizeAliasTarget(%q) = %q, %v; want success", target, got, err)
+		}
+	}
+	if _, warning, err := normalizeAliasName("feed"); err != nil || !strings.Contains(warning, "WordPress feed routes") {
+		t.Fatalf("normalizeAliasName(feed) warning = %q, err = %v", warning, err)
+	}
+}
+
+func TestAliasStatusScriptReportsSymlinkStates(t *testing.T) {
+	docroot := t.TempDir()
+	for _, dir := range []string{"wp-content/uploads/public/files", "wp-content/uploads/public/report", "wp-content/uploads/public/good", "wp-content/uploads/public/old"} {
+		if err := os.MkdirAll(filepath.Join(docroot, filepath.FromSlash(dir)), 0o755); err != nil {
+			t.Fatalf("MkdirAll(%s) error = %v", dir, err)
+		}
+	}
+	if err := os.Symlink("wp-content/uploads/public/files", filepath.Join(docroot, "files")); err != nil {
+		t.Fatalf("Symlink(files) error = %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(docroot, "file-conflict"), []byte("real"), 0o644); err != nil {
+		t.Fatalf("WriteFile(file-conflict) error = %v", err)
+	}
+	if err := os.Mkdir(filepath.Join(docroot, "dir-conflict"), 0o755); err != nil {
+		t.Fatalf("Mkdir(dir-conflict) error = %v", err)
+	}
+	if err := os.Symlink("wp-content/uploads/public/old", filepath.Join(docroot, "wrong")); err != nil {
+		t.Fatalf("Symlink(wrong) error = %v", err)
+	}
+	if err := os.Symlink("wp-content/uploads/public/old", filepath.Join(docroot, "stale")); err != nil {
+		t.Fatalf("Symlink(stale) error = %v", err)
+	}
+	outside := t.TempDir()
+	if err := os.Symlink(outside, filepath.Join(docroot, "wp-content", "uploads", "escape")); err != nil {
+		t.Fatalf("Symlink(escape) error = %v", err)
+	}
+	specs := []aliasSpec{
+		{Alias: "dir-conflict", Target: "wp-content/uploads/public/good"},
+		{Alias: "escaped", Target: "wp-content/uploads/escape"},
+		{Alias: "file-conflict", Target: "wp-content/uploads/public/good"},
+		{Alias: "files", Target: "wp-content/uploads/public/files"},
+		{Alias: "missing", Target: "wp-content/uploads/public/missing"},
+		{Alias: "report", Target: "wp-content/uploads/public/report"},
+		{Alias: "wrong", Target: "wp-content/uploads/public/files"},
+	}
+	output, err := runAliasTestScript(aliasStatusScript(docroot, specs))
+	if err != nil {
+		t.Fatalf("aliasStatusScript() error = %v\n%s", err, output)
+	}
+	for _, want := range []string{
+		"/files\twp-content/uploads/public/files\tOK",
+		"/report\twp-content/uploads/public/report\tMissing symlink",
+		"/missing\twp-content/uploads/public/missing\tMissing target",
+		"/file-conflict\twp-content/uploads/public/good\tConflict: real file exists",
+		"/dir-conflict\twp-content/uploads/public/good\tConflict: real directory exists",
+		"/wrong\twp-content/uploads/public/old\tWrong symlink target",
+		"/escaped\twp-content/uploads/escape\tTarget outside wp-content",
+		"/stale\twp-content/uploads/public/old\tStale symlink",
+	} {
+		if !strings.Contains(output, want) {
+			t.Fatalf("status output missing %q:\n%s", want, output)
+		}
+	}
+}
+
+func TestAliasSyncScriptCreatesUpdatesPrunesAndPreservesContent(t *testing.T) {
+	docroot := t.TempDir()
+	for _, dir := range []string{"wp-content/uploads/public/files", "wp-content/uploads/public/good", "wp-content/uploads/public/old"} {
+		if err := os.MkdirAll(filepath.Join(docroot, filepath.FromSlash(dir)), 0o755); err != nil {
+			t.Fatalf("MkdirAll(%s) error = %v", dir, err)
+		}
+	}
+	if err := os.Symlink("wp-content/uploads/public/old", filepath.Join(docroot, "wrong")); err != nil {
+		t.Fatalf("Symlink(wrong) error = %v", err)
+	}
+	if err := os.Symlink("wp-content/uploads/public/old", filepath.Join(docroot, "stale")); err != nil {
+		t.Fatalf("Symlink(stale) error = %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(docroot, "conflict"), []byte("real"), 0o644); err != nil {
+		t.Fatalf("WriteFile(conflict) error = %v", err)
+	}
+	outside := t.TempDir()
+	if err := os.Symlink(outside, filepath.Join(docroot, "wp-content", "uploads", "escape")); err != nil {
+		t.Fatalf("Symlink(escape) error = %v", err)
+	}
+	specs := []aliasSpec{
+		{Alias: "conflict", Target: "wp-content/uploads/public/good"},
+		{Alias: "escaped", Target: "wp-content/uploads/escape"},
+		{Alias: "files", Target: "wp-content/uploads/public/files"},
+		{Alias: "missing", Target: "wp-content/uploads/public/missing"},
+		{Alias: "wrong", Target: "wp-content/uploads/public/files"},
+	}
+	output, err := runAliasTestScript(aliasSyncScript(docroot, specs))
+	if err == nil {
+		t.Fatalf("aliasSyncScript() succeeded, want non-zero for conflicts\n%s", output)
+	}
+	for _, want := range []string{
+		"Created /files -> wp-content/uploads/public/files",
+		"Updated /wrong -> wp-content/uploads/public/files",
+		"Pruned /stale",
+		"Skipped /missing: Missing target: wp-content/uploads/public/missing",
+		"Skipped /escaped: Target outside wp-content: wp-content/uploads/escape",
+		"Conflict /conflict: real file exists at web root",
+	} {
+		if !strings.Contains(output, want) {
+			t.Fatalf("sync output missing %q:\n%s", want, output)
+		}
+	}
+	assertSymlinkTarget(t, filepath.Join(docroot, "files"), "wp-content/uploads/public/files")
+	assertSymlinkTarget(t, filepath.Join(docroot, "wrong"), "wp-content/uploads/public/files")
+	if _, err := os.Lstat(filepath.Join(docroot, "stale")); !os.IsNotExist(err) {
+		t.Fatalf("stale symlink still exists, err = %v", err)
+	}
+	if data, err := os.ReadFile(filepath.Join(docroot, "conflict")); err != nil || string(data) != "real" {
+		t.Fatalf("conflict file = %q, %v; want unchanged", data, err)
+	}
+	if _, err := os.Lstat(filepath.Join(docroot, "missing")); !os.IsNotExist(err) {
+		t.Fatalf("missing target alias was created, err = %v", err)
+	}
+	if _, err := os.Lstat(filepath.Join(docroot, "escaped")); !os.IsNotExist(err) {
+		t.Fatalf("escaped target alias was created, err = %v", err)
+	}
+}
+
+func TestRunAliasRemoteStatusAndSyncUseFinalRemoteArg(t *testing.T) {
 	stateDir := t.TempDir()
 	t.Setenv("NF_STATE_HOME", stateDir)
 	if err := state.SaveStateRecords("sites", []map[string]any{{"provider": "kinsta", "site_id": "client-kinsta", "env": "live", "url": "https://www.example.com/", "path": "/www/client/public", "ssh": map[string]any{"host": "203.0.113.10", "port": "12345", "user": "client"}}}); err != nil {
 		t.Fatalf("SaveStateRecords(sites) error = %v", err)
 	}
 	repoRoot := t.TempDir()
-	for _, dir := range []string{".git", "public/annual-report-2026/assets"} {
-		if err := os.MkdirAll(filepath.Join(repoRoot, dir), 0o755); err != nil {
-			t.Fatalf("MkdirAll(%s) error = %v", dir, err)
-		}
+	if err := os.Mkdir(filepath.Join(repoRoot, ".git"), 0o755); err != nil {
+		t.Fatalf("Mkdir(.git) error = %v", err)
 	}
-	for _, file := range []string{"public/annual-report-2026/index.html", "public/annual-report-2026/assets/app.js"} {
-		if err := os.WriteFile(filepath.Join(repoRoot, file), []byte("ok"), 0o644); err != nil {
-			t.Fatalf("WriteFile(%s) error = %v", file, err)
-		}
-	}
-	project := map[string]any{
-		"version": 1,
-		"project": map[string]any{"slug": "client"},
-		"public":  map[string]any{"paths": []any{map[string]any{"source": "public/annual-report-2026", "path": "/annual-report-2026"}}},
-		"remotes": map[string]any{"production": "client-kinsta:live"},
-	}
-	projectData, err := json.MarshalIndent(project, "", "  ")
-	if err != nil {
-		t.Fatalf("MarshalIndent(project) error = %v", err)
-	}
-	if err := os.WriteFile(filepath.Join(repoRoot, "nf.json"), append(projectData, '\n'), 0o644); err != nil {
-		t.Fatalf("WriteFile(project) error = %v", err)
-	}
-	oldwd, err := os.Getwd()
-	if err != nil {
-		t.Fatalf("Getwd() error = %v", err)
-	}
-	if err := os.Chdir(repoRoot); err != nil {
-		t.Fatalf("Chdir() error = %v", err)
-	}
-	t.Cleanup(func() { _ = os.Chdir(oldwd) })
-	oldRunRsync := runRsyncCommandFn
-	runRsyncCommandFn = func(args []string) error { t.Fatalf("runRsyncCommandFn called during dry-run: %#v", args); return nil }
-	t.Cleanup(func() { runRsyncCommandFn = oldRunRsync })
-	oldRunSSH := runSSHCommandFn
-	runSSHCommandFn = func(args []string) error { t.Fatalf("runSSHCommandFn called during dry-run: %#v", args); return nil }
-	t.Cleanup(func() { runSSHCommandFn = oldRunSSH })
-
-	stdout := captureStdout(t, func() {
-		if got := Run([]string{"public", "deploy", "production", "--dry-run"}); got != 0 {
-			t.Fatalf("Run(public deploy --dry-run) = %d, want 0", got)
-		}
-	})
-	for _, want := range []string{"Public deploy plan:", "remote:      production", "site:        client-kinsta", "env:         live", "provider:    kinsta", "mode:        dry-run", "source:    " + filepath.Join(repoRoot, "public", "annual-report-2026"), "url path:  /annual-report-2026", "remote:    /www/client/public/annual-report-2026", "files:     2", "delete:    false", "> ssh -p 12345 client@203.0.113.10 'mkdir -p /www/client/public/annual-report-2026'", "> rsync -az -e 'ssh -p 12345' " + filepath.Join(repoRoot, "public", "annual-report-2026") + string(filepath.Separator) + " client@203.0.113.10:/www/client/public/annual-report-2026/", "No remote files were changed."} {
-		if !strings.Contains(stdout, want) {
-			t.Fatalf("public deploy stdout missing %q:\n%s", want, stdout)
-		}
-	}
-}
-
-func TestRunPublicDeployDeleteRequiresYes(t *testing.T) {
-	stateDir := t.TempDir()
-	t.Setenv("NF_STATE_HOME", stateDir)
-	if err := state.SaveStateRecords("sites", []map[string]any{{"provider": "kinsta", "site_id": "client-kinsta", "env": "live", "path": "/www/client/public", "ssh": map[string]any{"host": "203.0.113.10", "port": "12345", "user": "client"}}}); err != nil {
-		t.Fatalf("SaveStateRecords(sites) error = %v", err)
-	}
-	repoRoot := t.TempDir()
-	if err := os.MkdirAll(filepath.Join(repoRoot, ".git"), 0o755); err != nil {
-		t.Fatalf("MkdirAll(.git) error = %v", err)
-	}
-	if err := os.MkdirAll(filepath.Join(repoRoot, "public/report"), 0o755); err != nil {
-		t.Fatalf("MkdirAll(public/report) error = %v", err)
-	}
-	project := map[string]any{"version": 1, "public": map[string]any{"paths": []any{map[string]any{"source": "public/report", "path": "/report", "delete": true}}}, "remotes": map[string]any{"production": "client-kinsta:live"}}
+	project := map[string]any{"version": 1, "project": map[string]any{"slug": "client"}, "aliases": map[string]any{"files": "wp-content/uploads/public/files"}, "remotes": map[string]any{"production": "client-kinsta:live"}}
 	projectData, err := json.MarshalIndent(project, "", "  ")
 	if err != nil {
 		t.Fatalf("MarshalIndent(project) error = %v", err)
@@ -8711,25 +8900,64 @@ func TestRunPublicDeployDeleteRequiresYes(t *testing.T) {
 	}
 	t.Cleanup(func() { _ = os.Chdir(oldwd) })
 
-	stderr := captureStderr(t, func() {
-		if got := Run([]string{"public", "deploy", "production"}); got != 1 {
-			t.Fatalf("Run(public deploy) = %d, want 1", got)
+	var scripts []string
+	oldRunSSHOutput := runSSHOutputFn
+	runSSHOutputFn = func(args []string) ([]byte, error) {
+		if len(args) != 5 || args[0] != "ssh" || args[2] != "12345" || args[3] != "client@203.0.113.10" {
+			t.Fatalf("runSSHOutputFn args = %#v, want kinsta ssh args", args)
+		}
+		scripts = append(scripts, args[4])
+		if strings.Contains(args[4], "\nsync_alias ") {
+			return []byte("OK /files -> wp-content/uploads/public/files\n"), nil
+		}
+		return []byte("/files\twp-content/uploads/public/files\tOK\n"), nil
+	}
+	t.Cleanup(func() { runSSHOutputFn = oldRunSSHOutput })
+
+	statusOutput := captureStdout(t, func() {
+		if got := Run([]string{"alias", "status", "production"}); got != 0 {
+			t.Fatalf("Run(alias status production) = %d, want 0", got)
 		}
 	})
-	if !strings.Contains(stderr, "public deploy with delete=true requires --yes") {
-		t.Fatalf("public deploy stderr = %q", stderr)
+	for _, want := range []string{"Alias status:", "remote:   production", "site:     client-kinsta", "env:      live", "/files", "OK"} {
+		if !strings.Contains(statusOutput, want) {
+			t.Fatalf("alias status output missing %q:\n%s", want, statusOutput)
+		}
+	}
+	syncOutput := captureStdout(t, func() {
+		if got := Run([]string{"alias", "sync", "production"}); got != 0 {
+			t.Fatalf("Run(alias sync production) = %d, want 0", got)
+		}
+	})
+	if !strings.Contains(syncOutput, "OK /files -> wp-content/uploads/public/files") {
+		t.Fatalf("alias sync output = %q", syncOutput)
+	}
+	if len(scripts) != 2 {
+		t.Fatalf("ran %d remote scripts, want 2", len(scripts))
+	}
+	for _, script := range scripts {
+		for _, want := range []string{"docroot=/www/client/public", "files", "wp-content/uploads/public/files"} {
+			if !strings.Contains(script, want) {
+				t.Fatalf("remote script missing %q:\n%s", want, script)
+			}
+		}
 	}
 }
 
-func TestRunPublicDeployRejectsReservedPath(t *testing.T) {
-	repoRoot := t.TempDir()
-	if err := os.MkdirAll(filepath.Join(repoRoot, "public/bad"), 0o755); err != nil {
-		t.Fatalf("MkdirAll(public/bad) error = %v", err)
+func runAliasTestScript(script string) (string, error) {
+	cmd := exec.Command("sh", "-lc", script)
+	output, err := cmd.CombinedOutput()
+	return string(output), err
+}
+
+func assertSymlinkTarget(t *testing.T, linkPath, want string) {
+	t.Helper()
+	got, err := os.Readlink(linkPath)
+	if err != nil {
+		t.Fatalf("Readlink(%s) error = %v", linkPath, err)
 	}
-	metadata := map[string]any{"public": map[string]any{"paths": []any{map[string]any{"source": "public/bad", "path": "/wp-content/bad"}}}}
-	_, err := loadPublicDeployPaths(repoRoot, metadata, "/www/client/public")
-	if err == nil || !strings.Contains(err.Error(), "reserved WordPress path") {
-		t.Fatalf("loadPublicDeployPaths() error = %v, want reserved path error", err)
+	if got != want {
+		t.Fatalf("Readlink(%s) = %q, want %q", linkPath, got, want)
 	}
 }
 

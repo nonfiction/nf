@@ -7,7 +7,7 @@
 * Executable entrypoint: `cmd/nf/main.go`
 * CLI dispatcher: `internal/cli.Run`
 * Primary always-visible command groups: `init`, `provider`, `target`, `site`, `domain`, `config`, `password`
-* Project-only command groups: `remote`, `theme`, `env`, `public`
+* Project-only command groups: `remote`, `plugin`, `theme`, `env`, `alias`
 
 Project-only commands appear only when the current repo has `nf.json` next to `.git`.
 

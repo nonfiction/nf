@@ -33,7 +33,7 @@ Project-context smoke checks need an `nf` project repo with `nf.json` next to `.
 go run ./cmd/nf theme help
 go run ./cmd/nf remote help
 go run ./cmd/nf env help
-go run ./cmd/nf public help
+go run ./cmd/nf alias help
 ```
 
 Provider checks call live APIs when credentials are present:
@@ -71,4 +71,4 @@ The release script writes binaries and checksums under `dist/`, stamping the ver
 
 Primary always-visible command groups are `init`, `provider`, `target`, `site`, `config`, and `password`.
 
-Project-only command groups are `remote`, `theme`, `env`, and `public`. They appear only when the current repo has `nf.json` next to `.git`.
+Project-only command groups are `remote`, `plugin`, `theme`, `env`, and `alias`. They appear only when the current repo has `nf.json` next to `.git`.

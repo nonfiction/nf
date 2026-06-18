@@ -38,7 +38,7 @@ Commands:
   remote      manage repo remotes
   env         manage the local development env
   theme       package clean artifacts and run theme tasks
-  public      deploy static public paths
+  alias       manage root-level WordPress content aliases
 
   init        initialize project metadata
   config      manage global config
@@ -91,6 +91,11 @@ nf remote add [name] [site.target:env]
 nf remote show <name>
 nf remote remove <name>
 nf remote list
+nf alias list
+nf alias status [remote]
+nf alias sync [remote]
+nf alias add <alias> <target>
+nf alias remove <alias>
 ```
 
 Standard Linode target example:
@@ -132,6 +137,7 @@ nf target add linode app1 \
 * `nf domain remove ...` retires external domain bindings after a rename or target move. Linode removal deletes each nf-managed domain vhost, script, certbot timer/service, and domain metadata, then resets cached `hostname`/`url` to the generated internal fallback when the removed domain was primary. It keeps Let's Encrypt lineages by default for rollback safety; add `--delete-cert` only after the rollback window. Kinsta removal deletes non-primary domains from the Kinsta environment and refuses to remove the current primary domain.
 * `nf site remove [site]` removes a whole Linode site and deletes its env data.
 * `nf remote add` validates an env ID against the cache, then repo remotes are stored in `nf.json` under `remotes` as `<site>.<target>:<env>` refs.
+* `nf alias ...` manages root-level webroot symlinks declared in top-level `aliases` in `nf.json`. Alias targets must be `wp-content` or descendants. `nf alias status [remote]` reports configured, missing, conflicting, and stale symlinks. `nf alias sync [remote]` creates or updates configured symlinks and prunes stale root symlinks, but never overwrites or removes real files/directories.
 * `nf site shell/wp ...` validate the cache, print the SSH or wp-cli command preview, then execute the remote command.
 * `nf env logs <remote>` resolves a configured repo remote, prints the SSH command preview, ensures `wp-content/debug.log` exists, and tails it on the remote host.
 * `nf env import <source>` imports external WordPress data into the local env after creating a safety snapshot. It never writes directly to a remote env.

@@ -114,13 +114,15 @@ func runThemeHelp() int {
 	return 0
 }
 
-func runPublicHelp() int {
-	printCommandHelp("public", []helpLine{
-		{"deploy <remote>", "deploy configured static public paths"},
-	}, helpSection{"Options", []helpLine{
-		{"--dry-run", "preview public file changes"},
-		{"--yes", "confirm deletes when configured"},
-	}})
+func runAliasHelp() int {
+	printCommandHelp("alias", []helpLine{
+		{"list, ls", "list configured root aliases"},
+		{"status [remote]", "show local or remote alias symlink status"},
+		{"sync [remote]", "sync local or remote alias symlinks"},
+		{},
+		{"add <alias> <target>", "add an alias to nf.json"},
+		{"remove, rm <alias>", "remove an alias from nf.json"},
+	})
 	return 0
 }
 
@@ -279,31 +281,77 @@ func runTheme(argv []string) int {
 	}
 }
 
-func runPublic(argv []string) int {
+func runAlias(argv []string) int {
 	if len(argv) == 0 || argv[0] == "help" || argv[0] == "--help" || argv[0] == "-h" {
-		return runPublicHelp()
+		return runAliasHelp()
 	}
-	switch argv[0] {
-	case "deploy":
-		if err := requireProjectContext("public deploy"); err != nil {
-			fmt.Fprintln(os.Stderr, err)
+	cmd := cliCommandAlias(argv[0])
+	args := argv[1:]
+	remoteName := ""
+	addAlias := ""
+	addTarget := ""
+	removeAlias := ""
+	switch cmd {
+	case "list":
+		if len(args) != 0 {
+			fmt.Fprintln(os.Stderr, "alias list takes no arguments")
 			return 1
 		}
-		remote, opts, ok := parsePublicDeployArgs(argv[1:])
-		if !ok {
+	case "status", "sync":
+		if len(args) > 1 {
+			fmt.Fprintf(os.Stderr, "alias %s takes at most one remote\n", cmd)
 			return 1
 		}
-		if strings.TrimSpace(remote) == "" {
-			selected, err := chooseProjectRemote("deploy public files to")
-			if err != nil {
-				fmt.Fprintln(os.Stderr, err)
+		if len(args) == 1 {
+			if strings.HasPrefix(args[0], "-") {
+				fmt.Fprintf(os.Stderr, "unknown alias %s flag: %s\n", cmd, args[0])
 				return 1
 			}
-			remote = selected
+			remoteName = args[0]
 		}
-		return cmdPublicDeploy(remote, opts)
+	case "add":
+		if len(args) != 2 || strings.HasPrefix(args[0], "-") || strings.HasPrefix(args[1], "-") {
+			fmt.Fprintln(os.Stderr, "alias add requires exactly one alias and one target")
+			return 1
+		}
+		addAlias = args[0]
+		addTarget = args[1]
+	case "remove":
+		if len(args) != 1 || strings.HasPrefix(args[0], "-") {
+			fmt.Fprintln(os.Stderr, "alias remove requires exactly one alias")
+			return 1
+		}
+		removeAlias = args[0]
 	default:
-		fmt.Fprintln(os.Stderr, "unsupported public command")
+		fmt.Fprintln(os.Stderr, "unsupported alias command")
+		return 1
+	}
+	if err := requireProjectContext("alias " + cmd); err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		return 1
+	}
+	root, err := discoverProjectRootOrError()
+	if err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		return 1
+	}
+	metadata, err := loadProjectMetadataOrError(root)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		return 1
+	}
+	switch cmd {
+	case "list":
+		return cmdAliasesList(metadata)
+	case "status":
+		return cmdAliasesStatusWithOptions(root, metadata, remoteName)
+	case "sync":
+		return cmdAliasesSyncWithOptions(root, metadata, remoteName)
+	case "add":
+		return cmdAliasesAdd(root, metadata, addAlias, addTarget)
+	case "remove":
+		return cmdAliasesRemove(root, metadata, removeAlias)
+	default:
 		return 1
 	}
 }
@@ -895,7 +943,7 @@ func runHelp() int {
 			helpLine{"env", "manage the local development env"},
 			helpLine{"theme", "package clean artifacts and run theme tasks"},
 			helpLine{"plugin", "manage configured WordPress plugins"},
-			helpLine{"public", "deploy static public paths"},
+			helpLine{"alias", "manage root-level WordPress content aliases"},
 			helpLine{"remote", "manage repo remotes"},
 			helpLine{"password", "derive passwords"},
 		)
@@ -917,7 +965,7 @@ func runHelp() int {
 
 func projectOnlyCommand(name string) bool {
 	switch name {
-	case "remote", "plugin", "theme", "env", "public":
+	case "remote", "plugin", "theme", "env", "alias":
 		return true
 	default:
 		return false

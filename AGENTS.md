@@ -8,7 +8,7 @@ Use this file for repo shortcuts and learned implementation gotchas. Put durable
 * Executable entrypoint: `cmd/nf/main.go`.
 * CLI dispatcher: `internal/cli.Run`.
 * Primary always-visible command groups: `init`, `provider`, `target`, `site`, `config`, `password`.
-* Project-only command groups: `remote`, `theme`, `env`, `public`. They appear only when the current repo has `nf.json` next to `.git`.
+* Project-only command groups: `remote`, `plugin`, `theme`, `env`, `alias`. They appear only when the current repo has `nf.json` next to `.git`.
 * Remote env operations live under `site` (`site list --envs`, `site show <site:env>`, `site shell`, `site wp`, `site snapshot`, `site export`), not as a separate `site env` group.
 * Do not re-add public `nf server ...`, `nf instance ...`, or top-level local env aliases (`nf up/down/logs/reset/info/shell/wp`) unless explicitly requested.
 
@@ -35,7 +35,7 @@ Project-context smoke checks need an `nf` project repo with `nf.json` next to `.
 go run ./cmd/nf theme help
 go run ./cmd/nf remote help
 go run ./cmd/nf env help
-go run ./cmd/nf public help
+go run ./cmd/nf alias help
 ```
 
 Provider checks call live APIs when credentials are present:
@@ -125,7 +125,7 @@ Local state is disposable. Provider truth is canonical remotely.
 
 ## Project-context gotchas
 
-* `nf env ...`, `nf init`, `nf theme ...`, and `nf remote ...` are repo/local commands.
+* `nf env ...`, `nf init`, `nf theme ...`, `nf plugin ...`, `nf alias ...`, and `nf remote ...` are repo/local commands.
 * Project-context commands should be hidden or rejected outside a `.git` repo when they require repo metadata.
 * `nf.json` should store project metadata, local env intent, theme tasks, artifact recipe, and repo remotes only.
 * Never store secrets, generated caches, or global provider inventory in `nf.json`.
@@ -139,8 +139,8 @@ Local state is disposable. Provider truth is canonical remotely.
 * Theme deploy releases live under `wp-content/themes/.nf-releases/<theme-slug>/`; metadata lives in `releases.json` there for rollback/history.
 * Theme deploy keeps the last 5 distinct releases and matching uploaded artifacts; older release dirs/zips and stale temp dirs are pruned after successful deploy.
 * `nf theme rollback <remote> [--dry-run]` restores the previous recorded release and does not rebuild or upload artifacts.
-* Static public artifacts live under repo `public/` by convention, but deploy only when explicitly listed in `nf.json` `public.paths` entries. Each entry requires repo-relative symlink-free `source` and URL `path`; optional `delete: true` mirrors deletes and requires `--yes` for execution. `nf public deploy <remote> [--dry-run] [--yes]` deploys these paths to the remote document root and refuses `/`, traversal, and reserved WordPress paths like `/wp-admin`, `/wp-content`, `/wp-includes`, and `/uploads`.
-* Large or remote public artifacts should be fetched into `public/` by a project task first; do not add HTTP crawling, archive source, or rsync source support unless explicitly requested.
+* `aliases` in `nf.json` maps one top-level URL name to `wp-content` or a descendant path, for example `"files": "wp-content/uploads/public/files"`. Store aliases without a leading slash; display them with one.
+* `nf alias sync [remote]` manages root-level webroot symlinks only. It creates or updates configured symlinks and prunes stale root symlinks, but never overwrites or removes real files/directories. Missing targets and targets that resolve outside `wp-content` are unsafe and make sync non-zero.
 
 ## Local env gotchas
 
