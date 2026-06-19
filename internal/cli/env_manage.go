@@ -273,16 +273,15 @@ func envWpBootstrapPreviewArgs(cfg envConfig, label string) []string {
 }
 
 func envWpThemeIsActiveArgs(cfg envConfig, slug string) []string {
-	return envWpArgs(cfg, "theme", "is-active", firstNonEmpty(slug, cfg.ThemeMountSlug, cfg.ThemeSlug, "theme"))
+	return envWpArgs(cfg, "theme", "is-active", firstNonEmpty(slug, activeEnvThemeSlug(cfg)))
 }
 
 func envWpThemeIsInstalledArgs(cfg envConfig, slug string) []string {
-	return envWpArgs(cfg, "theme", "is-installed", firstNonEmpty(slug, cfg.ThemeMountSlug, cfg.ThemeSlug, "theme"))
+	return envWpArgs(cfg, "theme", "is-installed", firstNonEmpty(slug, activeEnvThemeSlug(cfg)))
 }
 
 func envWpCoreInstallArgs(cfg envConfig) []string {
-	slug := firstNonEmpty(cfg.ThemeMountSlug, cfg.ThemeSlug, "theme")
-	return append(envWordpressExecArgs(cfg, "sh", "-lc"), `wp core install --url="$WP_URL" --title="$WP_TITLE" --admin_user="$ADMIN_USER" --admin_password="$ADMIN_PASSWORD" --admin_email="$ADMIN_EMAIL" --skip-email && wp theme activate `+slug)
+	return append(envWordpressExecArgs(cfg, "sh", "-lc"), `wp core install --url="$WP_URL" --title="$WP_TITLE" --admin_user="$ADMIN_USER" --admin_password="$ADMIN_PASSWORD" --admin_email="$ADMIN_EMAIL" --skip-email`)
 }
 
 func envWpMailpitSMTPArgs(cfg envConfig) []string {
@@ -329,7 +328,7 @@ done`, shellQuoteArg(envRepoPluginSlugList(cfg)), dockerUser, dockerUser))
 }
 
 func envWpThemeActivateArgs(cfg envConfig, slug string) []string {
-	return envWpArgs(cfg, "theme", "activate", firstNonEmpty(slug, cfg.ThemeMountSlug, cfg.ThemeSlug, "theme"))
+	return envWpArgs(cfg, "theme", "activate", firstNonEmpty(slug, activeEnvThemeSlug(cfg)))
 }
 
 func envThemeArchivePaths(cfg envConfig, sourcePath string) (string, string) {

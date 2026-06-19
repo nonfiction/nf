@@ -16,7 +16,7 @@ func runInitHelp() int {
 	fmt.Println("\nFlags:")
 	for _, line := range []string{
 		"--project-slug string   project slug (defaults to the current git root name)",
-		"--theme-slug string     mounted theme slug",
+		"--theme-slug string     WordPress theme slug",
 		"--theme-source string   theme source directory",
 		"--type string           project type (default wordpress-theme)",
 		"--force                 overwrite nf.json",
@@ -88,13 +88,36 @@ func runPluginHelp() int {
 
 func runThemeHelp() int {
 	lines := []helpLine{
+		{"list, ls", "list configured WordPress themes"},
+		{"status [remote]", "show configured WordPress theme status"},
+		{"diff [remote]", "show configured WordPress theme drift"},
+		{},
+		{"add <theme>", "add a WordPress theme to nf.json"},
+		{"activate <theme>", "move a configured theme to the top of wordpress.themes"},
+		{"remove, rm <theme>", "remove a WordPress theme from nf.json"},
+		{},
+		{"install [remote]", "install configured WordPress themes"},
+		{},
 		{"tasks", "list configured theme tasks"},
 		{"package", "package a clean theme artifact"},
 		{},
 		{"deploy <remote>", "deploy a packaged theme release"},
 		{"rollback <remote>", "roll back to the previous theme release"},
 	}
-	printCommandHelp("theme", lines, helpSection{"Package Options", []helpLine{
+	printCommandHelp("theme", lines, helpSection{"Add Options", []helpLine{
+		{"--source <source>", "wordpress.org, repo, cache, URL/path, or env-var zip"},
+		{"--path <path>", "repo theme source path (default theme with --source repo)"},
+		{"--auto-update", "enable WordPress auto-updates for this non-repo theme"},
+		{"--note <note>", "store an install note for humans"},
+	}}, helpSection{"Install Options", []helpLine{
+		{"--dry-run", "preview a remote install"},
+		{"--yes", "skip remote install confirmation"},
+	}}, helpSection{"Cache Commands", []helpLine{
+		{"cache add <theme> <zip>", "add a theme zip to the local nf theme cache"},
+		{"cache save <theme>", "save an installed local theme to the local nf theme cache"},
+		{"cache list, cache ls", "list cached WordPress theme zips"},
+		{"cache show <theme>", "show local theme cache details"},
+	}}, helpSection{"Package Options", []helpLine{
 		{"--dry-run", "show package actions without writing a zip"},
 		{"--source <path>", "theme source directory"},
 		{"--output <path>", "package output path"},
@@ -191,6 +214,166 @@ func runTheme(argv []string) int {
 		return runThemeHelp()
 	}
 	switch argv[0] {
+	case "list", "ls":
+		if len(argv) != 1 {
+			fmt.Fprintln(os.Stderr, "theme list takes no arguments")
+			return 1
+		}
+		if err := requireProjectContext("theme list"); err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			return 1
+		}
+		root, err := discoverProjectRootOrError()
+		if err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			return 1
+		}
+		metadata, err := loadProjectMetadataOrError(root)
+		if err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			return 1
+		}
+		return cmdEnvThemesList(metadata)
+	case "status", "diff":
+		cmd := argv[0]
+		if len(argv) > 2 {
+			fmt.Fprintf(os.Stderr, "theme %s takes at most one remote\n", cmd)
+			return 1
+		}
+		remoteName := ""
+		if len(argv) == 2 {
+			if strings.HasPrefix(argv[1], "-") {
+				fmt.Fprintf(os.Stderr, "unknown theme %s flag: %s\n", cmd, argv[1])
+				return 1
+			}
+			remoteName = argv[1]
+		}
+		if err := requireProjectContext("theme " + cmd); err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			return 1
+		}
+		root, err := discoverProjectRootOrError()
+		if err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			return 1
+		}
+		metadata, err := loadProjectMetadataOrError(root)
+		if err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			return 1
+		}
+		if cmd == "status" {
+			return cmdEnvThemesStatusWithOptions(root, metadata, remoteName)
+		}
+		return cmdEnvThemesDiffWithOptions(root, metadata, remoteName)
+	case "add":
+		addOpts, ok := parseEnvThemeAddArgs(argv[1:])
+		if !ok {
+			return 1
+		}
+		if err := requireProjectContext("theme add"); err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			return 1
+		}
+		root, err := discoverProjectRootOrError()
+		if err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			return 1
+		}
+		metadata, err := loadProjectMetadataOrError(root)
+		if err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			return 1
+		}
+		return cmdEnvThemesAdd(root, metadata, addOpts)
+	case "activate":
+		activateSlug, ok := parseEnvThemeSingleSlugArgs("activate", argv[1:])
+		if !ok {
+			return 1
+		}
+		if err := requireProjectContext("theme activate"); err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			return 1
+		}
+		root, err := discoverProjectRootOrError()
+		if err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			return 1
+		}
+		metadata, err := loadProjectMetadataOrError(root)
+		if err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			return 1
+		}
+		return cmdEnvThemesActivate(root, metadata, activateSlug)
+	case "remove", "rm":
+		removeSlug, ok := parseEnvThemeRemoveArgs(argv[1:])
+		if !ok {
+			return 1
+		}
+		if err := requireProjectContext("theme remove"); err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			return 1
+		}
+		root, err := discoverProjectRootOrError()
+		if err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			return 1
+		}
+		metadata, err := loadProjectMetadataOrError(root)
+		if err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			return 1
+		}
+		return cmdEnvThemesRemove(root, metadata, removeSlug)
+	case "install":
+		installOpts, ok := parseEnvThemeInstallArgs(argv[1:])
+		if !ok {
+			return 1
+		}
+		if err := requireProjectContext("theme install"); err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			return 1
+		}
+		root, err := discoverProjectRootOrError()
+		if err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			return 1
+		}
+		metadata, err := loadProjectMetadataOrError(root)
+		if err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			return 1
+		}
+		return cmdEnvThemesInstallWithOptions(root, metadata, installOpts)
+	case "cache":
+		cacheOpts, ok := parseEnvThemeCacheArgs(argv[1:])
+		if !ok {
+			return 1
+		}
+		if err := requireProjectContext("theme cache"); err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			return 1
+		}
+		root, err := discoverProjectRootOrError()
+		if err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			return 1
+		}
+		metadata, err := loadProjectMetadataOrError(root)
+		if err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			return 1
+		}
+		if cacheOpts.Command != "save" {
+			return cmdEnvThemesCache(envConfig{}, cacheOpts)
+		}
+		cfg, ok := loadEnvConfig(root, metadata)
+		if !ok {
+			fmt.Fprintln(os.Stderr, "Missing env metadata in nf.json. Run nf env up first.")
+			return 1
+		}
+		return cmdEnvThemesCache(cfg, cacheOpts)
 	case "tasks":
 		if len(argv) != 1 {
 			fmt.Fprintln(os.Stderr, "theme tasks takes no arguments")
@@ -482,6 +665,10 @@ func runEnv(argv []string) int {
 	}
 	metadata, err := loadProjectMetadataOrError(root)
 	if err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		return 1
+	}
+	if _, err := loadWordPressThemeSpecs(metadata); err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		return 1
 	}
@@ -831,6 +1018,159 @@ func parseEnvPluginCacheArgs(args []string) (envPluginCacheOptions, bool) {
 		}
 	default:
 		fmt.Fprintln(os.Stderr, "unsupported plugin cache command")
+		return opts, false
+	}
+	return opts, true
+}
+
+func parseEnvThemeSingleSlugArgs(command string, args []string) (string, bool) {
+	if len(args) != 1 {
+		fmt.Fprintf(os.Stderr, "theme %s requires exactly one theme slug\n", command)
+		return "", false
+	}
+	slug := strings.TrimSpace(args[0])
+	if slug == "" || strings.HasPrefix(slug, "-") {
+		fmt.Fprintf(os.Stderr, "theme %s requires exactly one theme slug\n", command)
+		return "", false
+	}
+	return slug, true
+}
+
+func parseEnvThemeRemoveArgs(args []string) (string, bool) {
+	return parseEnvThemeSingleSlugArgs("remove", args)
+}
+
+func parseEnvThemeAddArgs(args []string) (envThemeAddOptions, bool) {
+	var opts envThemeAddOptions
+	positionals := make([]string, 0, 1)
+	for i := 0; i < len(args); i++ {
+		arg := args[i]
+		switch arg {
+		case "--source":
+			if i+1 >= len(args) {
+				fmt.Fprintln(os.Stderr, "theme add --source requires a value")
+				return opts, false
+			}
+			i++
+			opts.Source = strings.TrimSpace(args[i])
+			if opts.Source == "" {
+				fmt.Fprintln(os.Stderr, "theme add --source must not be empty")
+				return opts, false
+			}
+		case "--path":
+			if i+1 >= len(args) {
+				fmt.Fprintln(os.Stderr, "theme add --path requires a value")
+				return opts, false
+			}
+			i++
+			opts.Path = strings.TrimSpace(args[i])
+			if opts.Path == "" {
+				fmt.Fprintln(os.Stderr, "theme add --path must not be empty")
+				return opts, false
+			}
+		case "--auto-update":
+			opts.AutoUpdate = true
+		case "--note":
+			if i+1 >= len(args) {
+				fmt.Fprintln(os.Stderr, "theme add --note requires a value")
+				return opts, false
+			}
+			i++
+			opts.Note = strings.TrimSpace(args[i])
+			if opts.Note == "" {
+				fmt.Fprintln(os.Stderr, "theme add --note must not be empty")
+				return opts, false
+			}
+		default:
+			if strings.HasPrefix(arg, "-") {
+				fmt.Fprintf(os.Stderr, "unknown theme add flag: %s\n", arg)
+				return opts, false
+			}
+			positionals = append(positionals, arg)
+		}
+	}
+	if len(positionals) != 1 {
+		fmt.Fprintln(os.Stderr, "theme add requires exactly one theme slug")
+		return opts, false
+	}
+	opts.Slug = strings.TrimSpace(positionals[0])
+	if opts.Slug == "" {
+		fmt.Fprintln(os.Stderr, "theme add theme slug must not be empty")
+		return opts, false
+	}
+	if strings.TrimSpace(opts.Source) == "" {
+		opts.Source = "wordpress.org"
+	}
+	if strings.EqualFold(strings.TrimSpace(opts.Source), wordpressThemeRepoSource) && strings.TrimSpace(opts.Path) == "" {
+		opts.Path = "theme"
+	}
+	return opts, true
+}
+
+func parseEnvThemeInstallArgs(args []string) (envThemeInstallOptions, bool) {
+	var opts envThemeInstallOptions
+	positionals := make([]string, 0, 1)
+	for _, arg := range args {
+		switch arg {
+		case "--dry-run":
+			opts.DryRun = true
+		case "--yes":
+			opts.Yes = true
+		default:
+			if strings.HasPrefix(arg, "-") {
+				fmt.Fprintf(os.Stderr, "unknown theme install flag: %s\n", arg)
+				return opts, false
+			}
+			positionals = append(positionals, arg)
+		}
+	}
+	if len(positionals) > 1 {
+		fmt.Fprintln(os.Stderr, "theme install takes at most one remote")
+		return opts, false
+	}
+	if len(positionals) == 1 {
+		opts.RemoteName = positionals[0]
+	}
+	return opts, true
+}
+
+func parseEnvThemeCacheArgs(args []string) (envThemeCacheOptions, bool) {
+	var opts envThemeCacheOptions
+	if len(args) == 0 {
+		fmt.Fprintln(os.Stderr, "theme cache requires a command")
+		return opts, false
+	}
+	cmd := cliCommandAlias(args[0])
+	opts.Command = cmd
+	switch cmd {
+	case "add":
+		if len(args) != 3 {
+			fmt.Fprintln(os.Stderr, "theme cache add requires a theme slug and zip path")
+			return opts, false
+		}
+		opts.Slug = strings.TrimSpace(args[1])
+		opts.Source = strings.TrimSpace(args[2])
+		if opts.Slug == "" || opts.Source == "" || strings.HasPrefix(opts.Slug, "-") || strings.HasPrefix(opts.Source, "-") {
+			fmt.Fprintln(os.Stderr, "theme cache add requires a theme slug and zip path")
+			return opts, false
+		}
+	case "save", "show":
+		if len(args) != 2 {
+			fmt.Fprintf(os.Stderr, "theme cache %s requires exactly one theme slug\n", cmd)
+			return opts, false
+		}
+		opts.Slug = strings.TrimSpace(args[1])
+		if opts.Slug == "" || strings.HasPrefix(opts.Slug, "-") {
+			fmt.Fprintf(os.Stderr, "theme cache %s requires exactly one theme slug\n", cmd)
+			return opts, false
+		}
+	case "list":
+		if len(args) != 1 {
+			fmt.Fprintln(os.Stderr, "theme cache list takes no arguments")
+			return opts, false
+		}
+	default:
+		fmt.Fprintln(os.Stderr, "unsupported theme cache command")
 		return opts, false
 	}
 	return opts, true

@@ -42,7 +42,9 @@ func (c envCommandRunner) ensureUpInstalledActive(envDir string) error {
 		if err := runCommandSpec(execSpec{Dir: envDir, Args: envWpCoreInstallArgs(c.cfg)}); err != nil {
 			return err
 		}
-		return nil
+	}
+	if err := ensureEnvThemesInstalledActive(c.cfg); err != nil {
+		return err
 	}
 	if err := runCommandSpecQuiet(execSpec{Dir: envDir, Args: envWpThemeIsActiveArgs(c.cfg, "")}); err != nil {
 		return runCommandSpec(execSpec{Dir: envDir, Args: envWpThemeActivateArgs(c.cfg, "")})
@@ -130,18 +132,18 @@ func (c envCommandRunner) Render() string {
 	switch c.name {
 	case "up":
 		if c.rebuild {
-			return "docker compose build; docker compose up -d; configure Mailpit SMTP; install WordPress if missing and ensure the mounted theme is active"
+			return "docker compose build; docker compose up -d; configure Mailpit SMTP; install WordPress if missing and ensure configured themes are installed and active"
 		}
-		return "docker compose up -d; configure Mailpit SMTP; install WordPress if missing and ensure the mounted theme is active"
+		return "docker compose up -d; configure Mailpit SMTP; install WordPress if missing and ensure configured themes are installed and active"
 	case "down":
 		return "docker compose down"
 	case "logs":
 		return "docker compose logs -f " + c.cfg.WordpressService
 	case "reset":
 		if c.rebuild {
-			return "docker compose down -v --remove-orphans; nuke env data and recreate it with docker compose build, docker compose up -d, configure Mailpit SMTP, install WordPress if missing, and ensure the mounted theme is active"
+			return "docker compose down -v --remove-orphans; nuke env data and recreate it with docker compose build, docker compose up -d, configure Mailpit SMTP, install WordPress if missing, and ensure configured themes are installed and active"
 		}
-		return "docker compose down -v --remove-orphans; nuke env data and recreate it with docker compose up -d, configure Mailpit SMTP, install WordPress if missing, and ensure the mounted theme is active"
+		return "docker compose down -v --remove-orphans; nuke env data and recreate it with docker compose up -d, configure Mailpit SMTP, install WordPress if missing, and ensure configured themes are installed and active"
 	case "shell":
 		return "docker compose exec --user " + firstNonEmpty(c.cfg.DockerUser, defaultDockerUser) + " " + firstNonEmpty(c.cfg.WordpressService, "wordpress") + " bash"
 	case "wp":
@@ -370,7 +372,7 @@ func envFinalizeLocalRestore(cfg envConfig, sourceURL string) error {
 			return err
 		}
 	}
-	themeSlug := firstNonEmpty(cfg.ThemeMountSlug, cfg.ThemeSlug, "theme")
+	themeSlug := activeEnvThemeSlug(cfg)
 	if err := runCommandSpecQuiet(execSpec{Dir: localEnvDir(cfg), Args: envWpThemeIsInstalledArgs(cfg, themeSlug)}); err == nil {
 		if err := runCommandSpec(execSpec{Dir: localEnvDir(cfg), Args: envWpThemeActivateArgs(cfg, themeSlug)}); err != nil {
 			return err

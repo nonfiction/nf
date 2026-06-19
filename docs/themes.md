@@ -2,6 +2,117 @@
 
 Theme commands run from an `nf` project repo with `nf.json` next to `.git`.
 
+Configured WordPress themes live in `nf.json` under `wordpress.themes`. The list is an env bootstrap checklist, must include at least one theme, and the first theme listed is the theme nf activates.
+
+## Configure Themes
+
+```json
+{
+  "wordpress": {
+    "themes": [
+      {
+        "slug": "client",
+        "source": "repo",
+        "path": "theme"
+      },
+      "twentytwentyfive",
+      "twentytwentyfour",
+      "twentytwentythree",
+      {
+        "slug": "paid-parent-theme",
+        "source": "cache",
+        "auto_update": false,
+        "note": "Vendor zip is cached locally"
+      }
+    ]
+  }
+}
+```
+
+String entries install from wordpress.org and default `auto_update` to `false`. Object entries require `slug`, may set `source` to `wordpress.org`, `cache`, `repo`, a zip URL/path, or an env-var-backed source, and may set `auto_update` for non-repo themes.
+
+Use `source: "repo"` for the one theme directory stored in the project repo. A repo theme defaults to `path: "theme"`, is bind mounted into the local env as `/var/www/html/wp-content/themes/<slug>`, and is the theme packaged by `nf theme package` and `nf theme deploy`. A project may have zero repo themes when the active theme comes from wordpress.org, cache, or another install source. Only one repo theme is allowed.
+
+Use `source: "cache"` for paid/private themes whose installable zip is kept in nf's local theme cache under `$NF_DATA_HOME/themes/<slug>/<slug>.zip`. This is explicit; nf does not silently fall back from wordpress.org to the cache.
+
+For a parent theme plus custom child theme, put the child repo theme first so it is active, then list the parent theme after it.
+
+## Edit the Theme List
+
+```sh
+nf theme list
+nf theme add twentytwentyfive
+nf theme add paid-parent-theme --source cache
+nf theme add client --source repo
+nf theme activate client
+nf theme remove twentytwentyfive
+```
+
+`nf theme add <theme>` appends a theme to `nf.json` without installing it. Add `--source <source>`, `--path <path>`, `--auto-update`, or `--note <note>` when defaults are not enough. With `--source repo`, `--path` defaults to `theme` and the directory must already exist.
+
+`nf theme activate <theme>` moves an existing configured theme to the top of `wordpress.themes`. It updates desired state only; run `nf theme install`, `nf env up`, or a later deploy/sync path to apply the active theme in WordPress.
+
+`nf theme remove <theme>` removes a theme from `nf.json` without uninstalling it. It refuses to remove the last configured theme.
+
+## Manage the Local Theme Cache
+
+```sh
+nf theme cache add paid-parent-theme ~/Downloads/paid-parent-theme.zip
+nf theme cache save paid-parent-theme
+nf theme cache list
+nf theme cache show paid-parent-theme
+```
+
+`nf theme cache add <theme> <zip>` copies an existing zip into `$NF_DATA_HOME/themes/<slug>/<slug>.zip`.
+
+`nf theme cache save <theme>` archives the theme currently installed in the local WordPress env and stores it as the cached zip. Use this as a local recovery aid for paid/manual themes that were installed through WordPress admin or vendor updaters.
+
+`nf theme cache list` and `nf theme cache show <theme>` inspect the local cache. Cached zips are local machine state, not project metadata, and are not committed.
+
+## Compare Config to WordPress State
+
+Local env:
+
+```sh
+nf theme status
+nf theme diff
+```
+
+Configured remote:
+
+```sh
+nf theme status production
+nf theme diff production
+```
+
+`nf theme status [remote]` compares `nf.json` against the local env or configured remote and reports whether each configured theme is installed, active, and auto-update enabled.
+
+`nf theme diff [remote]` reports the install/activate/auto-update changes needed to make the local env or remote match `nf.json`, including installed themes that are not configured. It does not mutate anything. It exits `0` when configured themes match and no extras are installed, and `2` when drift exists.
+
+## Install Configured Themes
+
+Local env:
+
+```sh
+nf theme install
+```
+
+Remote dry-run:
+
+```sh
+nf theme install production --dry-run
+```
+
+Remote install:
+
+```sh
+nf theme install production --yes
+```
+
+Local installs use the configured repo theme bind mount and cached zips when requested. Remote installs run WP-CLI on the remote host. URL sources must be reachable from that host; local zip, cache, and repo sources are uploaded to a temporary remote directory before install and cleaned up afterward.
+
+Theme install is idempotent: it installs only missing configured themes, activates the first listed theme when inactive, and enables native WordPress auto-updates for non-repo themes only when requested. It does not update, remove, pin, disable auto-updates, or manage licenses.
+
 ## Run Theme Tasks
 
 ```sh
@@ -37,12 +148,12 @@ nf theme package
 
 If `package.json` has a `build` script, packaging requires built files under `dist/` or `assets/dist/` and fails clearly when they are missing. Development-only files such as `node_modules`, editor config, PHP-CS-Fixer/PHPCS/PHPStan/Psalm config, npm manifests and lockfiles, and common frontend tooling config are excluded from the artifact.
 
-The zip root remains `wordpress.theme_slug`, not necessarily the local `wordpress.theme_path` basename.
+The zip root is the configured repo theme slug, not necessarily the local repo theme path basename.
 
 If `artifact.path` contains `{version}`, `nf` resolves it from:
 
-1. `theme/style.css` `Version:`
-2. `theme/package.json` `version`
+1. the repo theme `style.css` `Version:`
+2. the repo theme `package.json` `version`
 
 ## Deploy a Theme Release
 
@@ -60,7 +171,7 @@ Deploy:
 nf theme deploy production
 ```
 
-`nf theme deploy <remote>` builds the same theme artifact as `nf theme package`, uploads it to the selected remote env, extracts it under `wp-content/themes/.nf-releases/<theme-slug>/`, copies the release into the active theme directory, activates the configured theme slug with wp-cli, and records release metadata.
+`nf theme deploy <remote>` builds the same repo theme artifact as `nf theme package`, installs any configured non-repo themes first, uploads the repo theme release to the selected remote env, extracts it under `wp-content/themes/.nf-releases/<repo-theme-slug>/`, copies the release into `wp-content/themes/<repo-theme-slug>/`, activates the first configured theme with wp-cli, and records release metadata.
 
 Theme deploy keeps the last 5 releases and matching uploaded zips, so release storage does not grow indefinitely. It does not require manual WordPress admin zip upload and supersedes direct in-place source rsync deploys.
 
@@ -78,4 +189,4 @@ Roll back:
 nf theme rollback production
 ```
 
-`nf theme rollback <remote>` switches the active theme directory back to the previous recorded release and activates the configured theme slug again. It uses remote `releases.json`; it does not rebuild or upload artifacts.
+`nf theme rollback <remote>` switches the repo theme directory back to the previous recorded release and activates the first configured theme again. It uses remote `releases.json`; it does not rebuild or upload artifacts.

@@ -35,7 +35,14 @@ type envConfig struct {
 	AdminUser        string
 	AdminEmail       string
 	AdminPassword    string
+	Themes           []wordpressThemeSpec
+	RepoThemeMounts  []envThemeMount
 	RepoPluginMounts []envPluginMount
+}
+
+type envThemeMount struct {
+	Slug string
+	Host string
 }
 
 type envPluginMount struct {

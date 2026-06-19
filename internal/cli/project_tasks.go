@@ -244,11 +244,34 @@ func loadEnvConfig(root string, metadata map[string]any) (envConfig, bool) {
 		return envConfig{}, false
 	}
 	projectSlug := firstNonEmpty(mapStringAtPath(metadata, "project", "slug"), "project")
-	themePath := firstNonEmpty(mapStringAtPath(metadata, "wordpress", "theme_path"), "theme")
-	if !filepath.IsAbs(themePath) {
-		themePath = filepath.Join(root, themePath)
-	}
 	wordpress := mapMapAtPath(metadata, "wordpress")
+	_, themeListConfigured := wordpress["themes"]
+	themes, err := loadWordPressThemeSpecs(metadata)
+	if err != nil {
+		return envConfig{}, false
+	}
+	activeThemeSlug := activeWordPressThemeSlug(themes)
+	legacyThemePath := firstNonEmpty(mapStringAtPath(metadata, "wordpress", "theme_path"), "theme")
+	themePath := ""
+	if repoTheme, ok := repoWordPressThemeSpec(themes); ok {
+		if sourceDir, err := repoThemeSourceDir(root, repoTheme); err == nil {
+			themePath = sourceDir
+		}
+	}
+	if themePath == "" && !themeListConfigured {
+		themePath = legacyThemePath
+		if !filepath.IsAbs(themePath) {
+			themePath = filepath.Join(root, themePath)
+		}
+	}
+	themeMountSlug := activeThemeSlug
+	if themeMountSlug == "" && !themeListConfigured {
+		themeMountSlug = firstNonEmpty(mapStringAtPath(raw, "theme_mount_slug"), "theme")
+	}
+	themeSlug := activeThemeSlug
+	if themeSlug == "" && !themeListConfigured {
+		themeSlug = firstNonEmpty(recordValueString(wordpress["theme_slug"]), projectSlug, "theme")
+	}
 	return envConfig{
 		ProjectSlug:      projectSlug,
 		PasswordVersion:  projectPasswordVersion(metadata),
@@ -261,9 +284,11 @@ func loadEnvConfig(root string, metadata map[string]any) (envConfig, bool) {
 		Compose:          firstNonEmpty(mapStringAtPath(raw, "compose"), "docker compose"),
 		WordpressService: firstNonEmpty(mapStringAtPath(raw, "wordpress_service"), "wordpress"),
 		CliService:       firstNonEmpty(mapStringAtPath(raw, "cli_service"), "cli"),
-		ThemeMountSlug:   firstNonEmpty(mapStringAtPath(raw, "theme_mount_slug"), "theme"),
+		ThemeMountSlug:   themeMountSlug,
 		UploadsPath:      firstNonEmpty(mapStringAtPath(raw, "uploads_path"), "uploads"),
-		ThemeSlug:        firstNonEmpty(recordValueString(wordpress["theme_slug"]), projectSlug, "theme"),
+		ThemeSlug:        themeSlug,
+		Themes:           themes,
+		RepoThemeMounts:  repoThemeMountsFromMetadata(root, metadata),
 		RepoPluginMounts: repoPluginMountsFromMetadata(root, metadata),
 	}, true
 }
@@ -344,7 +369,7 @@ func parseEnvPort(value any) (int, bool) {
 
 func defaultEnvCommands(cfg envConfig) map[string]projectCommand {
 	return map[string]projectCommand{
-		"up":    {Description: "Start the managed env, install WordPress if missing, and ensure the mounted theme is active", Run: envCommandRunner{name: "up", cfg: cfg}},
+		"up":    {Description: "Start the managed env, install WordPress if missing, and ensure configured themes are active", Run: envCommandRunner{name: "up", cfg: cfg}},
 		"down":  {Description: "Stop the managed env", Run: envCommandRunner{name: "down", cfg: cfg}},
 		"logs":  {Description: "Tail WordPress logs", Run: envCommandRunner{name: "logs", cfg: cfg}},
 		"reset": {Description: "Destroy and recreate the local env", Run: envCommandRunner{name: "reset", cfg: cfg}},

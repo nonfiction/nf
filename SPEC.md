@@ -463,8 +463,21 @@ Example shape:
   },
   "wordpress": {
     "deploy_unit": "theme",
-    "theme_slug": "client",
-    "theme_path": "theme",
+    "themes": [
+      {
+        "slug": "client",
+        "source": "repo",
+        "path": "theme"
+      },
+      "twentytwentyfive",
+      "twentytwentyfour",
+      "twentytwentythree",
+      {
+        "slug": "paid-parent-theme",
+        "source": "cache",
+        "auto_update": false
+      }
+    ],
     "plugins": [
       "stream",
       "wp-crontrol",
@@ -480,7 +493,6 @@ Example shape:
     "compose": "docker compose",
     "wordpress_service": "wordpress",
     "cli_service": "cli",
-    "theme_mount_slug": "theme",
     "uploads_path": "uploads"
   },
   "aliases": {
@@ -515,10 +527,10 @@ Packaging rules:
 * it does not run npm or asset builds first
 * if `package.json` has a `build` script, packaging requires built files under `dist/` or `assets/dist/` and fails clearly when they are missing
 * package archives exclude obvious development-only files such as `node_modules`, editor config, formatter/linter/static-analysis config, npm manifests and lockfiles, common frontend tooling config, and Composer manifest files after staging
-* package archives use `wordpress.theme_slug` as the zip root directory, even when source files live in `wordpress.theme_path`
+* package archives use the configured repo theme slug as the zip root directory, even when source files live in a differently named repo theme path
 * deploy artifacts must include built files when needed, such as `vendor/autoload.php`, `dist/`, or `assets/dist/`
 * `artifact.path` may contain `{version}`
-* `{version}` resolves from `theme/style.css` `Version:` first, then `theme/package.json` `version`
+* `{version}` resolves from the repo theme `style.css` `Version:` first, then the repo theme `package.json` `version`
 * fail clearly if neither version source exists
 
 Deploy rules:
@@ -526,15 +538,16 @@ Deploy rules:
 * deploy UX stays `nf theme deploy <remote> [--dry-run]`
 * deploy is a one-command packaged release deploy, not manual WordPress zip upload
 * deploy uses the same packaging behavior as `nf theme package`; it stages Composer production dependencies but does not run npm or asset builds automatically
+* deploy installs configured non-repo themes before uploading the repo theme release when needed for parent-theme dependencies
 * direct in-place source rsync to the active theme directory is superseded
-* remote releases live under `wp-content/themes/.nf-releases/<theme-slug>/<release-id>/`
-* active theme files live at `wp-content/themes/<theme-slug>/`
+* remote releases live under `wp-content/themes/.nf-releases/<repo-theme-slug>/<release-id>/`
+* active repo theme files live at `wp-content/themes/<repo-theme-slug>/`
 * current deploy copies the fully extracted release into the active theme directory instead of making it a symlink, to keep Kinsta/Linode host and WordPress behavior boring
-* release metadata is recorded at `wp-content/themes/.nf-releases/<theme-slug>/releases.json` without secrets
+* release metadata is recorded at `wp-content/themes/.nf-releases/<repo-theme-slug>/releases.json` without secrets
 * deploy prunes remote release storage after success, keeping the last 5 distinct releases and their matching uploaded artifacts
-* deploy also removes stale extraction/temp release dirs under `.nf-releases/<theme-slug>/`
+* deploy also removes stale extraction/temp release dirs under `.nf-releases/<repo-theme-slug>/`
 * rollback UX is `nf theme rollback <remote> [--dry-run]`
-* rollback selects the previous distinct `release_id` from remote `releases.json`, copies that release back into the active theme directory, runs wp-cli activation, and appends a rollback metadata entry
+* rollback selects the previous distinct `release_id` from remote `releases.json`, copies that release back into the repo theme directory, runs wp-cli activation for the first configured theme, and appends a rollback metadata entry
 * rollback does not rebuild or upload artifacts
 
 ## Root aliases
@@ -581,6 +594,16 @@ Current built-ins:
 * `shell`
 * `sh`
 * `wp`
+* `theme list`
+* `theme add <theme> [--source <source>] [--path <path>] [--auto-update] [--note <note>]`
+* `theme remove <theme>`
+* `theme status [remote]`
+* `theme diff [remote]`
+* `theme install [remote] [--dry-run] [--yes]`
+* `theme cache add <theme> <zip>`
+* `theme cache save <theme>`
+* `theme cache list`
+* `theme cache show <theme>`
 * `plugin list`
 * `plugin add <plugin> [--source <source>] [--manual] [--note <note>] [--no-activate] [--no-auto-update]`
 * `plugin remove <plugin>`
@@ -613,6 +636,24 @@ Rules:
 * `nf env logs <remote>` resolves a repo remote and tails remote `wp-content/debug.log` over SSH after creating the file if needed
 * `nf env password [remote] [--wp|--db|--basicauth]` prints only the selected local or remote env password; `--wp` is the default
 * `nf site password [site|env] [--wp|--db|--basicauth]` accepts env refs for `--db`; site refs are required for `--wp` and `--basicauth`
+* `wordpress.themes` is a non-empty bootstrap checklist, not a full theme lifecycle manager
+* the first `wordpress.themes` entry is the theme nf activates
+* string theme entries install from wordpress.org and default auto-updates to false
+* object theme entries require `slug`, support `source`, `path`, `note`, and `auto_update`; `path` is only valid for repo themes
+* theme `source` may be `wordpress.org`, `repo`, `cache`, a zip URL/path, or an env-var-backed value such as `$NF_THEME_PARENT_ZIP`
+* new project metadata starts with the repo theme first, followed by WordPress 7.0 bundled wordpress.org themes `twentytwentyfive`, `twentytwentyfour`, and `twentytwentythree`
+* `wordpress.themes` may contain zero repo themes when the active theme is installed from wordpress.org, cache, or another source; it may contain at most one repo theme, and a repo theme defaults to `path: "theme"`
+* local envs bind mount the configured repo theme into `wp-content/themes/<slug>` using the real theme slug, never a generic mount slot
+* `nf theme add <theme>` appends to `wordpress.themes` in `nf.json`, creates the array if missing, rejects duplicate slugs, and does not install anything; `--source repo` requires an existing repo path and does not scaffold files
+* `nf theme activate <theme>` moves an existing configured theme to the top of `wordpress.themes`; it mutates desired state only and does not run WP-CLI directly
+* `nf theme remove <theme>` removes a configured theme from `nf.json`, rejects missing slugs, refuses to remove the last configured theme, and does not uninstall anything
+* `nf theme status [remote]` compares configured themes against local or remote WordPress state and reports installed, active, and auto-update status
+* `nf theme diff [remote]` reports needed install/activate/auto-update changes for configured themes and installed themes that are not configured in `nf.json`; it mutates nothing, exits 0 when configured themes match and no extras are installed, and exits 2 when drift exists
+* `nf theme install` with no remote targets the local env
+* `nf theme install <remote>` validates the repo remote/cache, prints a remote theme plan, and asks for yes/no confirmation unless `--yes` is passed
+* `nf theme install <remote> --dry-run` previews only and does not run SSH
+* remote theme installs run WP-CLI on the remote host; URL sources must be reachable from that host, and local zip/cache/repo sources are uploaded to a temporary remote directory before install and cleaned up afterward
+* theme install is idempotent: it installs only missing configured themes, activates only the first configured theme when inactive, and enables native WordPress auto-updates only for non-repo themes that request it; it does not update, remove, pin, disable auto-updates, or manage licenses
 * `wordpress.plugins` is a bootstrap checklist, not a full plugin lifecycle manager
 * string plugin entries install from wordpress.org, activate, and enable auto-updates by default
 * object plugin entries require `slug`, support `source`, `install`, `note`, and `auto_update`, and default `install`, `activate`, and `auto_update` to true

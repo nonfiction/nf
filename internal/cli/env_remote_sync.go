@@ -248,14 +248,19 @@ func remoteWPSearchReplaceLine(target envRemoteSyncTarget, sourceURL, destinatio
 }
 
 func remoteFinalizeImportScript(target envRemoteSyncTarget, themeSlug, sourceURL, destinationURL string) string {
-	return fmt.Sprintf(`set -eu
-%sif %s --path=%s theme is-installed %s >/dev/null 2>&1; then
+	themeScript := ""
+	if strings.TrimSpace(themeSlug) != "" {
+		themeScript = fmt.Sprintf(`if %s --path=%s theme is-installed %s >/dev/null 2>&1; then
   %s --path=%s theme activate %s
 else
   printf 'Warning: theme %s is not installed on the remote; skipping theme activation.\n' >&2
 fi
+`, target.WPCommand, shellQuoteArg(target.WordPressPath), shellQuoteArg(themeSlug), target.WPCommand, shellQuoteArg(target.WordPressPath), shellQuoteArg(themeSlug), shellQuoteArg(themeSlug))
+	}
+	return fmt.Sprintf(`set -eu
+%s%s
 %s --path=%s cache flush
-`, remoteWPSearchReplaceLine(target, sourceURL, destinationURL), target.WPCommand, shellQuoteArg(target.WordPressPath), shellQuoteArg(themeSlug), target.WPCommand, shellQuoteArg(target.WordPressPath), shellQuoteArg(themeSlug), shellQuoteArg(themeSlug), target.WPCommand, shellQuoteArg(target.WordPressPath))
+`, remoteWPSearchReplaceLine(target, sourceURL, destinationURL), themeScript, target.WPCommand, shellQuoteArg(target.WordPressPath))
 }
 
 func remoteSSHArgs(target envRemoteSyncTarget, script string) []string {
@@ -448,7 +453,7 @@ func executeEnvPush(cfg envConfig, target envRemoteSyncTarget) int {
 		fmt.Fprintln(os.Stderr, err)
 		return 1
 	}
-	if err := runSSHCommandFn(remoteSSHArgs(target, remoteFinalizeImportScript(target, firstNonEmpty(cfg.ThemeSlug, cfg.ProjectSlug, cfg.ThemeMountSlug, "theme"), envLocalWordPressURL(cfg), target.URL))); err != nil {
+	if err := runSSHCommandFn(remoteSSHArgs(target, remoteFinalizeImportScript(target, activeEnvThemeSlug(cfg), envLocalWordPressURL(cfg), target.URL))); err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		return 1
 	}

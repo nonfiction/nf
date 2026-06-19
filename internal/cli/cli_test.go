@@ -1016,8 +1016,10 @@ func TestRunCompleteSuggestsProjectValues(t *testing.T) {
 			t.Fatalf("Run(__complete theme d) = %d, want 0", got)
 		}
 	})
-	if strings.TrimSpace(themeCommandOutput) != "deploy" {
-		t.Fatalf("theme command completion = %q, want deploy", themeCommandOutput)
+	for _, want := range []string{"deploy\n", "diff\n"} {
+		if !strings.Contains(themeCommandOutput, want) {
+			t.Fatalf("theme command completion missing %q:\n%s", want, themeCommandOutput)
+		}
 	}
 
 	themeDeployOutput := captureStdout(t, func() {
@@ -10609,7 +10611,7 @@ func TestExecuteEnvPullFinalizesLocalDestinationThemeAndCache(t *testing.T) {
 	}
 	t.Setenv("DOCKER_LOG", logPath)
 	t.Setenv("PATH", dockerDir+string(os.PathListSeparator)+os.Getenv("PATH"))
-	cfg := envConfig{ProjectSlug: "client", EnvDir: config.EnvDir("client"), Compose: "docker compose", WordpressService: "wordpress", DockerUser: "nonfiction", ThemeMountSlug: "local-theme", ThemeSlug: "remote-theme", UploadsPath: "uploads", WordpressPort: 18432}
+	cfg := envConfig{ProjectSlug: "client", EnvDir: config.EnvDir("client"), Compose: "docker compose", WordpressService: "wordpress", DockerUser: "nonfiction", ThemeMountSlug: "local-theme", ThemeSlug: "remote-theme", Themes: []wordpressThemeSpec{{Slug: "local-theme", Source: wordpressThemeRepoSource, Path: "theme"}}, UploadsPath: "uploads", WordpressPort: 18432}
 	target := envRemoteSyncTarget{RemoteName: "live", Provider: "linode", SiteID: "client.app1-linode", Env: "live", URL: "https://client.app1-linode.nonfiction.dev/", SSHUser: "nonfiction", SSHHost: "app1-linode.nonfiction.dev", SSHPort: "22", WordPressPath: "/var/www/sites/client/public", WPCommand: "sudo -u www-data wp", SudoFileOps: true}
 	oldRunSSH := runSSHCommandFn
 	runSSHCommandFn = func(args []string) error { return nil }
@@ -10646,7 +10648,7 @@ func TestExecuteEnvPullSkipsMissingLocalDestinationTheme(t *testing.T) {
 	}
 	t.Setenv("DOCKER_LOG", logPath)
 	t.Setenv("PATH", dockerDir+string(os.PathListSeparator)+os.Getenv("PATH"))
-	cfg := envConfig{ProjectSlug: "client", EnvDir: config.EnvDir("client"), Compose: "docker compose", WordpressService: "wordpress", DockerUser: "nonfiction", ThemeMountSlug: "local-theme", ThemeSlug: "remote-theme", UploadsPath: "uploads", WordpressPort: 18432}
+	cfg := envConfig{ProjectSlug: "client", EnvDir: config.EnvDir("client"), Compose: "docker compose", WordpressService: "wordpress", DockerUser: "nonfiction", ThemeMountSlug: "local-theme", ThemeSlug: "remote-theme", Themes: []wordpressThemeSpec{{Slug: "local-theme", Source: wordpressThemeRepoSource, Path: "theme"}}, UploadsPath: "uploads", WordpressPort: 18432}
 	target := envRemoteSyncTarget{RemoteName: "live", Provider: "linode", SiteID: "client.app1-linode", Env: "live", URL: "https://client.app1-linode.nonfiction.dev/", SSHUser: "nonfiction", SSHHost: "app1-linode.nonfiction.dev", SSHPort: "22", WordPressPath: "/var/www/sites/client/public", WPCommand: "sudo -u www-data wp", SudoFileOps: true}
 	oldRunSSH := runSSHCommandFn
 	runSSHCommandFn = func(args []string) error { return nil }
@@ -11274,18 +11276,31 @@ func TestRunInitWritesPortableMetadataShape(t *testing.T) {
 	} else if _, exists := project["name"]; exists {
 		t.Fatalf("project block = %#v, did not want name", metadata["project"])
 	}
-	if wordpress, ok := metadata["wordpress"].(map[string]any); !ok || wordpress["theme_path"] != "theme" || wordpress["theme_slug"] != "client" {
-		t.Fatalf("wordpress block = %#v, want theme_path theme and theme_slug client", metadata["wordpress"])
+	if wordpress, ok := metadata["wordpress"].(map[string]any); !ok {
+		t.Fatalf("wordpress block = %#v, want wordpress config", metadata["wordpress"])
+	} else if themes, ok := wordpress["themes"].([]any); !ok || len(themes) != 4 {
+		t.Fatalf("wordpress.themes = %#v, want repo theme plus bundled WordPress themes", wordpress["themes"])
+	} else if theme, ok := themes[0].(map[string]any); !ok || theme["slug"] != "client" || theme["source"] != "repo" || theme["path"] != "theme" {
+		t.Fatalf("wordpress.themes[0] = %#v, want client repo theme at theme", themes[0])
+	} else if themes[1] != "twentytwentyfive" || themes[2] != "twentytwentyfour" || themes[3] != "twentytwentythree" {
+		t.Fatalf("wordpress.themes bundled defaults = %#v, want WordPress default themes", themes[1:])
+	} else if _, exists := wordpress["theme_path"]; exists {
+		t.Fatalf("wordpress.theme_path unexpectedly present: %#v", wordpress)
+	} else if _, exists := wordpress["theme_slug"]; exists {
+		t.Fatalf("wordpress.theme_slug unexpectedly present: %#v", wordpress)
 	} else if plugins, ok := wordpress["plugins"].([]any); !ok || len(plugins) != 0 {
 		t.Fatalf("wordpress.plugins = %#v, want empty list", wordpress["plugins"])
 	}
 	if env, ok := metadata["env"].(map[string]any); !ok {
 		t.Fatalf("env block = %#v, want env config", metadata["env"])
 	} else {
-		for key, want := range map[string]string{"compose": "docker compose", "wordpress_service": "wordpress", "theme_mount_slug": "theme", "uploads_path": "uploads"} {
+		for key, want := range map[string]string{"compose": "docker compose", "wordpress_service": "wordpress", "uploads_path": "uploads"} {
 			if got := env[key]; got != want {
 				t.Fatalf("env.%s = %#v, want %q", key, got, want)
 			}
+		}
+		if _, exists := env["theme_mount_slug"]; exists {
+			t.Fatalf("env.theme_mount_slug unexpectedly present: %#v", env)
 		}
 		if _, exists := env["ports"]; exists {
 			t.Fatalf("env.ports unexpectedly present: %#v", env["ports"])
@@ -11416,8 +11431,27 @@ func TestRunInitHonorsExplicitThemeSlug(t *testing.T) {
 	if err := json.Unmarshal(data, &metadata); err != nil {
 		t.Fatalf("Unmarshal() error = %v", err)
 	}
-	if wordpress, ok := metadata["wordpress"].(map[string]any); !ok || wordpress["theme_slug"] != "custom-theme" || wordpress["theme_path"] != "theme" {
-		t.Fatalf("wordpress block = %#v, want explicit theme_slug custom-theme and theme_path theme", metadata["wordpress"])
+	if wordpress, ok := metadata["wordpress"].(map[string]any); !ok {
+		t.Fatalf("wordpress block = %#v, want wordpress config", metadata["wordpress"])
+	} else if themes, ok := wordpress["themes"].([]any); !ok || len(themes) != 4 {
+		t.Fatalf("wordpress.themes = %#v, want repo theme plus bundled WordPress themes", wordpress["themes"])
+	} else if theme, ok := themes[0].(map[string]any); !ok || theme["slug"] != "custom-theme" || theme["source"] != "repo" || theme["path"] != "theme" {
+		t.Fatalf("wordpress.themes[0] = %#v, want explicit custom-theme repo theme", themes[0])
+	} else if themes[1] != "twentytwentyfive" || themes[2] != "twentytwentyfour" || themes[3] != "twentytwentythree" {
+		t.Fatalf("wordpress.themes bundled defaults = %#v, want WordPress default themes", themes[1:])
+	}
+}
+
+func TestProjectInitThemeListSkipsBundledThemeDuplicate(t *testing.T) {
+	themes := projectInitThemeList("twentytwentyfive", "theme")
+	if len(themes) != 3 {
+		t.Fatalf("len(projectInitThemeList) = %d, want 3", len(themes))
+	}
+	if theme, ok := themes[0].(orderedObject); !ok || len(theme.Pairs) != 3 || theme.Pairs[0].Value != "twentytwentyfive" || theme.Pairs[1].Value != wordpressThemeRepoSource || theme.Pairs[2].Value != "theme" {
+		t.Fatalf("projectInitThemeList()[0] = %#v, want repo twentytwentyfive", themes[0])
+	}
+	if themes[1] != "twentytwentyfour" || themes[2] != "twentytwentythree" {
+		t.Fatalf("projectInitThemeList bundled themes = %#v, want remaining bundled defaults", themes[1:])
 	}
 }
 
@@ -11477,17 +11511,22 @@ func TestRunInitRejectsUnsupportedProjectType(t *testing.T) {
 
 func TestRenderEnvComposeUsesMetadataDefaults(t *testing.T) {
 	root := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(root, "theme-src"), 0o755); err != nil {
+		t.Fatalf("MkdirAll(theme-src) error = %v", err)
+	}
 	metadata := map[string]any{
-		"project":   map[string]any{"slug": "client"},
-		"wordpress": map[string]any{"theme_path": "theme-src"},
-		"env":       map[string]any{"compose": "docker compose", "wordpress_service": "wp-app", "theme_mount_slug": "theme-slot", "uploads_path": "uploads"},
+		"project": map[string]any{"slug": "client"},
+		"wordpress": map[string]any{"themes": []any{
+			map[string]any{"slug": "client-theme", "source": "repo", "path": "theme-src"},
+		}},
+		"env": map[string]any{"compose": "docker compose", "wordpress_service": "wp-app", "uploads_path": "uploads"},
 	}
 	cfg, ok := loadEnvConfig(root, metadata)
 	if !ok {
 		t.Fatalf("loadEnvConfig() = false, want true")
 	}
 	compose := renderEnvCompose(cfg)
-	for _, want := range []string{"wp-app:", "condition: service_healthy", "HOME: /home/nonfiction", "WP_CLI_CACHE_DIR: /tmp/wp-cli-cache", filepath.Join(root, "theme-src") + ":/var/www/html/wp-content/themes/theme-slot", "./uploads:/var/www/html/wp-content/uploads", "./.nf-transfer:/env/uploads", config.SnapshotProjectDir("client") + ":/env-snapshots"} {
+	for _, want := range []string{"wp-app:", "condition: service_healthy", "HOME: /home/nonfiction", "WP_CLI_CACHE_DIR: /tmp/wp-cli-cache", filepath.Join(root, "theme-src") + ":/var/www/html/wp-content/themes/client-theme", "./uploads:/var/www/html/wp-content/uploads", "./.nf-transfer:/env/uploads", config.SnapshotProjectDir("client") + ":/env-snapshots"} {
 		if !strings.Contains(compose, want) {
 			t.Fatalf("renderEnvCompose() missing %q:\n%s", want, compose)
 		}
@@ -11637,6 +11676,9 @@ func TestRunEnvUpAutoInitializesProjectMetadata(t *testing.T) {
 	if err := os.MkdirAll(filepath.Join(repoRoot, ".git"), 0o755); err != nil {
 		t.Fatalf("MkdirAll() error = %v", err)
 	}
+	if err := os.MkdirAll(filepath.Join(repoRoot, "theme"), 0o755); err != nil {
+		t.Fatalf("MkdirAll(theme) error = %v", err)
+	}
 	if err := os.MkdirAll(filepath.Join(repoRoot, "work"), 0o755); err != nil {
 		t.Fatalf("MkdirAll() error = %v", err)
 	}
@@ -11695,10 +11737,15 @@ func TestRunEnvUpAutoInitializesProjectMetadata(t *testing.T) {
 
 func TestLoadEnvConfigUsesEnvBlock(t *testing.T) {
 	root := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(root, "theme-src"), 0o755); err != nil {
+		t.Fatalf("MkdirAll(theme-src) error = %v", err)
+	}
 	metadata := map[string]any{
-		"project":   map[string]any{"slug": "client", "name": "Client"},
-		"wordpress": map[string]any{"theme_path": "theme-src", "theme_slug": "theme"},
-		"env":       map[string]any{"compose": "env compose", "wordpress_service": "env-wp", "cli_service": "env-cli", "theme_mount_slug": "env-theme", "uploads_path": "env-uploads"},
+		"project": map[string]any{"slug": "client", "name": "Client"},
+		"wordpress": map[string]any{"themes": []any{
+			map[string]any{"slug": "theme", "source": "repo", "path": "theme-src"},
+		}},
+		"env": map[string]any{"compose": "env compose", "wordpress_service": "env-wp", "cli_service": "env-cli", "theme_mount_slug": "env-theme", "uploads_path": "env-uploads"},
 	}
 	cfg, ok := loadEnvConfig(root, metadata)
 	if !ok {
@@ -11713,8 +11760,11 @@ func TestLoadEnvConfigUsesEnvBlock(t *testing.T) {
 	if got, want := cfg.CliService, "env-cli"; got != want {
 		t.Fatalf("CliService = %q, want %q", got, want)
 	}
-	if got, want := cfg.ThemeMountSlug, "env-theme"; got != want {
+	if got, want := cfg.ThemeMountSlug, "theme"; got != want {
 		t.Fatalf("ThemeMountSlug = %q, want %q", got, want)
+	}
+	if got, want := cfg.ThemePath, filepath.Join(root, "theme-src"); got != want {
+		t.Fatalf("ThemePath = %q, want %q", got, want)
 	}
 	if got, want := cfg.UploadsPath, "env-uploads"; got != want {
 		t.Fatalf("UploadsPath = %q, want %q", got, want)
@@ -12115,6 +12165,429 @@ func TestRunEnvPasswordRejectsMultipleRemotes(t *testing.T) {
 	})
 	if !strings.Contains(stderr, "env password takes at most one remote") {
 		t.Fatalf("stderr = %q, want at-most-one error", stderr)
+	}
+}
+
+func TestRunEnvThemesListReadsWordPressThemes(t *testing.T) {
+	repoRoot := t.TempDir()
+	if err := os.Mkdir(filepath.Join(repoRoot, ".git"), 0o755); err != nil {
+		t.Fatalf("Mkdir(.git) error = %v", err)
+	}
+	project := map[string]any{
+		"version": 1,
+		"project": map[string]any{"slug": "client", "name": "Client"},
+		"wordpress": map[string]any{"themes": []any{
+			"twentytwentyfive",
+			map[string]any{"slug": "acf-theme", "source": "cache", "auto_update": true, "note": "Paid theme"},
+			map[string]any{"slug": "client", "source": "repo", "path": "theme", "note": "Child theme"},
+		}},
+	}
+	data, err := json.MarshalIndent(project, "", "  ")
+	if err != nil {
+		t.Fatalf("MarshalIndent(project) error = %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(repoRoot, "nf.json"), append(data, '\n'), 0o644); err != nil {
+		t.Fatalf("WriteFile(nf.json) error = %v", err)
+	}
+	oldwd, err := os.Getwd()
+	if err != nil {
+		t.Fatalf("Getwd() error = %v", err)
+	}
+	if err := os.Chdir(repoRoot); err != nil {
+		t.Fatalf("Chdir() error = %v", err)
+	}
+	t.Cleanup(func() { _ = os.Chdir(oldwd) })
+
+	output := captureStdout(t, func() {
+		if got := Run([]string{"theme", "list"}); got != 0 {
+			t.Fatalf("Run(theme list) = %d, want 0", got)
+		}
+	})
+	for _, want := range []string{"theme", "source", "active", "auto-update", "twentytwentyfive", "wordpress.org", "acf-theme", "cache", "Paid theme", "client", "repo", "theme", "Child theme"} {
+		if !strings.Contains(output, want) {
+			t.Fatalf("theme list output missing %q:\n%s", want, output)
+		}
+	}
+}
+
+func TestLoadWordPressThemeSpecsAllowsNoRepoTheme(t *testing.T) {
+	themes, err := loadWordPressThemeSpecs(map[string]any{
+		"wordpress": map[string]any{"themes": []any{
+			"twentytwentyfive",
+			map[string]any{"slug": "paid-parent", "source": "cache", "auto_update": true},
+		}},
+	})
+	if err != nil {
+		t.Fatalf("loadWordPressThemeSpecs() error = %v", err)
+	}
+	if len(themes) != 2 {
+		t.Fatalf("len(themes) = %d, want 2", len(themes))
+	}
+	if got := activeWordPressThemeSlug(themes); got != "twentytwentyfive" {
+		t.Fatalf("activeWordPressThemeSlug() = %q, want twentytwentyfive", got)
+	}
+	if _, ok := repoWordPressThemeSpec(themes); ok {
+		t.Fatalf("repoWordPressThemeSpec() found a repo theme, want none")
+	}
+}
+
+func TestRunEnvThemesListRejectsEmptyThemes(t *testing.T) {
+	repoRoot := t.TempDir()
+	if err := os.Mkdir(filepath.Join(repoRoot, ".git"), 0o755); err != nil {
+		t.Fatalf("Mkdir(.git) error = %v", err)
+	}
+	project := map[string]any{
+		"version":   1,
+		"project":   map[string]any{"slug": "client", "name": "Client"},
+		"wordpress": map[string]any{"themes": []any{}},
+	}
+	data, err := json.MarshalIndent(project, "", "  ")
+	if err != nil {
+		t.Fatalf("MarshalIndent(project) error = %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(repoRoot, "nf.json"), append(data, '\n'), 0o644); err != nil {
+		t.Fatalf("WriteFile(nf.json) error = %v", err)
+	}
+	oldwd, err := os.Getwd()
+	if err != nil {
+		t.Fatalf("Getwd() error = %v", err)
+	}
+	if err := os.Chdir(repoRoot); err != nil {
+		t.Fatalf("Chdir() error = %v", err)
+	}
+	t.Cleanup(func() { _ = os.Chdir(oldwd) })
+
+	stderr := captureStderr(t, func() {
+		if got := Run([]string{"theme", "list"}); got != 1 {
+			t.Fatalf("Run(theme list) = %d, want 1", got)
+		}
+	})
+	if !strings.Contains(stderr, "nf.json wordpress.themes must include at least one theme") {
+		t.Fatalf("stderr = %q, want empty themes error", stderr)
+	}
+}
+
+func TestRunEnvThemesAddUpdatesProjectMetadata(t *testing.T) {
+	repoRoot := t.TempDir()
+	if err := os.Mkdir(filepath.Join(repoRoot, ".git"), 0o755); err != nil {
+		t.Fatalf("Mkdir(.git) error = %v", err)
+	}
+	if err := os.Mkdir(filepath.Join(repoRoot, "theme"), 0o755); err != nil {
+		t.Fatalf("Mkdir(theme) error = %v", err)
+	}
+	project := map[string]any{
+		"version":   1,
+		"project":   map[string]any{"slug": "client", "name": "Client"},
+		"wordpress": map[string]any{"themes": []any{"twentytwentyfive"}},
+	}
+	data, err := json.MarshalIndent(project, "", "  ")
+	if err != nil {
+		t.Fatalf("MarshalIndent(project) error = %v", err)
+	}
+	projectPath := filepath.Join(repoRoot, "nf.json")
+	if err := os.WriteFile(projectPath, append(data, '\n'), 0o644); err != nil {
+		t.Fatalf("WriteFile(nf.json) error = %v", err)
+	}
+	oldwd, err := os.Getwd()
+	if err != nil {
+		t.Fatalf("Getwd() error = %v", err)
+	}
+	if err := os.Chdir(repoRoot); err != nil {
+		t.Fatalf("Chdir() error = %v", err)
+	}
+	t.Cleanup(func() { _ = os.Chdir(oldwd) })
+
+	output := captureStdout(t, func() {
+		if got := Run([]string{"theme", "add", "client", "--source", "repo"}); got != 0 {
+			t.Fatalf("Run(theme add --source repo) = %d, want 0", got)
+		}
+	})
+	if !strings.Contains(output, "Added WordPress theme client to nf.json.") {
+		t.Fatalf("theme add output unexpected:\n%s", output)
+	}
+	updated, err := os.ReadFile(projectPath)
+	if err != nil {
+		t.Fatalf("ReadFile(nf.json) error = %v", err)
+	}
+	text := string(updated)
+	for _, want := range []string{`"themes": [`, `"twentytwentyfive"`, `"slug": "client"`, `"source": "repo"`, `"path": "theme"`} {
+		if !strings.Contains(text, want) {
+			t.Fatalf("nf.json missing %q:\n%s", want, text)
+		}
+	}
+	if _, err := os.Stat(filepath.Join(repoRoot, "themes")); !os.IsNotExist(err) {
+		t.Fatalf("theme add should not scaffold a themes directory, stat err = %v", err)
+	}
+}
+
+func TestRunEnvThemesAddRepairsEmptyThemeList(t *testing.T) {
+	repoRoot := t.TempDir()
+	if err := os.Mkdir(filepath.Join(repoRoot, ".git"), 0o755); err != nil {
+		t.Fatalf("Mkdir(.git) error = %v", err)
+	}
+	project := map[string]any{
+		"version":   1,
+		"project":   map[string]any{"slug": "client", "name": "Client"},
+		"wordpress": map[string]any{"themes": []any{}},
+	}
+	data, err := json.MarshalIndent(project, "", "  ")
+	if err != nil {
+		t.Fatalf("MarshalIndent(project) error = %v", err)
+	}
+	projectPath := filepath.Join(repoRoot, "nf.json")
+	if err := os.WriteFile(projectPath, append(data, '\n'), 0o644); err != nil {
+		t.Fatalf("WriteFile(nf.json) error = %v", err)
+	}
+	oldwd, err := os.Getwd()
+	if err != nil {
+		t.Fatalf("Getwd() error = %v", err)
+	}
+	if err := os.Chdir(repoRoot); err != nil {
+		t.Fatalf("Chdir() error = %v", err)
+	}
+	t.Cleanup(func() { _ = os.Chdir(oldwd) })
+
+	if got := Run([]string{"theme", "add", "twentytwentyfive"}); got != 0 {
+		t.Fatalf("Run(theme add) = %d, want 0", got)
+	}
+	updated, err := os.ReadFile(projectPath)
+	if err != nil {
+		t.Fatalf("ReadFile(nf.json) error = %v", err)
+	}
+	if text := string(updated); !strings.Contains(text, `"twentytwentyfive"`) {
+		t.Fatalf("nf.json missing added theme:\n%s", text)
+	}
+}
+
+func TestRunEnvThemesAddMigratesLegacyThemeMetadata(t *testing.T) {
+	repoRoot := t.TempDir()
+	if err := os.Mkdir(filepath.Join(repoRoot, ".git"), 0o755); err != nil {
+		t.Fatalf("Mkdir(.git) error = %v", err)
+	}
+	if err := os.Mkdir(filepath.Join(repoRoot, "theme"), 0o755); err != nil {
+		t.Fatalf("Mkdir(theme) error = %v", err)
+	}
+	project := map[string]any{
+		"version":   1,
+		"project":   map[string]any{"slug": "client", "name": "Client"},
+		"wordpress": map[string]any{"theme_slug": "client", "theme_path": "theme"},
+		"env":       map[string]any{"theme_mount_slug": "theme", "uploads_path": "uploads"},
+	}
+	data, err := json.MarshalIndent(project, "", "  ")
+	if err != nil {
+		t.Fatalf("MarshalIndent(project) error = %v", err)
+	}
+	projectPath := filepath.Join(repoRoot, "nf.json")
+	if err := os.WriteFile(projectPath, append(data, '\n'), 0o644); err != nil {
+		t.Fatalf("WriteFile(nf.json) error = %v", err)
+	}
+	oldwd, err := os.Getwd()
+	if err != nil {
+		t.Fatalf("Getwd() error = %v", err)
+	}
+	if err := os.Chdir(repoRoot); err != nil {
+		t.Fatalf("Chdir() error = %v", err)
+	}
+	t.Cleanup(func() { _ = os.Chdir(oldwd) })
+
+	if got := Run([]string{"theme", "add", "twentytwentyfive"}); got != 0 {
+		t.Fatalf("Run(theme add) = %d, want 0", got)
+	}
+	updated, err := os.ReadFile(projectPath)
+	if err != nil {
+		t.Fatalf("ReadFile(nf.json) error = %v", err)
+	}
+	text := string(updated)
+	for _, want := range []string{`"themes": [`, `"slug": "client"`, `"source": "repo"`, `"path": "theme"`, `"twentytwentyfive"`} {
+		if !strings.Contains(text, want) {
+			t.Fatalf("nf.json missing %q:\n%s", want, text)
+		}
+	}
+	for _, stale := range []string{`"theme_slug"`, `"theme_path"`, `"theme_mount_slug"`} {
+		if strings.Contains(text, stale) {
+			t.Fatalf("nf.json still contains legacy %s:\n%s", stale, text)
+		}
+	}
+}
+
+func TestRunEnvThemesAddRejectsSecondRepoTheme(t *testing.T) {
+	repoRoot := t.TempDir()
+	if err := os.Mkdir(filepath.Join(repoRoot, ".git"), 0o755); err != nil {
+		t.Fatalf("Mkdir(.git) error = %v", err)
+	}
+	if err := os.Mkdir(filepath.Join(repoRoot, "other-theme"), 0o755); err != nil {
+		t.Fatalf("Mkdir(other-theme) error = %v", err)
+	}
+	project := map[string]any{
+		"version": 1,
+		"project": map[string]any{"slug": "client", "name": "Client"},
+		"wordpress": map[string]any{"themes": []any{
+			map[string]any{"slug": "client", "source": "repo", "path": "theme"},
+		}},
+	}
+	data, err := json.MarshalIndent(project, "", "  ")
+	if err != nil {
+		t.Fatalf("MarshalIndent(project) error = %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(repoRoot, "nf.json"), append(data, '\n'), 0o644); err != nil {
+		t.Fatalf("WriteFile(nf.json) error = %v", err)
+	}
+	oldwd, err := os.Getwd()
+	if err != nil {
+		t.Fatalf("Getwd() error = %v", err)
+	}
+	if err := os.Chdir(repoRoot); err != nil {
+		t.Fatalf("Chdir() error = %v", err)
+	}
+	t.Cleanup(func() { _ = os.Chdir(oldwd) })
+
+	stderr := captureStderr(t, func() {
+		if got := Run([]string{"theme", "add", "other-theme", "--source", "repo", "--path", "other-theme"}); got != 1 {
+			t.Fatalf("Run(theme add second repo) = %d, want 1", got)
+		}
+	})
+	if !strings.Contains(stderr, "only one repo theme is allowed") {
+		t.Fatalf("stderr = %q, want one-repo error", stderr)
+	}
+}
+
+func TestRunEnvThemesActivateMovesThemeToTop(t *testing.T) {
+	repoRoot := t.TempDir()
+	if err := os.Mkdir(filepath.Join(repoRoot, ".git"), 0o755); err != nil {
+		t.Fatalf("Mkdir(.git) error = %v", err)
+	}
+	project := map[string]any{
+		"version": 1,
+		"project": map[string]any{"slug": "client", "name": "Client"},
+		"wordpress": map[string]any{"themes": []any{
+			map[string]any{"slug": "client", "source": "repo", "path": "theme"},
+			"twentytwentyfive",
+			map[string]any{"slug": "paid-parent", "source": "cache", "note": "Paid parent"},
+		}},
+	}
+	data, err := json.MarshalIndent(project, "", "  ")
+	if err != nil {
+		t.Fatalf("MarshalIndent(project) error = %v", err)
+	}
+	projectPath := filepath.Join(repoRoot, "nf.json")
+	if err := os.WriteFile(projectPath, append(data, '\n'), 0o644); err != nil {
+		t.Fatalf("WriteFile(nf.json) error = %v", err)
+	}
+	oldwd, err := os.Getwd()
+	if err != nil {
+		t.Fatalf("Getwd() error = %v", err)
+	}
+	if err := os.Chdir(repoRoot); err != nil {
+		t.Fatalf("Chdir() error = %v", err)
+	}
+	t.Cleanup(func() { _ = os.Chdir(oldwd) })
+
+	output := captureStdout(t, func() {
+		if got := Run([]string{"theme", "activate", "paid-parent"}); got != 0 {
+			t.Fatalf("Run(theme activate) = %d, want 0", got)
+		}
+	})
+	if !strings.Contains(output, "Moved WordPress theme paid-parent to the top of wordpress.themes.") {
+		t.Fatalf("theme activate output unexpected:\n%s", output)
+	}
+	updated, err := os.ReadFile(projectPath)
+	if err != nil {
+		t.Fatalf("ReadFile(nf.json) error = %v", err)
+	}
+	var metadata map[string]any
+	if err := json.Unmarshal(updated, &metadata); err != nil {
+		t.Fatalf("Unmarshal(updated) error = %v", err)
+	}
+	wordpress := metadata["wordpress"].(map[string]any)
+	themes := wordpress["themes"].([]any)
+	first := themes[0].(map[string]any)
+	if first["slug"] != "paid-parent" || first["source"] != "cache" || first["note"] != "Paid parent" {
+		t.Fatalf("themes[0] = %#v, want paid-parent cache object", themes[0])
+	}
+	second := themes[1].(map[string]any)
+	if second["slug"] != "client" || second["source"] != "repo" || second["path"] != "theme" {
+		t.Fatalf("themes[1] = %#v, want original repo object", themes[1])
+	}
+	if themes[2] != "twentytwentyfive" {
+		t.Fatalf("themes[2] = %#v, want original string theme", themes[2])
+	}
+}
+
+func TestRunEnvThemesRemoveRejectsLastTheme(t *testing.T) {
+	repoRoot := t.TempDir()
+	if err := os.Mkdir(filepath.Join(repoRoot, ".git"), 0o755); err != nil {
+		t.Fatalf("Mkdir(.git) error = %v", err)
+	}
+	project := map[string]any{
+		"version":   1,
+		"project":   map[string]any{"slug": "client", "name": "Client"},
+		"wordpress": map[string]any{"themes": []any{"twentytwentyfive"}},
+	}
+	data, err := json.MarshalIndent(project, "", "  ")
+	if err != nil {
+		t.Fatalf("MarshalIndent(project) error = %v", err)
+	}
+	projectPath := filepath.Join(repoRoot, "nf.json")
+	if err := os.WriteFile(projectPath, append(data, '\n'), 0o644); err != nil {
+		t.Fatalf("WriteFile(nf.json) error = %v", err)
+	}
+	oldwd, err := os.Getwd()
+	if err != nil {
+		t.Fatalf("Getwd() error = %v", err)
+	}
+	if err := os.Chdir(repoRoot); err != nil {
+		t.Fatalf("Chdir() error = %v", err)
+	}
+	t.Cleanup(func() { _ = os.Chdir(oldwd) })
+
+	stderr := captureStderr(t, func() {
+		if got := Run([]string{"theme", "remove", "twentytwentyfive"}); got != 1 {
+			t.Fatalf("Run(theme remove last) = %d, want 1", got)
+		}
+	})
+	if !strings.Contains(stderr, "cannot remove the last configured WordPress theme") {
+		t.Fatalf("stderr = %q, want last-theme error", stderr)
+	}
+	updated, err := os.ReadFile(projectPath)
+	if err != nil {
+		t.Fatalf("ReadFile(nf.json) error = %v", err)
+	}
+	if text := string(updated); !strings.Contains(text, `"twentytwentyfive"`) {
+		t.Fatalf("theme remove should leave nf.json unchanged:\n%s", text)
+	}
+}
+
+func TestLocalThemeInstallScriptInstallsAndActivatesFirstTheme(t *testing.T) {
+	themes := []wordpressThemeSpec{
+		{Slug: "client", Source: wordpressThemeRepoSource, Path: "theme"},
+		{Slug: "twentytwentyfive", Source: "wordpress.org", AutoUpdate: true},
+	}
+	script := localThemeInstallScript(themes, map[string]string{"client": localRepoThemeInstallSourceMark}, activeWordPressThemeSlug(themes))
+	for _, want := range []string{"wp theme is-installed client", "wp theme install twentytwentyfive", "wp theme auto-updates enable twentytwentyfive", "wp theme activate client"} {
+		if !strings.Contains(script, want) {
+			t.Fatalf("theme install script missing %q:\n%s", want, script)
+		}
+	}
+	if strings.Contains(script, "auto-updates enable client") {
+		t.Fatalf("repo theme should not get auto-updates enabled:\n%s", script)
+	}
+}
+
+func TestWordPressThemeDiffsReportsExtraThemes(t *testing.T) {
+	themes := []wordpressThemeSpec{{Slug: "client", Source: wordpressThemeRepoSource, Path: "theme"}}
+	statuses := parseWordPressThemeDiffStatusOutput(themes, "client\tyes\tyes\tno\ntwentytwentytwo\tyes\tno\tyes\textra\n")
+	diffs, drift := wordpressThemeDiffs(statuses, t.TempDir())
+	if !drift {
+		t.Fatalf("wordpressThemeDiffs drift = false, want true")
+	}
+	if len(diffs) != 2 {
+		t.Fatalf("len(diffs) = %d, want 2: %#v", len(diffs), diffs)
+	}
+	if diffs[0].Change != "ok" {
+		t.Fatalf("configured theme diff = %#v, want ok", diffs[0])
+	}
+	if diffs[1].Theme.Slug != "twentytwentytwo" || diffs[1].Change != "extra (inactive, auto-update on)" || !diffs[1].Drift {
+		t.Fatalf("extra theme diff = %#v, want extra drift", diffs[1])
 	}
 }
 
@@ -13774,6 +14247,7 @@ func TestEnvCommandHelpersBuildExpectedArgs(t *testing.T) {
 		ThemeMountSlug:   "theme",
 		UploadsPath:      "uploads",
 		ThemeSlug:        "client",
+		Themes:           []wordpressThemeSpec{{Slug: "client", Source: wordpressThemeRepoSource, Path: "theme"}},
 	}
 
 	if got, want := envComposeArgs(cfg, "up", "-d"), []string{"docker", "compose", "up", "-d"}; !reflect.DeepEqual(got, want) {
@@ -13785,7 +14259,7 @@ func TestEnvCommandHelpersBuildExpectedArgs(t *testing.T) {
 	if got, want := envShellArgs(cfg), []string{"docker", "compose", "exec", "--user", "nonfiction", "wordpress", "bash"}; !reflect.DeepEqual(got, want) {
 		t.Fatalf("envShellArgs() = %#v, want %#v", got, want)
 	}
-	if got, want := envWpThemeIsActiveArgs(cfg, ""), []string{"docker", "compose", "exec", "--user", "nonfiction", "wordpress", "wp", "theme", "is-active", "theme"}; !reflect.DeepEqual(got, want) {
+	if got, want := envWpThemeIsActiveArgs(cfg, ""), []string{"docker", "compose", "exec", "--user", "nonfiction", "wordpress", "wp", "theme", "is-active", "client"}; !reflect.DeepEqual(got, want) {
 		t.Fatalf("envWpThemeIsActiveArgs() = %#v, want %#v", got, want)
 	}
 	hostPath, containerPath := envThemeArchivePaths(cfg, "/tmp/theme.zip")
@@ -13795,7 +14269,7 @@ func TestEnvCommandHelpersBuildExpectedArgs(t *testing.T) {
 	if got, want := envCommandDir(cfg), cfg.EnvDir; got != want {
 		t.Fatalf("envCommandDir() = %q, want %q", got, want)
 	}
-	if got, want := envWpThemeActivateArgs(cfg, ""), []string{"docker", "compose", "exec", "--user", "nonfiction", "wordpress", "wp", "theme", "activate", "theme"}; !reflect.DeepEqual(got, want) {
+	if got, want := envWpThemeActivateArgs(cfg, ""), []string{"docker", "compose", "exec", "--user", "nonfiction", "wordpress", "wp", "theme", "activate", "client"}; !reflect.DeepEqual(got, want) {
 		t.Fatalf("envWpThemeActivateArgs() = %#v, want %#v", got, want)
 	}
 	if got, want := envWpThemeActivateArgs(cfg, "custom-slug"), []string{"docker", "compose", "exec", "--user", "nonfiction", "wordpress", "wp", "theme", "activate", "custom-slug"}; !reflect.DeepEqual(got, want) {
@@ -13813,10 +14287,13 @@ func TestEnvCommandHelpersBuildExpectedArgs(t *testing.T) {
 	}
 	installArgs := envWpCoreInstallArgs(cfg)
 	joined := strings.Join(installArgs, " ")
-	for _, wanted := range []string{"docker compose exec --user nonfiction wordpress sh -lc", "WP_URL", "WP_TITLE", "ADMIN_USER", "ADMIN_PASSWORD", "ADMIN_EMAIL", "wp theme activate theme"} {
+	for _, wanted := range []string{"docker compose exec --user nonfiction wordpress sh -lc", "WP_URL", "WP_TITLE", "ADMIN_USER", "ADMIN_PASSWORD", "ADMIN_EMAIL", "wp core install"} {
 		if !strings.Contains(joined, wanted) {
 			t.Fatalf("envWpCoreInstallArgs() missing %q in %#v", wanted, installArgs)
 		}
+	}
+	if strings.Contains(joined, "wp theme activate") {
+		t.Fatalf("envWpCoreInstallArgs() unexpectedly activates a theme: %#v", installArgs)
 	}
 	if strings.Contains(joined, "wp core is-installed") {
 		t.Fatalf("envWpCoreInstallArgs() unexpectedly probes install state: %#v", installArgs)
@@ -13834,16 +14311,16 @@ func TestEnvCommandHelpersBuildExpectedArgs(t *testing.T) {
 	if got, want := envRepoPath("/repo", "/tmp/theme.zip"), "/tmp/theme.zip"; got != want {
 		t.Fatalf("envRepoPath() = %q, want %q", got, want)
 	}
-	if got, want := (envCommandRunner{name: "up", cfg: cfg}).Render(), "docker compose up -d; configure Mailpit SMTP; install WordPress if missing and ensure the mounted theme is active"; got != want {
+	if got, want := (envCommandRunner{name: "up", cfg: cfg}).Render(), "docker compose up -d; configure Mailpit SMTP; install WordPress if missing and ensure configured themes are installed and active"; got != want {
 		t.Fatalf("up Render() = %q, want %q", got, want)
 	}
-	if got, want := (envCommandRunner{name: "up", cfg: cfg, rebuild: true}).Render(), "docker compose build; docker compose up -d; configure Mailpit SMTP; install WordPress if missing and ensure the mounted theme is active"; got != want {
+	if got, want := (envCommandRunner{name: "up", cfg: cfg, rebuild: true}).Render(), "docker compose build; docker compose up -d; configure Mailpit SMTP; install WordPress if missing and ensure configured themes are installed and active"; got != want {
 		t.Fatalf("up --rebuild Render() = %q, want %q", got, want)
 	}
-	if got, want := (envCommandRunner{name: "reset", cfg: cfg}).Render(), "docker compose down -v --remove-orphans; nuke env data and recreate it with docker compose up -d, configure Mailpit SMTP, install WordPress if missing, and ensure the mounted theme is active"; got != want {
+	if got, want := (envCommandRunner{name: "reset", cfg: cfg}).Render(), "docker compose down -v --remove-orphans; nuke env data and recreate it with docker compose up -d, configure Mailpit SMTP, install WordPress if missing, and ensure configured themes are installed and active"; got != want {
 		t.Fatalf("reset Render() = %q, want %q", got, want)
 	}
-	if got, want := (envCommandRunner{name: "reset", cfg: cfg, rebuild: true}).Render(), "docker compose down -v --remove-orphans; nuke env data and recreate it with docker compose build, docker compose up -d, configure Mailpit SMTP, install WordPress if missing, and ensure the mounted theme is active"; got != want {
+	if got, want := (envCommandRunner{name: "reset", cfg: cfg, rebuild: true}).Render(), "docker compose down -v --remove-orphans; nuke env data and recreate it with docker compose build, docker compose up -d, configure Mailpit SMTP, install WordPress if missing, and ensure configured themes are installed and active"; got != want {
 		t.Fatalf("reset --rebuild Render() = %q, want %q", got, want)
 	}
 	if got, want := (envCommandRunner{name: "shell", cfg: cfg}).Render(), "docker compose exec --user nonfiction wordpress bash"; got != want {
@@ -14100,7 +14577,7 @@ func TestRunEnvUpActivatesThemeWhenAlreadyInstalled(t *testing.T) {
 
 	dockerDir := t.TempDir()
 	logPath := filepath.Join(dockerDir, "docker-args.txt")
-	dockerScript := []byte("#!/bin/sh\nprintf '%s\\n' \"$@\" >> \"$DOCKER_LOG\"\ncase \"$*\" in\n  *\"wp theme is-active\"*) exit 1 ;;\n  *\"wp core is-installed\"*) exit 0 ;;\nesac\nexit 0\n")
+	dockerScript := []byte("#!/bin/sh\nprintf '%s\\n' \"$@\" >> \"$DOCKER_LOG\"\ncase \"$6 $7 $8\" in\n  \"wp theme is-active\") exit 1 ;;\n  \"wp core is-installed\") exit 0 ;;\nesac\nexit 0\n")
 	if err := os.WriteFile(filepath.Join(dockerDir, "docker"), dockerScript, 0o755); err != nil {
 		t.Fatalf("WriteFile(docker) error = %v", err)
 	}
@@ -14130,6 +14607,7 @@ func TestRunEnvUpActivatesThemeWhenAlreadyInstalled(t *testing.T) {
 		"> docker compose exec --user nonfiction wordpress '<wait for WordPress files>'",
 		"> docker compose exec --user nonfiction wordpress '<configure Mailpit SMTP>'",
 		"> docker compose exec --user nonfiction wordpress wp core is-installed",
+		"> docker compose exec --user nonfiction wordpress '<wp theme bootstrap script>'",
 		"> docker compose exec --user nonfiction wordpress wp theme is-active theme",
 		"> docker compose exec --user nonfiction wordpress wp theme activate theme",
 	} {

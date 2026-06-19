@@ -80,6 +80,17 @@ func PluginCacheZip(slug string) string {
 	return filepath.Join(PluginCachePluginDir(slug), slug+".zip")
 }
 
+func ThemeCacheDir() string { return filepath.Join(DataHome(), "themes") }
+
+func ThemeCacheThemeDir(slug string) string {
+	return filepath.Join(ThemeCacheDir(), strings.TrimSpace(slug))
+}
+
+func ThemeCacheZip(slug string) string {
+	slug = strings.TrimSpace(slug)
+	return filepath.Join(ThemeCacheThemeDir(slug), slug+".zip")
+}
+
 func LocalSnapshotsDir() string { return filepath.Join(SnapshotsDir(), "local") }
 
 func RemoteSnapshotsDir() string { return filepath.Join(SnapshotsDir(), "remote") }

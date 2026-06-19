@@ -65,16 +65,13 @@ func cmdThemeDeploy(remoteName string, dryRun bool) int {
 		fmt.Fprintln(os.Stderr, err)
 		return 1
 	}
-	themeSource := firstNonEmpty(mapStringAtPath(metadata, "wordpress", "theme_path"), "theme")
-	if !filepath.IsAbs(themeSource) {
-		themeSource = filepath.Join(root, themeSource)
-	}
-	info, err := os.Stat(themeSource)
-	if err != nil || !info.IsDir() {
-		fmt.Fprintf(os.Stderr, "Theme source directory does not exist: %s\n", themeSource)
+	repoTheme, themeSource, themes, err := projectRepoTheme(root, metadata, "theme deploy", true)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, err)
 		return 1
 	}
-	themeSlug := firstNonEmpty(mapStringAtPath(metadata, "wordpress", "theme_slug"), mapStringAtPath(metadata, "project", "slug"), filepath.Base(themeSource), "theme")
+	themeSlug := repoTheme.Slug
+	activeThemeSlug := firstNonEmpty(activeWordPressThemeSlug(themes), themeSlug)
 	if err := validateThemeDeploySlug(themeSlug); err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		return 1
@@ -84,10 +81,22 @@ func cmdThemeDeploy(remoteName string, dryRun bool) int {
 		fmt.Fprintln(os.Stderr, err)
 		return 1
 	}
-	artifact, err := prepareThemeDeployArtifact(root, metadata, themeSource, dryRun)
+	artifact, err := prepareThemeDeployArtifact(root, metadata, themeSource, themeSlug, dryRun)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		return 1
+	}
+	syncTarget := themeDeploySyncTarget(target)
+	dependencyThemes := filterNonRepoThemes(themes)
+	remoteDependencyThemes := []remoteThemeInstallSpec{}
+	dependencyUploads := []remoteThemeUpload{}
+	dependencyTmp := remoteThemeInstallTempDir(syncTarget)
+	if len(dependencyThemes) > 0 {
+		remoteDependencyThemes, dependencyUploads, err = remoteThemeInstallSpecs(root, dependencyThemes, dependencyTmp, !dryRun, nil)
+		if err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			return 1
+		}
 	}
 	releaseBase := path.Join(target.WordPressPath, "wp-content", "themes", ".nf-releases", themeSlug)
 	releaseDir := path.Join(releaseBase, artifact.ReleaseID)
@@ -106,6 +115,12 @@ func cmdThemeDeploy(remoteName string, dryRun bool) int {
 	fmt.Printf("  release id:  %s\n", artifact.ReleaseID)
 	fmt.Printf("  release dir: %s\n", releaseDir)
 	fmt.Printf("  active dir:  %s\n", target.RemoteThemeDir)
+	if activeThemeSlug != themeSlug {
+		fmt.Printf("  activate:    %s\n", activeThemeSlug)
+	}
+	if len(dependencyThemes) > 0 {
+		fmt.Printf("  dependencies: %d non-repo theme(s)\n", len(dependencyThemes))
+	}
 	fmt.Printf("  keep:        last %d releases\n", themeReleaseKeep)
 	if dryRun {
 		fmt.Println("  mode:        dry-run")
@@ -118,12 +133,34 @@ func cmdThemeDeploy(remoteName string, dryRun bool) int {
 	printCommandArgs(mkdirArgs)
 	uploadArgs := themeDeployArtifactUploadArgs(artifact.OutputPath, target, remoteArtifact)
 	printCommandArgs(uploadArgs)
-	activateArgs := themeDeployActivateArgs(target, themeSlug)
-	releaseScript := themeDeployReleaseScript(target, themeSlug, artifact, remoteArtifact, releaseBase, releaseDir, activateArgs[len(activateArgs)-1])
+	if len(remoteDependencyThemes) > 0 {
+		fmt.Println("  dependency script: install configured non-repo themes")
+		printRemoteThemeInstallCommand(syncTarget)
+	}
+	activateArgs := themeDeployActivateArgs(target, activeThemeSlug)
+	releaseScript := themeDeployReleaseScript(target, themeSlug, activeThemeSlug, artifact, remoteArtifact, releaseBase, releaseDir, activateArgs[len(activateArgs)-1])
 	releaseArgs := themeRemoteScriptCommandArgs(target, "nf-theme-deploy-release")
 	fmt.Println("  remote script: extract release, switch active theme, refresh runtime mtimes, activate, record metadata, prune old releases")
 	printCommandArgs(releaseArgs)
 	if !dryRun {
+		if len(dependencyUploads) > 0 {
+			if err := uploadRemoteThemeSources(syncTarget, dependencyTmp, dependencyUploads); err != nil {
+				fmt.Fprintln(os.Stderr, err)
+				return 1
+			}
+		}
+		if len(remoteDependencyThemes) > 0 {
+			if err := runSSHCommandFn(remoteSSHArgs(syncTarget, remoteThemeInstallScript(syncTarget, remoteDependencyThemes, ""))); err != nil {
+				fmt.Fprintln(os.Stderr, err)
+				if len(dependencyUploads) > 0 {
+					_ = runSSHCommandFn(remoteSSHArgs(syncTarget, "rm -rf "+shellQuoteArg(dependencyTmp)))
+				}
+				return 1
+			}
+			if len(dependencyUploads) > 0 {
+				_ = runSSHCommandFn(remoteSSHArgs(syncTarget, "rm -rf "+shellQuoteArg(dependencyTmp)))
+			}
+		}
 		if err := runSSHCommandFn(mkdirArgs); err != nil {
 			fmt.Fprintln(os.Stderr, err)
 			return 1
@@ -161,8 +198,13 @@ func cmdThemeRollback(remoteName string, dryRun bool) int {
 		fmt.Fprintln(os.Stderr, err)
 		return 1
 	}
-	themeSource := firstNonEmpty(mapStringAtPath(metadata, "wordpress", "theme_path"), "theme")
-	themeSlug := firstNonEmpty(mapStringAtPath(metadata, "wordpress", "theme_slug"), mapStringAtPath(metadata, "project", "slug"), filepath.Base(themeSource), "theme")
+	repoTheme, _, themes, err := projectRepoTheme(root, metadata, "theme rollback", false)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		return 1
+	}
+	themeSlug := repoTheme.Slug
+	activeThemeSlug := firstNonEmpty(activeWordPressThemeSlug(themes), themeSlug)
 	if err := validateThemeDeploySlug(themeSlug); err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		return 1
@@ -174,7 +216,7 @@ func cmdThemeRollback(remoteName string, dryRun bool) int {
 	}
 	releaseBase := path.Join(target.WordPressPath, "wp-content", "themes", ".nf-releases", themeSlug)
 	metadataFile := path.Join(releaseBase, "releases.json")
-	rollbackScript := themeRollbackScript(target, themeSlug, releaseBase, metadataFile)
+	rollbackScript := themeRollbackScript(target, themeSlug, activeThemeSlug, releaseBase, metadataFile)
 	rollbackArgs := themeRemoteScriptCommandArgs(target, "nf-theme-rollback-release")
 
 	fmt.Println("Theme rollback plan:")
@@ -188,6 +230,9 @@ func cmdThemeRollback(remoteName string, dryRun bool) int {
 	fmt.Printf("  releases:    %s\n", metadataFile)
 	fmt.Printf("  release dir: %s/<previous-release>\n", releaseBase)
 	fmt.Printf("  active dir:  %s\n", target.RemoteThemeDir)
+	if activeThemeSlug != themeSlug {
+		fmt.Printf("  activate:    %s\n", activeThemeSlug)
+	}
 	if dryRun {
 		fmt.Println("  mode:        dry-run")
 	}
@@ -260,6 +305,21 @@ func resolveThemeDeployTarget(remoteName, themeSlug string, metadata map[string]
 	return target, nil
 }
 
+func themeDeploySyncTarget(target themeDeployTarget) envRemoteSyncTarget {
+	return envRemoteSyncTarget{
+		Provider:      target.Provider,
+		RemoteName:    target.RemoteName,
+		SiteID:        target.SiteID,
+		Env:           target.Env,
+		URL:           target.URL,
+		SSHUser:       target.SSHUser,
+		SSHHost:       target.SSHHost,
+		SSHPort:       target.SSHPort,
+		WordPressPath: target.WordPressPath,
+		WPCommand:     target.WPCommand,
+	}
+}
+
 func linodeThemeDeploySSHInfo(record map[string]any) (user, host, port, wpPath string, err error) {
 	targetRef := siteProviderTarget(record)
 	targets, err := cachedTargets()
@@ -284,7 +344,7 @@ func linodeThemeDeploySSHInfo(record map[string]any) (user, host, port, wpPath s
 	return user, host, port, wpPath, nil
 }
 
-func prepareThemeDeployArtifact(root string, metadata map[string]any, sourceDir string, dryRun bool) (themeDeployArtifact, error) {
+func prepareThemeDeployArtifact(root string, metadata map[string]any, sourceDir, themeSlug string, dryRun bool) (themeDeployArtifact, error) {
 	projectSlug := firstNonEmpty(mapStringAtPath(metadata, "project", "slug"), "project")
 	output := firstNonEmpty(mapStringAtPath(metadata, "artifact", "path"), filepath.ToSlash(filepath.Join("dist", projectSlug+"-v{version}.zip")))
 	version, versionErr := readThemeVersion(sourceDir)
@@ -303,7 +363,7 @@ func prepareThemeDeployArtifact(root string, metadata map[string]any, sourceDir 
 			output = filepath.Join(root, output, projectSlug+".zip")
 		}
 	}
-	themeSlug := firstNonEmpty(mapStringAtPath(metadata, "wordpress", "theme_slug"), projectSlug, filepath.Base(filepath.Clean(sourceDir)), "theme")
+	themeSlug = firstNonEmpty(themeSlug, projectSlug, filepath.Base(filepath.Clean(sourceDir)), "theme")
 	if err := validateThemeDeploySlug(themeSlug); err != nil {
 		return themeDeployArtifact{}, err
 	}
@@ -425,11 +485,12 @@ func safePHPFPMService(version string) string {
 	return "php" + version + "-fpm"
 }
 
-func themeDeployReleaseScript(target themeDeployTarget, themeSlug string, artifact themeDeployArtifact, remoteArtifact, releaseBase, releaseDir, activateCommand string) string {
+func themeDeployReleaseScript(target themeDeployTarget, themeSlug, activeThemeSlug string, artifact themeDeployArtifact, remoteArtifact, releaseBase, releaseDir, activateCommand string) string {
 	activeDir := target.RemoteThemeDir
 	metadata := map[string]any{
 		"release_id":        artifact.ReleaseID,
 		"theme_slug":        themeSlug,
+		"active_theme_slug": firstNonEmpty(activeThemeSlug, themeSlug),
 		"artifact_filename": artifact.FileName,
 		"artifact_checksum": artifact.Checksum,
 		"deployed_at":       time.Now().UTC().Format(time.RFC3339),
@@ -481,13 +542,13 @@ func themeDeployReleaseScript(target themeDeployTarget, themeSlug string, artifa
 	return script
 }
 
-func themeRollbackScript(target themeDeployTarget, themeSlug, releaseBase, metadataFile string) string {
+func themeRollbackScript(target themeDeployTarget, themeSlug, activeThemeSlug, releaseBase, metadataFile string) string {
 	activeDir := target.RemoteThemeDir
-	activateArgs := themeDeployActivateArgs(target, themeSlug)
+	activateArgs := themeDeployActivateArgs(target, firstNonEmpty(activeThemeSlug, themeSlug))
 	activateCommand := activateArgs[len(activateArgs)-1]
 	readCurrentPHP := `$f=$argv[1]; $ok=function($v){return is_string($v)&&preg_match('/^[A-Za-z0-9._-]+$/',$v);}; $l=json_decode(file_get_contents($f), true); if (!is_array($l) || count($l) < 1) { fwrite(STDERR, "No theme releases found.\n"); exit(2); } for ($i=count($l)-1; $i>=0; $i--) { if (!empty($l[$i]["release_id"]) && $ok($l[$i]["release_id"])) { echo $l[$i]["release_id"]; exit; } } fwrite(STDERR, "No current release found.\n"); exit(2);`
 	readPreviousPHP := `$f=$argv[1]; $ok=function($v){return is_string($v)&&preg_match('/^[A-Za-z0-9._-]+$/',$v);}; $l=json_decode(file_get_contents($f), true); if (!is_array($l) || count($l) < 2) { fwrite(STDERR, "No previous theme release found.\n"); exit(2); } $current=""; for ($i=count($l)-1; $i>=0; $i--) { if (!empty($l[$i]["release_id"]) && $ok($l[$i]["release_id"])) { $current=$l[$i]["release_id"]; break; } } for ($i=count($l)-2; $i>=0; $i--) { if (!empty($l[$i]["release_id"]) && $ok($l[$i]["release_id"]) && $l[$i]["release_id"] !== $current) { echo $l[$i]["release_id"]; exit; } } fwrite(STDERR, "No previous theme release found.\n"); exit(2);`
-	appendPHP := `$f=$argv[1]; $target=$argv[2]; $from=$argv[3]; $slug=$argv[4]; $provider=$argv[5]; $site=$argv[6]; $env=$argv[7]; $remote=$argv[8]; $m=["action"=>"rollback","release_id"=>$target,"theme_slug"=>$slug,"rolled_back_from"=>$from,"deployed_at"=>gmdate("c"),"provider"=>$provider,"site_id"=>$site,"env"=>$env,"remote"=>$remote]; $l=[]; if (is_file($f)) { $o=json_decode(file_get_contents($f), true); if (is_array($o)) { $l=$o; } } $l[]=$m; file_put_contents($f, json_encode($l, JSON_PRETTY_PRINT|JSON_UNESCAPED_SLASHES).PHP_EOL);`
+	appendPHP := `$f=$argv[1]; $target=$argv[2]; $from=$argv[3]; $slug=$argv[4]; $active=$argv[5]; $provider=$argv[6]; $site=$argv[7]; $env=$argv[8]; $remote=$argv[9]; $m=["action"=>"rollback","release_id"=>$target,"theme_slug"=>$slug,"active_theme_slug"=>$active,"rolled_back_from"=>$from,"deployed_at"=>gmdate("c"),"provider"=>$provider,"site_id"=>$site,"env"=>$env,"remote"=>$remote]; $l=[]; if (is_file($f)) { $o=json_decode(file_get_contents($f), true); if (is_array($o)) { $l=$o; } } $l[]=$m; file_put_contents($f, json_encode($l, JSON_PRETTY_PRINT|JSON_UNESCAPED_SLASHES).PHP_EOL);`
 	script := strings.Join([]string{
 		"set -e",
 		"release_base=" + shellQuoteArg(releaseBase),
@@ -507,7 +568,7 @@ func themeRollbackScript(target themeDeployTarget, themeSlug, releaseBase, metad
 		"if " + activateCommand + "; then rm -rf \"$old_active\"; else rm -rf \"$active_dir\"; if [ -e \"$old_active\" ] || [ -L \"$old_active\" ]; then mv \"$old_active\" \"$active_dir\"; fi; exit 1; fi",
 		themeRuntimeOpcacheResetCommand(),
 		themeRuntimeFPMReloadCommand(target),
-		"php -r " + shellQuoteArg(appendPHP) + " \"$metadata_file\" \"$target_release\" \"$current_release\" " + shellQuoteArg(themeSlug) + " " + shellQuoteArg(target.Provider) + " " + shellQuoteArg(target.SiteID) + " " + shellQuoteArg(target.Env) + " " + shellQuoteArg(target.RemoteName),
+		"php -r " + shellQuoteArg(appendPHP) + " \"$metadata_file\" \"$target_release\" \"$current_release\" " + shellQuoteArg(themeSlug) + " " + shellQuoteArg(firstNonEmpty(activeThemeSlug, themeSlug)) + " " + shellQuoteArg(target.Provider) + " " + shellQuoteArg(target.SiteID) + " " + shellQuoteArg(target.Env) + " " + shellQuoteArg(target.RemoteName),
 	}, " && ")
 	return script
 }

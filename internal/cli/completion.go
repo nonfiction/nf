@@ -449,15 +449,44 @@ func envSnapshotCompletionCandidates(args []string) []string {
 
 func themeCompletionCandidates(args []string) []string {
 	if len(args) == 0 {
-		candidates := []string{"tasks", "package", "deploy", "rollback", "help"}
+		candidates := []string{"list", "ls", "add", "activate", "remove", "rm", "status", "diff", "install", "cache", "tasks", "package", "deploy", "rollback", "help"}
 		candidates = append(candidates, projectTaskCompletionNames()...)
 		return uniqueSortedStrings(candidates)
+	}
+	args[0] = cliCommandAlias(args[0])
+	if args[0] == "add" {
+		return []string{"--source", "--path", "--auto-update", "--note"}
+	}
+	if args[0] == "activate" || args[0] == "remove" {
+		return projectThemeCompletionNames()
+	}
+	if args[0] == "install" {
+		return append(projectRemoteCompletionNames(), "--dry-run", "--yes")
+	}
+	if args[0] == "status" || args[0] == "diff" {
+		return projectRemoteCompletionNames()
+	}
+	if args[0] == "cache" {
+		return themeCacheCompletionCandidates(args[1:])
 	}
 	switch args[0] {
 	case "package":
 		return []string{"--dry-run", "--source", "--output"}
 	case "deploy", "rollback":
 		return projectRemoteCompletionNames()
+	default:
+		return nil
+	}
+}
+
+func themeCacheCompletionCandidates(args []string) []string {
+	if len(args) == 0 {
+		return []string{"add", "save", "list", "ls", "show", "help"}
+	}
+	args[0] = cliCommandAlias(args[0])
+	switch args[0] {
+	case "save", "show":
+		return projectThemeCompletionNames()
 	default:
 		return nil
 	}
@@ -624,6 +653,26 @@ func projectPluginCompletionNames() []string {
 	values := make([]string, 0, len(plugins))
 	for _, plugin := range plugins {
 		values = append(values, plugin.Slug)
+	}
+	return uniqueSortedStrings(values)
+}
+
+func projectThemeCompletionNames() []string {
+	root, ok := currentNFProjectRoot()
+	if !ok {
+		return nil
+	}
+	metadata, err := loadProjectMetadataOrError(root)
+	if err != nil {
+		return nil
+	}
+	themes, err := loadWordPressThemeSpecs(metadata)
+	if err != nil {
+		return nil
+	}
+	values := make([]string, 0, len(themes))
+	for _, theme := range themes {
+		values = append(values, theme.Slug)
 	}
 	return uniqueSortedStrings(values)
 }

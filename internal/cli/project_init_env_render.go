@@ -90,14 +90,12 @@ func projectInitMetadata(args projectInitArgs) map[string]any {
 		},
 		"wordpress": map[string]any{
 			"deploy_unit": "theme",
-			"theme_slug":  themeSlug,
-			"theme_path":  themePath,
+			"themes":      projectInitThemeList(themeSlug, themePath),
 			"plugins":     []any{},
 		},
 		"env": map[string]any{
 			"compose":           "docker compose",
 			"wordpress_service": "wordpress",
-			"theme_mount_slug":  "theme",
 			"uploads_path":      "uploads",
 		},
 		"artifact": map[string]any{
@@ -107,6 +105,29 @@ func projectInitMetadata(args projectInitArgs) map[string]any {
 		"tasks":   defaultProjectTasks(),
 	}
 	return metadata
+}
+
+func projectInitThemeList(themeSlug, themePath string) []any {
+	themes := []any{
+		orderedObject{Pairs: []orderedPair{
+			{Key: "slug", Value: themeSlug},
+			{Key: "source", Value: wordpressThemeRepoSource},
+			{Key: "path", Value: themePath},
+		}},
+	}
+	seen := map[string]struct{}{themeSlug: {}}
+	for _, slug := range defaultBundledWordPressThemes() {
+		if _, ok := seen[slug]; ok {
+			continue
+		}
+		themes = append(themes, slug)
+		seen[slug] = struct{}{}
+	}
+	return themes
+}
+
+func defaultBundledWordPressThemes() []string {
+	return []string{"twentytwentyfive", "twentytwentyfour", "twentytwentythree"}
 }
 
 type projectInitArgs struct {
@@ -178,14 +199,12 @@ func (o orderedObject) MarshalJSON() ([]byte, error) {
 }
 
 func renderEnvCompose(cfg envConfig) string {
-	themeMountSlug := firstNonEmpty(cfg.ThemeMountSlug, "theme")
 	wordpressService := firstNonEmpty(cfg.WordpressService, "wordpress")
 	dbImage := firstNonEmpty(cfg.DockerDBImage, defaultDockerDBImage)
 	wordpressImage := firstNonEmpty(cfg.DockerWPImage, defaultDockerWordpressImage)
 	dockerUser := firstNonEmpty(cfg.DockerUser, defaultDockerUser)
-	themePath := cfg.ThemePath
 	uploadsPath := firstNonEmpty(cfg.UploadsPath, "uploads")
-	pluginMounts := renderEnvRepoPluginMounts(cfg)
+	repoMounts := renderEnvRepoThemeMounts(cfg) + renderEnvRepoPluginMounts(cfg)
 	return fmt.Sprintf(`services:
   db:
     image: %s
@@ -233,9 +252,7 @@ func renderEnvCompose(cfg envConfig) string {
         if ( ! defined('WP_DEBUG_DISPLAY') ) define('WP_DEBUG_DISPLAY', false);
     volumes:
       - wp_data:/var/www/html
-      - %s:/var/www/html/wp-content/themes/%s
-%s
-      - ./php/uploads.ini:/usr/local/etc/php/conf.d/uploads.ini:ro
+%s      - ./php/uploads.ini:/usr/local/etc/php/conf.d/uploads.ini:ro
       - ./%s:/var/www/html/wp-content/uploads
       - ./%s:%s
       - %s:/env-snapshots
@@ -262,7 +279,30 @@ func renderEnvCompose(cfg envConfig) string {
 volumes:
   db_data:
   wp_data:
-`, dbImage, wordpressService, dockerUser, themePath, themeMountSlug, pluginMounts, uploadsPath, envTransferPath, path.Join("/", "env", "uploads"), envSnapshotComposeMount(cfg), wordpressImage)
+`, dbImage, wordpressService, dockerUser, repoMounts, uploadsPath, envTransferPath, path.Join("/", "env", "uploads"), envSnapshotComposeMount(cfg), wordpressImage)
+}
+
+func renderEnvRepoThemeMounts(cfg envConfig) string {
+	if len(cfg.RepoThemeMounts) == 0 {
+		return ""
+	}
+	mounts := make([]envThemeMount, 0, len(cfg.RepoThemeMounts))
+	for _, mount := range cfg.RepoThemeMounts {
+		if strings.TrimSpace(mount.Slug) == "" || strings.TrimSpace(mount.Host) == "" {
+			continue
+		}
+		mounts = append(mounts, mount)
+	}
+	sort.Slice(mounts, func(i, j int) bool { return mounts[i].Slug < mounts[j].Slug })
+	var builder strings.Builder
+	for _, mount := range mounts {
+		builder.WriteString("      - ")
+		builder.WriteString(mount.Host)
+		builder.WriteString(":/var/www/html/wp-content/themes/")
+		builder.WriteString(mount.Slug)
+		builder.WriteByte('\n')
+	}
+	return builder.String()
 }
 
 func renderEnvRepoPluginMounts(cfg envConfig) string {
@@ -285,7 +325,7 @@ func renderEnvRepoPluginMounts(cfg envConfig) string {
 		builder.WriteString(mount.Slug)
 		builder.WriteByte('\n')
 	}
-	return strings.TrimRight(builder.String(), "\n")
+	return builder.String()
 }
 
 func renderEnvFile(cfg envConfig) string {
@@ -598,10 +638,10 @@ func projectRemoteSelectOptions(action string) ([]ui.SelectOption, error) {
 func validateThemeDeploySlug(slug string) error {
 	slug = strings.TrimSpace(slug)
 	if slug == "" {
-		return ProjectError{Msg: "wordpress.theme_slug cannot be empty"}
+		return ProjectError{Msg: "theme slug cannot be empty"}
 	}
 	if filepath.IsAbs(slug) || strings.ContainsAny(slug, "/\\") || strings.Contains(slug, "..") {
-		return ProjectError{Msg: fmt.Sprintf("wordpress.theme_slug %q must be one safe directory name", slug)}
+		return ProjectError{Msg: fmt.Sprintf("theme slug %q must be one safe directory name", slug)}
 	}
 	return nil
 }
@@ -617,11 +657,21 @@ func cmdPackage(commandName, source, output string, dryRun bool) int {
 		return 1
 	}
 	if source == "" {
-		source = firstNonEmpty(mapStringAtPath(metadata, "wordpress", "theme_path"), "theme")
+		_, sourceDir, _, err := projectRepoTheme(root, metadata, commandName, true)
+		if err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			return 1
+		}
+		source = sourceDir
 	}
 	sourceDir := source
 	if !filepath.IsAbs(sourceDir) {
 		sourceDir = filepath.Join(root, sourceDir)
+	}
+	repoTheme, _, _, err := projectRepoTheme(root, metadata, commandName, false)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		return 1
 	}
 	projectSlug := firstNonEmpty(mapStringAtPath(metadata, "project", "slug"), "project")
 	versionedOutput := output
@@ -641,7 +691,7 @@ func cmdPackage(commandName, source, output string, dryRun bool) int {
 			output = filepath.Join(root, output, projectSlug+".zip")
 		}
 	}
-	themeSlug := firstNonEmpty(mapStringAtPath(metadata, "wordpress", "theme_slug"), projectSlug, filepath.Base(filepath.Clean(sourceDir)), "theme")
+	themeSlug := firstNonEmpty(repoTheme.Slug, projectSlug, filepath.Base(filepath.Clean(sourceDir)), "theme")
 	if err := validateThemeDeploySlug(themeSlug); err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		return 1
