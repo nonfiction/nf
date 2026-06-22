@@ -135,22 +135,6 @@ func cmdEnvRemoteSyncPlan(action, remoteName string, cfg envConfig, metadata map
 		fmt.Fprintln(os.Stderr, err)
 		return 1
 	}
-	fmt.Printf("Env %s preflight:\n", action)
-	fmt.Printf("  local project: %s\n", cfg.ProjectSlug)
-	fmt.Printf("  local env:     %s\n", localEnvDir(cfg))
-	fmt.Printf("  remote:        %s\n", target.RemoteName)
-	fmt.Printf("  site:          %s\n", target.SiteID)
-	fmt.Printf("  env:           %s\n", target.Env)
-	fmt.Printf("  provider:      %s\n", target.Provider)
-	if target.TargetLabel != "" && target.TargetRef != "" {
-		fmt.Printf("  %s:        %s\n", target.TargetLabel, target.TargetRef)
-	}
-	if target.URL != "" {
-		fmt.Printf("  url:           %s\n", target.URL)
-	}
-	if target.AccessSummary != "" {
-		fmt.Printf("  %s: %s\n", target.AccessLabel, target.AccessSummary)
-	}
 	willExecute := opts.execute || (!opts.dryRun && !opts.nonInteractive)
 	mode := "execute"
 	if !willExecute {
@@ -158,9 +142,9 @@ func cmdEnvRemoteSyncPlan(action, remoteName string, cfg envConfig, metadata map
 	} else if opts.execute {
 		mode = "execute"
 	}
-	fmt.Printf("  mode:          %s\n", mode)
+	printEnvRemoteSyncPreflight(action, cfg, target, mode)
 	if !willExecute {
-		fmt.Println("No data was changed. Re-run with --execute to sync database and mutable wp-content.")
+		fmt.Println(envRemoteSyncDryRunMessage(action))
 		return 0
 	}
 	if target.Provider != "linode" && target.Provider != "kinsta" {
@@ -172,11 +156,7 @@ func cmdEnvRemoteSyncPlan(action, remoteName string, cfg envConfig, metadata map
 		return 1
 	}
 	if !opts.yes {
-		displayAction := action
-		if displayAction != "" {
-			displayAction = strings.ToUpper(displayAction[:1]) + displayAction[1:]
-		}
-		message := fmt.Sprintf("%s %s:%s %s local env %s? This syncs the database and mutable wp-content.", displayAction, target.SiteID, target.Env, map[string]string{"pull": "into", "push": "from"}[action], cfg.ProjectSlug)
+		message := envRemoteSyncConfirmationMessage(action, cfg, target)
 		confirmed, err := envRemoteSyncConfirm(message, false)
 		if err != nil {
 			fmt.Fprintln(os.Stderr, err)
@@ -191,6 +171,84 @@ func cmdEnvRemoteSyncPlan(action, remoteName string, cfg envConfig, metadata map
 		return executeEnvPull(cfg, target)
 	}
 	return executeEnvPush(cfg, target)
+}
+
+func envRemoteSyncArrow(action string) string {
+	if action == "pull" {
+		return "◀──"
+	}
+	return "──▶"
+}
+
+func envRemoteSyncActionTitle(action string) string {
+	if action == "pull" {
+		return "Pull"
+	}
+	return "Push"
+}
+
+func printEnvRemoteSyncPreflight(action string, cfg envConfig, target envRemoteSyncTarget, mode string) {
+	arrow := envRemoteSyncArrow(action)
+	localHeader := "FROM local"
+	remoteHeader := "TO remote"
+	if action == "pull" {
+		localHeader = "TO local"
+		remoteHeader = "FROM remote"
+	}
+	fmt.Printf("Env %s preflight:\n\n", action)
+	fmt.Printf("  %s local env  %s  %s remote\n\n", cfg.ProjectSlug, arrow, target.RemoteName)
+	fmt.Printf("%s:\n", localHeader)
+	fmt.Printf("  project: %s\n", cfg.ProjectSlug)
+	fmt.Printf("  env:     %s\n\n", localEnvDir(cfg))
+	fmt.Printf("%s:\n", remoteHeader)
+	fmt.Printf("  remote:   %s\n", target.RemoteName)
+	fmt.Printf("  site:     %s\n", target.SiteID)
+	fmt.Printf("  env:      %s\n", target.Env)
+	fmt.Printf("  provider: %s\n", target.Provider)
+	if target.TargetLabel == "target" && target.TargetRef != "" {
+		fmt.Printf("  target:   %s\n", target.TargetRef)
+	} else if target.TargetLabel != "" && target.TargetRef != "" {
+		fmt.Printf("  %s: %s\n", target.TargetLabel, target.TargetRef)
+	}
+	if target.URL != "" {
+		fmt.Printf("  url:      %s\n", target.URL)
+	}
+	if ssh := envRemoteSyncSSHSummary(target); ssh != "" {
+		fmt.Printf("  ssh:      %s\n", ssh)
+	}
+	if target.AccessLabel == "target record" && target.AccessSummary != "" {
+		fmt.Printf("  target record: %s\n", target.AccessSummary)
+	}
+	fmt.Printf("  mode:     %s\n", mode)
+}
+
+func envRemoteSyncSSHSummary(target envRemoteSyncTarget) string {
+	if strings.TrimSpace(target.SSHHost) == "" {
+		return ""
+	}
+	ssh := strings.TrimSpace(target.SSHHost)
+	if strings.TrimSpace(target.SSHUser) != "" {
+		ssh = strings.TrimSpace(target.SSHUser) + "@" + ssh
+	}
+	if port := strings.TrimSpace(target.SSHPort); port != "" && port != "22" {
+		ssh += ":" + port
+	}
+	return ssh
+}
+
+func envRemoteSyncDryRunMessage(action string) string {
+	if action == "pull" {
+		return "No data was changed. Re-run with --execute to replace the local database and mutable wp-content."
+	}
+	return "No data was changed. Re-run with --execute to replace the remote database and mutable wp-content."
+}
+
+func envRemoteSyncConfirmationMessage(action string, cfg envConfig, target envRemoteSyncTarget) string {
+	overwrite := "This will replace the remote database and mutable wp-content with your local env data."
+	if action == "pull" {
+		overwrite = "This will replace your local database and mutable wp-content with remote data."
+	}
+	return fmt.Sprintf("%s local env %s %s remote %s / %s:%s?\n%s", envRemoteSyncActionTitle(action), cfg.ProjectSlug, envRemoteSyncArrow(action), target.RemoteName, target.SiteID, target.Env, overwrite)
 }
 
 func remoteSyncTempDir(cfg envConfig, target envRemoteSyncTarget, action string) string {
@@ -223,8 +281,11 @@ if [ -n "$dirs" ]; then %star -C %s -czf %s/wp-content.tar.gz $dirs; else %star 
 `, shellQuoteArg(remoteTmp), shellQuoteArg(remoteTmp), shellQuoteArg(remoteTmp), shellQuoteArg(target.WordPressPath), target.WPCommand, shellQuoteArg(target.WordPressPath), shellQuoteArg(remoteTmp), fileOp, shellQuoteArg(remoteTmp), fileOp, shellQuoteArg(remoteTmp), shellQuoteArg(target.WordPressPath), fileOp, shellQuoteArg(target.WordPressPath), shellQuoteArg(remoteTmp), fileOp, shellQuoteArg(target.WordPressPath), shellQuoteArg(remoteTmp), fileOp, shellQuoteArg(remoteTmp))
 }
 
-func remoteImportScript(target envRemoteSyncTarget, remoteTmp string) string {
+func remoteImportScript(cfg envConfig, target envRemoteSyncTarget, remoteTmp string) string {
 	fileOp := remoteFileOpPrefix(target)
+	repoPlugins := shellQuoteArg(envRepoPluginSlugList(cfg))
+	excludes := envRepoPluginTarExcludeArgs(cfg)
+	extractDir := path.Join(remoteTmp, "wp-content-extract")
 	chown := ""
 	if target.SudoFileOps {
 		chown = fmt.Sprintf("sudo chown -R www-data:www-data %s/wp-content/uploads %s/wp-content/plugins %s/wp-content/mu-plugins %s/wp-content/languages 2>/dev/null || true\n", shellQuoteArg(target.WordPressPath), shellQuoteArg(target.WordPressPath), shellQuoteArg(target.WordPressPath), shellQuoteArg(target.WordPressPath))
@@ -233,9 +294,42 @@ func remoteImportScript(target envRemoteSyncTarget, remoteTmp string) string {
 tmp_sql=%s/database.sql
 gzip -cd %s/database.sql.gz > "$tmp_sql"
 %s --path=%s db import "$tmp_sql"
-%srm -rf %s/wp-content/uploads %s/wp-content/plugins %s/wp-content/mu-plugins %s/wp-content/languages
-%star -xzf %s/wp-content.tar.gz -C %s
-%s`, shellQuoteArg(remoteTmp), shellQuoteArg(remoteTmp), target.WPCommand, shellQuoteArg(target.WordPressPath), fileOp, shellQuoteArg(target.WordPressPath), shellQuoteArg(target.WordPressPath), shellQuoteArg(target.WordPressPath), shellQuoteArg(target.WordPressPath), fileOp, shellQuoteArg(remoteTmp), shellQuoteArg(target.WordPressPath), chown)
+if [ -f %s/wp-content.tar.gz ]; then
+  extract_dir=%s
+  %srm -rf "$extract_dir"
+  %smkdir -p "$extract_dir"
+  %star %s -xzf %s/wp-content.tar.gz -C "$extract_dir"
+  clear_dir_contents() {
+    dir="$1"
+    if [ -e "$dir" ] && [ ! -d "$dir" ]; then
+      %srm -f "$dir"
+    fi
+    %smkdir -p "$dir"
+    %sfind "$dir" -mindepth 1 -maxdepth 1 -exec rm -rf {} +
+  }
+  copy_dir_contents() {
+    source="$1"
+    dest="$2"
+    [ -d "$source" ] || return 0
+    %sfind "$source" -mindepth 1 -maxdepth 1 -exec cp -a {} "$dest"/ \;
+  }
+  clear_dir_contents %s/wp-content/uploads
+  clear_dir_contents %s/wp-content/mu-plugins
+  clear_dir_contents %s/wp-content/languages
+  %smkdir -p %s/wp-content/plugins
+  repo_plugins=%s
+  for entry in %s/wp-content/plugins/* %s/wp-content/plugins/.[!.]* %s/wp-content/plugins/..?*; do
+    [ -e "$entry" ] || continue
+    base="${entry##*/}"
+    case " $repo_plugins " in *" $base "*) continue ;; esac
+    %srm -rf "$entry"
+  done
+  copy_dir_contents "$extract_dir/wp-content/uploads" %s/wp-content/uploads
+  copy_dir_contents "$extract_dir/wp-content/mu-plugins" %s/wp-content/mu-plugins
+  copy_dir_contents "$extract_dir/wp-content/languages" %s/wp-content/languages
+  copy_dir_contents "$extract_dir/wp-content/plugins" %s/wp-content/plugins
+fi
+%s`, shellQuoteArg(remoteTmp), shellQuoteArg(remoteTmp), target.WPCommand, shellQuoteArg(target.WordPressPath), shellQuoteArg(remoteTmp), shellQuoteArg(extractDir), fileOp, fileOp, fileOp, excludes, shellQuoteArg(remoteTmp), fileOp, fileOp, fileOp, fileOp, shellQuoteArg(target.WordPressPath), shellQuoteArg(target.WordPressPath), shellQuoteArg(target.WordPressPath), fileOp, shellQuoteArg(target.WordPressPath), repoPlugins, shellQuoteArg(target.WordPressPath), shellQuoteArg(target.WordPressPath), shellQuoteArg(target.WordPressPath), fileOp, shellQuoteArg(target.WordPressPath), shellQuoteArg(target.WordPressPath), shellQuoteArg(target.WordPressPath), shellQuoteArg(target.WordPressPath), chown)
 }
 
 func remoteWPSearchReplaceLine(target envRemoteSyncTarget, sourceURL, destinationURL string) string {
@@ -449,7 +543,7 @@ func executeEnvPush(cfg envConfig, target envRemoteSyncTarget) int {
 		fmt.Fprintln(os.Stderr, err)
 		return 1
 	}
-	if err := runSSHCommandFn(remoteSSHArgs(target, remoteImportScript(target, remoteTmp))); err != nil {
+	if err := runSSHCommandFn(remoteSSHArgs(target, remoteImportScript(cfg, target, remoteTmp))); err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		return 1
 	}

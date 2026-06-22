@@ -8489,12 +8489,12 @@ func TestRunEnvPushPreflightsRepoRemoteWithoutSyncing(t *testing.T) {
 				t.Fatalf("Run(env push) = %d, want 0 for preflight", got)
 			}
 		})
-		for _, want := range []string{"Env push preflight:", "local project: client", "remote:        production", "site:          client-kinsta", "env:           live", "provider:      kinsta", "url:           https://www.example.com/", "environment ssh: client@203.0.113.10"} {
+		for _, want := range []string{"Env push preflight:", "client local env  ──▶  production remote", "FROM local:", "project: client", "TO remote:", "remote:   production", "site:     client-kinsta", "env:      live", "provider: kinsta", "url:      https://www.example.com/", "ssh:      client@203.0.113.10:12345", "mode:     dry-run", "No data was changed. Re-run with --execute to replace the remote database and mutable wp-content."} {
 			if !strings.Contains(stdout, want) {
 				t.Fatalf("env push stdout missing %q:\n%s", want, stdout)
 			}
 		}
-		if strings.Contains(stdout, "target record:") || strings.Contains(stdout, "target:        kinsta") {
+		if strings.Contains(stdout, "target record:") || strings.Contains(stdout, "target:        kinsta") || strings.Contains(stdout, "environment ssh") {
 			t.Fatalf("env push stdout used target wording for Kinsta:\n%s", stdout)
 		}
 	})
@@ -8567,7 +8567,7 @@ func TestRunEnvPullPreflightResolvesLinodeTargetFromProvidersCache(t *testing.T)
 				t.Fatalf("Run(env pull) = %d, want 0 for preflight", got)
 			}
 		})
-		for _, want := range []string{"Env pull preflight:", "local project: foobar", "remote:        live", "site:          foobar.app4-linode", "provider:      linode", "target:        app4-linode", "target record: app4-linode", "mode:          dry-run", "No data was changed."} {
+		for _, want := range []string{"Env pull preflight:", "foobar local env  ◀──  live remote", "TO local:", "project: foobar", "FROM remote:", "remote:   live", "site:     foobar.app4-linode", "provider: linode", "target:   app4-linode", "ssh:      nonfiction@app4-linode.nonfiction.dev", "target record: app4-linode", "mode:     dry-run", "No data was changed. Re-run with --execute to replace the local database and mutable wp-content."} {
 			if !strings.Contains(stdout, want) {
 				t.Fatalf("env pull stdout missing %q:\n%s", want, stdout)
 			}
@@ -8592,7 +8592,7 @@ func TestRunEnvPullPreflightResolvesLinodeTargetFromProvidersCache(t *testing.T)
 			t.Fatalf("Run(env pull --dry-run) = %d, want 0", got)
 		}
 	})
-	if selectedTitle != "Choose a remote to pull" || !strings.Contains(stdout, "remote:        live") {
+	if selectedTitle != "Choose a remote to pull" || !strings.Contains(stdout, "live remote") {
 		t.Fatalf("env pull picker title/output = %q /\n%s", selectedTitle, stdout)
 	}
 }
@@ -9164,7 +9164,7 @@ func TestRunThemeDeployWithoutRemotePromptsPicker(t *testing.T) {
 	if selectTitle != "Choose a remote to deploy theme to" {
 		t.Fatalf("select title = %q", selectTitle)
 	}
-	if len(selectOptions) != 1 || selectOptions[0] != (ui.SelectOption{Value: "production", Label: "production -> client-kinsta:live"}) {
+	if len(selectOptions) != 1 || selectOptions[0] != (ui.SelectOption{Value: "production", Label: "production (client-kinsta:live)"}) {
 		t.Fatalf("select options = %#v", selectOptions)
 	}
 	if !strings.Contains(stdout, "remote:      production") || !strings.Contains(stdout, "Theme release deployed.") {
@@ -9783,7 +9783,7 @@ func TestRunRemoteAddListRemoveWritesProjectMetadata(t *testing.T) {
 	if removeSelectTitle != "Choose a remote to remove" {
 		t.Fatalf("remote remove select title = %q", removeSelectTitle)
 	}
-	if len(removeSelectOptions) != 1 || removeSelectOptions[0] != (ui.SelectOption{Value: "production", Label: "production -> client-app1-linode:live"}) {
+	if len(removeSelectOptions) != 1 || removeSelectOptions[0] != (ui.SelectOption{Value: "production", Label: "production (client-app1-linode:live)"}) {
 		t.Fatalf("remote remove select options = %#v", removeSelectOptions)
 	}
 	if !strings.Contains(removeOutput, "Removed remote production") {
@@ -10720,6 +10720,38 @@ func TestExecuteEnvPushFinalizesRemoteDestinationThemeAndCache(t *testing.T) {
 	}
 	if strings.Contains(finalizeScript, "theme activate local-theme") {
 		t.Fatalf("push activated local theme mount slug remotely:\n%s", finalizeScript)
+	}
+}
+
+func TestRemoteImportScriptPreservesRepoPluginDirs(t *testing.T) {
+	cfg := envConfig{RepoPluginMounts: []envPluginMount{{Slug: "agency-credit", Host: "/repo/plugins/agency-credit"}}}
+	target := envRemoteSyncTarget{WordPressPath: "/var/www/sites/client/public", WPCommand: "sudo -u www-data wp", SudoFileOps: true}
+	script := remoteImportScript(cfg, target, "/tmp/nf-push-client")
+	for _, want := range []string{"repo_plugins=agency-credit", "case \" $repo_plugins \" in *\" $base \"*) continue ;; esac", "sudo rm -rf \"$entry\"", "sudo tar --exclude=wp-content/plugins/agency-credit -xzf /tmp/nf-push-client/wp-content.tar.gz -C \"$extract_dir\"", "copy_dir_contents \"$extract_dir/wp-content/plugins\" /var/www/sites/client/public/wp-content/plugins", "clear_dir_contents /var/www/sites/client/public/wp-content/uploads", "sudo chown -R www-data:www-data /var/www/sites/client/public/wp-content/uploads"} {
+		if !strings.Contains(script, want) {
+			t.Fatalf("remote import script missing %q:\n%s", want, script)
+		}
+	}
+	for _, unwanted := range []string{"rm -rf /var/www/sites/client/public/wp-content/uploads /var/www/sites/client/public/wp-content/plugins", "rm -rf /var/www/sites/client/public/wp-content/plugins", "tar --no-overwrite-dir"} {
+		if strings.Contains(script, unwanted) {
+			t.Fatalf("remote import script should not remove repo plugin mount point %q:\n%s", unwanted, script)
+		}
+	}
+}
+
+func TestEnvRemoteSyncConfirmationMessageShowsLocalLeftAndRemoteName(t *testing.T) {
+	cfg := envConfig{ProjectSlug: "themestarter"}
+	target := envRemoteSyncTarget{RemoteName: "test", SiteID: "themestarter.app3-linode", Env: "live"}
+	wantPush := "Push local env themestarter ──▶ remote test / themestarter.app3-linode:live?\nThis will replace the remote database and mutable wp-content with your local env data."
+	if got := envRemoteSyncConfirmationMessage("push", cfg, target); got != wantPush {
+		t.Fatalf("push confirmation = %q, want %q", got, wantPush)
+	}
+	wantPull := "Pull local env themestarter ◀── remote test / themestarter.app3-linode:live?\nThis will replace your local database and mutable wp-content with remote data."
+	if got := envRemoteSyncConfirmationMessage("pull", cfg, target); got != wantPull {
+		t.Fatalf("pull confirmation = %q, want %q", got, wantPull)
+	}
+	if strings.Contains(envRemoteSyncConfirmationMessage("push", cfg, target), "sync") || strings.Contains(envRemoteSyncConfirmationMessage("pull", cfg, target), "sync") {
+		t.Fatalf("confirmation messages should not use sync wording")
 	}
 }
 
@@ -13349,7 +13381,7 @@ func TestEnvSnapshotScriptsExcludeRepoPluginMounts(t *testing.T) {
 		t.Fatalf("snapshot create script missing repo plugin exclude:\n%s", createScript)
 	}
 	restoreScript := envSnapshotRestoreScript(cfg, "snapshot")
-	for _, want := range []string{"clear_dir_contents /var/www/html/wp-content/uploads", "find \"$dir\" -mindepth 1 -maxdepth 1 -exec rm -rf {} +", "repo_plugins=client-plugin", "case \" $repo_plugins \" in *\" $base \"*) continue", "--exclude=wp-content/plugins/client-plugin"} {
+	for _, want := range []string{"clear_dir_contents /var/www/html/wp-content/uploads", "find \"$dir\" -mindepth 1 -maxdepth 1 -exec rm -rf {} +", "repo_plugins=client-plugin", "case \" $repo_plugins \" in *\" $base \"*) continue", "tar --exclude=wp-content/plugins/client-plugin", "-C \"$extract_dir\"", "copy_dir_contents \"$extract_dir/wp-content/plugins\" /var/www/html/wp-content/plugins", "--exclude=wp-content/plugins/client-plugin"} {
 		if !strings.Contains(restoreScript, want) {
 			t.Fatalf("snapshot restore script missing %q:\n%s", want, restoreScript)
 		}
@@ -13359,6 +13391,9 @@ func TestEnvSnapshotScriptsExcludeRepoPluginMounts(t *testing.T) {
 	}
 	if strings.Contains(restoreScript, "rm -rf /var/www/html/wp-content/uploads /var/www/html/wp-content/plugins") {
 		t.Fatalf("snapshot restore script should not remove the whole plugins directory:\n%s", restoreScript)
+	}
+	if strings.Contains(restoreScript, "tar --no-overwrite-dir") {
+		t.Fatalf("snapshot restore should extract into temp dir instead of relying on tar directory overwrite behavior:\n%s", restoreScript)
 	}
 }
 

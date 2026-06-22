@@ -628,7 +628,7 @@ func projectRemoteSelectOptions(action string) ([]ui.SelectOption, error) {
 		if _, _, ok, err := projectRemoteAlias(metadata, name); err != nil {
 			return nil, err
 		} else if ok {
-			label += " -> " + strings.TrimSpace(recordValueString(remotes[name]))
+			label += " (" + strings.TrimSpace(recordValueString(remotes[name])) + ")"
 		}
 		options = append(options, ui.SelectOption{Value: name, Label: label})
 	}

@@ -227,6 +227,9 @@ trap 'rm -rf "$tmpdir"' EXIT
 gzip -cd "%s" > "$tmpdir/database.sql"
 wp db import "$tmpdir/database.sql"
 if [ -f "%s" ]; then
+  extract_dir="$tmpdir/wp-content-extract"
+  mkdir -p "$extract_dir"
+  tar %s -xzf "%s" -C "$extract_dir"
   clear_dir_contents() {
     dir="$1"
     if [ -e "$dir" ] && [ ! -d "$dir" ]; then
@@ -234,6 +237,12 @@ if [ -f "%s" ]; then
     fi
     mkdir -p "$dir"
     find "$dir" -mindepth 1 -maxdepth 1 -exec rm -rf {} +
+  }
+  copy_dir_contents() {
+    source="$1"
+    dest="$2"
+    [ -d "$source" ] || return 0
+    find "$source" -mindepth 1 -maxdepth 1 -exec cp -a {} "$dest"/ \;
   }
   clear_dir_contents /var/www/html/wp-content/uploads
   clear_dir_contents /var/www/html/wp-content/mu-plugins
@@ -246,9 +255,12 @@ if [ -f "%s" ]; then
     case " $repo_plugins " in *" $base "*) continue ;; esac
     rm -rf "$entry"
   done
-  tar %s -xzf "%s" -C /var/www/html
+  copy_dir_contents "$extract_dir/wp-content/uploads" /var/www/html/wp-content/uploads
+  copy_dir_contents "$extract_dir/wp-content/mu-plugins" /var/www/html/wp-content/mu-plugins
+  copy_dir_contents "$extract_dir/wp-content/languages" /var/www/html/wp-content/languages
+  copy_dir_contents "$extract_dir/wp-content/plugins" /var/www/html/wp-content/plugins
 fi
-`, databaseArchive, wpContentArchive, repoPlugins, excludes, wpContentArchive)
+`, databaseArchive, wpContentArchive, excludes, wpContentArchive, repoPlugins)
 }
 
 func envSnapshotComposeArgs(cfg envConfig, args ...string) []string {
