@@ -8,15 +8,15 @@ Public DNS remains the client's responsibility. `nf` attaches domains, prints DN
 
 ```sh
 nf domain list [site|site.target:env|remote]
-nf domain add [site.target:env|remote] [domain...] [--primary|--no-primary] [--proxy cloudflare|<ip>|--no-proxy] [--setup avoid-downtime|quick] [--search-replace|--no-search-replace] [--dry-run] [--execute --yes]
+nf domain add [site.target:env|remote] [domain...] [--proxy cloudflare|<ip>|--no-proxy] [--dry-run] [--execute --yes]
 nf domain check [site.target:env|remote] [domain...] [--proxy cloudflare|<ip>|--no-proxy]
-nf domain primary [site.target:env|remote] [domain] [--proxy cloudflare|<ip>|--no-proxy] [--setup avoid-downtime|quick] [--search-replace|--no-search-replace] [--force] [--wait-timeout 30m] [--wait-interval 30s] [--dry-run] [--execute --yes]
+nf domain primary [site.target:env|remote] [domain] [--proxy cloudflare|<ip>|--no-proxy] [--search-replace|--no-search-replace] [--force] [--wait-timeout 30m] [--wait-interval 30s] [--dry-run] [--execute --yes]
 nf domain remove [site.target:env|remote] [domain...] [--proxy cloudflare|<ip>|--no-proxy] [--delete-cert] [--dry-run] [--execute --yes]
 ```
 
 `domain check` is read-only. `domain add`, `domain primary`, and `domain remove` are mutations and support dry-run.
 
-When run interactively, omitted envs/remotes, domains, proxy mode, Kinsta setup type, primary-vs-secondary, and search-replace decisions are prompted as needed. Inside an `nf.json` project, env/remote pickers are scoped to configured project remotes only. Outside a project, they use the global cached env list. In non-interactive mode, risky decisions must be explicit with flags.
+When run interactively, omitted envs/remotes, domains, proxy mode, and search-replace decisions are prompted as needed. Inside an `nf.json` project, env/remote pickers are scoped to configured project remotes only. Outside a project, they use the global cached env list. In non-interactive mode, risky decisions must be explicit with flags.
 
 ## Domain Roles
 
@@ -49,12 +49,14 @@ subdomain-primary: reports.client.com only
 Example commands:
 
 ```sh
-nf domain add production www.client.com client.com --primary --no-proxy --search-replace --dry-run
-nf domain add production client.com www.client.com --primary --no-proxy --search-replace --dry-run
-nf domain add production reports.client.com --primary --no-proxy --search-replace --dry-run
+nf domain add production www.client.com client.com --no-proxy --dry-run
+nf domain primary production www.client.com --no-proxy --search-replace --dry-run
+nf domain primary production client.com --no-proxy --search-replace --dry-run
+nf domain add production reports.client.com --no-proxy --dry-run
+nf domain primary production reports.client.com --no-proxy --search-replace --dry-run
 ```
 
-The first domain is primary when `--primary` is used. Later domains in the same command become secondaries.
+Add every public hostname first, then run `nf domain primary` with the hostname that should become canonical. Other cached external hostnames become secondaries for that env.
 
 ## Pre-Launch Checklist
 
@@ -77,35 +79,29 @@ For high-pressure launches, write down the exact env ID and exact domains before
 Preview the plan:
 
 ```sh
-nf domain add production www.client.com client.com --primary --no-proxy --search-replace --dry-run
+nf domain add production www.client.com client.com --no-proxy --dry-run
 ```
 
 Execute:
 
 ```sh
-nf domain add production www.client.com client.com --primary --no-proxy --search-replace --execute --yes
+nf domain add production www.client.com client.com --no-proxy --execute --yes
 ```
 
-`nf domain add` attaches external domains and prints the DNS records the client must create. Kinsta records come from the Kinsta API. Linode records point the public hostnames at the target IPs. `nf` does not create or change public/client DNS records.
+`nf domain add` attaches external domains and prints the DNS records the client must create. It never changes the primary domain and never runs search-replace. Kinsta output separates verification records, which prove domain control and allow TLS validation, from routing records, which point public DNS at Kinsta. If Kinsta does not expose routing records through the API, the command prints the MyKinsta Domains URL and the user must follow Kinsta's instructions there. Linode records point the public hostnames at the target IPs. `nf` does not create or change public/client DNS records.
 
-For Kinsta, `--setup` accepts `avoid-downtime` or `quick` on add/primary:
-
-```sh
-nf domain add production www.client.com client.com --primary --setup avoid-downtime --search-replace --dry-run
-```
-
-For Kinsta in non-interactive mode, pass `--setup avoid-downtime` or `--setup quick` explicitly.
+For Kinsta, `nf` always uses Kinsta's avoid-downtime domain setup. There is no `--setup` mode to choose.
 
 For Linode domains proxied through Cloudflare, include `--proxy cloudflare` consistently on add/check/primary/remove:
 
 ```sh
-nf domain add production www.client.com client.com --primary --proxy cloudflare --search-replace --dry-run
+nf domain add production www.client.com client.com --proxy cloudflare --dry-run
 ```
 
 For Linode domains proxied through a separate HTTPS reverse proxy, pass that proxy's public IP address:
 
 ```sh
-nf domain add production www.client.com client.com --primary --proxy 159.203.49.164 --search-replace --dry-run
+nf domain add production www.client.com client.com --proxy 159.203.49.164 --dry-run
 ```
 
 In this mode, client DNS points at the reverse proxy IP. The reverse proxy terminates public HTTPS for the client domain and proxies to the Linode target origin while preserving `Host: www.client.com`. `nf` configures the Linode origin to answer that host over HTTPS using the target wildcard certificate, so proxy hostname verification must be disabled or configured to trust the origin hostname.

@@ -791,17 +791,20 @@ func waitKinstaDomainVerificationRecords(parent context.Context, client *kinsta.
 }
 
 func kinstaDomainVerificationRecordsTimeoutError(domainName string) error {
-	return fmt.Errorf("timed out waiting for Kinsta to detect verification DNS for %s. Verification records were written when available; rerun site add after DNS propagates", domainName)
+	return fmt.Errorf("timed out waiting for Kinsta to detect verification DNS for %s. Verification records were written or printed when available; rerun the command after DNS propagates", domainName)
 }
 
 func waitKinstaDomainPointingRecords(parent context.Context, client *kinsta.Client, domainID, domainName string, timeout time.Duration, onRecords func(kinsta.DomainRecords) error) (kinsta.DomainRecords, error) {
+	return waitKinstaDomainPointingRecordsEvery(parent, client, domainID, domainName, timeout, kinstaDomainRecordsWaitInterval, onRecords)
+}
+
+func waitKinstaDomainPointingRecordsEvery(parent context.Context, client *kinsta.Client, domainID, domainName string, timeout, interval time.Duration, onRecords func(kinsta.DomainRecords) error) (kinsta.DomainRecords, error) {
 	if timeout <= 0 {
 		timeout = kinstaDomainRecordsWaitTimeout
 	}
 	if timeout <= 0 {
 		timeout = 30 * time.Minute
 	}
-	interval := kinstaDomainRecordsWaitInterval
 	if interval <= 0 {
 		interval = 30 * time.Second
 	}
@@ -847,7 +850,7 @@ func waitKinstaDomainPointingRecords(parent context.Context, client *kinsta.Clie
 }
 
 func kinstaDomainPointingRecordsTimeoutError(domainName string, lastErr error) error {
-	msg := fmt.Sprintf("timed out waiting for Kinsta pointing DNS records for %s. Verification records were written when available; rerun site add after Kinsta verifies the domain", domainName)
+	msg := fmt.Sprintf("timed out waiting for Kinsta pointing DNS records for %s. Verification records were written or printed when available; rerun the command after Kinsta verifies the domain", domainName)
 	if lastErr != nil {
 		return fmt.Errorf("%s; last temporary Kinsta error: %w", msg, lastErr)
 	}
@@ -1296,7 +1299,7 @@ func ensureKinstaDomain(ctx context.Context, client *kinsta.Client, env kinsta.E
 		return markKinstaDomainPrimary(domain, env), nil
 	}
 	fmt.Printf("Adding Kinsta domain %s...\n", domainName)
-	opID, err := client.AddDomain(ctx, envID, kinsta.AddDomainRequest{DomainName: domainName, IsWildcardless: true, AddWithWWWSubdomain: false, SetupType: "quick"})
+	opID, err := client.AddDomain(ctx, envID, kinsta.AddDomainRequest{DomainName: domainName, IsWildcardless: true, AddWithWWWSubdomain: false, SetupType: kinstaDomainSetupType})
 	if err != nil {
 		return kinsta.Domain{}, err
 	}

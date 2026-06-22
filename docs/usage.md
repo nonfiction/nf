@@ -119,7 +119,7 @@ Launch a public domain:
 
 ```sh
 nf domain list production
-nf domain add production www.client.com client.com --primary --dry-run
+nf domain add production www.client.com client.com --dry-run
 nf domain check production www.client.com client.com
 nf domain primary production www.client.com --search-replace --dry-run
 ```

@@ -152,7 +152,7 @@ func checkKinstaSiteDomainProvider(plan siteDomainPlan) (siteDomainProviderCheck
 	if token == "" {
 		return siteDomainProviderCheck{}, fmt.Errorf("Expected KINSTA_API_KEY in the environment or %s.", config.EnvFile())
 	}
-	client := kinsta.NewClient(firstNonEmpty(envwizard.Value("KINSTA_BASE_URL"), "https://api.kinsta.com/v2"), token)
+	client := newKinstaClient(token)
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 	domains, err := client.ListDomains(ctx, plan.KinstaEnvID)

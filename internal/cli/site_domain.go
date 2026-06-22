@@ -25,10 +25,6 @@ import (
 
 type siteDomainOptions struct {
 	domains        []string
-	primary        bool
-	primarySet     bool
-	setupType      string
-	setupTypeSet   bool
 	proxyMode      string
 	proxySet       bool
 	searchReplace  bool
@@ -57,7 +53,6 @@ type siteDomainPlan struct {
 	Domains          []string
 	Primary          bool
 	RedirectTarget   string
-	SetupType        string
 	ProxyMode        string
 	SearchReplace    bool
 	DeleteCert       bool
@@ -85,6 +80,13 @@ type siteDomainProviderDomain struct {
 	DomainID string
 	Records  kinsta.DomainRecords
 }
+
+var (
+	kinstaDomainAddPointingWaitTimeout  = 30 * time.Second
+	kinstaDomainAddPointingWaitInterval = 2 * time.Second
+)
+
+const kinstaDomainSetupType = "avoid_downtime"
 
 func runSiteDomain(argv []string) int {
 	if len(argv) == 0 || argv[0] == "help" || argv[0] == "--help" || argv[0] == "-h" {
@@ -121,11 +123,8 @@ func runSiteDomainHelp() int {
 		{"primary [env|remote] [domain]", "make one domain primary"},
 		{"remove, rm [env|remote] [domain...]", "remove external domain bindings"},
 	}, helpSection{"Domain Options", []helpLine{
-		{"--primary", "make the first added domain primary"},
-		{"--no-primary", "add domains as secondary redirects"},
 		{"--proxy <mode|ip>", "Linode proxy mode: cloudflare or reverse proxy IP"},
 		{"--no-proxy", "Linode direct/no-proxy mode"},
-		{"--setup <type>", "Kinsta setup type for add/primary: avoid-downtime or quick"},
 		{"--search-replace", "run provider/wp search-replace during primary"},
 		{"--no-search-replace", "update primary home/siteurl without database-wide search-replace"},
 		{"--force", "launch primary without waiting for readiness checks"},
@@ -401,20 +400,6 @@ func parseSiteDomainActionArgs(action string, argv []string) (string, siteDomain
 			opts.deleteCert = true
 		case "--force":
 			opts.force = true
-		case "--primary":
-			if opts.primarySet && !opts.primary {
-				fmt.Fprintln(os.Stderr, "Choose either --primary or --no-primary, not both.")
-				return "", opts, false
-			}
-			opts.primary = true
-			opts.primarySet = true
-		case "--no-primary":
-			if opts.primarySet && opts.primary {
-				fmt.Fprintln(os.Stderr, "Choose either --primary or --no-primary, not both.")
-				return "", opts, false
-			}
-			opts.primary = false
-			opts.primarySet = true
 		case "--wait-timeout":
 			if i+1 >= len(argv) || strings.TrimSpace(argv[i+1]) == "" {
 				fmt.Fprintln(os.Stderr, "--wait-timeout requires a value")
@@ -438,13 +423,8 @@ func parseSiteDomainActionArgs(action string, argv []string) (string, siteDomain
 			}
 			opts.waitInterval = duration
 		case "--setup":
-			if i+1 >= len(argv) || strings.TrimSpace(argv[i+1]) == "" {
-				fmt.Fprintln(os.Stderr, "--setup requires a value")
-				return "", opts, false
-			}
-			i++
-			opts.setupType = argv[i]
-			opts.setupTypeSet = true
+			fmt.Fprintln(os.Stderr, "--setup is no longer supported; Kinsta domain setup always uses avoid-downtime")
+			return "", opts, false
 		case "--proxy":
 			if opts.proxySet && strings.TrimSpace(opts.proxyMode) == "" {
 				fmt.Fprintln(os.Stderr, "Choose either --proxy or --no-proxy, not both.")
@@ -474,13 +454,8 @@ func parseSiteDomainActionArgs(action string, argv []string) (string, siteDomain
 				return "", opts, false
 			}
 			if strings.HasPrefix(arg, "--setup=") {
-				opts.setupType = strings.TrimPrefix(arg, "--setup=")
-				if strings.TrimSpace(opts.setupType) == "" {
-					fmt.Fprintln(os.Stderr, "--setup requires a value")
-					return "", opts, false
-				}
-				opts.setupTypeSet = true
-				continue
+				fmt.Fprintln(os.Stderr, "--setup is no longer supported; Kinsta domain setup always uses avoid-downtime")
+				return "", opts, false
 			}
 			if strings.HasPrefix(arg, "--proxy=") {
 				if opts.proxySet && strings.TrimSpace(opts.proxyMode) == "" {
@@ -518,12 +493,8 @@ func parseSiteDomainActionArgs(action string, argv []string) (string, siteDomain
 			positionals = append(positionals, arg)
 		}
 	}
-	if action != "add" && opts.primarySet {
-		fmt.Fprintln(os.Stderr, "--primary and --no-primary only apply to domain add")
-		return "", opts, false
-	}
-	if opts.searchSet && action != "primary" && (action != "add" || opts.primarySet && !opts.primary) {
-		fmt.Fprintln(os.Stderr, "--search-replace and --no-search-replace only apply when making a domain primary")
+	if opts.searchSet && action != "primary" {
+		fmt.Fprintln(os.Stderr, "--search-replace and --no-search-replace only apply to domain primary")
 		return "", opts, false
 	}
 	if action != "primary" && (opts.force || opts.waitTimeout > 0 || opts.waitInterval > 0) {
@@ -538,12 +509,12 @@ func parseSiteDomainActionArgs(action string, argv []string) (string, siteDomain
 		fmt.Fprintln(os.Stderr, "--delete-cert only applies to domain remove")
 		return "", opts, false
 	}
-	if action == "remove" && (opts.searchSet || strings.TrimSpace(opts.setupType) != "") {
-		fmt.Fprintln(os.Stderr, "domain remove does not support --setup, --search-replace, or --no-search-replace")
+	if action == "remove" && opts.searchSet {
+		fmt.Fprintln(os.Stderr, "domain remove does not support --search-replace or --no-search-replace")
 		return "", opts, false
 	}
 	if action == "check" {
-		if opts.dryRun || opts.execute || opts.yes || opts.primarySet || opts.searchSet || opts.deleteCert || strings.TrimSpace(opts.setupType) != "" {
+		if opts.dryRun || opts.execute || opts.yes || opts.searchSet || opts.deleteCert {
 			fmt.Fprintln(os.Stderr, "domain check is read-only; use only domains, --proxy, --no-proxy, and --non-interactive")
 			return "", opts, false
 		}
@@ -747,7 +718,7 @@ func waitForSiteDomainPrimaryReadiness(plan siteDomainPlan, opts siteDomainOptio
 		fmt.Println("Overall: pending")
 		remaining := time.Until(deadline)
 		if remaining <= 0 {
-			return false, ProjectError{Msg: "Timed out waiting for public domain checks; no data was changed."}
+			return false, ProjectError{Msg: "Timed out waiting for public domain checks; primary was not changed."}
 		}
 		sleepFor := interval
 		if sleepFor > remaining {
@@ -918,12 +889,6 @@ func resolveSiteDomainActionOptions(action string, opts siteDomainOptions, recor
 		return opts, err
 	}
 	provider := strings.ToLower(strings.TrimSpace(recordValueString(record["provider"])))
-	if action == "add" && !opts.primarySet && (opts.nonInteractive || !siteIsInteractiveFn()) {
-		if opts.nonInteractive {
-			return opts, ProjectError{Msg: "domain add requires --primary or --no-primary in non-interactive mode"}
-		}
-		return opts, ProjectError{Msg: "domain add requires --primary or --no-primary"}
-	}
 	switch provider {
 	case "linode":
 		opts, err = resolveSiteDomainProxyDecision(action, opts, record)
@@ -934,27 +899,12 @@ func resolveSiteDomainActionOptions(action string, opts siteDomainOptions, recor
 		if opts.proxySet {
 			return opts, ProjectError{Msg: "--proxy and --no-proxy only apply to Linode domains"}
 		}
-		if action == "add" || action == "primary" {
-			opts, err = resolveSiteDomainKinstaSetupDecision(action, opts)
-			if err != nil {
-				return opts, err
-			}
-		}
 	default:
 		if opts.proxySet {
 			return opts, ProjectError{Msg: "--proxy and --no-proxy only apply to Linode domains"}
 		}
 	}
-	if action == "add" && !opts.primarySet {
-		opts, err = promptSiteDomainPrimaryDecision(opts)
-		if err != nil {
-			return opts, err
-		}
-	}
-	if action == "add" && opts.searchSet && !opts.primary {
-		return opts, ProjectError{Msg: "--search-replace and --no-search-replace only apply when making a domain primary"}
-	}
-	if action == "primary" || action == "add" && opts.primary {
+	if action == "primary" {
 		opts, err = resolveSiteDomainSearchDecision(action, opts)
 		if err != nil {
 			return opts, err
@@ -1075,19 +1025,6 @@ func siteDomainCachedExternalOptions(record map[string]any) []ui.SelectOption {
 	return options
 }
 
-func promptSiteDomainPrimaryDecision(opts siteDomainOptions) (siteDomainOptions, error) {
-	selected, err := siteDomainSelectFn("Add domain as primary or secondary", []ui.SelectOption{
-		{Value: "primary", Label: "Primary domain"},
-		{Value: "secondary", Label: "Secondary redirect"},
-	})
-	if err != nil {
-		return opts, err
-	}
-	opts.primary = selected == "primary"
-	opts.primarySet = true
-	return opts, nil
-}
-
 func resolveSiteDomainProxyDecision(action string, opts siteDomainOptions, record map[string]any) (siteDomainOptions, error) {
 	if opts.proxySet {
 		return opts, nil
@@ -1143,28 +1080,6 @@ func resolveSiteDomainProxyDecision(action string, opts siteDomainOptions, recor
 		opts.proxyMode = normalized
 	}
 	opts.proxySet = true
-	return opts, nil
-}
-
-func resolveSiteDomainKinstaSetupDecision(action string, opts siteDomainOptions) (siteDomainOptions, error) {
-	if opts.setupTypeSet {
-		return opts, nil
-	}
-	if opts.nonInteractive {
-		return opts, ProjectError{Msg: fmt.Sprintf("domain %s for Kinsta requires --setup quick or --setup avoid-downtime in non-interactive mode", action)}
-	}
-	if !siteIsInteractiveFn() {
-		return opts, ProjectError{Msg: fmt.Sprintf("domain %s for Kinsta requires --setup quick or --setup avoid-downtime", action)}
-	}
-	selected, err := siteDomainSelectFn("Choose Kinsta domain setup", []ui.SelectOption{
-		{Value: "avoid-downtime", Label: "Avoid downtime", Default: true},
-		{Value: "quick", Label: "Quick"},
-	})
-	if err != nil {
-		return opts, err
-	}
-	opts.setupType = selected
-	opts.setupTypeSet = true
 	return opts, nil
 }
 
@@ -1227,7 +1142,7 @@ func buildSiteDomainPlan(siteID, env, action string, opts siteDomainOptions) (si
 		}
 	}
 	existingPrimary := cachedExternalPrimaryDomain(record)
-	primary := action == "primary" || action == "add" && opts.primary
+	primary := action == "primary"
 	canonical := domains[0]
 	if primary {
 		for _, existing := range cachedExternalSiteDomainNames(record) {
@@ -1250,8 +1165,8 @@ func buildSiteDomainPlan(siteID, env, action string, opts siteDomainOptions) (si
 	if primary {
 		redirectTarget = canonical
 	}
-	if action == "add" && !opts.primary && firstNonEmpty(redirectTarget, currentHostname, internalHostname) == "" {
-		return siteDomainPlan{}, ProjectError{Msg: "Secondary domain add requires an existing primary or internal domain to redirect to. Add the first domain with --primary."}
+	if action == "add" && firstNonEmpty(redirectTarget, currentHostname, internalHostname) == "" {
+		return siteDomainPlan{}, ProjectError{Msg: "Domain add requires an existing primary or internal domain to redirect to."}
 	}
 	proxyMode := opts.proxyMode
 	if !opts.proxySet && strings.TrimSpace(proxyMode) == "" {
@@ -1289,11 +1204,6 @@ func buildSiteDomainPlan(siteID, env, action string, opts siteDomainOptions) (si
 		if opts.proxySet || strings.TrimSpace(plan.ProxyMode) != "" {
 			return siteDomainPlan{}, ProjectError{Msg: "--proxy and --no-proxy only apply to Linode domains"}
 		}
-		setup, err := normalizeKinstaDomainSetupType(opts.setupType)
-		if err != nil {
-			return siteDomainPlan{}, err
-		}
-		plan.SetupType = setup
 		plan.KinstaSiteID = mapStringAtPath(record, "kinsta", "site_id")
 		plan.KinstaEnvID = mapStringAtPath(record, "kinsta", "environment_id")
 		plan.KinstaDomainID = mapStringAtPath(record, "kinsta", "domain_id")
@@ -1306,9 +1216,6 @@ func buildSiteDomainPlan(siteID, env, action string, opts siteDomainOptions) (si
 			return siteDomainPlan{}, err
 		}
 		plan.ProxyMode = proxyMode
-		if strings.TrimSpace(opts.setupType) != "" {
-			return siteDomainPlan{}, ProjectError{Msg: "--setup only applies to Kinsta domains"}
-		}
 		resolvedTarget, err := cachedSiteTarget(target.TargetRef)
 		if err != nil {
 			return siteDomainPlan{}, err
@@ -1395,24 +1302,6 @@ func cachedExternalPrimaryDomain(record map[string]any) string {
 		}
 	}
 	return ""
-}
-
-func normalizeKinstaDomainSetupType(value string) (string, error) {
-	switch strings.ToLower(strings.TrimSpace(value)) {
-	case "", "avoid-downtime", "avoid_downtime":
-		return "avoid_downtime", nil
-	case "quick":
-		return "quick", nil
-	default:
-		return "", ProjectError{Msg: "--setup must be quick or avoid-downtime"}
-	}
-}
-
-func displayKinstaSetupType(value string) string {
-	if value == "avoid_downtime" {
-		return "avoid-downtime"
-	}
-	return value
 }
 
 func normalizeSiteDomainProxyMode(value string) (string, error) {
@@ -1583,9 +1472,6 @@ func printSiteDomainPlan(plan siteDomainPlan, mode string) {
 		fmt.Println("  proxy:     none")
 	}
 	if plan.Provider == "kinsta" {
-		if plan.Action != "remove" {
-			fmt.Printf("  kinsta setup: %s\n", displayKinstaSetupType(plan.SetupType))
-		}
 		if plan.Primary {
 			fmt.Printf("  search-replace: %t\n", plan.SearchReplace)
 		}
@@ -1691,7 +1577,7 @@ func removeKinstaSiteDomain(plan siteDomainPlan) (siteDomainProviderResult, erro
 	if token == "" {
 		return siteDomainProviderResult{}, fmt.Errorf("Expected KINSTA_API_KEY in the environment or %s.", config.EnvFile())
 	}
-	client := kinsta.NewClient(firstNonEmpty(envwizard.Value("KINSTA_BASE_URL"), "https://api.kinsta.com/v2"), token)
+	client := newKinstaClient(token)
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Minute)
 	defer cancel()
 	domains, err := client.ListDomains(ctx, plan.KinstaEnvID)
@@ -1738,7 +1624,7 @@ func runKinstaSiteDomain(plan siteDomainPlan, primary bool) (siteDomainProviderR
 	if token == "" {
 		return siteDomainProviderResult{}, fmt.Errorf("Expected KINSTA_API_KEY in the environment or %s.", config.EnvFile())
 	}
-	client := kinsta.NewClient(firstNonEmpty(envwizard.Value("KINSTA_BASE_URL"), "https://api.kinsta.com/v2"), token)
+	client := newKinstaClient(token)
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Minute)
 	defer cancel()
 	result := siteDomainProviderResult{Domains: make([]siteDomainProviderDomain, 0, 1+len(plan.Aliases))}
@@ -1748,14 +1634,14 @@ func runKinstaSiteDomain(plan siteDomainPlan, primary bool) (siteDomainProviderR
 		if primary && i == 0 {
 			role = "primary"
 		}
-		domain, err := ensureKinstaDomainWithSetup(ctx, client, plan.KinstaEnvID, name, plan.SetupType)
+		domain, err := ensureKinstaSiteDomain(ctx, client, plan.KinstaEnvID, name)
 		if err != nil {
 			return siteDomainProviderResult{}, err
 		}
 		if i == 0 {
 			canonicalDomain = domain
 		}
-		records, err := client.DomainRecords(ctx, domain.ID)
+		records, err := kinstaSiteDomainRecords(ctx, client, domain, name)
 		if err != nil {
 			return siteDomainProviderResult{}, err
 		}
@@ -1774,7 +1660,7 @@ func runKinstaSiteDomain(plan siteDomainPlan, primary bool) (siteDomainProviderR
 	return result, nil
 }
 
-func ensureKinstaDomainWithSetup(ctx context.Context, client *kinsta.Client, envID, domainName, setupType string) (kinsta.Domain, error) {
+func ensureKinstaSiteDomain(ctx context.Context, client *kinsta.Client, envID, domainName string) (kinsta.Domain, error) {
 	domains, err := client.ListDomains(ctx, envID)
 	if err != nil {
 		return kinsta.Domain{}, err
@@ -1782,12 +1668,8 @@ func ensureKinstaDomainWithSetup(ctx context.Context, client *kinsta.Client, env
 	if domain, ok := kinsta.FindDomain(domains, domainName); ok {
 		return domain, nil
 	}
-	setupType, err = normalizeKinstaDomainSetupType(setupType)
-	if err != nil {
-		return kinsta.Domain{}, err
-	}
 	fmt.Printf("Adding Kinsta domain %s...\n", domainName)
-	opID, err := client.AddDomain(ctx, envID, kinsta.AddDomainRequest{DomainName: domainName, IsWildcardless: false, AddWithWWWSubdomain: false, SetupType: setupType})
+	opID, err := client.AddDomain(ctx, envID, kinsta.AddDomainRequest{DomainName: domainName, IsWildcardless: false, AddWithWWWSubdomain: false, SetupType: kinstaDomainSetupType})
 	if err != nil {
 		return kinsta.Domain{}, err
 	}
@@ -1804,15 +1686,37 @@ func ensureKinstaDomainWithSetup(ctx context.Context, client *kinsta.Client, env
 	return kinsta.Domain{}, fmt.Errorf("Kinsta domain %q was added but was not found in domain list", domainName)
 }
 
+func kinstaSiteDomainRecords(ctx context.Context, client *kinsta.Client, domain kinsta.Domain, domainName string) (kinsta.DomainRecords, error) {
+	records, err := client.DomainRecords(ctx, domain.ID)
+	if err != nil {
+		return kinsta.DomainRecords{}, err
+	}
+	if kinstaDomainRecordsHavePointing(records, domainName) {
+		return records, nil
+	}
+
+	fmt.Printf("Waiting briefly for Kinsta routing records for %s...\n", domainName)
+	waited, err := waitKinstaDomainPointingRecordsEvery(ctx, client, domain.ID, domainName, kinstaDomainAddPointingWaitTimeout, kinstaDomainAddPointingWaitInterval, nil)
+	if err == nil {
+		fmt.Printf("Kinsta returned routing records for %s.\n", domainName)
+		return kinstaMergeDomainRecords(records, waited), nil
+	}
+	if kinstaDomainRecordsHaveAny(waited) {
+		records = kinstaMergeDomainRecords(records, waited)
+	}
+	fmt.Printf("Kinsta has not returned routing records for %s yet. Open https://my.kinsta.com/sites/domains/ and follow Kinsta's domain DNS instructions for this site.\n", domainName)
+	return records, nil
+}
+
 func printKinstaDomainRecords(result siteDomainProviderResult) {
 	if len(result.Domains) == 0 {
 		return
 	}
-	fmt.Println("DNS records for client DNS:")
+	fmt.Println("Kinsta DNS records for client DNS:")
 	for _, domain := range result.Domains {
 		fmt.Printf("  %s (%s):\n", domain.Name, domain.Role)
-		printed := printKinstaDomainRecordGroup("verification", domain.Records.Verification)
-		printed = printKinstaDomainRecordGroup("pointing", domain.Records.Pointing) || printed
+		printed := printKinstaDomainRecordGroup("verification (prove ownership and TLS validation)", domain.Records.Verification)
+		printed = printKinstaDomainRecordGroup("routing (point public DNS at Kinsta)", domain.Records.Pointing) || printed
 		if !printed {
 			fmt.Println("    Kinsta returned no DNS records.")
 		}

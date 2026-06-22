@@ -33,7 +33,7 @@ nf alias sync production
 Use the domain guide when launching a remote env on a client-owned public domain:
 
 ```sh
-nf domain add production www.client.com client.com --primary --dry-run
+nf domain add production www.client.com client.com --dry-run
 nf domain check production www.client.com client.com
 nf domain primary production www.client.com --search-replace --dry-run
 ```

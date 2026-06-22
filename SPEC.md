@@ -285,7 +285,7 @@ Do not add old compatibility routes unless explicitly requested.
 * [x] `nf site wp <env-id> -- <args>`
 * [x] `nf site password [site|env] [--wp|--db|--basicauth]`
 * [x] `nf domain list [site|env|remote]` shows cached domain inventory
-* [x] `nf domain add <env|remote> <domain> [domain...] [--primary]` attaches public domains without mutating public DNS
+* [x] `nf domain add <env|remote> <domain> [domain...]` attaches public domains without mutating public DNS or primary state
 * [x] `nf domain check <env|remote> [domain...]` reports provider, DNS, HTTP, and HTTPS readiness
 * [x] `nf domain primary <env|remote> <domain>` launches a primary public domain
 * [x] `nf domain remove <env|remote> <domain> [domain...]` removes public-domain bindings after domain renames or target moves
@@ -426,7 +426,7 @@ Public launch domains are provider/env state, not repo remote identity. `nf doma
 
 For Kinsta, the generated internal hostname also anchors the canonical `nf` project slug. This matters when the Kinsta provider slug must differ from the repo `project.slug`: cache records use `project_slug` and `site_id` from the canonical slug, while `kinsta.slug` stores the provider slug. `nf site add kinsta acme --kinsta-slug acmeinc` should create/adopt Kinsta site `acmeinc`, attach `acme.kinsta.<base_domain>`, cache the site as `acme.kinsta`, and preserve an existing public primary domain. The `nf` internal Kinsta domain only becomes primary when the current Kinsta primary is still a `*.kinsta.cloud` default domain.
 
-Every env should have exactly one primary domain and zero or more secondaries. `nf domain add --primary a.com b.com` makes `a.com` primary and `b.com` secondary. Without `--primary`, added domains are secondary and redirect to the current primary. `nf domain primary` asks for launch approval before waiting, polls the same readiness checks as `nf domain check`, and runs the primary launch automatically as soon as checks pass. It must not prompt again after checks pass; the default behavior is unattended wait-then-cutover. If checks never pass before the timeout, it exits without changing primary state. `--force` is the explicit bypass for launching immediately without readiness checks.
+Every env should have exactly one primary domain and zero or more secondaries. `nf domain add` attaches external domains as secondaries that redirect to the current primary or internal fallback. `nf domain primary` asks for launch approval before waiting, polls the same readiness checks as `nf domain check`, and runs the primary launch automatically as soon as checks pass. It must not prompt again after checks pass; the default behavior is unattended wait-then-cutover. If checks never pass before the timeout, it exits without changing primary state. `--force` is the explicit bypass for launching immediately without readiness checks.
 
 `nf domain remove` retires public-domain bindings when domains are renamed or moved between targets. Linode removal deletes nf-managed per-domain public vhosts, scripts, certbot units, and local/remote domain metadata, then resets the cached current URL to the generated internal fallback when the removed domain was primary. Kinsta removal deletes non-primary domains from the Kinsta environment and refuses to remove the current primary domain. Public DNS remains client-managed.
 
