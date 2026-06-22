@@ -8,17 +8,19 @@ Public DNS remains the client's responsibility. `nf` attaches domains, prints DN
 
 ```sh
 nf domain list [site|site.target:env|remote]
-nf domain add <site.target:env|remote> <domain> [domain...] [--primary] [--proxy cloudflare] [--setup avoid-downtime|quick] [--dry-run] [--execute --yes]
-nf domain check <site.target:env|remote> [domain...] [--proxy cloudflare]
-nf domain primary <site.target:env|remote> <domain> [--proxy cloudflare] [--setup avoid-downtime|quick] [--search-replace] [--force] [--wait-timeout 30m] [--wait-interval 30s] [--dry-run] [--execute --yes]
-nf domain remove <site.target:env|remote> <domain> [domain...] [--delete-cert] [--dry-run] [--execute --yes]
+nf domain add [site.target:env|remote] [domain...] [--primary|--no-primary] [--proxy cloudflare|<ip>|--no-proxy] [--setup avoid-downtime|quick] [--search-replace|--no-search-replace] [--dry-run] [--execute --yes]
+nf domain check [site.target:env|remote] [domain...] [--proxy cloudflare|<ip>|--no-proxy]
+nf domain primary [site.target:env|remote] [domain] [--proxy cloudflare|<ip>|--no-proxy] [--setup avoid-downtime|quick] [--search-replace|--no-search-replace] [--force] [--wait-timeout 30m] [--wait-interval 30s] [--dry-run] [--execute --yes]
+nf domain remove [site.target:env|remote] [domain...] [--proxy cloudflare|<ip>|--no-proxy] [--delete-cert] [--dry-run] [--execute --yes]
 ```
 
 `domain check` is read-only. `domain add`, `domain primary`, and `domain remove` are mutations and support dry-run.
 
+When run interactively, omitted envs/remotes, domains, proxy mode, Kinsta setup type, primary-vs-secondary, and search-replace decisions are prompted as needed. Inside an `nf.json` project, env/remote pickers are scoped to configured project remotes only. Outside a project, they use the global cached env list. In non-interactive mode, risky decisions must be explicit with flags.
+
 ## Domain Roles
 
-`nf domain list` shows cached domain inventory keyed by full env IDs like `client.app1-linode:live`.
+`nf domain list` shows cached domain inventory keyed by full env IDs like `client.app1-linode:live`. Inside an `nf.json` project, the no-argument list is scoped to the project's configured remotes.
 
 Roles:
 
@@ -47,9 +49,9 @@ subdomain-primary: reports.client.com only
 Example commands:
 
 ```sh
-nf domain add production www.client.com client.com --primary --dry-run
-nf domain add production client.com www.client.com --primary --dry-run
-nf domain add production reports.client.com --primary --dry-run
+nf domain add production www.client.com client.com --primary --no-proxy --search-replace --dry-run
+nf domain add production client.com www.client.com --primary --no-proxy --search-replace --dry-run
+nf domain add production reports.client.com --primary --no-proxy --search-replace --dry-run
 ```
 
 The first domain is primary when `--primary` is used. Later domains in the same command become secondaries.
@@ -62,9 +64,9 @@ Before sending DNS instructions or entering a launch window:
 * Confirm the remote env ID directly with `nf site show <site.target:env>`.
 * Confirm current domain inventory with `nf domain list production`.
 * Decide whether launch should run against `www`, apex, or a subdomain.
-* Decide whether `--search-replace` should run when making the primary transition.
+* Decide whether `--search-replace` or `--no-search-replace` should be used when making the primary transition.
 * Confirm who controls DNS and who will make the change.
-* Confirm whether Cloudflare is proxying the domain.
+* Confirm whether Cloudflare or a separate reverse proxy is proxying the domain.
 * Confirm whether basic auth, maintenance mode, cache, or redirect rules need coordination outside `nf`.
 * Make sure rollback expectations are explicit before the window starts.
 
@@ -75,13 +77,13 @@ For high-pressure launches, write down the exact env ID and exact domains before
 Preview the plan:
 
 ```sh
-nf domain add production www.client.com client.com --primary --dry-run
+nf domain add production www.client.com client.com --primary --no-proxy --search-replace --dry-run
 ```
 
 Execute:
 
 ```sh
-nf domain add production www.client.com client.com --primary --execute --yes
+nf domain add production www.client.com client.com --primary --no-proxy --search-replace --execute --yes
 ```
 
 `nf domain add` attaches external domains and prints the DNS records the client must create. Kinsta records come from the Kinsta API. Linode records point the public hostnames at the target IPs. `nf` does not create or change public/client DNS records.
@@ -89,14 +91,24 @@ nf domain add production www.client.com client.com --primary --execute --yes
 For Kinsta, `--setup` accepts `avoid-downtime` or `quick` on add/primary:
 
 ```sh
-nf domain add production www.client.com client.com --primary --setup avoid-downtime --dry-run
+nf domain add production www.client.com client.com --primary --setup avoid-downtime --search-replace --dry-run
 ```
+
+For Kinsta in non-interactive mode, pass `--setup avoid-downtime` or `--setup quick` explicitly.
 
 For Linode domains proxied through Cloudflare, include `--proxy cloudflare` consistently on add/check/primary/remove:
 
 ```sh
-nf domain add production www.client.com client.com --primary --proxy cloudflare --dry-run
+nf domain add production www.client.com client.com --primary --proxy cloudflare --search-replace --dry-run
 ```
+
+For Linode domains proxied through a separate HTTPS reverse proxy, pass that proxy's public IP address:
+
+```sh
+nf domain add production www.client.com client.com --primary --proxy 159.203.49.164 --search-replace --dry-run
+```
+
+In this mode, client DNS points at the reverse proxy IP. The reverse proxy terminates public HTTPS for the client domain and proxies to the Linode target origin while preserving `Host: www.client.com`. `nf` configures the Linode origin to answer that host over HTTPS using the target wildcard certificate, so proxy hostname verification must be disabled or configured to trust the origin hostname.
 
 ## Check Readiness
 
@@ -112,6 +124,8 @@ With no explicit domains, `domain check` checks cached external domains for the 
 nf domain check production
 ```
 
+With no arguments, interactive `domain check` prompts for an env/remote and the cached external domains to check.
+
 `nf domain check` reports provider/server readiness, expected public DNS, HTTP reachability, HTTPS certificate status, and whether the domain is already primary. It exits `0` when public checks are ready and `2` when DNS, HTTP, HTTPS, or provider readiness is still pending.
 
 For Cloudflare-proxied Linode domains:
@@ -122,21 +136,31 @@ nf domain check production www.client.com client.com --proxy cloudflare
 
 In Cloudflare mode, `nf` verifies public DNS resolves to Cloudflare IP ranges, skips public origin-IP matching, and checks direct Linode origin HTTPS with SNI so `Full (strict)` renewal problems are visible before Cloudflare starts returning edge errors.
 
+For reverse-proxy IP mode:
+
+```sh
+nf domain check production www.client.com client.com --proxy 159.203.49.164
+```
+
+`nf` verifies public DNS resolves to the reverse proxy IP and verifies public HTTP/HTTPS through that proxy. It does not require a per-domain Let's Encrypt certificate or certbot timer on the Linode origin.
+
 ## Launch the Primary Domain
 
 Preview the primary transition:
 
 ```sh
-nf domain primary production www.client.com --search-replace --dry-run
+nf domain primary production www.client.com --no-proxy --search-replace --dry-run
 ```
 
 Execute:
 
 ```sh
-nf domain primary production www.client.com --search-replace --execute --yes
+nf domain primary production www.client.com --no-proxy --search-replace --execute --yes
 ```
 
 `nf domain primary` launches one external domain as the primary public hostname for the env. By default it approves once up front, polls the same readiness checks as `nf domain check`, then launches immediately when checks pass without a second prompt.
+
+Every primary launch requires an explicit search-replace choice. Use `--search-replace` for the normal final launch from an internal or old hostname to the public hostname. Use `--no-search-replace` only when content URLs are already correct or old-domain references should intentionally remain.
 
 Defaults:
 
@@ -148,13 +172,19 @@ Defaults:
 Use `--force` only when you intentionally need to bypass readiness checks and launch immediately:
 
 ```sh
-nf domain primary production www.client.com --force --execute --yes
+nf domain primary production www.client.com --no-proxy --search-replace --force --execute --yes
 ```
 
 For Cloudflare-proxied Linode domains:
 
 ```sh
 nf domain primary production www.client.com --proxy cloudflare --search-replace --execute --yes
+```
+
+For reverse-proxy IP mode, keep using the same proxy IP on the primary command:
+
+```sh
+nf domain primary production www.client.com --proxy 159.203.49.164 --search-replace --execute --yes
 ```
 
 ## Post-Launch Checks
@@ -197,6 +227,19 @@ If issuing the first cert while orange-clouded fails, temporarily use DNS-only o
 ```sh
 nf domain check production www.client.com client.com --proxy cloudflare
 ```
+
+## Reverse Proxy IP Notes for Linode
+
+Use `--proxy <ip>` when public DNS points at a separate reverse proxy rather than directly at the Linode target or Cloudflare.
+
+The reverse proxy should:
+
+* Terminate HTTPS with a valid certificate for the public domain.
+* Proxy to the Linode target origin, for example `https://app1-linode.nonfiction.dev`.
+* Preserve the public host header, for example `Host: www.client.com`.
+* Disable origin certificate hostname verification, or verify the Linode origin hostname instead of the public domain.
+
+In this mode, `nf` writes the public-domain nginx vhost on the Linode origin with the target wildcard certificate snippet and disables stale per-domain certbot timers/scripts for that domain. Secondary-domain redirects are marked `Cache-Control: no-store` so the reverse proxy should not cache pre-launch redirects. Public HTTPS readiness is still checked against the reverse proxy; if the proxy cached redirects before these headers existed, purge that proxy cache after launch.
 
 ## Move or Retire Old Bindings
 

@@ -15,6 +15,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"reflect"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -626,7 +627,7 @@ func TestRunCompleteSuggestsStaticAndCachedValues(t *testing.T) {
 			t.Fatalf("Run(__complete domain primary --) = %d, want 0", got)
 		}
 	})
-	for _, want := range []string{"--proxy\n", "--setup\n", "--search-replace\n", "--force\n", "--wait-timeout\n", "--wait-interval\n", "--dry-run\n", "--execute\n", "--yes\n", "--non-interactive\n"} {
+	for _, want := range []string{"--proxy\n", "--no-proxy\n", "--setup\n", "--search-replace\n", "--no-search-replace\n", "--force\n", "--wait-timeout\n", "--wait-interval\n", "--dry-run\n", "--execute\n", "--yes\n", "--non-interactive\n"} {
 		if !strings.Contains(domainPrimaryFlagOutput, want) {
 			t.Fatalf("domain primary flag completion missing %q:\n%s", want, domainPrimaryFlagOutput)
 		}
@@ -642,8 +643,13 @@ func TestRunCompleteSuggestsStaticAndCachedValues(t *testing.T) {
 			t.Fatalf("Run(__complete domain add --) = %d, want 0", got)
 		}
 	})
-	if !strings.Contains(domainAddFlagOutput, "--primary\n") || strings.Contains(domainAddFlagOutput, "--alias\n") || strings.Contains(domainAddFlagOutput, "--canonical\n") {
-		t.Fatalf("domain add flag completion = %q, want --primary without old alias/canonical flags", domainAddFlagOutput)
+	for _, want := range []string{"--primary\n", "--no-primary\n", "--no-proxy\n", "--no-search-replace\n"} {
+		if !strings.Contains(domainAddFlagOutput, want) {
+			t.Fatalf("domain add flag completion missing %q:\n%s", want, domainAddFlagOutput)
+		}
+	}
+	if strings.Contains(domainAddFlagOutput, "--alias\n") || strings.Contains(domainAddFlagOutput, "--canonical\n") {
+		t.Fatalf("domain add flag completion = %q, want new flags without old alias/canonical flags", domainAddFlagOutput)
 	}
 
 	domainCheckFlagOutput := captureStdout(t, func() {
@@ -651,7 +657,7 @@ func TestRunCompleteSuggestsStaticAndCachedValues(t *testing.T) {
 			t.Fatalf("Run(__complete domain check --) = %d, want 0", got)
 		}
 	})
-	for _, want := range []string{"--proxy\n", "--non-interactive\n"} {
+	for _, want := range []string{"--proxy\n", "--no-proxy\n", "--non-interactive\n"} {
 		if !strings.Contains(domainCheckFlagOutput, want) {
 			t.Fatalf("domain check flag completion missing %q:\n%s", want, domainCheckFlagOutput)
 		}
@@ -5459,7 +5465,7 @@ func TestRunDomainKinstaAddPrimaryExecutePrintsDNSAndCachesDomains(t *testing.T)
 	t.Cleanup(func() { kinstaPrimaryDomainFn = oldPrimary })
 
 	output := captureStdout(t, func() {
-		if got := Run([]string{"domain", "add", "client.kinsta:live", "www.client.com", "client.com", "--primary", "--execute", "--yes", "--non-interactive"}); got != 0 {
+		if got := Run([]string{"domain", "add", "client.kinsta:live", "www.client.com", "client.com", "--primary", "--setup", "avoid-downtime", "--no-search-replace", "--execute", "--yes", "--non-interactive"}); got != 0 {
 			t.Fatalf("Run(domain add kinsta) = %d, want 0", got)
 		}
 	})
@@ -5551,7 +5557,7 @@ func TestRunDomainKinstaAddSecondaryAllowsInternalPrimary(t *testing.T) {
 	})
 
 	output := captureStdout(t, func() {
-		if got := Run([]string{"domain", "add", "client.kinsta:live", "oldwebsite.com", "--execute", "--yes", "--non-interactive"}); got != 0 {
+		if got := Run([]string{"domain", "add", "client.kinsta:live", "oldwebsite.com", "--no-primary", "--setup", "avoid-downtime", "--execute", "--yes", "--non-interactive"}); got != 0 {
 			t.Fatalf("Run(domain add secondary kinsta) = %d, want 0", got)
 		}
 	})
@@ -5686,6 +5692,14 @@ func TestRunSiteDomainListShowsCachedDomainsAndFilters(t *testing.T) {
 			t.Fatalf("domain list output contains old vocabulary %q:\n%s", notWant, output)
 		}
 	}
+	for _, line := range strings.Split(output, "\n") {
+		if strings.Contains(line, "client.app1-linode.nonfiction.dev") && strings.Contains(line, "cloudflare") {
+			t.Fatalf("internal fallback domain should not inherit proxy mode:\n%s", output)
+		}
+		if strings.Contains(line, "www.client.com") && !strings.Contains(line, "cloudflare") {
+			t.Fatalf("external domain should inherit env proxy mode:\n%s", output)
+		}
+	}
 
 	siteOutput := captureStdout(t, func() {
 		if got := Run([]string{"domain", "list", "client.app1-linode"}); got != 0 {
@@ -5716,6 +5730,23 @@ func TestRunSiteDomainListShowsCachedDomainsAndFilters(t *testing.T) {
 			t.Fatalf("domain list env output contains %q:\n%s", notWant, envOutput)
 		}
 	}
+
+	setupTestNFProject(t, map[string]any{"production": "client.app1-linode:live"})
+	projectOutput := captureStdout(t, func() {
+		if got := Run([]string{"domain", "list"}); got != 0 {
+			t.Fatalf("Run(project domain list) = %d, want 0", got)
+		}
+	})
+	for _, want := range []string{"client.app1-linode.nonfiction.dev", "www.client.com", "client.com", "client.app1-linode:live"} {
+		if !strings.Contains(projectOutput, want) {
+			t.Fatalf("project domain list output missing %q:\n%s", want, projectOutput)
+		}
+	}
+	for _, notWant := range []string{"client-staging.app1-linode.nonfiction.dev", "staging.client.com", "other.kinsta.nonfiction.dev", "www.other.com", "client.app1-linode:staging", "other.kinsta:live"} {
+		if strings.Contains(projectOutput, notWant) {
+			t.Fatalf("project domain list output contains %q:\n%s", notWant, projectOutput)
+		}
+	}
 }
 
 func TestRunDomainLinodeAddPrimaryConfiguresVhostsAndCachesPrimary(t *testing.T) {
@@ -5738,7 +5769,7 @@ func TestRunDomainLinodeAddPrimaryConfiguresVhostsAndCachesPrimary(t *testing.T)
 		t.Fatalf("buildSiteDomainPlan() error = %v", err)
 	}
 	script := renderLinodeDomainBindingScript(plan)
-	for _, want := range []string{"/usr/local/bin/nf-refresh-domain-www-client-com", "/usr/local/bin/nf-refresh-domain-client-com", "/etc/nginx/sites-available/nf-site-domain-www-client-com", "/etc/nginx/sites-available/nf-site-domain-client-com", "server_name $domain;", "return 301 https://$domain\\$request_uri;", "return 302 https://$redirect_target\\$request_uri;", "getent ahosts \"$domain\"", "flock -n -E 75 /run/nf-certbot.lock", "Certbot is already running; timer will retry.", "certbot certonly --non-interactive --agree-tos --webroot", "nf-domain-www-client-com-tls.timer", "nf-domain-client-com-tls.timer", "option update home https://www.client.com", "option update siteurl https://www.client.com", "search-replace \"$old_url\" https://www.client.com --all-tables --skip-columns=guid", "del(.domain_state)", ".hostname = $canonical | .url = $url | .primary_domain = $canonical", "client.com", "www.client.com"} {
+	for _, want := range []string{"/usr/local/bin/nf-refresh-domain-www-client-com", "/usr/local/bin/nf-refresh-domain-client-com", "/etc/nginx/sites-available/nf-site-domain-www-client-com", "/etc/nginx/sites-available/nf-site-domain-client-com", "server_name $domain;", "return 301 https://$domain\\$request_uri;", "add_header Cache-Control \"no-store\" always;", "return 302 https://$redirect_target\\$request_uri;", "getent ahosts \"$domain\"", "flock -n -E 75 /run/nf-certbot.lock", "Certbot is already running; timer will retry.", "certbot certonly --non-interactive --agree-tos --webroot", "nf-domain-www-client-com-tls.timer", "nf-domain-client-com-tls.timer", "option update home https://www.client.com", "option update siteurl https://www.client.com", "search-replace \"$old_url\" https://www.client.com --all-tables --skip-columns=guid", "del(.domain_state)", ".hostname = $canonical | .url = $url | .primary_domain = $canonical", "client.com", "www.client.com"} {
 		if !strings.Contains(script, want) {
 			t.Fatalf("linode domain script missing %q:\n%s", want, script)
 		}
@@ -5753,7 +5784,7 @@ func TestRunDomainLinodeAddPrimaryConfiguresVhostsAndCachesPrimary(t *testing.T)
 	t.Cleanup(func() { runSSHCommandFn = oldRunSSH })
 
 	output := captureStdout(t, func() {
-		if got := Run([]string{"domain", "add", "client.app1-linode:live", "www.client.com", "client.com", "--primary", "--search-replace", "--execute", "--yes", "--non-interactive"}); got != 0 {
+		if got := Run([]string{"domain", "add", "client.app1-linode:live", "www.client.com", "client.com", "--primary", "--search-replace", "--no-proxy", "--execute", "--yes", "--non-interactive"}); got != 0 {
 			t.Fatalf("Run(domain add --primary linode) = %d, want 0", got)
 		}
 	})
@@ -5825,8 +5856,60 @@ func TestRunSiteDomainLinodePrepareRejectsCloudflareFull(t *testing.T) {
 	}
 
 	_, err := buildSiteDomainPlan("client.app1-linode", "live", "add", siteDomainOptions{domains: []string{"www.client.com"}, primary: true, proxyMode: "cloudflare-full"})
-	if err == nil || !strings.Contains(err.Error(), "--proxy must be cloudflare") {
+	if err == nil || !strings.Contains(err.Error(), "--proxy must be cloudflare or an IP address") {
 		t.Fatalf("buildSiteDomainPlan() error = %v, want cloudflare-full rejected", err)
+	}
+}
+
+func TestLinodeDomainCacheJQFilterUpdatesPrimary(t *testing.T) {
+	if _, err := exec.LookPath("jq"); err != nil {
+		t.Skip("jq is not available")
+	}
+	cmd := exec.Command("jq",
+		"--arg", "site_id", "client.app1-linode",
+		"--arg", "env", "live",
+		"--arg", "canonical", "www.client.com",
+		"--arg", "url", "https://www.client.com",
+		"--arg", "internal_hostname", "client.app1-linode.nonfiction.dev",
+		"--arg", "internal_url", "https://client.app1-linode.nonfiction.dev",
+		"--arg", "proxy_mode", "159.203.49.164",
+		"--arg", "primary", "1",
+		"--argjson", "names", `["www.client.com"]`,
+		"--argjson", "domains", `[{"name":"www.client.com","role":"primary","management":"external","status":"pending","proxy_mode":"159.203.49.164"}]`,
+		linodeDomainCacheUpdateJQFilter(),
+	)
+	cmd.Stdin = strings.NewReader(`[{"site_id":"client.app1-linode","env":"live","hostname":"old.client.com","url":"https://old.client.com","domains":[{"name":"old.client.com","role":"primary","management":"external","status":"active"}],"domain_state":"pending"}]`)
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("jq update filter failed: %v\n%s", err, out)
+	}
+	var records []map[string]any
+	if err := json.Unmarshal(out, &records); err != nil {
+		t.Fatalf("jq output decode error = %v: %s", err, out)
+	}
+	if got := recordValueString(records[0]["hostname"]); got != "www.client.com" {
+		t.Fatalf("hostname = %q, want www.client.com", got)
+	}
+	if got := recordValueString(records[0]["internal_hostname"]); got != "client.app1-linode.nonfiction.dev" {
+		t.Fatalf("internal_hostname = %q, want fallback hostname", got)
+	}
+	if got := recordValueString(records[0]["proxy_mode"]); got != "159.203.49.164" {
+		t.Fatalf("proxy_mode = %q, want proxy IP", got)
+	}
+	if _, ok := records[0]["domain_state"]; ok {
+		t.Fatalf("domain_state should be deleted: %#v", records[0])
+	}
+	domains, ok := records[0]["domains"].([]any)
+	if !ok || len(domains) != 2 {
+		t.Fatalf("domains = %#v, want old plus new domain", records[0]["domains"])
+	}
+	oldDomain := domains[0].(map[string]any)
+	newDomain := domains[1].(map[string]any)
+	if recordValueString(oldDomain["role"]) != "secondary" {
+		t.Fatalf("old domain role = %#v, want demoted secondary", oldDomain)
+	}
+	if recordValueString(newDomain["name"]) != "www.client.com" || recordValueString(newDomain["role"]) != "primary" {
+		t.Fatalf("new domain = %#v, want primary www.client.com", newDomain)
 	}
 }
 
@@ -5880,7 +5963,7 @@ func TestRunSiteDomainLinodePrimaryLaunchesAfterChecksPass(t *testing.T) {
 	})
 
 	output := captureStdout(t, func() {
-		if got := Run([]string{"domain", "primary", "client.app1-linode:live", "www.client.com", "--wait-interval", "1ns", "--wait-timeout", "1s", "--execute", "--yes", "--non-interactive"}); got != 0 {
+		if got := Run([]string{"domain", "primary", "client.app1-linode:live", "www.client.com", "--no-proxy", "--no-search-replace", "--wait-interval", "1ns", "--wait-timeout", "1s", "--execute", "--yes", "--non-interactive"}); got != 0 {
 			t.Fatalf("Run(domain primary linode) = %d, want 0", got)
 		}
 	})
@@ -5945,7 +6028,7 @@ func TestRunSiteDomainLinodePrimaryTimeoutDoesNotLaunch(t *testing.T) {
 
 	stderr := captureStderr(t, func() {
 		_ = captureStdout(t, func() {
-			if got := Run([]string{"domain", "primary", "client.app1-linode:live", "www.client.com", "--wait-interval", "1ns", "--wait-timeout", "1ns", "--execute", "--yes", "--non-interactive"}); got != 1 {
+			if got := Run([]string{"domain", "primary", "client.app1-linode:live", "www.client.com", "--no-proxy", "--no-search-replace", "--wait-interval", "1ns", "--wait-timeout", "1ns", "--execute", "--yes", "--non-interactive"}); got != 1 {
 				t.Fatalf("Run(domain primary timeout) = %d, want 1", got)
 			}
 		})
@@ -6005,7 +6088,7 @@ func TestRunDomainLinodeAddPrimaryCloudflareKeepsLetsEncrypt(t *testing.T) {
 	runSSHCommandFn = func(args []string) error { return nil }
 	t.Cleanup(func() { runSSHCommandFn = oldRunSSH })
 	output := captureStdout(t, func() {
-		if got := Run([]string{"domain", "add", "client.app1-linode:live", "www.client.com", "--primary", "--proxy", "cloudflare", "--execute", "--yes", "--non-interactive"}); got != 0 {
+		if got := Run([]string{"domain", "add", "client.app1-linode:live", "www.client.com", "--primary", "--proxy", "cloudflare", "--no-search-replace", "--execute", "--yes", "--non-interactive"}); got != 0 {
 			t.Fatalf("Run(domain add linode cloudflare) = %d, want 0", got)
 		}
 	})
@@ -6020,6 +6103,62 @@ func TestRunDomainLinodeAddPrimaryCloudflareKeepsLetsEncrypt(t *testing.T) {
 	}
 	if got := recordValueString(records[0]["proxy_mode"]); got != "cloudflare" {
 		t.Fatalf("proxy_mode = %q, want cloudflare", got)
+	}
+}
+
+func TestRunDomainLinodeAddPrimaryProxyIPUsesWildcardOrigin(t *testing.T) {
+	configDir := t.TempDir()
+	stateDir := t.TempDir()
+	t.Setenv("NF_CONFIG_HOME", configDir)
+	t.Setenv("NF_STATE_HOME", stateDir)
+	if err := saveGlobalConfig(map[string]string{"linode_default_user": "nonfiction"}); err != nil {
+		t.Fatalf("saveGlobalConfig() error = %v", err)
+	}
+	if err := state.SaveStateRecords("providers", []map[string]any{{"provider": "linode", "targets": []map[string]any{{"name": "app1-linode", "provider": "linode", "hostname": "app1-linode.nonfiction.dev", "public_ipv4": "203.0.113.10", "ssh": map[string]any{"user": "nonfiction", "host": "app1-linode.nonfiction.dev"}}}}}); err != nil {
+		t.Fatalf("SaveStateRecords(providers) error = %v", err)
+	}
+	if err := state.SaveStateRecords("sites", []map[string]any{{"provider": "linode", "site_id": "client.app1-linode", "env_id": "client.app1-linode:live", "name": "client", "env": "live", "target": "app1-linode", "path": "/var/www/sites/client/public", "database": "client", "hostname": "client.app1-linode.nonfiction.dev", "url": "https://client.app1-linode.nonfiction.dev", "php_version": "8.3"}}); err != nil {
+		t.Fatalf("SaveStateRecords(sites) error = %v", err)
+	}
+
+	plan, err := buildSiteDomainPlan("client.app1-linode", "live", "add", siteDomainOptions{domains: []string{"www.client.com"}, primary: true, proxyMode: "159.203.49.164"})
+	if err != nil {
+		t.Fatalf("buildSiteDomainPlan() error = %v", err)
+	}
+	if plan.ProxyMode != "159.203.49.164" {
+		t.Fatalf("ProxyMode = %q, want proxy IP", plan.ProxyMode)
+	}
+	script := renderLinodeDomainBindingScript(plan)
+	for _, want := range []string{"origin_wildcard_tls=1", "wildcard_cert_snippet=\"/etc/nginx/snippets/nf-wildcard-cert.conf\"", "printf '    include %s;\\n' \"$wildcard_cert_snippet\"", "systemctl disable --now nf-domain-www-client-com-tls.timer", "rm -f /etc/systemd/system/nf-domain-www-client-com-tls.service", "--arg proxy_mode 159.203.49.164", "if ! jq --arg site_id", "(.domains =", ".proxy_mode = $proxy_mode"} {
+		if !strings.Contains(script, want) {
+			t.Fatalf("proxy IP linode script missing %q:\n%s", want, script)
+		}
+	}
+	for _, notWant := range []string{"certbot certonly --non-interactive --agree-tos --webroot", "domain_resolves_to_cloudflare", "systemctl enable --now nf-domain-www-client-com-tls.timer"} {
+		if strings.Contains(script, notWant) {
+			t.Fatalf("proxy IP linode script unexpectedly contains %q:\n%s", notWant, script)
+		}
+	}
+
+	oldRunSSH := runSSHCommandFn
+	runSSHCommandFn = func(args []string) error { return nil }
+	t.Cleanup(func() { runSSHCommandFn = oldRunSSH })
+	output := captureStdout(t, func() {
+		if got := Run([]string{"domain", "add", "client.app1-linode:live", "www.client.com", "--primary", "--proxy", "159.203.49.164", "--no-search-replace", "--execute", "--yes", "--non-interactive"}); got != 0 {
+			t.Fatalf("Run(domain add linode proxy IP) = %d, want 0", got)
+		}
+	})
+	for _, want := range []string{"Primary domain plan:", "proxy:     159.203.49.164", "A     www.client.com -> 159.203.49.164", "reverse proxy origin:", "upstream: https://app1-linode.nonfiction.dev", "Host header: preserve the requested public domain", "TLS: reverse proxy terminates public HTTPS; Linode origin uses the target wildcard certificate", "Domain launched as primary."} {
+		if !strings.Contains(output, want) {
+			t.Fatalf("domain proxy IP output missing %q:\n%s", want, output)
+		}
+	}
+	records, err := state.LoadStateRecords("sites")
+	if err != nil {
+		t.Fatalf("LoadStateRecords(sites) error = %v", err)
+	}
+	if got := recordValueString(records[0]["proxy_mode"]); got != "159.203.49.164" {
+		t.Fatalf("proxy_mode = %q, want proxy IP", got)
 	}
 }
 
@@ -6059,7 +6198,7 @@ func TestRunSiteDomainLinodeRemoveExecuteCleansPublicBindingAndResetsCache(t *te
 		t.Fatalf("buildSiteDomainPlan() error = %v", err)
 	}
 	script := renderLinodeDomainBindingRemoveScript(plan, true)
-	for _, want := range []string{"rm -f /etc/nginx/sites-enabled/nf-site-domain-www-client-com", "rm -f /etc/nginx/sites-enabled/nf-site-domain-client-com", "systemctl disable --now nf-domain-www-client-com-tls.timer", "systemctl disable --now nf-domain-client-com-tls.timer", "rm -f /etc/systemd/system/nf-domain-www-client-com-tls.service", "certbot delete --cert-name www.client.com --non-interactive", "certbot delete --cert-name client.com --non-interactive", "--argjson remove_domains", "del(.domains, .domain_state, .proxy_mode)", ".hostname = $internal_hostname", ".url = $internal_url"} {
+	for _, want := range []string{"rm -f /etc/nginx/sites-enabled/nf-site-domain-www-client-com", "rm -f /etc/nginx/sites-enabled/nf-site-domain-client-com", "systemctl disable --now nf-domain-www-client-com-tls.timer", "systemctl disable --now nf-domain-client-com-tls.timer", "rm -f /etc/systemd/system/nf-domain-www-client-com-tls.service", "certbot delete --cert-name www.client.com --non-interactive", "certbot delete --cert-name client.com --non-interactive", "if ! jq --arg site_id", "--argjson remove_domains", "del(.domains, .domain_state, .proxy_mode)", ".hostname = $internal_hostname", ".url = $internal_url"} {
 		if !strings.Contains(script, want) {
 			t.Fatalf("linode remove script missing %q:\n%s", want, script)
 		}
@@ -6073,7 +6212,7 @@ func TestRunSiteDomainLinodeRemoveExecuteCleansPublicBindingAndResetsCache(t *te
 	}
 	t.Cleanup(func() { runSSHCommandFn = oldRunSSH })
 	output := captureStdout(t, func() {
-		if got := Run([]string{"domain", "remove", "client.app1-linode:live", "www.client.com", "client.com", "--delete-cert", "--execute", "--yes", "--non-interactive"}); got != 0 {
+		if got := Run([]string{"domain", "remove", "client.app1-linode:live", "www.client.com", "client.com", "--no-proxy", "--delete-cert", "--execute", "--yes", "--non-interactive"}); got != 0 {
 			t.Fatalf("Run(domain remove linode) = %d, want 0", got)
 		}
 	})
@@ -6149,7 +6288,7 @@ func TestRunSiteDomainRemoveRejectsDefaultHostname(t *testing.T) {
 	t.Cleanup(func() { runSSHCommandFn = oldRunSSH })
 
 	stderr := captureStderr(t, func() {
-		if got := Run([]string{"domain", "remove", "client.app1-linode:live", "client.app1-linode.nonfiction.dev", "--execute", "--yes", "--non-interactive"}); got != 1 {
+		if got := Run([]string{"domain", "remove", "client.app1-linode:live", "client.app1-linode.nonfiction.dev", "--no-proxy", "--execute", "--yes", "--non-interactive"}); got != 1 {
 			t.Fatalf("Run(domain remove default hostname) = %d, want 1", got)
 		}
 	})
@@ -6253,7 +6392,7 @@ func TestRunSiteDomainPrepareWarnsWhenDomainCachedElsewhere(t *testing.T) {
 		t.Fatalf("SaveStateRecords(sites) error = %v", err)
 	}
 	output := captureStdout(t, func() {
-		if got := Run([]string{"domain", "add", "client.app4-linode:live", "www.client.com", "--primary", "--proxy", "cloudflare", "--dry-run", "--non-interactive"}); got != 0 {
+		if got := Run([]string{"domain", "add", "client.app4-linode:live", "www.client.com", "--primary", "--proxy", "cloudflare", "--no-search-replace", "--dry-run", "--non-interactive"}); got != 0 {
 			t.Fatalf("Run(domain add duplicate dry-run) = %d, want 0", got)
 		}
 	})
@@ -6400,7 +6539,7 @@ func TestRunSiteDomainLinodeCheckReportsPending(t *testing.T) {
 	})
 
 	output := captureStdout(t, func() {
-		if got := Run([]string{"domain", "check", "client.app1-linode:live", "www.client.com", "client.com", "--non-interactive"}); got != 2 {
+		if got := Run([]string{"domain", "check", "client.app1-linode:live", "www.client.com", "client.com", "--no-proxy", "--non-interactive"}); got != 2 {
 			t.Fatalf("Run(domain check linode) = %d, want 2", got)
 		}
 	})
@@ -6414,6 +6553,510 @@ func TestRunSiteDomainLinodeCheckReportsPending(t *testing.T) {
 		if !strings.Contains(joinedArgs, want) {
 			t.Fatalf("ssh args missing %q:\n%#v", want, sshArgs)
 		}
+	}
+}
+
+func TestRunSiteDomainLinodeCheckProxyIPUsesProxyDNS(t *testing.T) {
+	configDir := t.TempDir()
+	stateDir := t.TempDir()
+	t.Setenv("NF_CONFIG_HOME", configDir)
+	t.Setenv("NF_STATE_HOME", stateDir)
+	if err := saveGlobalConfig(map[string]string{"linode_default_user": "nonfiction"}); err != nil {
+		t.Fatalf("saveGlobalConfig() error = %v", err)
+	}
+	if err := state.SaveStateRecords("providers", []map[string]any{{"provider": "linode", "targets": []map[string]any{{"name": "app1-linode", "provider": "linode", "hostname": "app1-linode.nonfiction.dev", "public_ipv4": "203.0.113.10", "ssh": map[string]any{"user": "nonfiction", "host": "app1-linode.nonfiction.dev"}}}}}); err != nil {
+		t.Fatalf("SaveStateRecords(providers) error = %v", err)
+	}
+	if err := state.SaveStateRecords("sites", []map[string]any{{"provider": "linode", "site_id": "client.app1-linode", "env_id": "client.app1-linode:live", "name": "client", "env": "live", "target": "app1-linode", "path": "/var/www/sites/client/public", "database": "client", "hostname": "client.app1-linode.nonfiction.dev", "url": "https://client.app1-linode.nonfiction.dev", "php_version": "8.3", "proxy_mode": "159.203.49.164"}}); err != nil {
+		t.Fatalf("SaveStateRecords(sites) error = %v", err)
+	}
+
+	oldRunSSHOutput := runSSHOutputFn
+	oldLookupHost := siteDomainLookupHostFn
+	oldHTTP := siteDomainHTTPStatusFn
+	oldHTTPS := siteDomainHTTPSStatusFn
+	oldTLS := siteDomainTLSStatusFn
+	oldOriginTLS := siteDomainOriginTLSFn
+	runSSHOutputFn = func(args []string) ([]byte, error) {
+		return []byte("vhost=present\nenabled=present\ntimer=missing\nservice=missing\ncert=missing\n"), nil
+	}
+	siteDomainLookupHostFn = func(host string) ([]string, error) {
+		return []string{"159.203.49.164"}, nil
+	}
+	siteDomainHTTPStatusFn = func(domain string) siteDomainHTTPCheckResult {
+		return siteDomainHTTPCheckResult{StatusCode: 200}
+	}
+	siteDomainHTTPSStatusFn = func(domain string) siteDomainHTTPCheckResult {
+		return siteDomainHTTPCheckResult{StatusCode: 200}
+	}
+	siteDomainTLSStatusFn = func(domain string) siteDomainTLSCheckResult {
+		return siteDomainTLSCheckResult{OK: true, NotAfter: time.Date(2026, 12, 31, 0, 0, 0, 0, time.UTC), Issuer: "Let's Encrypt"}
+	}
+	siteDomainOriginTLSFn = func(domain, origin string) siteDomainTLSCheckResult {
+		t.Fatalf("origin TLS should not be checked for reverse-proxy IP mode")
+		return siteDomainTLSCheckResult{}
+	}
+	t.Cleanup(func() {
+		runSSHOutputFn = oldRunSSHOutput
+		siteDomainLookupHostFn = oldLookupHost
+		siteDomainHTTPStatusFn = oldHTTP
+		siteDomainHTTPSStatusFn = oldHTTPS
+		siteDomainTLSStatusFn = oldTLS
+		siteDomainOriginTLSFn = oldOriginTLS
+	})
+
+	output := captureStdout(t, func() {
+		if got := Run([]string{"domain", "check", "client.app1-linode:live", "www.client.com", "--non-interactive"}); got != 0 {
+			t.Fatalf("Run(domain check linode proxy IP) = %d, want 0", got)
+		}
+	})
+	for _, want := range []string{"Public domain check:", "proxy:     159.203.49.164", "proxy mode: reverse proxy 159.203.49.164", "certbot timer: missing", "certificate: missing", "A www.client.com -> 159.203.49.164: ok", "https://www.client.com: ok expires 2026-12-31 issuer Let's Encrypt", "ready for primary: nf domain primary client.app1-linode:live www.client.com --proxy 159.203.49.164", "Overall: ready"} {
+		if !strings.Contains(output, want) {
+			t.Fatalf("domain linode proxy IP check output missing %q:\n%s", want, output)
+		}
+	}
+	if strings.Contains(output, "Origin HTTPS:") {
+		t.Fatalf("proxy IP check should not run origin TLS checks:\n%s", output)
+	}
+}
+
+func TestRunSiteDomainLinodeCheckRejectsHTTPSInternalRedirect(t *testing.T) {
+	configDir := t.TempDir()
+	stateDir := t.TempDir()
+	t.Setenv("NF_CONFIG_HOME", configDir)
+	t.Setenv("NF_STATE_HOME", stateDir)
+	if err := saveGlobalConfig(map[string]string{"linode_default_user": "nonfiction"}); err != nil {
+		t.Fatalf("saveGlobalConfig() error = %v", err)
+	}
+	if err := state.SaveStateRecords("providers", []map[string]any{{"provider": "linode", "targets": []map[string]any{{"name": "app1-linode", "provider": "linode", "hostname": "app1-linode.nonfiction.dev", "public_ipv4": "203.0.113.10", "ssh": map[string]any{"user": "nonfiction", "host": "app1-linode.nonfiction.dev"}}}}}); err != nil {
+		t.Fatalf("SaveStateRecords(providers) error = %v", err)
+	}
+	if err := state.SaveStateRecords("sites", []map[string]any{{
+		"provider":          "linode",
+		"site_id":           "client.app1-linode",
+		"env_id":            "client.app1-linode:live",
+		"name":              "client",
+		"env":               "live",
+		"target":            "app1-linode",
+		"path":              "/var/www/sites/client/public",
+		"database":          "client",
+		"hostname":          "www.client.com",
+		"url":               "https://www.client.com",
+		"primary_domain":    "www.client.com",
+		"internal_hostname": "client.app1-linode.nonfiction.dev",
+		"internal_url":      "https://client.app1-linode.nonfiction.dev",
+		"php_version":       "8.3",
+		"proxy_mode":        "159.203.49.164",
+		"domains":           []map[string]any{{"name": "www.client.com", "role": "primary", "management": "external", "status": "active", "proxy_mode": "159.203.49.164"}},
+	}}); err != nil {
+		t.Fatalf("SaveStateRecords(sites) error = %v", err)
+	}
+
+	oldRunSSHOutput := runSSHOutputFn
+	oldLookupHost := siteDomainLookupHostFn
+	oldHTTP := siteDomainHTTPStatusFn
+	oldHTTPS := siteDomainHTTPSStatusFn
+	oldTLS := siteDomainTLSStatusFn
+	runSSHOutputFn = func(args []string) ([]byte, error) {
+		return []byte("vhost=present\nenabled=present\ntimer=not-required\nservice=not-required\ncert=wildcard-origin\n"), nil
+	}
+	siteDomainLookupHostFn = func(host string) ([]string, error) {
+		return []string{"159.203.49.164"}, nil
+	}
+	siteDomainHTTPStatusFn = func(domain string) siteDomainHTTPCheckResult {
+		return siteDomainHTTPCheckResult{StatusCode: 200}
+	}
+	siteDomainHTTPSStatusFn = func(domain string) siteDomainHTTPCheckResult {
+		return siteDomainHTTPCheckResult{StatusCode: 302, Location: "https://client.app1-linode.nonfiction.dev/"}
+	}
+	siteDomainTLSStatusFn = func(domain string) siteDomainTLSCheckResult {
+		return siteDomainTLSCheckResult{OK: true, NotAfter: time.Date(2026, 12, 31, 0, 0, 0, 0, time.UTC), Issuer: "Let's Encrypt"}
+	}
+	t.Cleanup(func() {
+		runSSHOutputFn = oldRunSSHOutput
+		siteDomainLookupHostFn = oldLookupHost
+		siteDomainHTTPStatusFn = oldHTTP
+		siteDomainHTTPSStatusFn = oldHTTPS
+		siteDomainTLSStatusFn = oldTLS
+	})
+
+	output := captureStdout(t, func() {
+		if got := Run([]string{"domain", "check", "client.app1-linode:live", "www.client.com", "--non-interactive"}); got != 2 {
+			t.Fatalf("Run(domain check linode proxy IP internal redirect) = %d, want 2", got)
+		}
+	})
+	for _, want := range []string{"https://www.client.com: pending (redirects to internal hostname client.app1-linode.nonfiction.dev)", "Overall: pending"} {
+		if !strings.Contains(output, want) {
+			t.Fatalf("domain check output missing %q:\n%s", want, output)
+		}
+	}
+}
+
+func setupLinodeDomainPromptFixture(t *testing.T, extra map[string]any) {
+	t.Helper()
+	configDir := t.TempDir()
+	stateDir := t.TempDir()
+	t.Setenv("NF_CONFIG_HOME", configDir)
+	t.Setenv("NF_STATE_HOME", stateDir)
+	if err := saveGlobalConfig(map[string]string{"linode_default_user": "nonfiction"}); err != nil {
+		t.Fatalf("saveGlobalConfig() error = %v", err)
+	}
+	if err := state.SaveStateRecords("providers", []map[string]any{{"provider": "linode", "targets": []map[string]any{{"name": "app1-linode", "provider": "linode", "hostname": "app1-linode.nonfiction.dev", "public_ipv4": "203.0.113.10", "ssh": map[string]any{"user": "nonfiction", "host": "app1-linode.nonfiction.dev"}}}}}); err != nil {
+		t.Fatalf("SaveStateRecords(providers) error = %v", err)
+	}
+	record := map[string]any{"provider": "linode", "site_id": "client.app1-linode", "env_id": "client.app1-linode:live", "name": "client", "env": "live", "target": "app1-linode", "path": "/var/www/sites/client/public", "database": "client", "hostname": "client.app1-linode.nonfiction.dev", "url": "https://client.app1-linode.nonfiction.dev", "php_version": "8.3"}
+	for key, value := range extra {
+		record[key] = value
+	}
+	if err := state.SaveStateRecords("sites", []map[string]any{record}); err != nil {
+		t.Fatalf("SaveStateRecords(sites) error = %v", err)
+	}
+}
+
+func setupTestNFProject(t *testing.T, remotes map[string]any) string {
+	t.Helper()
+	repoRoot := t.TempDir()
+	if err := os.Mkdir(filepath.Join(repoRoot, ".git"), 0o755); err != nil {
+		t.Fatalf("Mkdir(.git) error = %v", err)
+	}
+	project := map[string]any{"version": 1, "project": map[string]any{"slug": "client"}, "remotes": remotes}
+	data, err := json.MarshalIndent(project, "", "  ")
+	if err != nil {
+		t.Fatalf("MarshalIndent(project) error = %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(repoRoot, "nf.json"), append(data, '\n'), 0o644); err != nil {
+		t.Fatalf("WriteFile(nf.json) error = %v", err)
+	}
+	oldwd, err := os.Getwd()
+	if err != nil {
+		t.Fatalf("Getwd() error = %v", err)
+	}
+	if err := os.Chdir(repoRoot); err != nil {
+		t.Fatalf("Chdir(project) error = %v", err)
+	}
+	t.Cleanup(func() { _ = os.Chdir(oldwd) })
+	return repoRoot
+}
+
+func withInteractiveDomainPrompts(t *testing.T) func() {
+	t.Helper()
+	oldInteractive := siteIsInteractiveFn
+	oldSiteSelect := siteSelectFn
+	oldDomainSelect := siteDomainSelectFn
+	oldDomainMultiSelect := siteDomainMultiSelectFn
+	oldDomainPrompt := siteDomainPromptStringFn
+	siteIsInteractiveFn = func() bool { return true }
+	return func() {
+		siteIsInteractiveFn = oldInteractive
+		siteSelectFn = oldSiteSelect
+		siteDomainSelectFn = oldDomainSelect
+		siteDomainMultiSelectFn = oldDomainMultiSelect
+		siteDomainPromptStringFn = oldDomainPrompt
+	}
+}
+
+func TestRunSiteDomainPrimaryWithoutArgsPromptsEnvDomainProxyAndSearch(t *testing.T) {
+	setupLinodeDomainPromptFixture(t, map[string]any{"domains": []map[string]any{{"name": "www.client.com", "role": "secondary", "management": "external", "status": "pending"}}})
+	t.Cleanup(withInteractiveDomainPrompts(t))
+
+	var envTitle string
+	var envOptions []ui.SelectOption
+	siteSelectFn = func(title string, options []ui.SelectOption) (string, error) {
+		envTitle = title
+		envOptions = append([]ui.SelectOption(nil), options...)
+		return "client.app1-linode:live", nil
+	}
+	selectCalls := []string{}
+	siteDomainSelectFn = func(title string, options []ui.SelectOption) (string, error) {
+		selectCalls = append(selectCalls, title)
+		switch title {
+		case "Choose a domain to make primary":
+			return "www.client.com", nil
+		case "Choose Linode proxy mode":
+			return "direct", nil
+		case "Database search-replace":
+			return "yes", nil
+		default:
+			t.Fatalf("unexpected select %q with options %#v", title, options)
+			return "", nil
+		}
+	}
+
+	output := captureStdout(t, func() {
+		if got := Run([]string{"domain", "primary", "--dry-run"}); got != 0 {
+			t.Fatalf("Run(domain primary picker) = %d, want 0", got)
+		}
+	})
+	if envTitle != "Choose an env or remote for domain primary" {
+		t.Fatalf("env picker title = %q", envTitle)
+	}
+	if len(envOptions) != 1 || envOptions[0].Value != "client.app1-linode:live" {
+		t.Fatalf("env picker options = %#v", envOptions)
+	}
+	for _, want := range []string{"Choose a domain to make primary", "Choose Linode proxy mode", "Database search-replace"} {
+		if !slices.Contains(selectCalls, want) {
+			t.Fatalf("select calls = %#v, missing %q", selectCalls, want)
+		}
+	}
+	for _, want := range []string{"Primary domain plan:", "primary:   www.client.com", "proxy:     none", "search-replace: true", "mode:      dry-run"} {
+		if !strings.Contains(output, want) {
+			t.Fatalf("domain primary picker output missing %q:\n%s", want, output)
+		}
+	}
+}
+
+func TestRunSiteDomainPrimaryInProjectPromptsOnlyConfiguredRemotes(t *testing.T) {
+	setupLinodeDomainPromptFixture(t, map[string]any{"domains": []map[string]any{{"name": "www.client.com", "role": "secondary", "management": "external", "status": "pending"}}})
+	records, err := state.LoadStateRecords("sites")
+	if err != nil {
+		t.Fatalf("LoadStateRecords(sites) error = %v", err)
+	}
+	records = append(records, map[string]any{"provider": "kinsta", "site_id": "other.kinsta", "env_id": "other.kinsta:live", "name": "other", "env": "live", "target": "kinsta", "hostname": "www.other.com", "url": "https://www.other.com"})
+	if err := state.SaveStateRecords("sites", records); err != nil {
+		t.Fatalf("SaveStateRecords(sites) error = %v", err)
+	}
+	setupTestNFProject(t, map[string]any{"test": "client.app1-linode:live"})
+	t.Cleanup(withInteractiveDomainPrompts(t))
+
+	var envOptions []ui.SelectOption
+	siteSelectFn = func(title string, options []ui.SelectOption) (string, error) {
+		if title != "Choose an env or remote for domain primary" {
+			t.Fatalf("env picker title = %q", title)
+		}
+		envOptions = append([]ui.SelectOption(nil), options...)
+		return "test", nil
+	}
+	siteDomainSelectFn = func(title string, options []ui.SelectOption) (string, error) {
+		switch title {
+		case "Choose a domain to make primary":
+			return "www.client.com", nil
+		case "Choose Linode proxy mode":
+			return "direct", nil
+		case "Database search-replace":
+			return "no", nil
+		default:
+			t.Fatalf("unexpected select %q", title)
+			return "", nil
+		}
+	}
+
+	output := captureStdout(t, func() {
+		if got := Run([]string{"domain", "primary", "--dry-run"}); got != 0 {
+			t.Fatalf("Run(project domain primary picker) = %d, want 0", got)
+		}
+	})
+	if len(envOptions) != 1 {
+		t.Fatalf("env picker options = %#v, want one project remote", envOptions)
+	}
+	if envOptions[0].Value != "test" || envOptions[0].Label != "test (client.app1-linode:live)" {
+		t.Fatalf("env picker option = %#v, want test without remote prefix", envOptions[0])
+	}
+	if strings.Contains(envOptions[0].Label, "remote ") {
+		t.Fatalf("env picker label contains remote prefix: %#v", envOptions[0])
+	}
+	for _, want := range []string{"Primary domain plan:", "env:       client.app1-linode:live", "primary:   www.client.com", "proxy:     none", "search-replace: false"} {
+		if !strings.Contains(output, want) {
+			t.Fatalf("project domain primary output missing %q:\n%s", want, output)
+		}
+	}
+}
+
+func TestRunSiteDomainAddWithoutArgsPromptsDomainPrimaryProxyAndSearch(t *testing.T) {
+	setupLinodeDomainPromptFixture(t, nil)
+	t.Cleanup(withInteractiveDomainPrompts(t))
+
+	siteSelectFn = func(title string, options []ui.SelectOption) (string, error) {
+		if title != "Choose an env or remote for domain add" {
+			t.Fatalf("env picker title = %q", title)
+		}
+		return "client.app1-linode:live", nil
+	}
+	siteDomainPromptStringFn = func(prompt, defaultValue string, allowBlank bool) (string, error) {
+		switch prompt {
+		case "Domain(s) to add":
+			return "www.client.com, client.com", nil
+		case "Reverse proxy public IP":
+			return "159.203.49.164", nil
+		default:
+			t.Fatalf("unexpected prompt %q", prompt)
+			return "", nil
+		}
+	}
+	siteDomainSelectFn = func(title string, options []ui.SelectOption) (string, error) {
+		switch title {
+		case "Add domain as primary or secondary":
+			return "primary", nil
+		case "Choose Linode proxy mode":
+			return "ip", nil
+		case "Database search-replace":
+			return "no", nil
+		default:
+			t.Fatalf("unexpected select %q", title)
+			return "", nil
+		}
+	}
+
+	output := captureStdout(t, func() {
+		if got := Run([]string{"domain", "add", "--dry-run"}); got != 0 {
+			t.Fatalf("Run(domain add picker) = %d, want 0", got)
+		}
+	})
+	for _, want := range []string{"Primary domain plan:", "primary:   www.client.com", "secondary: client.com", "proxy:     159.203.49.164", "search-replace: false", "A     www.client.com -> 159.203.49.164", "mode:      dry-run"} {
+		if !strings.Contains(output, want) {
+			t.Fatalf("domain add picker output missing %q:\n%s", want, output)
+		}
+	}
+}
+
+func TestRunSiteDomainRemoveWithoutArgsPromptsEnvDomainsAndProxy(t *testing.T) {
+	setupLinodeDomainPromptFixture(t, map[string]any{"domains": []map[string]any{{"name": "www.client.com", "role": "secondary", "management": "external", "status": "pending"}, {"name": "client.com", "role": "secondary", "management": "external", "status": "pending"}}})
+	t.Cleanup(withInteractiveDomainPrompts(t))
+
+	siteSelectFn = func(title string, options []ui.SelectOption) (string, error) { return "client.app1-linode:live", nil }
+	siteDomainMultiSelectFn = func(title string, options []ui.SelectOption) ([]string, error) {
+		if title != "Choose domains to remove" {
+			t.Fatalf("multi-select title = %q", title)
+		}
+		return []string{"www.client.com"}, nil
+	}
+	siteDomainSelectFn = func(title string, options []ui.SelectOption) (string, error) {
+		if title != "Choose Linode proxy mode" {
+			t.Fatalf("select title = %q", title)
+		}
+		return "direct", nil
+	}
+
+	output := captureStdout(t, func() {
+		if got := Run([]string{"domain", "remove", "--dry-run"}); got != 0 {
+			t.Fatalf("Run(domain remove picker) = %d, want 0", got)
+		}
+	})
+	for _, want := range []string{"Remove domain plan:", "domains:   www.client.com", "proxy:     none", "mode:      dry-run"} {
+		if !strings.Contains(output, want) {
+			t.Fatalf("domain remove picker output missing %q:\n%s", want, output)
+		}
+	}
+}
+
+func TestRunSiteDomainCheckWithoutArgsPromptsEnvDomainsAndProxy(t *testing.T) {
+	setupLinodeDomainPromptFixture(t, map[string]any{"hostname": "www.client.com", "url": "https://www.client.com", "primary_domain": "www.client.com", "internal_hostname": "client.app1-linode.nonfiction.dev", "internal_url": "https://client.app1-linode.nonfiction.dev", "domains": []map[string]any{{"name": "www.client.com", "role": "primary", "management": "external", "status": "active"}}})
+	t.Cleanup(withInteractiveDomainPrompts(t))
+
+	siteSelectFn = func(title string, options []ui.SelectOption) (string, error) { return "client.app1-linode:live", nil }
+	siteDomainMultiSelectFn = func(title string, options []ui.SelectOption) ([]string, error) {
+		if title != "Choose domains to check" {
+			t.Fatalf("multi-select title = %q", title)
+		}
+		return []string{"www.client.com"}, nil
+	}
+	siteDomainSelectFn = func(title string, options []ui.SelectOption) (string, error) { return "direct", nil }
+	oldRunSSHOutput := runSSHOutputFn
+	oldLookupHost := siteDomainLookupHostFn
+	oldHTTP := siteDomainHTTPStatusFn
+	oldHTTPS := siteDomainHTTPSStatusFn
+	oldTLS := siteDomainTLSStatusFn
+	runSSHOutputFn = func(args []string) ([]byte, error) {
+		return []byte("vhost=present\nenabled=present\ntimer=active\nservice=inactive\ncert=ready\n"), nil
+	}
+	siteDomainLookupHostFn = func(host string) ([]string, error) { return []string{"203.0.113.10"}, nil }
+	siteDomainHTTPStatusFn = func(domain string) siteDomainHTTPCheckResult { return siteDomainHTTPCheckResult{StatusCode: 200} }
+	siteDomainHTTPSStatusFn = func(domain string) siteDomainHTTPCheckResult { return siteDomainHTTPCheckResult{StatusCode: 200} }
+	siteDomainTLSStatusFn = func(domain string) siteDomainTLSCheckResult {
+		return siteDomainTLSCheckResult{OK: true, NotAfter: time.Date(2026, 12, 31, 0, 0, 0, 0, time.UTC), Issuer: "Let's Encrypt"}
+	}
+	t.Cleanup(func() {
+		runSSHOutputFn = oldRunSSHOutput
+		siteDomainLookupHostFn = oldLookupHost
+		siteDomainHTTPStatusFn = oldHTTP
+		siteDomainHTTPSStatusFn = oldHTTPS
+		siteDomainTLSStatusFn = oldTLS
+	})
+
+	output := captureStdout(t, func() {
+		if got := Run([]string{"domain", "check"}); got != 0 {
+			t.Fatalf("Run(domain check picker) = %d, want 0", got)
+		}
+	})
+	for _, want := range []string{"Public domain check:", "domains:   www.client.com", "proxy:     none", "Overall: ready"} {
+		if !strings.Contains(output, want) {
+			t.Fatalf("domain check picker output missing %q:\n%s", want, output)
+		}
+	}
+}
+
+func TestRunSiteDomainNonInteractiveRequiresExplicitDecisions(t *testing.T) {
+	setupLinodeDomainPromptFixture(t, nil)
+	stderr := captureStderr(t, func() {
+		_ = captureStdout(t, func() {
+			if got := Run([]string{"domain", "add", "client.app1-linode:live", "www.client.com", "--dry-run", "--non-interactive"}); got != 1 {
+				t.Fatalf("Run(domain add missing primary decision) = %d, want 1", got)
+			}
+		})
+	})
+	if !strings.Contains(stderr, "domain add requires --primary or --no-primary in non-interactive mode") {
+		t.Fatalf("missing primary decision stderr = %q", stderr)
+	}
+
+	stderr = captureStderr(t, func() {
+		_ = captureStdout(t, func() {
+			if got := Run([]string{"domain", "add", "client.app1-linode:live", "www.client.com", "--primary", "--no-search-replace", "--dry-run", "--non-interactive"}); got != 1 {
+				t.Fatalf("Run(domain add missing proxy decision) = %d, want 1", got)
+			}
+		})
+	})
+	if !strings.Contains(stderr, "domain add requires --proxy or --no-proxy in non-interactive mode") {
+		t.Fatalf("missing proxy decision stderr = %q", stderr)
+	}
+
+	stderr = captureStderr(t, func() {
+		_ = captureStdout(t, func() {
+			if got := Run([]string{"domain", "primary", "client.app1-linode:live", "www.client.com", "--no-proxy", "--dry-run", "--non-interactive"}); got != 1 {
+				t.Fatalf("Run(domain primary missing search decision) = %d, want 1", got)
+			}
+		})
+	})
+	if !strings.Contains(stderr, "domain primary requires --search-replace or --no-search-replace in non-interactive mode") {
+		t.Fatalf("missing search decision stderr = %q", stderr)
+	}
+}
+
+func TestRunSiteDomainAddRejectsSearchDecisionWhenPromptedSecondary(t *testing.T) {
+	setupLinodeDomainPromptFixture(t, nil)
+	t.Cleanup(withInteractiveDomainPrompts(t))
+
+	siteSelectFn = func(title string, options []ui.SelectOption) (string, error) {
+		return "client.app1-linode:live", nil
+	}
+	siteDomainPromptStringFn = func(prompt, defaultValue string, allowBlank bool) (string, error) {
+		if prompt != "Domain(s) to add" {
+			t.Fatalf("unexpected prompt %q", prompt)
+		}
+		return "www.client.com", nil
+	}
+	siteDomainSelectFn = func(title string, options []ui.SelectOption) (string, error) {
+		switch title {
+		case "Choose Linode proxy mode":
+			return "direct", nil
+		case "Add domain as primary or secondary":
+			return "secondary", nil
+		case "Database search-replace":
+			t.Fatalf("search-replace prompt should not be shown for a secondary add")
+			return "", nil
+		default:
+			t.Fatalf("unexpected select %q", title)
+			return "", nil
+		}
+	}
+
+	stderr := captureStderr(t, func() {
+		_ = captureStdout(t, func() {
+			if got := Run([]string{"domain", "add", "--no-search-replace", "--dry-run"}); got != 1 {
+				t.Fatalf("Run(domain add prompted secondary with search flag) = %d, want 1", got)
+			}
+		})
+	})
+	if !strings.Contains(stderr, "--search-replace and --no-search-replace only apply when making a domain primary") {
+		t.Fatalf("secondary search decision stderr = %q", stderr)
 	}
 }
 

@@ -267,20 +267,20 @@ func siteDomainCompletionCandidates(args []string) []string {
 	case "list", "ls":
 		return append(cachedSiteAndEnvCompletionNames(), projectRemoteCompletionNames()...)
 	case "add", "primary", "check", "remove":
-		flags := []string{"--proxy", "--setup", "--dry-run", "--execute", "--yes", "--non-interactive"}
+		flags := []string{"--proxy", "--no-proxy", "--setup", "--dry-run", "--execute", "--yes", "--non-interactive"}
 		if args[0] == "add" {
-			flags = append(flags, "--primary")
+			flags = append(flags, "--primary", "--no-primary")
 		}
 		if args[0] == "check" {
-			flags = []string{"--proxy", "--non-interactive"}
+			flags = []string{"--proxy", "--no-proxy", "--non-interactive"}
 		} else if args[0] == "remove" {
-			flags = []string{"--proxy", "--delete-cert", "--dry-run", "--execute", "--yes", "--non-interactive"}
+			flags = []string{"--proxy", "--no-proxy", "--delete-cert", "--dry-run", "--execute", "--yes", "--non-interactive"}
 		}
 		if args[0] == "add" {
-			flags = append(flags, "--search-replace")
+			flags = append(flags, "--search-replace", "--no-search-replace")
 		}
 		if args[0] == "primary" {
-			flags = append(flags, "--search-replace", "--force", "--wait-timeout", "--wait-interval")
+			flags = append(flags, "--search-replace", "--no-search-replace", "--force", "--wait-timeout", "--wait-interval")
 		}
 		if len(args) > 1 {
 			switch args[len(args)-1] {

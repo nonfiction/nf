@@ -131,6 +131,8 @@ func printSiteDomainCheckHeader(plan siteDomainPlan) {
 	}
 	if plan.ProxyMode != "" {
 		fmt.Printf("  proxy:     %s\n", displaySiteDomainProxyMode(plan.ProxyMode))
+	} else if plan.Provider == "linode" {
+		fmt.Println("  proxy:     none")
 	}
 }
 
@@ -207,6 +209,8 @@ func checkLinodeSiteDomainProvider(plan siteDomainPlan) siteDomainProviderCheck 
 	out := siteDomainProviderCheck{Ready: true, Description: []string{"Linode target:"}}
 	if siteDomainCloudflareStrict(plan) {
 		out.Description = append(out.Description, "  proxy mode: cloudflare (Cloudflare validates visitor HTTPS and origin certificate hostname)")
+	} else if proxyIP, ok := siteDomainReverseProxyIP(plan); ok {
+		out.Description = append(out.Description, fmt.Sprintf("  proxy mode: reverse proxy %s (public DNS resolves to proxy; origin uses target wildcard certificate)", proxyIP.String()))
 	}
 	remote, err := runSSHOutputFn(remoteSudoBashArgs(plan.Target, renderLinodeDomainCheckScript(plan)))
 	if err != nil {
@@ -224,11 +228,21 @@ func checkLinodeSiteDomainProvider(plan siteDomainPlan) siteDomainProviderCheck 
 			value := firstNonEmpty(values[item.key], "unknown")
 			out.Description = append(out.Description, fmt.Sprintf("  %s: %s", item.label, value))
 		}
-		if values["vhost"] != "present" || values["enabled"] != "present" || values["timer"] != "active" && values["cert"] != "ready" {
+		if values["vhost"] != "present" || values["enabled"] != "present" {
+			out.Ready = false
+		} else if _, ok := siteDomainReverseProxyIP(plan); ok {
+			if values["cert"] == "wildcard-missing" {
+				out.Ready = false
+			}
+		} else if values["timer"] != "active" && values["cert"] != "ready" {
 			out.Ready = false
 		}
 	}
-	if !siteDomainCloudflareProxy(plan) {
+	if proxyIP, ok := siteDomainReverseProxyIP(plan); ok {
+		for _, domain := range plan.allDomains() {
+			out.DNSRecords = append(out.DNSRecords, siteDomainExpectedDNSRecord{Domain: domain, Type: siteDomainProxyIPRecordType(proxyIP), Name: domain, Value: proxyIP.String()})
+		}
+	} else if !siteDomainCloudflareProxy(plan) {
 		for _, domain := range plan.allDomains() {
 			if plan.TargetIPv4 != "" {
 				out.DNSRecords = append(out.DNSRecords, siteDomainExpectedDNSRecord{Domain: domain, Type: "A", Name: domain, Value: plan.TargetIPv4})
@@ -246,9 +260,15 @@ func checkLinodeSiteDomainProvider(plan siteDomainPlan) siteDomainProviderCheck 
 
 func renderLinodeDomainCheckScript(plan siteDomainPlan) string {
 	q := shellQuoteArg
+	_, reverseProxyIP := siteDomainReverseProxyIP(plan)
 	var b strings.Builder
 	b.WriteString("set -euo pipefail\n")
-	b.WriteString("vhost=present\nenabled=present\ntimer=active\ncert=ready\nservice=unknown\n")
+	if reverseProxyIP {
+		b.WriteString("vhost=present\nenabled=present\ntimer=not-required\ncert=wildcard-origin\nservice=not-required\n")
+		b.WriteString("if [ ! -f /etc/nginx/snippets/nf-wildcard-cert.conf ]; then cert=wildcard-missing; fi\n")
+	} else {
+		b.WriteString("vhost=present\nenabled=present\ntimer=active\ncert=ready\nservice=unknown\n")
+	}
 	for _, domain := range plan.allDomains() {
 		art := linodeDomainArtifacts(domain)
 		b.WriteString("if [ ! -f ")
@@ -259,6 +279,9 @@ func renderLinodeDomainCheckScript(plan siteDomainPlan) string {
 		b.WriteString(" ] && [ ! -f ")
 		b.WriteString(q(art.Enabled))
 		b.WriteString(" ]; then enabled=missing; fi\n")
+		if reverseProxyIP {
+			continue
+		}
 		b.WriteString("if ! systemctl is-active --quiet ")
 		b.WriteString(q(art.ServiceName + ".timer"))
 		b.WriteString("; then if systemctl list-unit-files ")
@@ -517,7 +540,7 @@ func printSiteDomainHTTPChecks(plan siteDomainPlan) bool {
 			ready = false
 			continue
 		}
-		if plan.InternalHostname != "" && strings.Contains(strings.ToLower(result.Location), strings.ToLower(plan.InternalHostname)) {
+		if siteDomainRedirectsToInternalHostname(plan, result.Location) {
 			fmt.Printf("  http://%s: pending (redirects to internal hostname %s)\n", domain, plan.InternalHostname)
 			ready = false
 			continue
@@ -587,6 +610,11 @@ func printSiteDomainTLSChecks(plan siteDomainPlan) bool {
 			ready = false
 			continue
 		}
+		if siteDomainRedirectsToInternalHostname(plan, httpsResult.Location) {
+			fmt.Printf("  https://%s: pending (redirects to internal hostname %s)\n", domain, plan.InternalHostname)
+			ready = false
+			continue
+		}
 		if httpsResult.StatusCode >= 500 || httpsResult.StatusCode == 0 {
 			fmt.Printf("  https://%s: pending (status %d)\n", domain, httpsResult.StatusCode)
 			ready = false
@@ -607,6 +635,13 @@ func printSiteDomainTLSChecks(plan siteDomainPlan) bool {
 		fmt.Printf("  https://%s: ok%s%s%s\n", domain, expires, issuer, status)
 	}
 	return ready
+}
+
+func siteDomainRedirectsToInternalHostname(plan siteDomainPlan, location string) bool {
+	if plan.InternalHostname == "" {
+		return false
+	}
+	return strings.Contains(strings.ToLower(location), strings.ToLower(plan.InternalHostname))
 }
 
 func isSameHTTPSRedirect(domain, location string) bool {

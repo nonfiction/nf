@@ -51,6 +51,9 @@ var (
 	targetSelectFn                 = ui.Select
 	providerSelectFn               = ui.Select
 	siteSelectFn                   = ui.Select
+	siteDomainSelectFn             = ui.Select
+	siteDomainMultiSelectFn        = ui.MultiSelect
+	siteDomainPromptStringFn       = ui.PromptString
 	remoteSelectFn                 = ui.Select
 	remotePromptString             = ui.PromptString
 	passwordDeriveSelectFn         = ui.Select

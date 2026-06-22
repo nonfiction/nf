@@ -10,7 +10,9 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"net/netip"
 	"os"
+	"sort"
 	"strings"
 	"time"
 
@@ -24,9 +26,13 @@ import (
 type siteDomainOptions struct {
 	domains        []string
 	primary        bool
+	primarySet     bool
 	setupType      string
+	setupTypeSet   bool
 	proxyMode      string
+	proxySet       bool
 	searchReplace  bool
+	searchSet      bool
 	deleteCert     bool
 	force          bool
 	waitTimeout    time.Duration
@@ -110,15 +116,18 @@ func runDomain(argv []string) int {
 func runSiteDomainHelp() int {
 	printCommandHelp("domain", []helpLine{
 		{"list, ls [site|env|remote]", "list cached domain bindings"},
-		{"add <env|remote> <domain>...", "add external domains; secondary unless --primary"},
+		{"add [env|remote] [domain...]", "add external domains; prompts when omitted"},
 		{"check <env|remote> [domain]...", "check DNS, provider, HTTP, and HTTPS readiness"},
-		{"primary <env|remote> <domain>", "make one domain primary"},
-		{"remove, rm <env|remote> <domain>...", "remove external domain bindings"},
+		{"primary [env|remote] [domain]", "make one domain primary"},
+		{"remove, rm [env|remote] [domain...]", "remove external domain bindings"},
 	}, helpSection{"Domain Options", []helpLine{
 		{"--primary", "make the first added domain primary"},
-		{"--proxy <mode>", "Linode proxy mode: cloudflare"},
+		{"--no-primary", "add domains as secondary redirects"},
+		{"--proxy <mode|ip>", "Linode proxy mode: cloudflare or reverse proxy IP"},
+		{"--no-proxy", "Linode direct/no-proxy mode"},
 		{"--setup <type>", "Kinsta setup type for add/primary: avoid-downtime or quick"},
 		{"--search-replace", "run provider/wp search-replace during primary"},
+		{"--no-search-replace", "update primary home/siteurl without database-wide search-replace"},
 		{"--force", "launch primary without waiting for readiness checks"},
 		{"--wait-timeout <duration>", "maximum primary readiness wait; default 30m"},
 		{"--wait-interval <duration>", "primary readiness poll interval; default 30s"},
@@ -158,6 +167,17 @@ func cmdSiteDomainList(filter string) int {
 			return 1
 		}
 	}
+	projectRefs, inProject, err := siteDomainProjectRemoteRefs("")
+	if err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		return 1
+	}
+	projectEnvIDs := map[string]bool{}
+	if inProject {
+		for _, ref := range projectRefs {
+			projectEnvIDs[ref.envID] = true
+		}
+	}
 	records, err := state.LoadStateRecords("sites")
 	if err != nil {
 		fmt.Fprintln(os.Stderr, err)
@@ -165,6 +185,9 @@ func cmdSiteDomainList(filter string) int {
 	}
 	rows := [][]string{{"domain", "env", "role", "management", "status", "provider", "proxy"}}
 	for _, record := range records {
+		if inProject && !projectEnvIDs[siteRecordEnvID(record)] {
+			continue
+		}
 		if resolved != "" && !siteDomainListRecordMatches(record, resolved) {
 			continue
 		}
@@ -176,7 +199,7 @@ func cmdSiteDomainList(filter string) int {
 				domain.management,
 				domain.status,
 				recordValueString(record["provider"]),
-				displaySiteDomainProxyMode(firstNonEmpty(domain.proxyMode, firstRecordString(record, "proxy_mode"))),
+				displaySiteDomainProxyMode(domain.proxyMode),
 			})
 		}
 	}
@@ -210,15 +233,23 @@ type siteDomainListDomain struct {
 func siteDomainListDomains(record map[string]any) []siteDomainListDomain {
 	seen := map[string]int{}
 	domains := []siteDomainListDomain{}
+	envProxyMode := firstRecordString(record, "proxy_mode")
 	addDomain := func(name, role, management, status, proxyMode string) {
 		name = normalizeDomainName(hostnameFromURLish(name))
 		if name == "" || siteDomainWildcardName(name) {
 			return
 		}
+		management = firstNonEmpty(normalizeSiteDomainManagement(management), "external")
+		if management == "external" && proxyMode == "" {
+			proxyMode = envProxyMode
+		}
+		if management != "external" {
+			proxyMode = ""
+		}
 		entry := siteDomainListDomain{
 			name:       name,
 			role:       normalizeSiteDomainRole(role),
-			management: firstNonEmpty(normalizeSiteDomainManagement(management), "external"),
+			management: management,
 			status:     normalizeSiteDomainStatus(status),
 			proxyMode:  proxyMode,
 		}
@@ -353,13 +384,37 @@ func parseSiteDomainActionArgs(action string, argv []string) (string, siteDomain
 		case "--non-interactive":
 			opts.nonInteractive = true
 		case "--search-replace":
+			if opts.searchSet && !opts.searchReplace {
+				fmt.Fprintln(os.Stderr, "Choose either --search-replace or --no-search-replace, not both.")
+				return "", opts, false
+			}
 			opts.searchReplace = true
+			opts.searchSet = true
+		case "--no-search-replace":
+			if opts.searchSet && opts.searchReplace {
+				fmt.Fprintln(os.Stderr, "Choose either --search-replace or --no-search-replace, not both.")
+				return "", opts, false
+			}
+			opts.searchReplace = false
+			opts.searchSet = true
 		case "--delete-cert":
 			opts.deleteCert = true
 		case "--force":
 			opts.force = true
 		case "--primary":
+			if opts.primarySet && !opts.primary {
+				fmt.Fprintln(os.Stderr, "Choose either --primary or --no-primary, not both.")
+				return "", opts, false
+			}
 			opts.primary = true
+			opts.primarySet = true
+		case "--no-primary":
+			if opts.primarySet && opts.primary {
+				fmt.Fprintln(os.Stderr, "Choose either --primary or --no-primary, not both.")
+				return "", opts, false
+			}
+			opts.primary = false
+			opts.primarySet = true
 		case "--wait-timeout":
 			if i+1 >= len(argv) || strings.TrimSpace(argv[i+1]) == "" {
 				fmt.Fprintln(os.Stderr, "--wait-timeout requires a value")
@@ -389,13 +444,26 @@ func parseSiteDomainActionArgs(action string, argv []string) (string, siteDomain
 			}
 			i++
 			opts.setupType = argv[i]
+			opts.setupTypeSet = true
 		case "--proxy":
+			if opts.proxySet && strings.TrimSpace(opts.proxyMode) == "" {
+				fmt.Fprintln(os.Stderr, "Choose either --proxy or --no-proxy, not both.")
+				return "", opts, false
+			}
 			if i+1 >= len(argv) || strings.TrimSpace(argv[i+1]) == "" {
 				fmt.Fprintln(os.Stderr, "--proxy requires a value")
 				return "", opts, false
 			}
 			i++
 			opts.proxyMode = argv[i]
+			opts.proxySet = true
+		case "--no-proxy":
+			if opts.proxySet && strings.TrimSpace(opts.proxyMode) != "" {
+				fmt.Fprintln(os.Stderr, "Choose either --proxy or --no-proxy, not both.")
+				return "", opts, false
+			}
+			opts.proxyMode = ""
+			opts.proxySet = true
 		default:
 			if strings.HasPrefix(arg, "--canonical=") {
 				fmt.Fprintln(os.Stderr, "--canonical was replaced by positional domains")
@@ -411,14 +479,20 @@ func parseSiteDomainActionArgs(action string, argv []string) (string, siteDomain
 					fmt.Fprintln(os.Stderr, "--setup requires a value")
 					return "", opts, false
 				}
+				opts.setupTypeSet = true
 				continue
 			}
 			if strings.HasPrefix(arg, "--proxy=") {
+				if opts.proxySet && strings.TrimSpace(opts.proxyMode) == "" {
+					fmt.Fprintln(os.Stderr, "Choose either --proxy or --no-proxy, not both.")
+					return "", opts, false
+				}
 				opts.proxyMode = strings.TrimPrefix(arg, "--proxy=")
 				if strings.TrimSpace(opts.proxyMode) == "" {
 					fmt.Fprintln(os.Stderr, "--proxy requires a value")
 					return "", opts, false
 				}
+				opts.proxySet = true
 				continue
 			}
 			if strings.HasPrefix(arg, "--wait-timeout=") {
@@ -444,13 +518,12 @@ func parseSiteDomainActionArgs(action string, argv []string) (string, siteDomain
 			positionals = append(positionals, arg)
 		}
 	}
-	if action != "add" && opts.primary {
-		fmt.Fprintln(os.Stderr, "--primary only applies to domain add")
+	if action != "add" && opts.primarySet {
+		fmt.Fprintln(os.Stderr, "--primary and --no-primary only apply to domain add")
 		return "", opts, false
 	}
-	makesPrimary := action == "primary" || action == "add" && opts.primary
-	if !makesPrimary && opts.searchReplace {
-		fmt.Fprintln(os.Stderr, "--search-replace only applies when making a domain primary")
+	if opts.searchSet && action != "primary" && (action != "add" || opts.primarySet && !opts.primary) {
+		fmt.Fprintln(os.Stderr, "--search-replace and --no-search-replace only apply when making a domain primary")
 		return "", opts, false
 	}
 	if action != "primary" && (opts.force || opts.waitTimeout > 0 || opts.waitInterval > 0) {
@@ -465,31 +538,27 @@ func parseSiteDomainActionArgs(action string, argv []string) (string, siteDomain
 		fmt.Fprintln(os.Stderr, "--delete-cert only applies to domain remove")
 		return "", opts, false
 	}
-	if action == "remove" && (opts.searchReplace || strings.TrimSpace(opts.setupType) != "") {
-		fmt.Fprintln(os.Stderr, "domain remove does not support --setup or --search-replace")
+	if action == "remove" && (opts.searchSet || strings.TrimSpace(opts.setupType) != "") {
+		fmt.Fprintln(os.Stderr, "domain remove does not support --setup, --search-replace, or --no-search-replace")
 		return "", opts, false
 	}
 	if action == "check" {
-		if opts.dryRun || opts.execute || opts.yes || opts.primary || opts.searchReplace || opts.deleteCert || strings.TrimSpace(opts.setupType) != "" {
-			fmt.Fprintln(os.Stderr, "domain check is read-only; use only domains, --proxy, and --non-interactive")
+		if opts.dryRun || opts.execute || opts.yes || opts.primarySet || opts.searchSet || opts.deleteCert || strings.TrimSpace(opts.setupType) != "" {
+			fmt.Fprintln(os.Stderr, "domain check is read-only; use only domains, --proxy, --no-proxy, and --non-interactive")
 			return "", opts, false
 		}
 	}
-	if len(positionals) == 0 {
-		fmt.Fprintf(os.Stderr, "domain %s requires an env ref like site.target:live\n", action)
-		return "", opts, false
-	}
-	envRef := positionals[0]
-	rawDomains := positionals[1:]
-	if action == "check" {
-		// No explicit domains means check all cached external domains for the env.
-	} else if len(rawDomains) == 0 {
-		fmt.Fprintf(os.Stderr, "domain %s requires at least one domain\n", action)
-		return "", opts, false
+	envRef := ""
+	rawDomains := []string{}
+	if len(positionals) > 0 {
+		envRef = positionals[0]
+		rawDomains = positionals[1:]
 	}
 	if action == "primary" && len(rawDomains) != 1 {
-		fmt.Fprintln(os.Stderr, "domain primary takes exactly one domain")
-		return "", opts, false
+		if len(rawDomains) > 1 {
+			fmt.Fprintln(os.Stderr, "domain primary takes exactly one domain")
+			return "", opts, false
+		}
 	}
 	normalized, err := normalizePublicDomainList(rawDomains)
 	if err != nil {
@@ -514,6 +583,7 @@ func cmdSiteDomain(envRef, action string, opts siteDomainOptions) int {
 		fmt.Fprintln(os.Stderr, "Choose either --execute or --dry-run, not both.")
 		return 1
 	}
+	envRefExplicit := strings.TrimSpace(envRef) != ""
 	resolved, ok := resolveSiteDomainEnvRef(action, envRef, opts.nonInteractive)
 	if !ok {
 		return 1
@@ -521,6 +591,20 @@ func cmdSiteDomain(envRef, action string, opts siteDomainOptions) int {
 	siteID, env, ok := splitSiteEnvRef(resolved)
 	if !ok {
 		fmt.Fprintf(os.Stderr, "domain %s requires an env ref like site.target:live\n", action)
+		return 1
+	}
+	record, _, err := cachedSiteEnv(siteID, env)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		return 1
+	}
+	if record == nil {
+		fmt.Fprintf(os.Stderr, "No cached remote env matched %q.\n", canonicalEnvID(siteID, env))
+		return 1
+	}
+	opts, err = resolveSiteDomainActionOptions(action, opts, record, !envRefExplicit)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, err)
 		return 1
 	}
 	plan, err := buildSiteDomainPlan(siteID, env, action, opts)
@@ -684,16 +768,16 @@ func formatSiteDomainWaitDuration(duration time.Duration) string {
 func resolveSiteDomainEnvRef(action, ref string, nonInteractive bool) (string, bool) {
 	ref = strings.TrimSpace(ref)
 	if ref == "" {
-		if !siteIsInteractiveFn() {
+		if nonInteractive || !siteIsInteractiveFn() {
 			fmt.Fprintf(os.Stderr, "domain %s requires an env ref like site.target:live or a project remote\n", action)
 			return "", false
 		}
-		selected, err := chooseSiteEnv("domain "+action, "")
+		selected, err := chooseSiteDomainEnvRef(action, "")
 		if err != nil {
 			fmt.Fprintln(os.Stderr, err)
 			return "", false
 		}
-		return selected, true
+		ref = selected
 	}
 	resolved, _, _, _, err := resolveSiteTarget(ref)
 	if err != nil {
@@ -703,16 +787,407 @@ func resolveSiteDomainEnvRef(action, ref string, nonInteractive bool) (string, b
 	if _, _, ok := splitSiteEnvRef(resolved); ok {
 		return resolved, true
 	}
-	if nonInteractive {
+	if nonInteractive || !siteIsInteractiveFn() {
 		fmt.Fprintf(os.Stderr, "domain %s requires an env ref like %s:live or a project remote in non-interactive mode\n", action, ref)
 		return "", false
 	}
-	selected, err := chooseSiteEnv("domain "+action, resolved)
+	selected, err := chooseSiteDomainEnvRef(action, resolved)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		return "", false
 	}
-	return selected, true
+	resolved, _, _, _, err = resolveSiteTarget(selected)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		return "", false
+	}
+	if _, _, ok := splitSiteEnvRef(resolved); !ok {
+		fmt.Fprintf(os.Stderr, "domain %s requires an env ref like %s:live or a project remote\n", action, selected)
+		return "", false
+	}
+	return resolved, true
+}
+
+func chooseSiteDomainEnvRef(action, siteID string) (string, error) {
+	projectRefs, inProject, err := siteDomainProjectRemoteRefs(siteID)
+	if err != nil {
+		return "", err
+	}
+	if inProject {
+		if len(projectRefs) == 0 {
+			if strings.TrimSpace(siteID) != "" {
+				return "", ProjectError{Msg: fmt.Sprintf("No configured project remotes found for %q.", siteID)}
+			}
+			return "", ProjectError{Msg: "No configured project remotes found."}
+		}
+		options := make([]ui.SelectOption, 0, len(projectRefs))
+		for _, ref := range projectRefs {
+			options = append(options, ui.SelectOption{Value: ref.name, Label: ref.name + " (" + ref.envID + ")"})
+		}
+		return siteSelectFn("Choose an env or remote for domain "+action, options)
+	}
+	bundle, err := state.LoadStateBundle()
+	if err != nil {
+		return "", err
+	}
+	options := []ui.SelectOption{}
+	seen := map[string]bool{}
+	for _, record := range bundle.Sites {
+		if !siteEnvMatchesSite(record, siteID) {
+			continue
+		}
+		envID := siteRecordEnvID(record)
+		if envID == "" || seen["env|"+envID] {
+			continue
+		}
+		seen["env|"+envID] = true
+		options = append(options, ui.SelectOption{Value: envID, Label: envID})
+	}
+	if len(options) == 0 {
+		if strings.TrimSpace(siteID) != "" {
+			return "", ProjectError{Msg: fmt.Sprintf("No selectable envs found for %q.", siteID)}
+		}
+		return "", ProjectError{Msg: "No selectable envs found."}
+	}
+	sort.SliceStable(options, func(i, j int) bool { return options[i].Label < options[j].Label })
+	return siteSelectFn("Choose an env or remote for domain "+action, options)
+}
+
+type siteDomainProjectRemoteRef struct {
+	name  string
+	envID string
+}
+
+func siteDomainProjectRemoteRefs(siteID string) ([]siteDomainProjectRemoteRef, bool, error) {
+	root, ok := currentNFProjectRoot()
+	if !ok {
+		return nil, false, nil
+	}
+	metadata, err := loadProjectMetadataOrError(root)
+	if err != nil {
+		return nil, true, err
+	}
+	remotes, err := projectRemotes(metadata, false)
+	if err != nil {
+		return nil, true, err
+	}
+	names := make([]string, 0, len(remotes))
+	for name := range remotes {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	var cachedRecords []map[string]any
+	if strings.TrimSpace(siteID) != "" {
+		cachedRecords, err = state.LoadStateRecords("sites")
+		if err != nil {
+			return nil, true, err
+		}
+	}
+	refs := make([]siteDomainProjectRemoteRef, 0, len(names))
+	for _, name := range names {
+		remoteSiteID, remoteEnv, ok, err := projectRemoteAlias(metadata, name)
+		if err != nil {
+			return nil, true, err
+		}
+		if !ok {
+			continue
+		}
+		envID := canonicalEnvID(remoteSiteID, remoteEnv)
+		if strings.TrimSpace(siteID) != "" {
+			record := map[string]any{"site_id": remoteSiteID, "env_id": envID, "env": remoteEnv}
+			matches := siteEnvMatchesSite(record, siteID)
+			for _, cached := range cachedRecords {
+				if siteRecordEnvID(cached) == envID && siteEnvMatchesSite(cached, siteID) {
+					matches = true
+					break
+				}
+			}
+			if !matches {
+				continue
+			}
+		}
+		refs = append(refs, siteDomainProjectRemoteRef{name: name, envID: envID})
+	}
+	return refs, true, nil
+}
+
+func resolveSiteDomainActionOptions(action string, opts siteDomainOptions, record map[string]any, promptCheckDomains bool) (siteDomainOptions, error) {
+	var err error
+	opts, err = resolveSiteDomainDomains(action, opts, record, promptCheckDomains)
+	if err != nil {
+		return opts, err
+	}
+	provider := strings.ToLower(strings.TrimSpace(recordValueString(record["provider"])))
+	if action == "add" && !opts.primarySet && (opts.nonInteractive || !siteIsInteractiveFn()) {
+		if opts.nonInteractive {
+			return opts, ProjectError{Msg: "domain add requires --primary or --no-primary in non-interactive mode"}
+		}
+		return opts, ProjectError{Msg: "domain add requires --primary or --no-primary"}
+	}
+	switch provider {
+	case "linode":
+		opts, err = resolveSiteDomainProxyDecision(action, opts, record)
+		if err != nil {
+			return opts, err
+		}
+	case "kinsta":
+		if opts.proxySet {
+			return opts, ProjectError{Msg: "--proxy and --no-proxy only apply to Linode domains"}
+		}
+		if action == "add" || action == "primary" {
+			opts, err = resolveSiteDomainKinstaSetupDecision(action, opts)
+			if err != nil {
+				return opts, err
+			}
+		}
+	default:
+		if opts.proxySet {
+			return opts, ProjectError{Msg: "--proxy and --no-proxy only apply to Linode domains"}
+		}
+	}
+	if action == "add" && !opts.primarySet {
+		opts, err = promptSiteDomainPrimaryDecision(opts)
+		if err != nil {
+			return opts, err
+		}
+	}
+	if action == "add" && opts.searchSet && !opts.primary {
+		return opts, ProjectError{Msg: "--search-replace and --no-search-replace only apply when making a domain primary"}
+	}
+	if action == "primary" || action == "add" && opts.primary {
+		opts, err = resolveSiteDomainSearchDecision(action, opts)
+		if err != nil {
+			return opts, err
+		}
+	}
+	return opts, nil
+}
+
+func resolveSiteDomainDomains(action string, opts siteDomainOptions, record map[string]any, promptCheckDomains bool) (siteDomainOptions, error) {
+	if len(opts.domains) > 0 {
+		return opts, nil
+	}
+	switch action {
+	case "add":
+		if opts.nonInteractive {
+			return opts, ProjectError{Msg: "domain add requires at least one domain in non-interactive mode"}
+		}
+		if !siteIsInteractiveFn() {
+			return opts, ProjectError{Msg: "domain add requires at least one domain"}
+		}
+		prompted, err := siteDomainPromptStringFn("Domain(s) to add", "", false)
+		if err != nil {
+			return opts, err
+		}
+		domains, err := normalizePublicDomainList(splitSiteDomainPromptDomains(prompted))
+		if err != nil {
+			return opts, err
+		}
+		if len(domains) == 0 {
+			return opts, ProjectError{Msg: "domain add requires at least one domain"}
+		}
+		opts.domains = domains
+	case "primary":
+		if opts.nonInteractive {
+			return opts, ProjectError{Msg: "domain primary requires exactly one domain in non-interactive mode"}
+		}
+		if !siteIsInteractiveFn() {
+			return opts, ProjectError{Msg: "domain primary requires exactly one domain"}
+		}
+		selected, err := promptSiteDomainSingleDomain(record, "make primary")
+		if err != nil {
+			return opts, err
+		}
+		opts.domains = []string{selected}
+	case "remove":
+		if opts.nonInteractive {
+			return opts, ProjectError{Msg: "domain remove requires at least one domain in non-interactive mode"}
+		}
+		if !siteIsInteractiveFn() {
+			return opts, ProjectError{Msg: "domain remove requires at least one domain"}
+		}
+		selected, err := promptSiteDomainMultipleDomains(record, "remove")
+		if err != nil {
+			return opts, err
+		}
+		opts.domains = selected
+	case "check":
+		if !promptCheckDomains {
+			return opts, nil
+		}
+		if opts.nonInteractive || !siteIsInteractiveFn() {
+			return opts, nil
+		}
+		selected, err := promptSiteDomainMultipleDomains(record, "check")
+		if err != nil {
+			return opts, err
+		}
+		opts.domains = selected
+	}
+	return opts, nil
+}
+
+func splitSiteDomainPromptDomains(value string) []string {
+	return strings.FieldsFunc(value, func(r rune) bool {
+		return r == ',' || r == ' ' || r == '\t' || r == '\n' || r == '\r'
+	})
+}
+
+func promptSiteDomainSingleDomain(record map[string]any, action string) (string, error) {
+	options := siteDomainCachedExternalOptions(record)
+	if len(options) == 0 {
+		return "", ProjectError{Msg: "No cached external domains found. Add a domain first or pass one explicitly."}
+	}
+	return siteDomainSelectFn("Choose a domain to "+action, options)
+}
+
+func promptSiteDomainMultipleDomains(record map[string]any, action string) ([]string, error) {
+	options := siteDomainCachedExternalOptions(record)
+	if len(options) == 0 {
+		return nil, ProjectError{Msg: "No cached external domains found. Add a domain first or pass domains explicitly."}
+	}
+	selected, err := siteDomainMultiSelectFn("Choose domains to "+action, options)
+	if err != nil {
+		return nil, err
+	}
+	domains, err := normalizePublicDomainList(selected)
+	if err != nil {
+		return nil, err
+	}
+	if len(domains) == 0 {
+		return nil, ProjectError{Msg: "At least one domain must be selected."}
+	}
+	return domains, nil
+}
+
+func siteDomainCachedExternalOptions(record map[string]any) []ui.SelectOption {
+	options := []ui.SelectOption{}
+	for _, domain := range siteDomainListDomains(record) {
+		if domain.management != "external" || domain.name == "" {
+			continue
+		}
+		label := domain.name
+		if domain.role != "" {
+			label += " (" + domain.role + ")"
+		}
+		options = append(options, ui.SelectOption{Value: domain.name, Label: label, Default: domain.role == "primary"})
+	}
+	return options
+}
+
+func promptSiteDomainPrimaryDecision(opts siteDomainOptions) (siteDomainOptions, error) {
+	selected, err := siteDomainSelectFn("Add domain as primary or secondary", []ui.SelectOption{
+		{Value: "primary", Label: "Primary domain"},
+		{Value: "secondary", Label: "Secondary redirect"},
+	})
+	if err != nil {
+		return opts, err
+	}
+	opts.primary = selected == "primary"
+	opts.primarySet = true
+	return opts, nil
+}
+
+func resolveSiteDomainProxyDecision(action string, opts siteDomainOptions, record map[string]any) (siteDomainOptions, error) {
+	if opts.proxySet {
+		return opts, nil
+	}
+	cachedProxyMode, err := normalizeSiteDomainProxyMode(firstRecordString(record, "proxy_mode"))
+	if err != nil {
+		return opts, err
+	}
+	if opts.nonInteractive {
+		if cachedProxyMode != "" {
+			opts.proxyMode = cachedProxyMode
+			return opts, nil
+		}
+		return opts, ProjectError{Msg: fmt.Sprintf("domain %s requires --proxy or --no-proxy in non-interactive mode", action)}
+	}
+	if !siteIsInteractiveFn() {
+		if cachedProxyMode != "" {
+			opts.proxyMode = cachedProxyMode
+			return opts, nil
+		}
+		return opts, ProjectError{Msg: fmt.Sprintf("domain %s requires --proxy or --no-proxy", action)}
+	}
+	options := []ui.SelectOption{
+		{Value: "direct", Label: "Direct / no proxy", Default: cachedProxyMode == ""},
+		{Value: "cloudflare", Label: "Cloudflare", Default: cachedProxyMode == "cloudflare"},
+		{Value: "ip", Label: "Reverse proxy IP", Default: cachedProxyMode != "" && cachedProxyMode != "cloudflare"},
+	}
+	selected, err := siteDomainSelectFn("Choose Linode proxy mode", options)
+	if err != nil {
+		return opts, err
+	}
+	switch selected {
+	case "direct":
+		opts.proxyMode = ""
+	case "cloudflare":
+		opts.proxyMode = "cloudflare"
+	case "ip":
+		defaultIP := ""
+		if cachedProxyMode != "" && cachedProxyMode != "cloudflare" {
+			defaultIP = cachedProxyMode
+		}
+		value, err := siteDomainPromptStringFn("Reverse proxy public IP", defaultIP, false)
+		if err != nil {
+			return opts, err
+		}
+		normalized, err := normalizeSiteDomainProxyMode(value)
+		if err != nil {
+			return opts, err
+		}
+		if normalized == "" || normalized == "cloudflare" {
+			return opts, ProjectError{Msg: "reverse proxy mode requires an IP address"}
+		}
+		opts.proxyMode = normalized
+	}
+	opts.proxySet = true
+	return opts, nil
+}
+
+func resolveSiteDomainKinstaSetupDecision(action string, opts siteDomainOptions) (siteDomainOptions, error) {
+	if opts.setupTypeSet {
+		return opts, nil
+	}
+	if opts.nonInteractive {
+		return opts, ProjectError{Msg: fmt.Sprintf("domain %s for Kinsta requires --setup quick or --setup avoid-downtime in non-interactive mode", action)}
+	}
+	if !siteIsInteractiveFn() {
+		return opts, ProjectError{Msg: fmt.Sprintf("domain %s for Kinsta requires --setup quick or --setup avoid-downtime", action)}
+	}
+	selected, err := siteDomainSelectFn("Choose Kinsta domain setup", []ui.SelectOption{
+		{Value: "avoid-downtime", Label: "Avoid downtime", Default: true},
+		{Value: "quick", Label: "Quick"},
+	})
+	if err != nil {
+		return opts, err
+	}
+	opts.setupType = selected
+	opts.setupTypeSet = true
+	return opts, nil
+}
+
+func resolveSiteDomainSearchDecision(action string, opts siteDomainOptions) (siteDomainOptions, error) {
+	if opts.searchSet {
+		return opts, nil
+	}
+	if opts.nonInteractive {
+		return opts, ProjectError{Msg: fmt.Sprintf("domain %s requires --search-replace or --no-search-replace in non-interactive mode", action)}
+	}
+	if !siteIsInteractiveFn() {
+		return opts, ProjectError{Msg: fmt.Sprintf("domain %s requires --search-replace or --no-search-replace", action)}
+	}
+	selected, err := siteDomainSelectFn("Database search-replace", []ui.SelectOption{
+		{Value: "yes", Label: "Yes, replace old/internal URLs"},
+		{Value: "no", Label: "No, only update home/siteurl"},
+	})
+	if err != nil {
+		return opts, err
+	}
+	opts.searchReplace = selected == "yes"
+	opts.searchSet = true
+	return opts, nil
 }
 
 func buildSiteDomainPlan(siteID, env, action string, opts siteDomainOptions) (siteDomainPlan, error) {
@@ -778,6 +1253,10 @@ func buildSiteDomainPlan(siteID, env, action string, opts siteDomainOptions) (si
 	if action == "add" && !opts.primary && firstNonEmpty(redirectTarget, currentHostname, internalHostname) == "" {
 		return siteDomainPlan{}, ProjectError{Msg: "Secondary domain add requires an existing primary or internal domain to redirect to. Add the first domain with --primary."}
 	}
+	proxyMode := opts.proxyMode
+	if !opts.proxySet && strings.TrimSpace(proxyMode) == "" {
+		proxyMode = firstRecordString(record, "proxy_mode")
+	}
 	plan := siteDomainPlan{
 		Action:           action,
 		EnvID:            canonicalEnvID(siteID, env),
@@ -792,7 +1271,7 @@ func buildSiteDomainPlan(siteID, env, action string, opts siteDomainOptions) (si
 		Domains:          domains,
 		Primary:          primary,
 		RedirectTarget:   firstNonEmpty(redirectTarget, currentHostname, internalHostname),
-		ProxyMode:        firstNonEmpty(opts.proxyMode, firstRecordString(record, "proxy_mode")),
+		ProxyMode:        proxyMode,
 		SearchReplace:    opts.searchReplace,
 		DeleteCert:       opts.deleteCert,
 		CurrentURL:       currentURL,
@@ -807,8 +1286,8 @@ func buildSiteDomainPlan(siteID, env, action string, opts siteDomainOptions) (si
 		if opts.deleteCert {
 			return siteDomainPlan{}, ProjectError{Msg: "--delete-cert only applies to Linode domains"}
 		}
-		if strings.TrimSpace(plan.ProxyMode) != "" {
-			return siteDomainPlan{}, ProjectError{Msg: "--proxy only applies to Linode domains"}
+		if opts.proxySet || strings.TrimSpace(plan.ProxyMode) != "" {
+			return siteDomainPlan{}, ProjectError{Msg: "--proxy and --no-proxy only apply to Linode domains"}
 		}
 		setup, err := normalizeKinstaDomainSetupType(opts.setupType)
 		if err != nil {
@@ -842,8 +1321,8 @@ func buildSiteDomainPlan(siteID, env, action string, opts siteDomainOptions) (si
 		plan.TargetIPv6 = firstRecordString(resolvedTarget, "public_ipv6", "ipv6")
 		plan.PHPVersion = firstNonEmpty(plan.PHPVersion, targetPHPVersion(resolvedTarget), "8.3")
 	default:
-		if strings.TrimSpace(plan.ProxyMode) != "" {
-			return siteDomainPlan{}, ProjectError{Msg: "--proxy only applies to Linode domains"}
+		if opts.proxySet || strings.TrimSpace(plan.ProxyMode) != "" {
+			return siteDomainPlan{}, ProjectError{Msg: "--proxy and --no-proxy only apply to Linode domains"}
 		}
 		return siteDomainPlan{}, ProjectError{Msg: fmt.Sprintf("domain is not implemented for provider %q", plan.Provider)}
 	}
@@ -937,19 +1416,26 @@ func displayKinstaSetupType(value string) string {
 }
 
 func normalizeSiteDomainProxyMode(value string) (string, error) {
-	switch strings.ToLower(strings.TrimSpace(value)) {
+	trimmed := strings.TrimSpace(value)
+	switch strings.ToLower(trimmed) {
 	case "", "none", "direct", "dns-only", "dns_only":
 		return "", nil
 	case "cloudflare", "cloudflare-strict", "cloudflare_strict":
 		return "cloudflare", nil
-	default:
-		return "", ProjectError{Msg: "--proxy must be cloudflare"}
 	}
+	addr, err := netip.ParseAddr(trimmed)
+	if err == nil {
+		return addr.String(), nil
+	}
+	return "", ProjectError{Msg: "--proxy must be cloudflare or an IP address"}
 }
 
 func displaySiteDomainProxyMode(value string) string {
 	if value == "cloudflare" || value == "cloudflare-strict" || value == "cloudflare_strict" {
 		return "cloudflare"
+	}
+	if addr, err := netip.ParseAddr(strings.TrimSpace(value)); err == nil {
+		return addr.String()
 	}
 	return value
 }
@@ -960,6 +1446,21 @@ func siteDomainCloudflareStrict(plan siteDomainPlan) bool {
 
 func siteDomainCloudflareProxy(plan siteDomainPlan) bool {
 	return siteDomainCloudflareStrict(plan)
+}
+
+func siteDomainReverseProxyIP(plan siteDomainPlan) (netip.Addr, bool) {
+	addr, err := netip.ParseAddr(strings.TrimSpace(plan.ProxyMode))
+	if err != nil {
+		return netip.Addr{}, false
+	}
+	return addr, true
+}
+
+func siteDomainProxyIPRecordType(addr netip.Addr) string {
+	if addr.Is6() {
+		return "AAAA"
+	}
+	return "A"
 }
 
 func siteDomainBundledCloudflareIPRangeStrings() []string {
@@ -1078,6 +1579,8 @@ func printSiteDomainPlan(plan siteDomainPlan, mode string) {
 	}
 	if plan.ProxyMode != "" {
 		fmt.Printf("  proxy:     %s\n", displaySiteDomainProxyMode(plan.ProxyMode))
+	} else if plan.Provider == "linode" {
+		fmt.Println("  proxy:     none")
 	}
 	if plan.Provider == "kinsta" {
 		if plan.Action != "remove" {
@@ -1110,6 +1613,8 @@ func printSiteDomainPlan(plan siteDomainPlan, mode string) {
 			}
 		} else if siteDomainCloudflareStrict(plan) {
 			fmt.Println("  TLS: Cloudflare uses Full (strict) with a public Let's Encrypt origin cert; certbot waits for Cloudflare DNS and ACME challenge reachability")
+		} else if _, ok := siteDomainReverseProxyIP(plan); ok {
+			fmt.Println("  TLS: reverse proxy terminates public HTTPS; Linode origin uses the target wildcard certificate")
 		} else {
 			fmt.Println("  TLS: HTTP-01 certbot retry timer will issue HTTPS after DNS points at the target")
 		}
@@ -1137,6 +1642,20 @@ func printLinodeDomainDNSInstructions(plan siteDomainPlan) {
 			}
 		}
 		fmt.Println("  Cloudflare SSL/TLS mode: Full (strict)")
+		return
+	}
+	if proxyIP, ok := siteDomainReverseProxyIP(plan); ok {
+		fmt.Println("  client DNS records:")
+		for _, domain := range domains {
+			fmt.Printf("    %s     %s -> %s\n", siteDomainProxyIPRecordType(proxyIP), domain, proxyIP.String())
+		}
+		origin := firstNonEmpty(plan.TargetHostname, plan.TargetIPv4, plan.TargetIPv6, plan.Target.SSHHost)
+		if origin != "" {
+			fmt.Println("  reverse proxy origin:")
+			fmt.Printf("    upstream: https://%s\n", origin)
+			fmt.Println("    Host header: preserve the requested public domain")
+			fmt.Println("    origin TLS: target wildcard cert; disable hostname verification or trust the origin hostname")
+		}
 		return
 	}
 	if plan.TargetIPv4 != "" || plan.TargetIPv6 != "" {
@@ -1668,13 +2187,35 @@ func printSiteDomainStaleWarnings(plan siteDomainPlan) {
 	}
 }
 
+func linodeDomainCacheUpdateJQFilter() string {
+	return `  map(if (.site_id == $site_id and .env == $env) then
+    (
+      (if ((.internal_hostname // "") == "" and $internal_hostname != "") then .internal_hostname = $internal_hostname else . end)
+      | (if ((.internal_url // "") == "" and $internal_url != "") then .internal_url = $internal_url else . end)
+      | (.domains = (((.domains // []) | map(select((.name // .domain // .domain_name // .hostname // "") as $name | (($names | index($name)) == null))) | map(if $primary == "1" and ((.management // "external") == "external") then (.role = "secondary") else . end)) + $domains))
+      | del(.domain_state)
+      | (if $proxy_mode != "" then .proxy_mode = $proxy_mode else . end)
+      | (if $primary == "1" then (.hostname = $canonical | .url = $url | .primary_domain = $canonical) else . end)
+    )
+  else . end)`
+}
+
+func linodeDomainCacheRemoveJQFilter() string {
+	return `  map(if (.site_id == $site_id and .env == $env) then
+    (.domains = ((.domains // []) | map(select((.name // .domain // .domain_name // .hostname // "") as $name | (($remove_domains | index($name)) == null)))))
+    | (if ((.domains // []) | length) == 0 then del(.domains, .domain_state, .proxy_mode) else del(.domain_state) end)
+    | (if $reset_primary == "1" then (del(.primary_domain) | (if $internal_hostname != "" then .hostname = $internal_hostname else . end) | (if $internal_url != "" then .url = $internal_url else . end)) else . end)
+  else . end)`
+}
+
 func renderLinodeDomainBindingScript(plan siteDomainPlan) string {
 	q := shellQuoteArg
 	domains := plan.allDomains()
 	domainEntries, _ := json.Marshal(siteDomainCacheEntries(plan, siteDomainProviderResult{}))
 	domainNames, _ := json.Marshal(domains)
 	expectedIPs := []string{}
-	if !siteDomainCloudflareStrict(plan) {
+	_, reverseProxyIP := siteDomainReverseProxyIP(plan)
+	if !siteDomainCloudflareStrict(plan) && !reverseProxyIP {
 		for _, ip := range []string{plan.TargetIPv4, plan.TargetIPv6} {
 			if strings.TrimSpace(ip) != "" {
 				expectedIPs = append(expectedIPs, ip)
@@ -1729,6 +2270,23 @@ func renderLinodeDomainBindingScript(plan siteDomainPlan) string {
 		if redirectTarget == "" {
 			redirectTarget = plan.Canonical
 		}
+		if reverseProxyIP {
+			b.WriteString("systemctl disable --now ")
+			b.WriteString(q(art.ServiceName + ".timer"))
+			b.WriteString(" >/dev/null 2>&1 || true\n")
+			b.WriteString("systemctl stop ")
+			b.WriteString(q(art.ServiceName + ".service"))
+			b.WriteString(" >/dev/null 2>&1 || true\n")
+			b.WriteString("rm -f /etc/systemd/system/")
+			b.WriteString(art.ServiceName)
+			b.WriteString(".service /etc/systemd/system/")
+			b.WriteString(art.ServiceName)
+			b.WriteString(".timer ")
+			b.WriteString(q(art.IssueScript))
+			b.WriteByte('\n')
+			b.WriteString(renderLinodeDomainRefreshScript(plan, art, fileSlug, role, redirectTarget))
+			continue
+		}
 		b.WriteString(renderLinodeDomainRefreshScript(plan, art, fileSlug, role, redirectTarget))
 		b.WriteString(renderLinodeDomainIssueScript(art, expectedIPs, cloudflareRanges))
 		b.WriteString("cat >/etc/systemd/system/")
@@ -1754,6 +2312,9 @@ func renderLinodeDomainBindingScript(plan siteDomainPlan) string {
 		b.WriteString("systemctl start ")
 		b.WriteString(q(art.ServiceName + ".service"))
 		b.WriteString(" || true\n")
+	}
+	if reverseProxyIP {
+		b.WriteString("systemctl daemon-reload\n")
 	}
 	if plan.Primary {
 		b.WriteString("wp_cmd=(sudo -u www-data wp --path=")
@@ -1784,7 +2345,7 @@ func renderLinodeDomainBindingScript(plan siteDomainPlan) string {
 		}
 	}
 	b.WriteString("tmp=$(mktemp)\n")
-	b.WriteString("jq --arg site_id ")
+	b.WriteString("if ! jq --arg site_id ")
 	b.WriteString(q(plan.SiteID))
 	b.WriteString(" --arg env ")
 	b.WriteString(q(plan.Env))
@@ -1805,17 +2366,15 @@ func renderLinodeDomainBindingScript(plan siteDomainPlan) string {
 	b.WriteString(" --argjson domains ")
 	b.WriteString(q(string(domainEntries)))
 	b.WriteString(" '\n")
-	b.WriteString("  map(if (.site_id == $site_id and .env == $env) then\n")
-	b.WriteString("    (if ((.internal_hostname // \"\") == \"\" and $internal_hostname != \"\") then .internal_hostname = $internal_hostname else . end)\n")
-	b.WriteString("    | (if ((.internal_url // \"\") == \"\" and $internal_url != \"\") then .internal_url = $internal_url else . end)\n")
-	b.WriteString("    | .domains = ((((.domains // []) | map(select((.name // .domain // .domain_name // .hostname // \"\") as $name | (($names | index($name)) == null))) | map(if $primary == \"1\" and ((.management // \"external\") == \"external\") then .role = \"secondary\" else . end)) + $domains)\n")
-	b.WriteString("    | del(.domain_state)\n")
-	b.WriteString("    | (if $proxy_mode != \"\" then .proxy_mode = $proxy_mode else . end)\n")
-	b.WriteString("    | (if $primary == \"1\" then .hostname = $canonical | .url = $url | .primary_domain = $canonical else . end)\n")
-	b.WriteString("  else . end)\n")
-	b.WriteString("' /var/lib/nf/sites.json >\"$tmp\" && install -o ")
+	b.WriteString(linodeDomainCacheUpdateJQFilter())
+	b.WriteString("\n' /var/lib/nf/sites.json >\"$tmp\"; then\n")
+	b.WriteString("  rm -f \"$tmp\"\n")
+	b.WriteString("  exit 1\n")
+	b.WriteString("fi\n")
+	b.WriteString("install -o ")
 	b.WriteString(q(plan.Target.SSHUser))
-	b.WriteString(" -g www-data -m 0664 \"$tmp\" /var/lib/nf/sites.json && rm -f \"$tmp\"\n")
+	b.WriteString(" -g www-data -m 0664 \"$tmp\" /var/lib/nf/sites.json\n")
+	b.WriteString("rm -f \"$tmp\"\n")
 	b.WriteString("nginx -t\n")
 	b.WriteString("systemctl reload nginx\n")
 	return b.String()
@@ -1823,6 +2382,10 @@ func renderLinodeDomainBindingScript(plan siteDomainPlan) string {
 
 func renderLinodeDomainRefreshScript(plan siteDomainPlan, art siteDomainLinodeArtifacts, fileSlug, role, redirectTarget string) string {
 	q := shellQuoteArg
+	originWildcardTLS := "0"
+	if _, ok := siteDomainReverseProxyIP(plan); ok {
+		originWildcardTLS = "1"
+	}
 	var b strings.Builder
 	b.WriteString("cat >")
 	b.WriteString(q(art.RefreshScript))
@@ -1853,12 +2416,19 @@ func renderLinodeDomainRefreshScript(plan siteDomainPlan, art siteDomainLinodeAr
 	b.WriteString("cert_dir=")
 	b.WriteString(q(art.CertDir))
 	b.WriteByte('\n')
+	b.WriteString("origin_wildcard_tls=")
+	b.WriteString(q(originWildcardTLS))
+	b.WriteByte('\n')
 	b.WriteString(`php_version=$(jq -r '.php_version // .php.version // ""' /var/lib/nf/target.json 2>/dev/null || true)
 if [ -z "$php_version" ]; then php_version=`)
 	b.WriteString(q(plan.PHPVersion))
 	b.WriteString(`; fi
 cert_ready=0
-if [ -f "$cert_dir/fullchain.pem" ] && [ -f "$cert_dir/privkey.pem" ]; then cert_ready=1; fi
+wildcard_cert_snippet="/etc/nginx/snippets/nf-wildcard-cert.conf"
+if [ "$origin_wildcard_tls" = "1" ]; then
+  if [ ! -f "$wildcard_cert_snippet" ]; then echo "Missing $wildcard_cert_snippet for reverse-proxy origin TLS." >&2; exit 1; fi
+  cert_ready=1
+elif [ -f "$cert_dir/fullchain.pem" ] && [ -f "$cert_dir/privkey.pem" ]; then cert_ready=1; fi
 basic_auth_snippet="/etc/nginx/snippets/nf-basic-auth-$file_slug.conf"
 write_wordpress_block() {
   cat <<WPBLOCK
@@ -1878,8 +2448,24 @@ WPBLOCK
 write_redirect_block() {
   cat <<REDIRECT
     location ^~ /.well-known/acme-challenge/ { default_type text/plain; root /var/www/letsencrypt; }
-    location / { return 302 https://$redirect_target\$request_uri; }
+    location / {
+        add_header Cache-Control "no-store" always;
+        add_header Pragma "no-cache" always;
+        add_header Expires "0" always;
+        return 302 https://$redirect_target\$request_uri;
+    }
 REDIRECT
+}
+write_tls_certificate_block() {
+  if [ "$origin_wildcard_tls" = "1" ]; then
+    printf '    include %s;\n' "$wildcard_cert_snippet"
+  else
+    cat <<TLSBLOCK
+    ssl_certificate $cert_dir/fullchain.pem;
+    ssl_certificate_key $cert_dir/privkey.pem;
+    ssl_trusted_certificate $cert_dir/fullchain.pem;
+TLSBLOCK
+  fi
 }
 tmp=$(mktemp)
 {
@@ -1900,10 +2486,8 @@ server {
     listen 443 ssl http2;
     listen [::]:443 ssl http2;
     server_name $domain;
-    ssl_certificate $cert_dir/fullchain.pem;
-    ssl_certificate_key $cert_dir/privkey.pem;
-    ssl_trusted_certificate $cert_dir/fullchain.pem;
 EOF
+      write_tls_certificate_block
       write_wordpress_block
       cat <<EOF
 }
@@ -1932,10 +2516,8 @@ server {
     listen 443 ssl http2;
     listen [::]:443 ssl http2;
     server_name $domain;
-    ssl_certificate $cert_dir/fullchain.pem;
-    ssl_certificate_key $cert_dir/privkey.pem;
-    ssl_trusted_certificate $cert_dir/fullchain.pem;
 EOF
+      write_tls_certificate_block
       write_redirect_block
       cat <<EOF
 }
@@ -2122,7 +2704,7 @@ func renderLinodeDomainBindingRemoveScript(plan siteDomainPlan, deleteCert bool)
 	b.WriteString("touch /var/lib/nf/sites.json\n")
 	b.WriteString("if ! jq empty /var/lib/nf/sites.json >/dev/null 2>&1; then printf '[]\\n' >/var/lib/nf/sites.json; fi\n")
 	b.WriteString("tmp=$(mktemp)\n")
-	b.WriteString("jq --arg site_id ")
+	b.WriteString("if ! jq --arg site_id ")
 	b.WriteString(q(plan.SiteID))
 	b.WriteString(" --arg env ")
 	b.WriteString(q(plan.Env))
@@ -2135,14 +2717,15 @@ func renderLinodeDomainBindingRemoveScript(plan siteDomainPlan, deleteCert bool)
 	b.WriteString(" --argjson remove_domains ")
 	b.WriteString(q(string(domainNames)))
 	b.WriteString(" '\n")
-	b.WriteString("  map(if (.site_id == $site_id and .env == $env) then\n")
-	b.WriteString("    .domains = ((.domains // []) | map(select((.name // .domain // .domain_name // .hostname // \"\") as $name | (($remove_domains | index($name)) == null))))\n")
-	b.WriteString("    | (if ((.domains // []) | length) == 0 then del(.domains, .domain_state, .proxy_mode) else del(.domain_state) end)\n")
-	b.WriteString("    | (if $reset_primary == \"1\" then (del(.primary_domain) | (if $internal_hostname != \"\" then .hostname = $internal_hostname else . end) | (if $internal_url != \"\" then .url = $internal_url else . end)) else . end)\n")
-	b.WriteString("  else . end)\n")
-	b.WriteString("' /var/lib/nf/sites.json >\"$tmp\" && install -o ")
+	b.WriteString(linodeDomainCacheRemoveJQFilter())
+	b.WriteString("\n' /var/lib/nf/sites.json >\"$tmp\"; then\n")
+	b.WriteString("  rm -f \"$tmp\"\n")
+	b.WriteString("  exit 1\n")
+	b.WriteString("fi\n")
+	b.WriteString("install -o ")
 	b.WriteString(q(plan.Target.SSHUser))
-	b.WriteString(" -g www-data -m 0664 \"$tmp\" /var/lib/nf/sites.json && rm -f \"$tmp\"\n")
+	b.WriteString(" -g www-data -m 0664 \"$tmp\" /var/lib/nf/sites.json\n")
+	b.WriteString("rm -f \"$tmp\"\n")
 	b.WriteString("nginx -t\n")
 	b.WriteString("systemctl reload nginx\n")
 	return b.String()
