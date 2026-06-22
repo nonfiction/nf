@@ -332,7 +332,7 @@ func renderEnvFile(cfg envConfig) string {
 	wpTitle := slugToTitle(cfg.ProjectSlug)
 	dbUser := firstNonEmpty(cfg.DBUser, cfg.ProjectSlug)
 	dbPassword := firstNonEmpty(cfg.DBPassword, "wordpress")
-	adminUser := firstNonEmpty(cfg.AdminUser, "admin")
+	adminUser := firstNonEmpty(cfg.AdminUser, defaultWordPressAdminUser)
 	adminPassword := firstNonEmpty(cfg.AdminPassword, "admin")
 	adminEmail := firstNonEmpty(cfg.AdminEmail, "web@nonfiction.ca")
 	return fmt.Sprintf(`COMPOSE_PROJECT_NAME=%s

@@ -771,7 +771,7 @@ type envPluginStatusChecker struct {
 }
 
 func (c envPluginStatusChecker) statuses(plugins []wordpressPluginSpec, includeExtras bool) ([]wordpressPluginStatus, bool, error) {
-	output, err := runCommandSpecOutputSilent(execSpec{Dir: localEnvDir(c.cfg), Args: envWordpressExecArgs(c.cfg, "sh", "-lc", localPluginStatusScript(plugins))})
+	output, err := runCommandSpecOutputSilentFn(execSpec{Dir: localEnvDir(c.cfg), Args: envWordpressExecArgs(c.cfg, "sh", "-lc", localPluginStatusScript(plugins))})
 	if err != nil {
 		return nil, false, err
 	}

@@ -370,13 +370,13 @@ func cmdConfigShow() int {
 	fmt.Println("WordPress")
 	printIndentedDetailRows([]detailRow{
 		{label: "Admin email", value: configShowValue(values, "default_wp_email", "")},
-		{label: "Admin user", value: configShowValue(values, "default_wp_user", "admin")},
+		{label: "Admin user", value: configShowValue(values, "default_wp_user", defaultWordPressAdminUser)},
 		{label: "Basic auth user", value: configShowValue(values, "basicauth_default_user", "nonfiction")},
 	}, 2)
 	fmt.Println()
 	fmt.Println("Database")
 	printIndentedDetailRows([]detailRow{
-		{label: "User", value: configShowValueAny(values, []string{"db_default_user", "adminer_default_user"}, "admin")},
+		{label: "User", value: configShowValueAny(values, []string{"db_default_user", "adminer_default_user"}, defaultDatabaseUser)},
 	}, 2)
 	fmt.Println()
 	fmt.Println("Docker")

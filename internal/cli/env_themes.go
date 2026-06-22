@@ -854,7 +854,7 @@ func (i envThemeInstaller) Install(themes []wordpressThemeSpec, installSources m
 }
 
 func (c envThemeStatusChecker) statuses(themes []wordpressThemeSpec, includeExtras bool) ([]wordpressThemeStatus, bool, error) {
-	output, err := runCommandSpecOutputSilent(execSpec{Dir: localEnvDir(c.cfg), Args: envWordpressExecArgs(c.cfg, "sh", "-lc", localThemeStatusScript(themes))})
+	output, err := runCommandSpecOutputSilentFn(execSpec{Dir: localEnvDir(c.cfg), Args: envWordpressExecArgs(c.cfg, "sh", "-lc", localThemeStatusScript(themes))})
 	if err != nil {
 		return nil, false, err
 	}

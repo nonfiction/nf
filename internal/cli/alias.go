@@ -277,7 +277,7 @@ func cmdAliasesSyncWithOptions(root string, metadata map[string]any, remoteName 
 }
 
 func cmdAliasesStatusLocal(cfg envConfig, specs []aliasSpec) int {
-	output, err := runCommandSpecOutputSilent(execSpec{Dir: localEnvDir(cfg), Args: envWordpressRootExecArgs(cfg, "sh", "-lc", aliasStatusScript("/var/www/html", specs))})
+	output, err := runCommandSpecOutputSilentFn(execSpec{Dir: localEnvDir(cfg), Args: envWordpressRootExecArgs(cfg, "sh", "-lc", aliasStatusScript("/var/www/html", specs))})
 	if err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		return 1
@@ -306,7 +306,7 @@ func cmdAliasesStatusRemote(metadata map[string]any, remoteName string, specs []
 }
 
 func cmdAliasesSyncLocal(cfg envConfig, specs []aliasSpec) int {
-	output, err := runCommandSpecOutputSilent(execSpec{Dir: localEnvDir(cfg), Args: envWordpressRootExecArgs(cfg, "sh", "-lc", aliasSyncScript("/var/www/html", specs))})
+	output, err := runCommandSpecOutputSilentFn(execSpec{Dir: localEnvDir(cfg), Args: envWordpressRootExecArgs(cfg, "sh", "-lc", aliasSyncScript("/var/www/html", specs))})
 	fmt.Println("Alias sync:")
 	printAliasSyncOutput(output)
 	if err != nil {

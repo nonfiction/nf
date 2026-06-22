@@ -62,7 +62,7 @@ func buildKinstaSiteAddPlan(args siteAddArgs) (kinstaSiteAddPlan, error) {
 	if adminEmail == "" {
 		return kinstaSiteAddPlan{}, ProjectError{Msg: fmt.Sprintf("Expected default_wp_email in %s. Set it with nf config set-default-wp-email <email>.", config.ConfigFile())}
 	}
-	adminUser := firstNonEmpty(values["default_wp_user"], "admin")
+	adminUser := firstNonEmpty(values["default_wp_user"], defaultWordPressAdminUser)
 	baseDomain := strings.TrimSuffix(strings.TrimSpace(values["base_domain"]), ".")
 	if baseDomain == "" {
 		return kinstaSiteAddPlan{}, ProjectError{Msg: fmt.Sprintf("Expected base_domain in %s. Set it with nf config set-base-domain <domain>.", config.ConfigFile())}

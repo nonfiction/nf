@@ -287,6 +287,7 @@ func loadEnvConfig(root string, metadata map[string]any) (envConfig, bool) {
 		ThemeMountSlug:   themeMountSlug,
 		UploadsPath:      firstNonEmpty(mapStringAtPath(raw, "uploads_path"), "uploads"),
 		ThemeSlug:        themeSlug,
+		AdminUser:        recordValueString(raw["admin_user"]),
 		Themes:           themes,
 		RepoThemeMounts:  repoThemeMountsFromMetadata(root, metadata),
 		RepoPluginMounts: repoPluginMountsFromMetadata(root, metadata),

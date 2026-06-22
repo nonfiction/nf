@@ -688,7 +688,7 @@ func runEnv(argv []string) int {
 			fmt.Fprintln(os.Stderr, err)
 			return 1
 		}
-		fmt.Println(renderEnvInfo(credentialCfg, true, remoteRows...))
+		fmt.Println(renderEnvInfo(envConfigWithLiveAdminUser(credentialCfg), true, remoteRows...))
 		return 0
 	}
 	if name == "password" {

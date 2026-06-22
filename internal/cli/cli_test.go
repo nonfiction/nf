@@ -1280,7 +1280,7 @@ func TestInitGlobalConfigPromptsForMissingSettings(t *testing.T) {
 	answers := map[string]string{
 		"Base domain: ":                "nonfiction.dev",
 		"Default WordPress email: ":    "web@nonfiction.ca",
-		"Default WordPress user: ":     "admin",
+		"Default WordPress user: ":     defaultWordPressAdminUser,
 		"Basic auth default user: ":    "nonfiction",
 		"Database default user: ":      "admin",
 		"Kinsta default PHP version: ": "8.3",
@@ -1290,6 +1290,12 @@ func TestInitGlobalConfigPromptsForMissingSettings(t *testing.T) {
 	}
 	configIsInteractive = func() bool { return true }
 	configPromptString = func(prompt, defaultValue string, allowBlank bool) (string, error) {
+		if prompt == "Default WordPress user: " && defaultValue != defaultWordPressAdminUser {
+			t.Fatalf("Default WordPress user default = %q, want %q", defaultValue, defaultWordPressAdminUser)
+		}
+		if prompt == "Database default user: " && defaultValue != defaultDatabaseUser {
+			t.Fatalf("Database default user default = %q, want %q", defaultValue, defaultDatabaseUser)
+		}
 		value, ok := answers[prompt]
 		if !ok {
 			t.Fatalf("unexpected prompt %q", prompt)
@@ -1307,9 +1313,9 @@ func TestInitGlobalConfigPromptsForMissingSettings(t *testing.T) {
 	for key, want := range map[string]string{
 		"base_domain":            "nonfiction.dev",
 		"default_wp_email":       "web@nonfiction.ca",
-		"default_wp_user":        "admin",
+		"default_wp_user":        defaultWordPressAdminUser,
 		"basicauth_default_user": "nonfiction",
-		"db_default_user":        "admin",
+		"db_default_user":        defaultDatabaseUser,
 		"kinsta_default_php":     "8.3",
 		"linode_default_region":  "ca-central",
 		"linode_default_user":    "nonfiction",
@@ -1526,7 +1532,7 @@ func TestRunConfigShowMarksFallbackDefaults(t *testing.T) {
 		"  Password salt   unset\n",
 		"WordPress\n",
 		"  Admin email       web@nonfiction.ca\n",
-		"  Admin user        admin (default)\n",
+		"  Admin user        nonfiction (default)\n",
 		"  Basic auth user   nonfiction (default)\n",
 		"Database\n",
 		"  User   admin (default)\n",
@@ -7682,7 +7688,7 @@ func TestRunSiteShowEnvLinodeUsesCachedTargets(t *testing.T) {
 		}
 	})
 	adminPassword := passwords.DerivePassword("happytents", "wp-admin", "test-salt")
-	for _, want := range []string{"happytents.app2-linode:staging", "Site       happytents.app2-linode", "Env        staging", "Provider   linode", "Target     app2-linode", "URL        https://happytents-staging.app2-linode.nonfiction.dev", "PHP        8.3", "SSH command   ssh nonfiction@app2-linode.nonfiction.dev", "Admin user    admin", "Admin pass    " + adminPassword} {
+	for _, want := range []string{"happytents.app2-linode:staging", "Site       happytents.app2-linode", "Env        staging", "Provider   linode", "Target     app2-linode", "URL        https://happytents-staging.app2-linode.nonfiction.dev", "PHP        8.3", "SSH command   ssh nonfiction@app2-linode.nonfiction.dev", "Admin user    nonfiction", "Admin pass    " + adminPassword} {
 		if !strings.Contains(showOutput, want) {
 			t.Fatalf("site show env output missing %q:\n%s", want, showOutput)
 		}
@@ -7697,7 +7703,7 @@ func TestRunSiteShowEnvLinodeUsesCachedTargets(t *testing.T) {
 			t.Fatalf("Run(site show env --json) = %d, want 0", got)
 		}
 	})
-	for _, want := range []string{`"resolved_site": "happytents.app2-linode"`, `"resolved_env": "staging"`, `"resolved_target": "app2-linode"`, `"php_version": "8.3"`, `"resolved_admin_user": "admin"`, `"resolved_admin_password": "` + adminPassword + `"`, `"resolved_target_summary": "app2-linode / linode / ssh nonfiction@app2-linode.nonfiction.dev"`} {
+	for _, want := range []string{`"resolved_site": "happytents.app2-linode"`, `"resolved_env": "staging"`, `"resolved_target": "app2-linode"`, `"php_version": "8.3"`, `"resolved_admin_user": "nonfiction"`, `"resolved_admin_password": "` + adminPassword + `"`, `"resolved_target_summary": "app2-linode / linode / ssh nonfiction@app2-linode.nonfiction.dev"`} {
 		if !strings.Contains(jsonOutput, want) {
 			t.Fatalf("site show env --json output missing %q:\n%s", want, jsonOutput)
 		}
@@ -11928,7 +11934,7 @@ func writeTestWPDefaults(t *testing.T, salt string) {
 func TestRenderEnvFileUsesComposeProjectName(t *testing.T) {
 	wpPort, mailpitPort, adminerPort := envDerivedPorts("client")
 	cfg := envConfig{ProjectSlug: "client", WordpressPort: wpPort, MailpitPort: mailpitPort, AdminerPort: adminerPort, DBUser: "client", DBPassword: "db-pass"}
-	want := fmt.Sprintf("COMPOSE_PROJECT_NAME=nf_client_env\nWP_PORT=%d\nMAILPIT_PORT=%d\nDB_UI_PORT=%d\nDB_NAME=client\nDB_USER=client\nDB_PASSWORD=db-pass\nDB_ROOT_PASSWORD=root\nWP_URL=http://localhost:%d\nWP_TITLE=Client\nADMIN_USER=admin\nADMIN_PASSWORD=admin\nADMIN_EMAIL=web@nonfiction.ca\n", wpPort, mailpitPort, adminerPort, wpPort)
+	want := fmt.Sprintf("COMPOSE_PROJECT_NAME=nf_client_env\nWP_PORT=%d\nMAILPIT_PORT=%d\nDB_UI_PORT=%d\nDB_NAME=client\nDB_USER=client\nDB_PASSWORD=db-pass\nDB_ROOT_PASSWORD=root\nWP_URL=http://localhost:%d\nWP_TITLE=Client\nADMIN_USER=nonfiction\nADMIN_PASSWORD=admin\nADMIN_EMAIL=web@nonfiction.ca\n", wpPort, mailpitPort, adminerPort, wpPort)
 	if got := renderEnvFile(cfg); got != want {
 		t.Fatalf("renderEnvFile() = %q, want %q", got, want)
 	}
@@ -11977,6 +11983,9 @@ func TestEnvConfigWithAdminCredentialsUsesPasswordVersion(t *testing.T) {
 	}
 	if got, want := cfg.AdminPassword, passwords.DerivePassword("foobar:v2", "wp-admin", "test-salt"); got != want {
 		t.Fatalf("AdminPassword = %q, want %q", got, want)
+	}
+	if got, want := cfg.AdminUser, defaultWordPressAdminUser; got != want {
+		t.Fatalf("AdminUser = %q, want %q", got, want)
 	}
 }
 
@@ -15281,7 +15290,7 @@ func TestRunEnvShowPrintsEnvInfo(t *testing.T) {
 	if err := os.Mkdir(filepath.Join(workdir, ".git"), 0o755); err != nil {
 		t.Fatalf("Mkdir() error = %v", err)
 	}
-	project := map[string]any{"version": 1, "project": map[string]any{"slug": "client", "name": "Client"}, "env": map[string]any{"compose": "docker compose", "wordpress_service": "wordpress", "cli_service": "cli", "theme_mount_slug": "theme", "uploads_path": "uploads"}}
+	project := map[string]any{"version": 1, "project": map[string]any{"slug": "client", "name": "Client"}, "env": map[string]any{"compose": "docker compose", "wordpress_service": "wordpress", "cli_service": "cli", "theme_mount_slug": "theme", "uploads_path": "uploads", "admin_user": "cached-owner"}}
 	projectData, err := json.MarshalIndent(project, "", "  ")
 	if err != nil {
 		t.Fatalf("MarshalIndent() error = %v", err)
@@ -15298,6 +15307,13 @@ func TestRunEnvShowPrintsEnvInfo(t *testing.T) {
 		t.Fatalf("Chdir() error = %v", err)
 	}
 	t.Cleanup(func() { _ = os.Chdir(oldwd) })
+	oldRunCommandSpecOutputSilent := runCommandSpecOutputSilentFn
+	var userLookupArgs []string
+	runCommandSpecOutputSilentFn = func(spec execSpec) (string, error) {
+		userLookupArgs = append([]string(nil), spec.Args...)
+		return "owner\n", nil
+	}
+	t.Cleanup(func() { runCommandSpecOutputSilentFn = oldRunCommandSpecOutputSilent })
 
 	output := captureStdout(t, func() {
 		if got := Run([]string{"env", "show"}); got != 0 {
@@ -15321,9 +15337,12 @@ func TestRunEnvShowPrintsEnvInfo(t *testing.T) {
 		"WordPress\n",
 		fmt.Sprintf("  Site URL      http://localhost:%d\n", wpPort),
 		fmt.Sprintf("  Admin URL     http://localhost:%d/wp-login.php\n", wpPort),
-		"  WP user       admin\n",
+		"  WP user       owner\n",
 		"  WP pass       " + adminPassword,
 	})
+	if got, want := strings.Join(userLookupArgs, " "), "docker compose exec --user nonfiction wordpress wp user get 1 --field=user_login"; got != want {
+		t.Fatalf("env show user lookup args = %q, want %q", got, want)
+	}
 	if strings.Contains(output, "Remotes\n") {
 		t.Fatalf("Run(env show) output = %q, did not expect remotes section without nf.json remotes", output)
 	}
@@ -15350,7 +15369,7 @@ func TestRunEnvShowPrintsConfiguredRemoteURLs(t *testing.T) {
 	project := map[string]any{
 		"version": 1,
 		"project": map[string]any{"slug": "client", "name": "Client"},
-		"env":     map[string]any{"compose": "docker compose", "wordpress_service": "wordpress", "cli_service": "cli", "theme_mount_slug": "theme", "uploads_path": "uploads"},
+		"env":     map[string]any{"compose": "docker compose", "wordpress_service": "wordpress", "cli_service": "cli", "theme_mount_slug": "theme", "uploads_path": "uploads", "admin_user": "cached-owner"},
 		"remotes": map[string]any{
 			"staging": "client-app1-linode:staging",
 			"live":    "client-app1-linode:live",
@@ -15372,6 +15391,9 @@ func TestRunEnvShowPrintsConfiguredRemoteURLs(t *testing.T) {
 		t.Fatalf("Chdir() error = %v", err)
 	}
 	t.Cleanup(func() { _ = os.Chdir(oldwd) })
+	oldRunCommandSpecOutputSilent := runCommandSpecOutputSilentFn
+	runCommandSpecOutputSilentFn = func(spec execSpec) (string, error) { return "", fmt.Errorf("env down") }
+	t.Cleanup(func() { runCommandSpecOutputSilentFn = oldRunCommandSpecOutputSilent })
 
 	output := captureStdout(t, func() {
 		if got := Run([]string{"env", "show"}); got != 0 {
@@ -15380,6 +15402,7 @@ func TestRunEnvShowPrintsConfiguredRemoteURLs(t *testing.T) {
 	})
 	assertContainsInOrder(t, output, []string{
 		"WordPress\n",
+		"  WP user       cached-owner\n",
 		"Remotes\n",
 		"  Live URL      https://client.app1-linode.nonfiction.dev\n",
 		"  Staging URL   https://client-staging.app1-linode.nonfiction.dev",

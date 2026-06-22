@@ -47,6 +47,7 @@ var (
 	runSSHStdinCommandFn           = runSSHStdinCommand
 	runSSHOutputFn                 = runSSHOutput
 	runRsyncCommandFn              = runRsyncCommand
+	runCommandSpecOutputSilentFn   = runCommandSpecOutputSilent
 	targetSelectFn                 = ui.Select
 	providerSelectFn               = ui.Select
 	siteSelectFn                   = ui.Select

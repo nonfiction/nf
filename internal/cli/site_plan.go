@@ -258,7 +258,7 @@ func buildSiteAddPlan(args siteAddArgs) (siteAddPlan, error) {
 	if adminEmail == "" {
 		return siteAddPlan{}, ProjectError{Msg: fmt.Sprintf("Expected default_wp_email in %s. Set it with nf config set-default-wp-email <email>.", config.ConfigFile())}
 	}
-	adminUser := firstNonEmpty(values["default_wp_user"], "admin")
+	adminUser := firstNonEmpty(values["default_wp_user"], defaultWordPressAdminUser)
 	targets, err := cachedTargets()
 	if err != nil {
 		return siteAddPlan{}, err

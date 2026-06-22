@@ -335,7 +335,7 @@ func buildLinodeSiteStagingAddPlan(live map[string]any, resolvedSiteID string) (
 	if adminEmail == "" {
 		return siteAddPlan{}, ProjectError{Msg: fmt.Sprintf("Expected default_wp_email in %s. Set it with nf config set-default-wp-email <email>.", config.ConfigFile())}
 	}
-	adminUser := firstNonEmpty(values["default_wp_user"], "admin")
+	adminUser := firstNonEmpty(values["default_wp_user"], defaultWordPressAdminUser)
 	targetName := siteProviderTarget(live)
 	if targetName == "" {
 		return siteAddPlan{}, ProjectError{Msg: fmt.Sprintf("Site %q is missing a target.", resolvedSiteID)}

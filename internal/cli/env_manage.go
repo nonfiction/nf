@@ -75,7 +75,7 @@ func envConfigWithAdminCredentials(cfg envConfig) (envConfig, error) {
 	if adminEmail == "" {
 		return cfg, ProjectError{Msg: fmt.Sprintf("Expected default_wp_email in %s. Set it with nf config set-default-wp-email <email>.", config.ConfigFile())}
 	}
-	adminUser := firstNonEmpty(cfg.AdminUser, values["default_wp_user"], "admin")
+	adminUser := firstNonEmpty(cfg.AdminUser, values["default_wp_user"], defaultWordPressAdminUser)
 	adminPassword, err := envAdminPassword(cfg)
 	if err != nil {
 		return cfg, err
@@ -88,6 +88,17 @@ func envConfigWithAdminCredentials(cfg envConfig) (envConfig, error) {
 	cfg.AdminEmail = adminEmail
 	cfg.AdminPassword = adminPassword
 	return cfg, nil
+}
+
+func envConfigWithLiveAdminUser(cfg envConfig) envConfig {
+	output, err := runCommandSpecOutputSilentFn(execSpec{Dir: localEnvDir(cfg), Args: envWpArgs(cfg, "user", "get", "1", "--field=user_login")})
+	if err != nil {
+		return cfg
+	}
+	if user := strings.TrimSpace(output); user != "" {
+		cfg.AdminUser = user
+	}
+	return cfg
 }
 
 func envConfigWithDockerSettings(cfg envConfig, values map[string]string) envConfig {

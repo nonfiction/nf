@@ -372,7 +372,7 @@ func enrichSiteAdminCredentials(out, record map[string]any) error {
 		if err != nil {
 			return err
 		}
-		out["resolved_admin_user"] = firstNonEmpty(values["default_wp_user"], "admin")
+		out["resolved_admin_user"] = firstNonEmpty(values["default_wp_user"], defaultWordPressAdminUser)
 	}
 
 	password, err := siteAdminPassword(record)

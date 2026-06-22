@@ -9,6 +9,11 @@ import (
 	"github.com/nonfiction/nf/internal/envwizard"
 )
 
+const (
+	defaultWordPressAdminUser = "nonfiction"
+	defaultDatabaseUser       = "admin"
+)
+
 func configInitRequirements() []envwizard.Requirement {
 	return []envwizard.Requirement{
 		{Keys: []string{"DNSIMPLE_TOKEN"}, Prompt: "DNSimple token: ", Secret: true, WriteKey: "DNSIMPLE_TOKEN", Required: true},
@@ -31,9 +36,9 @@ func configInitSettings() []configInitSetting {
 	return []configInitSetting{
 		{Key: "base_domain", Prompt: "Base domain: ", Required: true},
 		{Key: "default_wp_email", Prompt: "Default WordPress email: ", Required: true},
-		{Key: "default_wp_user", Prompt: "Default WordPress user: ", Default: "admin", Required: true},
+		{Key: "default_wp_user", Prompt: "Default WordPress user: ", Default: defaultWordPressAdminUser, Required: true},
 		{Key: "basicauth_default_user", Prompt: "Basic auth default user: ", Default: "nonfiction", Required: true},
-		{Key: "db_default_user", LegacyKeys: []string{"adminer_default_user"}, Prompt: "Database default user: ", Default: "admin", Required: true, Validate: validateDBDefaultUser},
+		{Key: "db_default_user", LegacyKeys: []string{"adminer_default_user"}, Prompt: "Database default user: ", Default: defaultDatabaseUser, Required: true, Validate: validateDBDefaultUser},
 		{Key: "kinsta_default_php", Prompt: "Kinsta default PHP version: ", Default: "8.3", Required: true},
 		{Key: "linode_default_region", Prompt: "Linode default region: ", Default: "ca-central", Required: true},
 		{Key: "linode_default_user", Prompt: "Linode default SSH user: ", Default: "nonfiction", Required: true},
