@@ -3304,7 +3304,7 @@ func TestRunSiteRefreshReportsCachedTargets(t *testing.T) {
 func TestRunSiteRefreshDiscoversLinodeRemoteSites(t *testing.T) {
 	stateDir := t.TempDir()
 	t.Setenv("NF_STATE_HOME", stateDir)
-	if err := state.SaveStateRecords("providers", []map[string]any{{"provider": "linode", "targets": []map[string]any{{"name": "app1-linode", "provider": "linode", "hostname": "app1-linode.nonfiction.dev", "ssh": map[string]any{"user": "nonfiction", "host": "app1-linode.nonfiction.dev"}}}}}); err != nil {
+	if err := state.SaveStateRecords("providers", []map[string]any{{"provider": "linode", "targets": []map[string]any{{"name": "app1-linode", "provider": "linode", "hostname": "app1-linode.nonfiction.dev", "php": map[string]any{"version": "8.3", "service": "php8.3-fpm"}, "ssh": map[string]any{"user": "nonfiction", "host": "app1-linode.nonfiction.dev"}}}}}); err != nil {
 		t.Fatalf("SaveStateRecords(providers) error = %v", err)
 	}
 	if err := state.SaveStateRecords("sites", []map[string]any{{"provider": "linode", "site_id": "old-app1-linode", "env": "live", "target": "app1-linode"}, {"provider": "kinsta", "site_id": "client-kinsta", "env": "live", "target": "kinsta"}}); err != nil {
@@ -3879,7 +3879,7 @@ func TestRunSiteAddLinodeExecuteRunsSSHAndCachesEnvs(t *testing.T) {
 	if err := saveGlobalConfig(map[string]string{"base_domain": "nonfiction.dev", "default_wp_email": "web@nonfiction.ca", "default_wp_user": "admin", "linode_default_user": "nonfiction"}); err != nil {
 		t.Fatalf("saveGlobalConfig() error = %v", err)
 	}
-	if err := state.SaveStateRecords("providers", []map[string]any{{"provider": "linode", "targets": []map[string]any{{"name": "app1-linode", "provider": "linode", "hostname": "app1-linode.nonfiction.dev", "ssh": map[string]any{"user": "nonfiction", "host": "app1-linode.nonfiction.dev"}}}}}); err != nil {
+	if err := state.SaveStateRecords("providers", []map[string]any{{"provider": "linode", "targets": []map[string]any{{"name": "app1-linode", "provider": "linode", "hostname": "app1-linode.nonfiction.dev", "php": map[string]any{"version": "8.3", "service": "php8.3-fpm"}, "ssh": map[string]any{"user": "nonfiction", "host": "app1-linode.nonfiction.dev"}}}}}); err != nil {
 		t.Fatalf("SaveStateRecords(providers) error = %v", err)
 	}
 	var sshUser, sshHost, sshScript string
@@ -3897,6 +3897,12 @@ func TestRunSiteAddLinodeExecuteRunsSSHAndCachesEnvs(t *testing.T) {
 	})
 	if !strings.Contains(output, "Site added.") || !strings.Contains(output, "mode: execute") {
 		t.Fatalf("site add execute output = %q, want success", output)
+	}
+	if !strings.Contains(output, "php: 8.3") {
+		t.Fatalf("site add execute output missing PHP version:\n%s", output)
+	}
+	if strings.Contains(output, "map[") {
+		t.Fatalf("site add execute output contains raw PHP map:\n%s", output)
 	}
 	if sshUser != "nonfiction" || sshHost != "app1-linode.nonfiction.dev" {
 		t.Fatalf("ssh target = %s@%s, want nonfiction@app1-linode.nonfiction.dev", sshUser, sshHost)
@@ -3957,6 +3963,9 @@ func TestRunSiteAddLinodeExecuteRunsSSHAndCachesEnvs(t *testing.T) {
 		}
 		if _, ok := record["password_version"]; ok {
 			t.Fatalf("%s cached record wrote password_version: %#v", want.env, record)
+		}
+		if got := sitePHPVersion(record); got != "8.3" {
+			t.Fatalf("%s php version = %q, want 8.3 in %#v", want.env, got, record)
 		}
 		if got := recordValueString(record["target_name"]); got != "" {
 			t.Fatalf("%s target_name = %q, want empty", want.env, got)

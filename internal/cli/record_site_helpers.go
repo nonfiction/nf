@@ -217,7 +217,16 @@ func sitePHPVersion(site map[string]any) string {
 }
 
 func targetPHPVersion(target map[string]any) string {
-	return firstNonEmpty(firstRecordString(target, "php_version", "php"), mapStringAtPath(target, "php", "version"))
+	if phpVersion := firstRecordString(target, "php_version"); phpVersion != "" {
+		return phpVersion
+	}
+	if phpVersion := mapStringAtPath(target, "php", "version"); phpVersion != "" {
+		return phpVersion
+	}
+	if _, ok := target["php"].(map[string]any); ok {
+		return ""
+	}
+	return firstRecordString(target, "php")
 }
 
 func normalizedRecordString(value string) string {
