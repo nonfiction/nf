@@ -2558,14 +2558,16 @@ func normalizePlan(plan Plan) Plan {
 }
 
 func targetName(name string) string {
-	name = strings.TrimSpace(name)
-	if name == "" {
-		return ""
+	return strings.TrimSpace(name)
+}
+
+func validateTargetName(name string) error {
+	switch strings.ToLower(strings.TrimSpace(name)) {
+	case "kinsta", "linode", "dnsimple", "digitalocean", "droplet":
+		return Error{Msg: fmt.Sprintf("Target name %q is reserved. Use a more specific name such as linode1 or droplet1.", name)}
+	default:
+		return nil
 	}
-	if strings.HasSuffix(name, "-linode") {
-		return name
-	}
-	return name + "-linode"
 }
 
 func BuildPlan(args Args) (Plan, error) {
@@ -2581,6 +2583,11 @@ func BuildPlan(args Args) (Plan, error) {
 	}
 	if err := validateServerName(name); err != nil {
 		return Plan{}, err
+	}
+	if args.TargetMode {
+		if err := validateTargetName(name); err != nil {
+			return Plan{}, err
+		}
 	}
 	domain := serverDomain()
 	hostname := deriveHostname(name, domain)

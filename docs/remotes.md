@@ -14,7 +14,7 @@ nf site list --envs
 Add a remote from the project repo:
 
 ```sh
-nf remote add production client.app1-linode:live
+nf remote add production client.linode1:live
 ```
 
 `nf remote add` validates that the requested site/env exists in the local cache before writing `nf.json`. The env ref format is:
@@ -26,8 +26,8 @@ nf remote add production client.app1-linode:live
 Examples:
 
 ```text
-client.app1-linode:live
-client.app1-linode:staging
+client.linode1:live
+client.linode1:staging
 client.kinsta:live
 ```
 

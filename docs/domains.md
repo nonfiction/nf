@@ -20,7 +20,7 @@ When run interactively, omitted envs/remotes, domains, proxy mode, and search-re
 
 ## Domain Roles
 
-`nf domain list` shows cached domain inventory keyed by full env IDs like `client.app1-linode:live`. Inside an `nf.json` project, the no-argument list is scoped to the project's configured remotes.
+`nf domain list` shows cached domain inventory keyed by full env IDs like `client.linode1:live`. Inside an `nf.json` project, the no-argument list is scoped to the project's configured remotes.
 
 Roles:
 
@@ -202,7 +202,7 @@ Confirm manually:
 * Secondary domains redirect to the current primary. Linode secondaries use 302 redirects.
 * WordPress URLs and obvious navigation paths use the intended hostname.
 
-Do not change `nf.json` remotes from env IDs to public domains. Keep `production -> client.app1-linode:live` or `production -> client.kinsta:live` as the repo connection.
+Do not change `nf.json` remotes from env IDs to public domains. Keep `production -> client.linode1:live` or `production -> client.kinsta:live` as the repo connection.
 
 ## Cloudflare Notes for Linode
 
@@ -231,7 +231,7 @@ Use `--proxy <ip>` when public DNS points at a separate reverse proxy rather tha
 The reverse proxy should:
 
 * Terminate HTTPS with a valid certificate for the public domain.
-* Proxy to the Linode target origin, for example `https://app1-linode.nonfiction.dev`.
+* Proxy to the Linode target origin, for example `https://linode1.nonfiction.dev`.
 * Preserve the public host header, for example `Host: www.client.com`.
 * Disable origin certificate hostname verification, or verify the Linode origin hostname instead of the public domain.
 
@@ -242,8 +242,8 @@ In this mode, `nf` writes the public-domain nginx vhost on the Linode origin wit
 If the launch moved a domain from another target/env, retire the old binding after cutover. Include all domains that were attached to the old env:
 
 ```sh
-nf domain remove client.app1-linode:live www.client.com client.com --proxy cloudflare --dry-run
-nf domain remove client.app1-linode:live www.client.com client.com --proxy cloudflare --execute --yes
+nf domain remove client.linode1:live www.client.com client.com --proxy cloudflare --dry-run
+nf domain remove client.linode1:live www.client.com client.com --proxy cloudflare --execute --yes
 ```
 
 Use `--delete-cert` only after the rollback window if you also want to remove the old Let's Encrypt lineage. Otherwise certbot may later try to renew the old cert after DNS has moved, but keeping it briefly makes rollback safer.

@@ -43,24 +43,24 @@ provider -> target -> site -> env
 Definitions:
 
 * **provider**: external platform or service integration.
-* **target**: deployable place. Examples: `kinsta`, `app1-linode`.
-* **site**: WordPress site hosted on a target. Site IDs use `<site>-<target>`.
+* **target**: deployable place. Examples: `kinsta`, `linode1`.
+* **site**: WordPress site hosted on a target. Site IDs use `<site>.<target>`.
 * **env**: remote environment for a site. A site has `live`; `staging` is optional and intentionally managed.
 
 Remote env display IDs use:
 
 ```text
-<env>-<site>-<target>
+<site>.<target>:<env>
 ```
 
 Examples:
 
 ```text
 provider: linode
-target:   app1-linode
-site:     client-app1-linode
+target:   linode1
+site:     client.linode1
 env:      live
-display:  live-client-app1-linode
+display:  client.linode1:live
 ```
 
 ### Repo/local context
@@ -81,7 +81,7 @@ Repo-local remotes map names to global remote site/env records:
 ```json
 {
   "remotes": {
-    "production": "client.app1-linode:live"
+    "production": "client.linode1:live"
   }
 }
 ```
@@ -378,7 +378,7 @@ Target commands read from that cache:
 ```sh
 nf target refresh
 nf target list
-nf target show app1-linode
+nf target show linode1
 ```
 
 `nf refresh` is the top-level best-effort refresh: it runs all provider checks, including DNSimple, then refreshes site/env records from whatever target cache is available. It attempts all phases and exits non-zero if any phase fails.
@@ -503,7 +503,7 @@ Example shape:
     "path": "dist/client-v{version}.zip"
   },
   "remotes": {
-    "production": "client.app1-linode:live"
+    "production": "client.linode1:live"
   },
   "tasks": {}
 }

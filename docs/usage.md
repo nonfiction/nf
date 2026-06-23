@@ -49,8 +49,8 @@ Create infrastructure and hosted WordPress envs:
 
 ```sh
 nf provider check linode
-nf target add linode app1 --dry-run
-nf site add app1-linode client --dry-run
+nf target add linode linode1 --dry-run
+nf site add linode1 client --dry-run
 ```
 
 Read [Targets](targets.md) for target creation and [Sites](sites.md) for remote WordPress site creation, inspection, passwords, shell access, WP-CLI, and exports.
@@ -58,8 +58,8 @@ Read [Targets](targets.md) for target creation and [Sites](sites.md) for remote 
 Add or manage staging:
 
 ```sh
-nf site staging status client.app1-linode
-nf site staging add client.app1-linode --dry-run
+nf site staging status client.linode1
+nf site staging add client.linode1 --dry-run
 ```
 
 Read [Staging](staging.md) for staging lifecycle commands.
@@ -68,11 +68,11 @@ Connect the current repo to a remote env:
 
 ```sh
 nf site refresh
-nf remote add production client.app1-linode:live
+nf remote add production client.linode1:live
 nf remote show production
 ```
 
-Read [Remotes](remotes.md) for repo remote setup. Remotes stay pointed at env IDs such as `client.app1-linode:live`, not public domains.
+Read [Remotes](remotes.md) for repo remote setup. Remotes stay pointed at env IDs such as `client.linode1:live`, not public domains.
 
 Build and deploy a theme release:
 

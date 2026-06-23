@@ -33,7 +33,7 @@ The `wp-content` archive includes only `uploads/`, `plugins/`, `mu-plugins/`, an
 Create a remote snapshot from cached remote site env records:
 
 ```sh
-nf site snapshot client.app1-linode:live
+nf site snapshot client.linode1:live
 nf site snapshot list
 ```
 

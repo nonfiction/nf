@@ -7,25 +7,25 @@ Sites are hosted WordPress installs on a target. A site has one or more envs, us
 Preview a Linode site:
 
 ```sh
-nf site add app1-linode client --dry-run
+nf site add linode1 client --dry-run
 ```
 
 Create the live env:
 
 ```sh
-nf site add app1-linode client --execute --yes
+nf site add linode1 client --execute --yes
 ```
 
 Create live and staging in one operation:
 
 ```sh
-nf site add app1-linode client --with-staging --execute --yes
+nf site add linode1 client --with-staging --execute --yes
 ```
 
 Create a site for a project with a rotated password version:
 
 ```sh
-nf site add app1-linode client --password-version 2 --execute --yes
+nf site add linode1 client --password-version 2 --execute --yes
 ```
 
 Preview a Kinsta site:
@@ -54,8 +54,8 @@ The canonical `<site>` slug must be lowercase ASCII letters and digits, start wi
 nf site refresh
 nf site list
 nf site list --envs
-nf site show client.app1-linode
-nf site show client.app1-linode:live
+nf site show client.linode1
+nf site show client.linode1:live
 ```
 
 `nf site refresh` fans out from cached targets. It must not be treated as provider refresh. Use `nf provider check ...` or `nf target refresh` when target cache may be stale.
@@ -67,9 +67,9 @@ For Kinsta, refresh uses Kinsta API site/env/domain data. When an env has an `nf
 ## Passwords
 
 ```sh
-nf site password client.app1-linode --wp
-nf site password client.app1-linode:live --db
-nf site password client.app1-linode --basicauth
+nf site password client.linode1 --wp
+nf site password client.linode1:live --db
+nf site password client.linode1 --basicauth
 ```
 
 `nf site password [site|env] [--wp|--db|--basicauth]` prints only one selected password. `--wp` is the default. Env refs are accepted for `--db`; use a site ref for `--wp` or `--basicauth`.
@@ -79,8 +79,8 @@ Linode WordPress, DB, and basic-auth values are derived. Kinsta DB password outp
 ## Remote Shell and WP-CLI
 
 ```sh
-nf site shell client.app1-linode:live
-nf site wp client.app1-linode:live -- plugin list
+nf site shell client.linode1:live
+nf site wp client.linode1:live -- plugin list
 ```
 
 These commands validate the cache, print the SSH or wp-cli command preview, then execute the remote command.
@@ -97,8 +97,8 @@ Repo remotes are covered in [Remotes](remotes.md). For remote WP-CLI, use `nf si
 ## Handoff Export
 
 ```sh
-nf site export client.app1-linode:live --dry-run
-nf site export client.app1-linode:live
+nf site export client.linode1:live --dry-run
+nf site export client.linode1:live
 ```
 
 `nf site export` creates a full handoff copy of a managed remote WordPress env. It is different from snapshots: export includes the full WordPress filesystem, including core files, themes, plugins, uploads, mu-plugins, languages, and `wp-config.php`, plus a compressed database dump.
@@ -121,8 +121,8 @@ Importing a handoff into the local env is covered in [Snapshots](snapshots.md#im
 ## Remove a Site
 
 ```sh
-nf site remove client.app1-linode --dry-run
-nf site remove client.app1-linode --execute --yes
+nf site remove client.linode1 --dry-run
+nf site remove client.linode1 --execute --yes
 ```
 
 `nf site remove [site]` removes a whole Linode site and deletes its env data. To delete only staging, use [Staging](staging.md).

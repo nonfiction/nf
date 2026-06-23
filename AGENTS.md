@@ -183,10 +183,10 @@ Key rule: never silently clobber production credentials.
 Use neutral fictional examples:
 
 * project slug: `client`
-* target: `app1-linode`
-* target hostname: `app1.nonfiction.dev`
-* Linode site ID: `client-app1-linode`
-* Linode site URL: `https://client.app1.nonfiction.dev/`
+* target: `linode1`
+* target hostname: `linode1.nonfiction.dev`
+* Linode site ID: `client.linode1`
+* Linode site URL: `https://client.linode1.nonfiction.dev/`
 * Kinsta site ID: `client-kinsta`
 * Kinsta placeholder URL: `https://www.example.com/`
 

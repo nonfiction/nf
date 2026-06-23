@@ -456,7 +456,7 @@ func TestBuildPlanTargetModeDetectsExistingLinodeBeforeCreationPrompts(t *testin
 	serverProviderFactory = func(plan Plan) (ServerProvider, error) { return legacyTestProvider{}, nil }
 	runLinodeCLIValueFn = func(args []string) (any, error) {
 		if len(args) >= 2 && args[0] == "linodes" && args[1] == "list" {
-			return []any{map[string]any{"id": json.Number("98589908"), "label": "app4-linode", "ipv4": []any{"172.105.101.108"}, "region": "ca-central", "type": "g6-standard-1", "image": "linode/ubuntu24.04", "tags": []any{"nf"}}}, nil
+			return []any{map[string]any{"id": json.Number("98589908"), "label": "app4", "ipv4": []any{"172.105.101.108"}, "region": "ca-central", "type": "g6-standard-1", "image": "linode/ubuntu24.04", "tags": []any{"nf"}}}, nil
 		}
 		t.Fatalf("unexpected linode-cli value args: %v", args)
 		return nil, nil
@@ -486,7 +486,7 @@ func TestBuildPlanTargetModeDetectsExistingLinodeBeforeCreationPrompts(t *testin
 	if !plan.ReuseExisting {
 		t.Fatal("ReuseExisting = false, want true")
 	}
-	if got, want := plan.Name, "app4-linode"; got != want {
+	if got, want := plan.Name, "app4"; got != want {
 		t.Fatalf("Name = %q, want %q", got, want)
 	}
 	if got, want := plan.Region, "ca-central"; got != want {
@@ -506,6 +506,25 @@ func TestBuildPlanTargetModeDetectsExistingLinodeBeforeCreationPrompts(t *testin
 	}
 	if got, want := confirmPrompt, "This will reuse the existing Linode target and reconcile DNS/firewall state. Continue?"; got != want {
 		t.Fatalf("confirm prompt = %q, want %q", got, want)
+	}
+}
+
+func TestBuildPlanTargetModeRejectsReservedTargetNames(t *testing.T) {
+	for _, name := range []string{"kinsta", "linode", "dnsimple", "digitalocean", "droplet"} {
+		t.Run(name, func(t *testing.T) {
+			_, err := BuildPlan(Args{Provider: "linode", DnsProvider: "dnsimple", Name: name, TargetMode: true, NonInteractive: true})
+			if err == nil {
+				t.Fatal("BuildPlan() error = nil, want reserved name error")
+			}
+			if !strings.Contains(err.Error(), "reserved") {
+				t.Fatalf("BuildPlan() error = %q, want reserved name error", err)
+			}
+		})
+	}
+	for _, name := range []string{"linode1", "droplet1"} {
+		if err := validateTargetName(name); err != nil {
+			t.Fatalf("validateTargetName(%q) error = %v, want nil", name, err)
+		}
 	}
 }
 

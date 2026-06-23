@@ -54,8 +54,8 @@ func passwordDeriveScopeOptions() []ui.SelectOption {
 		passwordDeriveScopeWPAdmin:    "wp-admin - project slug (client)",
 		passwordDeriveScopeMySQL:      "mysql - project slug (client)",
 		passwordDeriveScopeBasicAuth:  "basic-auth - project slug (client)",
-		passwordDeriveScopeLinodeRoot: "linode-root - target hostname (app1-linode.nonfiction.dev)",
-		passwordDeriveScopeDBAdmin:    "db-admin - target hostname (app1-linode.nonfiction.dev)",
+		passwordDeriveScopeLinodeRoot: "linode-root - target hostname (linode1.nonfiction.dev)",
+		passwordDeriveScopeDBAdmin:    "db-admin - target hostname (linode1.nonfiction.dev)",
 	}
 	options := make([]ui.SelectOption, 0, len(passwordDeriveScopeCandidates()))
 	for _, scope := range passwordDeriveScopeCandidates() {
@@ -69,7 +69,7 @@ func passwordDeriveIdentityPrompt(scope string) string {
 	case passwordDeriveScopeWPAdmin, passwordDeriveScopeMySQL, passwordDeriveScopeBasicAuth:
 		return "Site/project slug (example: client)"
 	case passwordDeriveScopeLinodeRoot, passwordDeriveScopeDBAdmin:
-		return "Target hostname (example: app1-linode.nonfiction.dev)"
+		return "Target hostname (example: linode1.nonfiction.dev)"
 	default:
 		return "Password identity"
 	}

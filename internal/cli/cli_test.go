@@ -1245,7 +1245,7 @@ func TestRunPasswordDerivePromptsWhenArgumentsAreMissing(t *testing.T) {
 	if !reflect.DeepEqual(values, []string{"wp-admin", "mysql", "basic-auth", "linode-root", "db-admin"}) {
 		t.Fatalf("select option values = %#v", values)
 	}
-	if !reflect.DeepEqual(prompts, []string{"Target hostname (example: app1-linode.nonfiction.dev)"}) {
+	if !reflect.DeepEqual(prompts, []string{"Target hostname (example: linode1.nonfiction.dev)"}) {
 		t.Fatalf("prompts = %#v, want identity prompt only", prompts)
 	}
 	want := passwords.DerivePassword("app1.example.com", "db-admin", "test-salt") + "\n"
@@ -2813,13 +2813,24 @@ func TestRunTargetAddLinodeDryRunUsesTargetNameAndConfigDefaults(t *testing.T) {
 			t.Fatalf("Run(target add linode) = %d, want 0", got)
 		}
 	})
-	for _, want := range []string{"app1-linode", "hostname: app1-linode.nonfiction.dev", "wildcard hostname: *.app1-linode.nonfiction.dev", "url: https://dbadmin.app1-linode.nonfiction.dev/", "region: ca-central", "type: g6-standard-1", "image: linode/ubuntu24.04", "user: dbadmin", "ssh user: nonfiction", "authorized keys: all Linode profile keys", "state: not checked"} {
+	for _, want := range []string{"app1", "hostname: app1.nonfiction.dev", "wildcard hostname: *.app1.nonfiction.dev", "url: https://dbadmin.app1.nonfiction.dev/", "region: ca-central", "type: g6-standard-1", "image: linode/ubuntu24.04", "user: dbadmin", "ssh user: nonfiction", "authorized keys: all Linode profile keys", "state: not checked"} {
 		if !strings.Contains(output, want) {
 			t.Fatalf("target add output missing %q:\n%s", want, output)
 		}
 	}
 	if _, err := os.Stat(filepath.Join(stateDir, "providers.json")); !os.IsNotExist(err) {
 		t.Fatalf("providers.json unexpectedly exists after dry-run: %v", err)
+	}
+}
+
+func TestRunTargetAddLinodeRejectsReservedTargetName(t *testing.T) {
+	stderr := captureStderr(t, func() {
+		if got := Run([]string{"target", "add", "linode", "kinsta", "--dry-run", "--non-interactive"}); got != 1 {
+			t.Fatalf("Run(target add linode kinsta) = %d, want 1", got)
+		}
+	})
+	if !strings.Contains(stderr, `Target name "kinsta" is reserved`) {
+		t.Fatalf("Run() stderr = %q, want reserved target name error", stderr)
 	}
 }
 
