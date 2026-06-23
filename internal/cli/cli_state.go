@@ -48,6 +48,7 @@ var (
 	runSSHOutputFn                 = runSSHOutput
 	runRsyncCommandFn              = runRsyncCommand
 	runCommandSpecOutputSilentFn   = runCommandSpecOutputSilent
+	localAvailableDiskBytesFn      = localAvailableDiskBytes
 	targetSelectFn                 = ui.Select
 	providerSelectFn               = ui.Select
 	siteAddSelectFn                = ui.Select

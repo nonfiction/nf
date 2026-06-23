@@ -147,6 +147,31 @@ func assertContainsInOrder(t *testing.T, output string, values []string) {
 	}
 }
 
+func stubEnvRemoteDiskOutput(t *testing.T, outputs ...string) *[]string {
+	t.Helper()
+	oldRunSSHOutput := runSSHOutputFn
+	scripts := []string{}
+	runSSHOutputFn = func(args []string) ([]byte, error) {
+		scripts = append(scripts, args[len(args)-1])
+		if len(outputs) == 0 {
+			t.Fatalf("unexpected runSSHOutputFn call: %#v", args)
+			return []byte("0\n"), nil
+		}
+		output := outputs[0]
+		outputs = outputs[1:]
+		return []byte(output), nil
+	}
+	t.Cleanup(func() { runSSHOutputFn = oldRunSSHOutput })
+	return &scripts
+}
+
+func stubLocalAvailableDisk(t *testing.T, available int64) {
+	t.Helper()
+	oldLocalAvailableDiskBytes := localAvailableDiskBytesFn
+	localAvailableDiskBytesFn = func(string) (int64, error) { return available, nil }
+	t.Cleanup(func() { localAvailableDiskBytesFn = oldLocalAvailableDiskBytes })
+}
+
 func TestRunHelpShowsTopLevelCommandsOutsideGit(t *testing.T) {
 	workdir := t.TempDir()
 	oldwd, err := os.Getwd()
@@ -12703,8 +12728,14 @@ func TestExecuteEnvPullFinalizesLocalDestinationThemeAndCache(t *testing.T) {
 	runSSHCommandFn = func(args []string) error { return nil }
 	t.Cleanup(func() { runSSHCommandFn = oldRunSSH })
 	oldRunRsync := runRsyncCommandFn
-	runRsyncCommandFn = func(args []string) error { return nil }
+	var rsyncArgs []string
+	runRsyncCommandFn = func(args []string) error {
+		rsyncArgs = append([]string(nil), args...)
+		return nil
+	}
 	t.Cleanup(func() { runRsyncCommandFn = oldRunRsync })
+	stubEnvRemoteDiskOutput(t, "1024\n", "1073741824\n", "2048\n")
+	stubLocalAvailableDisk(t, 1073741824)
 
 	captureStdout(t, func() {
 		if got := executeEnvPull(cfg, target); got != 0 {
@@ -12719,6 +12750,9 @@ func TestExecuteEnvPullFinalizesLocalDestinationThemeAndCache(t *testing.T) {
 	assertContainsInOrder(t, logText, []string{"wp db export", "wp db import", "--user\nroot", "chown -R nonfiction:www-data", "wp\n--skip-themes\n--skip-plugins\noption\nupdate\nhome\nhttp://localhost:18432", "wp\n--skip-themes\n--skip-plugins\noption\nupdate\nsiteurl\nhttp://localhost:18432", "wp\nsearch-replace\nhttps://client.app1-linode.nonfiction.dev\nhttp://localhost:18432\n--all-tables-with-prefix\n--skip-columns=guid", "wp\ntheme\nactivate\nlocal-theme", "wp\ncache\nflush"})
 	if strings.Contains(logText, "wp\ntheme\nactivate\nremote-theme") {
 		t.Fatalf("pull activated remote theme slug locally:\n%s", logText)
+	}
+	if !slices.Contains(rsyncArgs, "--progress") {
+		t.Fatalf("pull rsync args missing --progress: %#v", rsyncArgs)
 	}
 }
 
@@ -12742,6 +12776,8 @@ func TestExecuteEnvPullSkipsMissingLocalDestinationTheme(t *testing.T) {
 	oldRunRsync := runRsyncCommandFn
 	runRsyncCommandFn = func(args []string) error { return nil }
 	t.Cleanup(func() { runRsyncCommandFn = oldRunRsync })
+	stubEnvRemoteDiskOutput(t, "1024\n", "1073741824\n", "2048\n")
+	stubLocalAvailableDisk(t, 1073741824)
 
 	stderr := captureStderr(t, func() {
 		captureStdout(t, func() {
@@ -12790,7 +12826,11 @@ func TestExecuteEnvPushFinalizesRemoteDestinationThemeAndCache(t *testing.T) {
 	cfg := envConfig{ProjectSlug: "client", EnvDir: config.EnvDir("client"), Compose: "docker compose", WordpressService: "wordpress", DockerUser: "nonfiction", ThemeMountSlug: "local-theme", ThemeSlug: "remote-theme", UploadsPath: "uploads", WordpressPort: 18432}
 	target := envRemoteSyncTarget{RemoteName: "live", Provider: "linode", SiteID: "client.app1-linode", Env: "live", URL: "https://client.app1-linode.nonfiction.dev/", SSHUser: "nonfiction", SSHHost: "app1-linode.nonfiction.dev", SSHPort: "22", WordPressPath: "/var/www/sites/client/public", WPCommand: "sudo -u www-data wp", SudoFileOps: true}
 	oldRunRsync := runRsyncCommandFn
-	runRsyncCommandFn = func(args []string) error { return nil }
+	var rsyncArgs []string
+	runRsyncCommandFn = func(args []string) error {
+		rsyncArgs = append([]string(nil), args...)
+		return nil
+	}
 	t.Cleanup(func() { runRsyncCommandFn = oldRunRsync })
 	oldRunSSH := runSSHCommandFn
 	var sshCommands [][]string
@@ -12799,6 +12839,7 @@ func TestExecuteEnvPushFinalizesRemoteDestinationThemeAndCache(t *testing.T) {
 		return nil
 	}
 	t.Cleanup(func() { runSSHCommandFn = oldRunSSH })
+	stubEnvRemoteDiskOutput(t, "1024\n", "1073741824\n")
 
 	captureStdout(t, func() {
 		if got := executeEnvPush(cfg, target); got != 0 {
@@ -12819,6 +12860,91 @@ func TestExecuteEnvPushFinalizesRemoteDestinationThemeAndCache(t *testing.T) {
 	}
 	if strings.Contains(finalizeScript, "theme activate local-theme") {
 		t.Fatalf("push activated local theme mount slug remotely:\n%s", finalizeScript)
+	}
+	if !slices.Contains(rsyncArgs, "--progress") {
+		t.Fatalf("push rsync args missing --progress: %#v", rsyncArgs)
+	}
+}
+
+func TestExecuteEnvPushChecksRemoteSpaceBeforeRsync(t *testing.T) {
+	configHome := t.TempDir()
+	t.Setenv("NF_CONFIG_HOME", configHome)
+	t.Setenv("NF_DATA_HOME", configHome)
+	dockerDir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dockerDir, "docker"), []byte("#!/bin/sh\nexit 0\n"), 0o755); err != nil {
+		t.Fatalf("WriteFile(docker) error = %v", err)
+	}
+	t.Setenv("PATH", dockerDir+string(os.PathListSeparator)+os.Getenv("PATH"))
+	cfg := envConfig{ProjectSlug: "client", EnvDir: config.EnvDir("client"), Compose: "docker compose", WordpressService: "wordpress", DockerUser: "nonfiction", UploadsPath: "uploads", WordpressPort: 18432}
+	target := envRemoteSyncTarget{RemoteName: "production", Provider: "kinsta", SiteID: "client-kinsta", Env: "live", URL: "https://www.example.com/", SSHUser: "client", SSHHost: "203.0.113.10", SSHPort: "12345", WordPressPath: "/www/client/public", WPCommand: "wp"}
+	scripts := stubEnvRemoteDiskOutput(t, "0\n", "1\n")
+	oldRunSSH := runSSHCommandFn
+	runSSHCommandFn = func(args []string) error {
+		t.Fatalf("runSSHCommandFn called after failed disk check: %#v", args)
+		return nil
+	}
+	t.Cleanup(func() { runSSHCommandFn = oldRunSSH })
+	oldRunRsync := runRsyncCommandFn
+	runRsyncCommandFn = func(args []string) error {
+		t.Fatalf("runRsyncCommandFn called after failed disk check: %#v", args)
+		return nil
+	}
+	t.Cleanup(func() { runRsyncCommandFn = oldRunRsync })
+
+	stderr := captureStderr(t, func() {
+		captureStdout(t, func() {
+			if got := executeEnvPush(cfg, target); got != 1 {
+				t.Fatalf("executeEnvPush() = %d, want 1", got)
+			}
+		})
+	})
+	if !strings.Contains(stderr, "not enough disk space for remote push workspace at /tmp") {
+		t.Fatalf("stderr missing remote disk error:\n%s", stderr)
+	}
+	if len(*scripts) != 2 || !strings.Contains((*scripts)[0], "information_schema.tables") || !strings.Contains((*scripts)[1], "df -Pk /tmp") {
+		t.Fatalf("remote disk check scripts = %#v", *scripts)
+	}
+}
+
+func TestExecuteEnvPullChecksLocalSpaceBeforeRsync(t *testing.T) {
+	configHome := t.TempDir()
+	t.Setenv("NF_CONFIG_HOME", configHome)
+	t.Setenv("NF_DATA_HOME", configHome)
+	dockerDir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dockerDir, "docker"), []byte("#!/bin/sh\nexit 0\n"), 0o755); err != nil {
+		t.Fatalf("WriteFile(docker) error = %v", err)
+	}
+	t.Setenv("PATH", dockerDir+string(os.PathListSeparator)+os.Getenv("PATH"))
+	cfg := envConfig{ProjectSlug: "client", EnvDir: config.EnvDir("client"), Compose: "docker compose", WordpressService: "wordpress", DockerUser: "nonfiction", UploadsPath: "uploads", WordpressPort: 18432}
+	target := envRemoteSyncTarget{RemoteName: "production", Provider: "linode", SiteID: "client.app1-linode", Env: "live", URL: "https://client.app1-linode.nonfiction.dev/", SSHUser: "nonfiction", SSHHost: "app1-linode.nonfiction.dev", SSHPort: "22", WordPressPath: "/var/www/sites/client/public", WPCommand: "sudo -u www-data wp", SudoFileOps: true}
+	stubEnvRemoteDiskOutput(t, "0\n", "1073741824\n", "1073741824\n")
+	stubLocalAvailableDisk(t, 1)
+	oldRunSSH := runSSHCommandFn
+	var sshCommands [][]string
+	runSSHCommandFn = func(args []string) error {
+		sshCommands = append(sshCommands, append([]string(nil), args...))
+		return nil
+	}
+	t.Cleanup(func() { runSSHCommandFn = oldRunSSH })
+	oldRunRsync := runRsyncCommandFn
+	runRsyncCommandFn = func(args []string) error {
+		t.Fatalf("runRsyncCommandFn called after failed local disk check: %#v", args)
+		return nil
+	}
+	t.Cleanup(func() { runRsyncCommandFn = oldRunRsync })
+
+	stderr := captureStderr(t, func() {
+		captureStdout(t, func() {
+			if got := executeEnvPull(cfg, target); got != 1 {
+				t.Fatalf("executeEnvPull() = %d, want 1", got)
+			}
+		})
+	})
+	if !strings.Contains(stderr, "not enough disk space for local pull snapshot") {
+		t.Fatalf("stderr missing local disk error:\n%s", stderr)
+	}
+	if len(sshCommands) != 1 || !strings.Contains(sshCommands[0][len(sshCommands[0])-1], "db export") {
+		t.Fatalf("ssh commands before local disk failure = %#v", sshCommands)
 	}
 }
 

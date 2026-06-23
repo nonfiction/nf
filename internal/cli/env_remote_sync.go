@@ -497,11 +497,29 @@ func executeEnvPull(cfg envConfig, target envRemoteSyncTarget) int {
 		return 1
 	}
 	remoteTmp := remoteSyncTempDir(cfg, target, "pull")
+	remoteEstimate, err := remoteWordPressTransferEstimateBytes(target)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		return 1
+	}
+	if err := ensureRemoteDiskSpace(target, path.Dir(remoteTmp), "export workspace", envTransferRequiredBytes(remoteEstimate)); err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		return 1
+	}
 	if err := runSSHCommandFn(remoteSSHArgs(target, remoteExportScript(target, remoteTmp))); err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		return 1
 	}
-	if err := runRsyncCommandFn([]string{"rsync", "-az", "-e", "ssh -p " + target.SSHPort, target.SSHUser + "@" + target.SSHHost + ":" + remoteTmp + "/", envSnapshotDir(cfg, name) + string(filepath.Separator)}); err != nil {
+	remoteSize, err := remotePathSizeBytes(target, remoteTmp)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		return 1
+	}
+	if err := ensureLocalDiskSpace(envSnapshotDir(cfg, name), "pull snapshot", envTransferRequiredBytes(remoteSize)); err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		return 1
+	}
+	if err := runRsyncCommandFn(envRemoteRsyncArgs(target, target.SSHUser+"@"+target.SSHHost+":"+remoteTmp+"/", envSnapshotDir(cfg, name)+string(filepath.Separator))); err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		return 1
 	}
@@ -543,11 +561,26 @@ func executeEnvPush(cfg envConfig, target envRemoteSyncTarget) int {
 		return 1
 	}
 	remoteTmp := remoteSyncTempDir(cfg, target, "push")
+	snapshotSize, err := localPathSizeBytes(envSnapshotDir(cfg, name))
+	if err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		return 1
+	}
+	remoteEstimate, err := remoteWordPressTransferEstimateBytes(target)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		return 1
+	}
+	remoteRequired := envTransferRequiredBytes(addEnvTransferBytes(snapshotSize, remoteEstimate))
+	if err := ensureRemoteDiskSpace(target, path.Dir(remoteTmp), "push workspace", remoteRequired); err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		return 1
+	}
 	if err := runSSHCommandFn(remoteSSHArgs(target, "rm -rf "+shellQuoteArg(remoteTmp)+" && mkdir -p "+shellQuoteArg(remoteTmp))); err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		return 1
 	}
-	if err := runRsyncCommandFn([]string{"rsync", "-az", "-e", "ssh -p " + target.SSHPort, envSnapshotDir(cfg, name) + string(filepath.Separator), target.SSHUser + "@" + target.SSHHost + ":" + remoteTmp + "/"}); err != nil {
+	if err := runRsyncCommandFn(envRemoteRsyncArgs(target, envSnapshotDir(cfg, name)+string(filepath.Separator), target.SSHUser+"@"+target.SSHHost+":"+remoteTmp+"/")); err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		return 1
 	}
