@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"net"
+	"net/http"
 	"os"
 	"path"
 	"strings"
@@ -457,12 +458,20 @@ func provisionKinstaSelectedEnvs(ctx context.Context, client *kinsta.Client, dns
 		if err != nil {
 			return kinstaProvisionResult{}, err
 		}
+		var domains []kinsta.Domain
 		if dnsResult.UsedFallback {
-			return kinstaProvisionResult{}, kinstaDomainFallbackManualVerificationError(env.Domain)
-		}
-		domains, err := client.ListDomains(ctx, remoteEnv.ID)
-		if err != nil {
-			return kinstaProvisionResult{}, err
+			domain, domains, err = waitKinstaDomainReadyAfterFallback(ctx, client, remoteEnv, env.Domain, domain)
+			if err != nil {
+				return kinstaProvisionResult{}, fmt.Errorf("%w: %v", kinstaDomainFallbackManualVerificationError(env.Domain), err)
+			}
+		} else {
+			domains, err = client.ListDomains(ctx, remoteEnv.ID)
+			if err != nil {
+				return kinstaProvisionResult{}, err
+			}
+			if current, ok := kinsta.FindDomain(domains, env.Domain); ok {
+				domain = markKinstaDomainPrimary(current, remoteEnv)
+			}
 		}
 		if !domain.IsPrimary && shouldMakeKinstaInternalDomainPrimary(remoteEnv, domains) {
 			fmt.Printf("Changing Kinsta primary domain to %s...\n", env.Domain)
@@ -617,6 +626,157 @@ func waitKinstaDomainDNSAfterPhantomVerification(ctx context.Context, client *ki
 
 func kinstaDomainFallbackManualVerificationError(domain string) error {
 	return fmt.Errorf("Kinsta did not return authoritative pointing records for %s. DNS records were written using the generated Kinsta domain fallback, but Kinsta has not marked the custom domain live or issued HTTPS yet. Open MyKinsta, click Verify domain for %s, then rerun site add/staging add; the command is resumable", domain, domain)
+}
+
+func waitKinstaDomainReadyAfterFallback(parent context.Context, client *kinsta.Client, env kinsta.Environment, domainName string, domain kinsta.Domain) (kinsta.Domain, []kinsta.Domain, error) {
+	timeout := kinstaWaitTimeout(kinstaDomainRecordsWaitTimeout, 30*time.Minute)
+	interval := kinstaWaitInterval(kinstaDomainRecordsWaitInterval, 30*time.Second)
+	ctx, cancel := context.WithTimeout(parent, timeout)
+	defer cancel()
+	ticker := time.NewTicker(interval)
+	defer ticker.Stop()
+
+	fmt.Printf("Waiting for Kinsta to accept %s as primary after fallback DNS...\n", domainName)
+	var lastDomains []kinsta.Domain
+	lastDomain := markKinstaDomainPrimary(domain, env)
+	var lastErr error
+	printedPrimaryChange := false
+	for {
+		if lastDomain.IsPrimary {
+			return lastDomain, markKinstaDomainPrimaryInList(lastDomains, lastDomain), nil
+		}
+		if lastDomain.ID != "" && shouldMakeKinstaInternalDomainPrimary(env, lastDomains) {
+			if !printedPrimaryChange {
+				fmt.Printf("Changing Kinsta primary domain to %s...\n", domainName)
+				printedPrimaryChange = true
+			}
+			opID, err := client.ChangePrimaryDomain(ctx, env.ID, lastDomain.ID, false)
+			if err == nil {
+				if err = waitKinstaOperation(ctx, client, opID); err == nil {
+					lastDomain.IsPrimary = true
+					lastDomains = markKinstaDomainPrimaryInList(lastDomains, lastDomain)
+					if refreshed, refreshErr := client.ListDomains(ctx, env.ID); refreshErr == nil {
+						lastDomains = refreshed
+						if current, ok := kinsta.FindDomain(refreshed, domainName); ok {
+							lastDomain = markKinstaDomainPrimary(current, kinsta.Environment{PrimaryDomain: current})
+						}
+					}
+					fmt.Printf("Kinsta accepted %s as primary.\n", domainName)
+					return lastDomain, markKinstaDomainPrimaryInList(lastDomains, lastDomain), nil
+				}
+			}
+			if ctx.Err() != nil {
+				return lastDomain, lastDomains, kinstaDomainFallbackReadinessTimeoutError(domainName, lastDomain, lastErr)
+			}
+			if kinstaDomainAlreadyPrimaryError(err) {
+				lastDomain.IsPrimary = true
+				return lastDomain, markKinstaDomainPrimaryInList(lastDomains, lastDomain), nil
+			}
+			if !kinstaDomainFallbackPrimaryRetryableError(err) {
+				return kinsta.Domain{}, nil, err
+			}
+			lastErr = err
+		}
+
+		domains, err := client.ListDomains(ctx, env.ID)
+		if err != nil {
+			if ctx.Err() != nil {
+				return lastDomain, lastDomains, kinstaDomainFallbackReadinessTimeoutError(domainName, lastDomain, lastErr)
+			}
+			if !kinstaDomainFallbackListRetryableError(err) {
+				return kinsta.Domain{}, nil, err
+			}
+			lastErr = err
+		} else {
+			lastErr = nil
+			lastDomains = domains
+			if current, ok := kinsta.FindDomain(domains, domainName); ok {
+				lastDomain = markKinstaDomainPrimary(current, env)
+			}
+			if lastDomain.IsPrimary || !shouldMakeKinstaInternalDomainPrimary(env, domains) {
+				return lastDomain, domains, nil
+			}
+		}
+		select {
+		case <-ctx.Done():
+			return lastDomain, lastDomains, kinstaDomainFallbackReadinessTimeoutError(domainName, lastDomain, lastErr)
+		case <-ticker.C:
+		}
+	}
+}
+
+func markKinstaDomainPrimaryInList(domains []kinsta.Domain, primary kinsta.Domain) []kinsta.Domain {
+	primaryName := normalizeDomainName(domainName(primary))
+	primaryID := strings.TrimSpace(primary.ID)
+	if primaryName == "" && primaryID == "" {
+		return domains
+	}
+	updated := make([]kinsta.Domain, 0, len(domains)+1)
+	found := false
+	for _, domain := range domains {
+		name := normalizeDomainName(domainName(domain))
+		id := strings.TrimSpace(domain.ID)
+		isPrimary := (primaryID != "" && id == primaryID) || (primaryName != "" && name == primaryName)
+		if isPrimary {
+			domain.IsPrimary = true
+			found = true
+		} else if domain.IsPrimary {
+			domain.IsPrimary = false
+		}
+		updated = append(updated, domain)
+	}
+	if !found {
+		primary.IsPrimary = true
+		updated = append(updated, primary)
+	}
+	return updated
+}
+
+func kinstaDomainFallbackReadinessTimeoutError(domainName string, domain kinsta.Domain, lastErr error) error {
+	msg := fmt.Sprintf("timed out waiting for Kinsta to accept %s as primary after fallback DNS", domainName)
+	if status := firstNonEmpty(domain.DNSStatus, domain.DomainStatus, domain.Status, domain.State, domain.VerificationStatus); status != "" {
+		msg += fmt.Sprintf("; last Kinsta domain status: %s", status)
+	}
+	if lastErr != nil {
+		return fmt.Errorf("%s; last temporary Kinsta error: %w", msg, lastErr)
+	}
+	return errors.New(msg)
+}
+
+func kinstaDomainFallbackListRetryableError(err error) bool {
+	if err == nil || kinsta.IsTemporary(err) || errors.Is(err, context.DeadlineExceeded) {
+		return err != nil
+	}
+	var netErr net.Error
+	return errors.As(err, &netErr) && netErr.Timeout()
+}
+
+func kinstaDomainFallbackPrimaryRetryableError(err error) bool {
+	if err == nil || kinstaDomainFallbackListRetryableError(err) {
+		return err != nil
+	}
+	var kerr kinsta.Error
+	if errors.As(err, &kerr) {
+		switch kerr.StatusCode {
+		case http.StatusBadRequest, http.StatusNotFound, http.StatusConflict, http.StatusLocked, http.StatusFailedDependency, http.StatusTooEarly, http.StatusTooManyRequests, http.StatusUnprocessableEntity:
+			return true
+		}
+	}
+	message := strings.ToLower(err.Error())
+	for _, phrase := range []string{"not ready", "not live", "not verified", "not pointed", "pending", "verification", "verify", "dns", "ssl", "tls", "certificate", "cloudflare", "try again", "in progress", "blocked by another process"} {
+		if strings.Contains(message, phrase) {
+			return true
+		}
+	}
+	return false
+}
+
+func kinstaDomainAlreadyPrimaryError(err error) bool {
+	if err == nil {
+		return false
+	}
+	message := strings.ToLower(err.Error())
+	return strings.Contains(message, "already") && strings.Contains(message, "primary")
 }
 
 func kinstaSiteAddFallbackDNSRecords(ctx context.Context, client *kinsta.Client, plan kinstaSiteAddPlan, env kinstaSiteAddEnvPlan, remoteEnv kinsta.Environment, records kinsta.DomainRecords) (kinsta.DomainRecords, error) {

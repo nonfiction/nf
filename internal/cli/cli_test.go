@@ -5571,11 +5571,14 @@ func TestProvisionKinstaSiteAddContinuesWhenVerificationActionIsNotVisible(t *te
 
 func TestProvisionKinstaSiteAddUsesGeneratedDNSFallbackWhenPointingRecordsAreMissing(t *testing.T) {
 	oldTimeout := kinstaDomainPhantomWaitTimeout
+	oldRecordsTimeout := kinstaDomainRecordsWaitTimeout
 	oldInterval := kinstaDomainRecordsWaitInterval
 	kinstaDomainPhantomWaitTimeout = 3 * time.Millisecond
+	kinstaDomainRecordsWaitTimeout = 10 * time.Millisecond
 	kinstaDomainRecordsWaitInterval = time.Millisecond
 	t.Cleanup(func() {
 		kinstaDomainPhantomWaitTimeout = oldTimeout
+		kinstaDomainRecordsWaitTimeout = oldRecordsTimeout
 		kinstaDomainRecordsWaitInterval = oldInterval
 	})
 
@@ -5622,7 +5625,8 @@ func TestProvisionKinstaSiteAddUsesGeneratedDNSFallbackWhenPointingRecordsAreMis
 			}
 		case "PUT /sites/environments/kenv-live/change-primary-domain":
 			primaryCalls++
-			_ = json.NewEncoder(w).Encode(map[string]any{"operation_id": "op-primary-domain", "status": 202})
+			w.WriteHeader(http.StatusUnprocessableEntity)
+			_ = json.NewEncoder(w).Encode(map[string]any{"message": "domain is not ready"})
 		case "GET /operations/op-primary-domain":
 			_ = json.NewEncoder(w).Encode(map[string]any{"status": 200, "message": "Successfully finished request"})
 		default:
@@ -5666,8 +5670,8 @@ func TestProvisionKinstaSiteAddUsesGeneratedDNSFallbackWhenPointingRecordsAreMis
 	if msg := err.Error(); !strings.Contains(msg, "Kinsta did not return authoritative pointing records") || !strings.Contains(msg, "Open MyKinsta") || !strings.Contains(msg, "command is resumable") {
 		t.Fatalf("provisionKinstaSelectedEnvs() error = %q, want manual verification guidance", msg)
 	}
-	if primaryCalls != 0 {
-		t.Fatalf("primary calls = %d, want 0 before manual verification", primaryCalls)
+	if primaryCalls == 0 {
+		t.Fatalf("primary calls = %d, want fallback primary retry before manual verification", primaryCalls)
 	}
 	for _, want := range []string{
 		"_acme-challenge.foobar.kinsta CNAME foobar.kinsta.nonfiction.dev.kinstavalidation.app",
@@ -5687,13 +5691,208 @@ func TestProvisionKinstaSiteAddUsesGeneratedDNSFallbackWhenPointingRecordsAreMis
 	}
 }
 
-func TestProvisionKinstaSiteAddUsesGeneratedDNSFallbackWithOnlyInitialVerificationRecord(t *testing.T) {
+func TestProvisionKinstaSiteAddFallbackCanPromotePrimaryAndContinueStaging(t *testing.T) {
 	oldTimeout := kinstaDomainPhantomWaitTimeout
 	oldInterval := kinstaDomainRecordsWaitInterval
-	kinstaDomainPhantomWaitTimeout = 3 * time.Millisecond
+	kinstaDomainPhantomWaitTimeout = 20 * time.Millisecond
 	kinstaDomainRecordsWaitInterval = time.Millisecond
 	t.Cleanup(func() {
 		kinstaDomainPhantomWaitTimeout = oldTimeout
+		kinstaDomainRecordsWaitInterval = oldInterval
+	})
+
+	liveDomainListCalls := 0
+	stagingDomainListCalls := 0
+	liveDomainRecordsCalls := 0
+	livePrimaryCalls := 0
+	stagingPrimaryCalls := 0
+	environmentCalls := 0
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		switch r.Method + " " + r.URL.Path {
+		case "GET /sites/environments/kenv-live/domains":
+			liveDomainListCalls++
+			domains := []map[string]any{}
+			if liveDomainListCalls > 1 {
+				domain := map[string]any{"id": "kdom-live", "name": "foobar.kinsta.nonfiction.dev", "is_primary": false}
+				if livePrimaryCalls > 0 {
+					domain["is_primary"] = true
+				}
+				domains = append(domains,
+					map[string]any{"id": "kdom-generated-live", "name": "foobar.kinsta.cloud", "is_primary": livePrimaryCalls == 0},
+					domain,
+				)
+			}
+			_ = json.NewEncoder(w).Encode(map[string]any{"environment": map[string]any{"site_domains": domains}})
+		case "POST /sites/environments/kenv-live/domains":
+			_ = json.NewEncoder(w).Encode(map[string]any{"operation_id": "op-add-live-domain", "status": 202})
+		case "GET /operations/op-add-live-domain":
+			_ = json.NewEncoder(w).Encode(map[string]any{"status": 200, "message": "Successfully finished request"})
+		case "GET /sites/environments/domains/kdom-live/verification-records":
+			liveDomainRecordsCalls++
+			records := []map[string]any{{"name": "k-verification.foobar.kinsta.nonfiction.dev", "type": "TXT", "content": "verify-token"}}
+			if liveDomainRecordsCalls > 1 {
+				records = []map[string]any{{"name": "_acme-challenge.foobar.kinsta.nonfiction.dev", "type": "CNAME", "content": "foobar.kinsta.nonfiction.dev.kinstavalidation.app"}}
+			}
+			_ = json.NewEncoder(w).Encode(map[string]any{"site_domain": map[string]any{"verification_records": records}})
+		case "PUT /sites/environments/kenv-live/change-primary-domain":
+			livePrimaryCalls++
+			_ = json.NewEncoder(w).Encode(map[string]any{"operation_id": "op-primary-live", "status": 202})
+		case "GET /operations/op-primary-live":
+			_ = json.NewEncoder(w).Encode(map[string]any{"status": 200, "message": "Successfully finished request"})
+		case "GET /sites/ksite123/environments":
+			environmentCalls++
+			_ = json.NewEncoder(w).Encode(map[string]any{"site": map[string]any{"environments": []map[string]any{
+				{"id": "kenv-live", "name": "live", "php_version": "8.3", "primaryDomain": map[string]any{"id": "kdom-generated-live", "name": "foobar.kinsta.cloud"}},
+				{"id": "kenv-staging", "name": "staging", "php_version": "8.3", "web_root": "/public", "primaryDomain": map[string]any{"id": "kdom-generated-staging", "name": "foobar-staging.kinsta.cloud"}},
+			}}})
+		case "GET /sites/environments/kenv-staging/domains":
+			stagingDomainListCalls++
+			domains := []map[string]any{
+				{"id": "kdom-generated-staging", "name": "foobar-staging.kinsta.cloud", "is_primary": stagingPrimaryCalls == 0},
+				{"id": "kdom-staging", "name": "foobar-staging.kinsta.nonfiction.dev", "is_primary": stagingPrimaryCalls > 0},
+			}
+			_ = json.NewEncoder(w).Encode(map[string]any{"environment": map[string]any{"site_domains": domains}})
+		case "GET /sites/environments/domains/kdom-staging/verification-records":
+			_ = json.NewEncoder(w).Encode(map[string]any{"site_domain": map[string]any{"pointing_records": []map[string]any{{"name": "foobar-staging.kinsta.nonfiction.dev", "type": "A", "content": "203.0.113.20", "ttl": 300}}}})
+		case "PUT /sites/environments/kenv-staging/change-primary-domain":
+			stagingPrimaryCalls++
+			_ = json.NewEncoder(w).Encode(map[string]any{"operation_id": "op-primary-staging", "status": 202})
+		case "GET /operations/op-primary-staging":
+			_ = json.NewEncoder(w).Encode(map[string]any{"status": 200, "message": "Successfully finished request"})
+		case "POST /":
+			var payload struct {
+				OperationName string `json:"operationName"`
+			}
+			if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
+				t.Fatalf("graphql decode error = %v", err)
+			}
+			switch payload.OperationName {
+			case "ValidateVerificationRecordsOfSiteDomains":
+				_ = json.NewEncoder(w).Encode(map[string]any{"data": map[string]any{"validateVerificationRecordsOfSiteDomains": []map[string]any{{"idSiteDomain": "kdom-live", "isValid": true}}}})
+			case "ConfirmCloudflareVerification":
+				_ = json.NewEncoder(w).Encode(map[string]any{"data": map[string]any{"idAction": 123}})
+			case "Action":
+				_ = json.NewEncoder(w).Encode(map[string]any{"data": map[string]any{"action": nil, "action_liveKeys": []string{"key"}}})
+			default:
+				t.Fatalf("unexpected graphql operation %q", payload.OperationName)
+			}
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	t.Cleanup(server.Close)
+
+	oldUpsert := upsertDNSRecordFn
+	upserts := []string{}
+	upsertDNSRecordFn = func(token, accountID, zone, name, recordType, content string, ttl int) error {
+		upserts = append(upserts, strings.Join([]string{name, recordType, content}, " "))
+		return nil
+	}
+	t.Cleanup(func() { upsertDNSRecordFn = oldUpsert })
+	stubDNSTypedDeletes(t)
+	stubKinstaLookupHost(t, "203.0.113.10")
+
+	client := kinsta.NewClient(server.URL, "kinsta-token", kinsta.WithGraphQLURL(server.URL))
+	plan := kinstaSiteAddPlan{
+		Site:         "foobar",
+		SiteID:       "foobar.kinsta",
+		TargetName:   "kinsta",
+		BaseDomain:   "nonfiction.dev",
+		PHPVersion:   "8.3",
+		DNSZone:      "nonfiction.dev",
+		DNSAccountID: "14",
+		KinstaSlug:   "foobar",
+		Envs: []kinstaSiteAddEnvPlan{
+			{Env: "live", Domain: "foobar.kinsta.nonfiction.dev", URL: "https://foobar.kinsta.nonfiction.dev"},
+			{Env: "staging", Domain: "foobar-staging.kinsta.nonfiction.dev", URL: "https://foobar-staging.kinsta.nonfiction.dev"},
+		},
+	}
+	liveEnv := kinsta.Environment{ID: "kenv-live", Name: "live", PrimaryDomain: kinsta.Domain{Name: "foobar.kinsta.cloud"}}
+
+	result, err := provisionKinstaSelectedEnvs(context.Background(), client, "dns-token", plan, "company-123", "ksite123", liveEnv)
+	if err != nil {
+		t.Fatalf("provisionKinstaSelectedEnvs() error = %v", err)
+	}
+	if livePrimaryCalls != 1 || stagingPrimaryCalls != 1 {
+		t.Fatalf("primary calls live=%d staging=%d, want one each", livePrimaryCalls, stagingPrimaryCalls)
+	}
+	if environmentCalls == 0 {
+		t.Fatal("staging environment was not checked after live fallback recovery")
+	}
+	if len(result.Envs) != 2 {
+		t.Fatalf("result envs len = %d, want 2: %#v", len(result.Envs), result.Envs)
+	}
+	if result.Envs[0].Env != "live" || result.Envs[0].DomainID != "kdom-live" || result.Envs[1].Env != "staging" || result.Envs[1].DomainID != "kdom-staging" {
+		t.Fatalf("result envs = %#v, want live and staging domains", result.Envs)
+	}
+	for _, want := range []string{
+		"_acme-challenge.foobar.kinsta CNAME foobar.kinsta.nonfiction.dev.kinstavalidation.app",
+		"foobar.kinsta A 203.0.113.10",
+		"foobar-staging.kinsta A 203.0.113.20",
+	} {
+		if !dnsCallContains(upserts, want) {
+			t.Fatalf("missing DNS upsert %q in %#v", want, upserts)
+		}
+	}
+}
+
+func TestKinstaFallbackPrimaryTimeoutDoesNotExposeListContextDeadline(t *testing.T) {
+	oldTimeout := kinstaDomainRecordsWaitTimeout
+	oldInterval := kinstaDomainRecordsWaitInterval
+	kinstaDomainRecordsWaitTimeout = 5 * time.Millisecond
+	kinstaDomainRecordsWaitInterval = time.Millisecond
+	t.Cleanup(func() {
+		kinstaDomainRecordsWaitTimeout = oldTimeout
+		kinstaDomainRecordsWaitInterval = oldInterval
+	})
+
+	primaryCalls := 0
+	domainListCalls := 0
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		switch r.Method + " " + r.URL.Path {
+		case "PUT /sites/environments/kenv-live/change-primary-domain":
+			primaryCalls++
+			w.WriteHeader(http.StatusUnprocessableEntity)
+			_ = json.NewEncoder(w).Encode(map[string]any{"message": "domain is not ready"})
+		case "GET /sites/environments/kenv-live/domains":
+			domainListCalls++
+			time.Sleep(50 * time.Millisecond)
+			_ = json.NewEncoder(w).Encode(map[string]any{"environment": map[string]any{"site_domains": []map[string]any{{"id": "kdom-live", "name": "foobar.kinsta.nonfiction.dev"}}}})
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	t.Cleanup(server.Close)
+
+	client := kinsta.NewClient(server.URL, "kinsta-token")
+	_, _, err := waitKinstaDomainReadyAfterFallback(context.Background(), client, kinsta.Environment{ID: "kenv-live", PrimaryDomain: kinsta.Domain{Name: "foobar.kinsta.cloud"}}, "foobar.kinsta.nonfiction.dev", kinsta.Domain{ID: "kdom-live", Name: "foobar.kinsta.nonfiction.dev"})
+	if err == nil {
+		t.Fatal("waitKinstaDomainReadyAfterFallback() error = nil, want timeout")
+	}
+	msg := err.Error()
+	if !strings.Contains(msg, "timed out waiting for Kinsta to accept foobar.kinsta.nonfiction.dev as primary after fallback DNS") {
+		t.Fatalf("waitKinstaDomainReadyAfterFallback() error = %q, want fallback timeout", msg)
+	}
+	if strings.Contains(msg, "Get \"") || strings.Contains(msg, "context deadline exceeded") {
+		t.Fatalf("waitKinstaDomainReadyAfterFallback() error = %q, want no raw list context deadline", msg)
+	}
+	if primaryCalls == 0 || domainListCalls == 0 {
+		t.Fatalf("primaryCalls=%d domainListCalls=%d, want both", primaryCalls, domainListCalls)
+	}
+}
+
+func TestProvisionKinstaSiteAddUsesGeneratedDNSFallbackWithOnlyInitialVerificationRecord(t *testing.T) {
+	oldTimeout := kinstaDomainPhantomWaitTimeout
+	oldRecordsTimeout := kinstaDomainRecordsWaitTimeout
+	oldInterval := kinstaDomainRecordsWaitInterval
+	kinstaDomainPhantomWaitTimeout = 3 * time.Millisecond
+	kinstaDomainRecordsWaitTimeout = 10 * time.Millisecond
+	kinstaDomainRecordsWaitInterval = time.Millisecond
+	t.Cleanup(func() {
+		kinstaDomainPhantomWaitTimeout = oldTimeout
+		kinstaDomainRecordsWaitTimeout = oldRecordsTimeout
 		kinstaDomainRecordsWaitInterval = oldInterval
 	})
 
@@ -5734,7 +5933,8 @@ func TestProvisionKinstaSiteAddUsesGeneratedDNSFallbackWithOnlyInitialVerificati
 			}
 		case "PUT /sites/environments/kenv-live/change-primary-domain":
 			primaryCalls++
-			_ = json.NewEncoder(w).Encode(map[string]any{"operation_id": "op-primary-domain", "status": 202})
+			w.WriteHeader(http.StatusUnprocessableEntity)
+			_ = json.NewEncoder(w).Encode(map[string]any{"message": "domain is not ready"})
 		case "GET /operations/op-primary-domain":
 			_ = json.NewEncoder(w).Encode(map[string]any{"status": 200, "message": "Successfully finished request"})
 		default:
@@ -5777,8 +5977,8 @@ func TestProvisionKinstaSiteAddUsesGeneratedDNSFallbackWithOnlyInitialVerificati
 	if msg := err.Error(); !strings.Contains(msg, "Kinsta did not return authoritative pointing records") || !strings.Contains(msg, "Open MyKinsta") || !strings.Contains(msg, "command is resumable") {
 		t.Fatalf("provisionKinstaSelectedEnvs() error = %q, want manual verification guidance", msg)
 	}
-	if primaryCalls != 0 {
-		t.Fatalf("primary calls = %d, want 0 before manual verification", primaryCalls)
+	if primaryCalls == 0 {
+		t.Fatalf("primary calls = %d, want fallback primary retry before manual verification", primaryCalls)
 	}
 	for _, want := range []string{
 		"_acme-challenge.foobar.kinsta CNAME foobar.kinsta.nonfiction.dev.kinstavalidation.app",
@@ -5806,11 +6006,14 @@ func TestProvisionKinstaSiteAddUsesGeneratedDNSFallbackWithOnlyInitialVerificati
 
 func TestProvisionKinstaSiteAddFallsBackWhenKinstaVerificationDetectionLags(t *testing.T) {
 	oldTimeout := kinstaDomainPhantomWaitTimeout
+	oldRecordsTimeout := kinstaDomainRecordsWaitTimeout
 	oldInterval := kinstaDomainRecordsWaitInterval
 	kinstaDomainPhantomWaitTimeout = 3 * time.Millisecond
+	kinstaDomainRecordsWaitTimeout = 10 * time.Millisecond
 	kinstaDomainRecordsWaitInterval = time.Millisecond
 	t.Cleanup(func() {
 		kinstaDomainPhantomWaitTimeout = oldTimeout
+		kinstaDomainRecordsWaitTimeout = oldRecordsTimeout
 		kinstaDomainRecordsWaitInterval = oldInterval
 	})
 
@@ -5854,7 +6057,8 @@ func TestProvisionKinstaSiteAddFallsBackWhenKinstaVerificationDetectionLags(t *t
 			}
 		case "PUT /sites/environments/kenv-live/change-primary-domain":
 			primaryCalls++
-			_ = json.NewEncoder(w).Encode(map[string]any{"operation_id": "op-primary-domain", "status": 202})
+			w.WriteHeader(http.StatusUnprocessableEntity)
+			_ = json.NewEncoder(w).Encode(map[string]any{"message": "domain is not ready"})
 		case "GET /operations/op-primary-domain":
 			_ = json.NewEncoder(w).Encode(map[string]any{"status": 200, "message": "Successfully finished request"})
 		default:
@@ -5897,8 +6101,8 @@ func TestProvisionKinstaSiteAddFallsBackWhenKinstaVerificationDetectionLags(t *t
 	if msg := err.Error(); !strings.Contains(msg, "Kinsta did not return authoritative pointing records") || !strings.Contains(msg, "Open MyKinsta") || !strings.Contains(msg, "command is resumable") {
 		t.Fatalf("provisionKinstaSelectedEnvs() error = %q, want manual verification guidance", msg)
 	}
-	if primaryCalls != 0 {
-		t.Fatalf("primary calls = %d, want 0 before manual verification", primaryCalls)
+	if primaryCalls == 0 {
+		t.Fatalf("primary calls = %d, want fallback primary retry before manual verification", primaryCalls)
 	}
 	for _, want := range []string{
 		"_cf-custom-hostname.foobar.kinsta TXT cf-token",
