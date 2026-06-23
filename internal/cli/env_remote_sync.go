@@ -341,7 +341,15 @@ func remoteWPSearchReplaceLine(target envRemoteSyncTarget, sourceURL, destinatio
 	return fmt.Sprintf("%s --path=%s search-replace %s %s --all-tables-with-prefix --skip-columns=guid\n", target.WPCommand, shellQuoteArg(target.WordPressPath), shellQuoteArg(sourceURL), shellQuoteArg(destinationURL))
 }
 
-func remoteFinalizeImportScript(target envRemoteSyncTarget, themeSlug, sourceURL, destinationURL string) string {
+func remoteWPOptionUpdateLines(target envRemoteSyncTarget, destinationURL string) string {
+	return fmt.Sprintf("%s --path=%s --skip-themes --skip-plugins option update home %s\n%s --path=%s --skip-themes --skip-plugins option update siteurl %s\n", target.WPCommand, shellQuoteArg(target.WordPressPath), shellQuoteArg(destinationURL), target.WPCommand, shellQuoteArg(target.WordPressPath), shellQuoteArg(destinationURL))
+}
+
+func remoteFinalizeImportScript(target envRemoteSyncTarget, themeSlug, sourceURL, destinationURL string) (string, error) {
+	destinationURL, err := normalizeWordPressDestinationURL(destinationURL, true)
+	if err != nil {
+		return "", err
+	}
 	themeScript := ""
 	if strings.TrimSpace(themeSlug) != "" {
 		themeScript = fmt.Sprintf(`if %s --path=%s theme is-installed %s >/dev/null 2>&1; then
@@ -352,9 +360,9 @@ fi
 `, target.WPCommand, shellQuoteArg(target.WordPressPath), shellQuoteArg(themeSlug), target.WPCommand, shellQuoteArg(target.WordPressPath), shellQuoteArg(themeSlug), shellQuoteArg(themeSlug))
 	}
 	return fmt.Sprintf(`set -eu
-%s%s
+%s%s%s
 %s --path=%s cache flush
-`, remoteWPSearchReplaceLine(target, sourceURL, destinationURL), themeScript, target.WPCommand, shellQuoteArg(target.WordPressPath))
+`, remoteWPOptionUpdateLines(target, destinationURL), remoteWPSearchReplaceLine(target, sourceURL, destinationURL), themeScript, target.WPCommand, shellQuoteArg(target.WordPressPath)), nil
 }
 
 func remoteSSHArgs(target envRemoteSyncTarget, script string) []string {
@@ -519,6 +527,11 @@ func executeEnvPush(cfg envConfig, target envRemoteSyncTarget) int {
 		fmt.Fprintln(os.Stderr, err)
 		return 1
 	}
+	finalizeScript, err := remoteFinalizeImportScript(target, activeEnvThemeSlug(cfg), envLocalWordPressURL(cfg), target.URL)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		return 1
+	}
 	name := "push-" + target.RemoteName + "-" + defaultEnvSnapshotName(time.Now())
 	if err := envSnapshotCreateArchives(cfg, name); err != nil {
 		fmt.Fprintln(os.Stderr, err)
@@ -547,7 +560,7 @@ func executeEnvPush(cfg envConfig, target envRemoteSyncTarget) int {
 		fmt.Fprintln(os.Stderr, err)
 		return 1
 	}
-	if err := runSSHCommandFn(remoteSSHArgs(target, remoteFinalizeImportScript(target, activeEnvThemeSlug(cfg), envLocalWordPressURL(cfg), target.URL))); err != nil {
+	if err := runSSHCommandFn(remoteSSHArgs(target, finalizeScript)); err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		return 1
 	}

@@ -12468,7 +12468,7 @@ func TestRunEnvSnapshotUseSkipsComposeUpWhenReady(t *testing.T) {
 		t.Fatalf("ReadFile(docker log) error = %v", err)
 	}
 	logText := string(logData)
-	assertContainsInOrder(t, logText, []string{"wp db export", "wp db import", "--user\nroot", "chown -R nonfiction:www-data", "chmod -R u+rwX,g+rwX,o-rwx", "wp\nsearch-replace\nhttps://source.example.test\nhttp://localhost:18440\n--all-tables-with-prefix\n--skip-columns=guid", "wp\ntheme\nactivate\ntheme", "wp\ncache\nflush"})
+	assertContainsInOrder(t, logText, []string{"wp db export", "wp db import", "--user\nroot", "chown -R nonfiction:www-data", "chmod -R u+rwX,g+rwX,o-rwx", "wp\n--skip-themes\n--skip-plugins\noption\nupdate\nhome\nhttp://localhost:18440", "wp\n--skip-themes\n--skip-plugins\noption\nupdate\nsiteurl\nhttp://localhost:18440", "wp\nsearch-replace\nhttps://source.example.test\nhttp://localhost:18440\n--all-tables-with-prefix\n--skip-columns=guid", "wp\ntheme\nactivate\ntheme", "wp\ncache\nflush"})
 }
 
 func TestRunEnvSnapshotUseYesSkipsInteractiveConfirmation(t *testing.T) {
@@ -12512,7 +12512,7 @@ func TestRunEnvSnapshotUseYesSkipsInteractiveConfirmation(t *testing.T) {
 		t.Fatalf("ReadFile(docker log) error = %v", err)
 	}
 	logText := string(logData)
-	assertContainsInOrder(t, logText, []string{"wp db export", "wp db import", "--user\nroot", "chown -R nonfiction:www-data", "wp\ntheme\nactivate\ntheme", "wp\ncache\nflush"})
+	assertContainsInOrder(t, logText, []string{"wp db export", "wp db import", "--user\nroot", "chown -R nonfiction:www-data", "wp\n--skip-themes\n--skip-plugins\noption\nupdate\nhome\nhttp://localhost:18440", "wp\n--skip-themes\n--skip-plugins\noption\nupdate\nsiteurl\nhttp://localhost:18440", "wp\nsearch-replace\nhttp://localhost:18432\nhttp://localhost:18440\n--all-tables-with-prefix\n--skip-columns=guid", "wp\ntheme\nactivate\ntheme", "wp\ncache\nflush"})
 }
 
 func TestRunEnvSnapshotUseRemoteImportsThenRestores(t *testing.T) {
@@ -12561,7 +12561,7 @@ func TestRunEnvSnapshotUseRemoteImportsThenRestores(t *testing.T) {
 		t.Fatalf("ReadFile(docker log) error = %v", err)
 	}
 	logText := string(logData)
-	assertContainsInOrder(t, logText, []string{"wp db export", "wp db import", "--user\nroot", "chown -R nonfiction:www-data", "wp\nsearch-replace\nhttps://client-kinsta.live.example.test\nhttp://localhost:18440\n--all-tables-with-prefix\n--skip-columns=guid", "wp\ntheme\nactivate\ntheme", "wp\ncache\nflush"})
+	assertContainsInOrder(t, logText, []string{"wp db export", "wp db import", "--user\nroot", "chown -R nonfiction:www-data", "wp\n--skip-themes\n--skip-plugins\noption\nupdate\nhome\nhttp://localhost:18440", "wp\n--skip-themes\n--skip-plugins\noption\nupdate\nsiteurl\nhttp://localhost:18440", "wp\nsearch-replace\nhttps://client-kinsta.live.example.test\nhttp://localhost:18440\n--all-tables-with-prefix\n--skip-columns=guid", "wp\ntheme\nactivate\ntheme", "wp\ncache\nflush"})
 }
 
 func TestRunEnvImportRestoresSiteExportIntoLocalEnv(t *testing.T) {
@@ -12647,7 +12647,7 @@ func TestRunEnvImportRestoresSiteExportIntoLocalEnv(t *testing.T) {
 		t.Fatalf("ReadFile(docker log) error = %v", err)
 	}
 	logText := string(logData)
-	assertContainsInOrder(t, logText, []string{"wp db export", "wp db import", "--user\nroot", "chown -R nonfiction:www-data", "wp\nsearch-replace\nhttps://www.example.com\nhttp://localhost:18440\n--all-tables-with-prefix\n--skip-columns=guid", "wp\ntheme\nactivate\ntheme", "wp\ncache\nflush"})
+	assertContainsInOrder(t, logText, []string{"wp db export", "wp db import", "--user\nroot", "chown -R nonfiction:www-data", "wp\n--skip-themes\n--skip-plugins\noption\nupdate\nhome\nhttp://localhost:18440", "wp\n--skip-themes\n--skip-plugins\noption\nupdate\nsiteurl\nhttp://localhost:18440", "wp\nsearch-replace\nhttps://www.example.com\nhttp://localhost:18440\n--all-tables-with-prefix\n--skip-columns=guid", "wp\ntheme\nactivate\ntheme", "wp\ncache\nflush"})
 	if !strings.Contains(stdout, "path: "+importedDir) {
 		t.Fatalf("env import stdout missing imported path %s:\n%s", importedDir, stdout)
 	}
@@ -12716,7 +12716,7 @@ func TestExecuteEnvPullFinalizesLocalDestinationThemeAndCache(t *testing.T) {
 		t.Fatalf("ReadFile(docker log) error = %v", err)
 	}
 	logText := string(logData)
-	assertContainsInOrder(t, logText, []string{"wp db export", "wp db import", "--user\nroot", "chown -R nonfiction:www-data", "wp\nsearch-replace\nhttps://client.app1-linode.nonfiction.dev\nhttp://localhost:18432\n--all-tables-with-prefix\n--skip-columns=guid", "wp\ntheme\nactivate\nlocal-theme", "wp\ncache\nflush"})
+	assertContainsInOrder(t, logText, []string{"wp db export", "wp db import", "--user\nroot", "chown -R nonfiction:www-data", "wp\n--skip-themes\n--skip-plugins\noption\nupdate\nhome\nhttp://localhost:18432", "wp\n--skip-themes\n--skip-plugins\noption\nupdate\nsiteurl\nhttp://localhost:18432", "wp\nsearch-replace\nhttps://client.app1-linode.nonfiction.dev\nhttp://localhost:18432\n--all-tables-with-prefix\n--skip-columns=guid", "wp\ntheme\nactivate\nlocal-theme", "wp\ncache\nflush"})
 	if strings.Contains(logText, "wp\ntheme\nactivate\nremote-theme") {
 		t.Fatalf("pull activated remote theme slug locally:\n%s", logText)
 	}
@@ -12758,9 +12758,22 @@ func TestExecuteEnvPullSkipsMissingLocalDestinationTheme(t *testing.T) {
 		t.Fatalf("ReadFile(docker log) error = %v", err)
 	}
 	logText := string(logData)
-	assertContainsInOrder(t, logText, []string{"wp db import", "--user\nroot", "chown -R nonfiction:www-data", "wp\ntheme\nis-installed\nlocal-theme", "wp\ncache\nflush"})
+	assertContainsInOrder(t, logText, []string{"wp db import", "--user\nroot", "chown -R nonfiction:www-data", "wp\n--skip-themes\n--skip-plugins\noption\nupdate\nhome\nhttp://localhost:18432", "wp\n--skip-themes\n--skip-plugins\noption\nupdate\nsiteurl\nhttp://localhost:18432", "wp\nsearch-replace\nhttps://client.app1-linode.nonfiction.dev\nhttp://localhost:18432\n--all-tables-with-prefix\n--skip-columns=guid", "wp\ntheme\nis-installed\nlocal-theme", "wp\ncache\nflush"})
 	if strings.Contains(logText, "wp\ntheme\nactivate\nlocal-theme") {
 		t.Fatalf("pull activated missing local theme:\n%s", logText)
+	}
+}
+
+func TestNormalizeWordPressDestinationURLRejectsMalformedURL(t *testing.T) {
+	if _, err := normalizeWordPressDestinationURL("https:///wp", true); err == nil {
+		t.Fatalf("normalizeWordPressDestinationURL(https:///wp) error = nil, want error")
+	}
+	got, err := normalizeWordPressDestinationURL("client.example.test/", true)
+	if err != nil {
+		t.Fatalf("normalizeWordPressDestinationURL(valid) error = %v", err)
+	}
+	if got != "https://client.example.test" {
+		t.Fatalf("normalizeWordPressDestinationURL(valid) = %q, want https://client.example.test", got)
 	}
 }
 
@@ -12800,7 +12813,7 @@ func TestExecuteEnvPushFinalizesRemoteDestinationThemeAndCache(t *testing.T) {
 	if !strings.Contains(importScript, "db import") {
 		t.Fatalf("remote import script missing db import:\n%s", importScript)
 	}
-	assertContainsInOrder(t, finalizeScript, []string{"search-replace http://localhost:18432 https://client.app1-linode.nonfiction.dev --all-tables-with-prefix --skip-columns=guid", "theme is-installed remote-theme", "theme activate remote-theme", "cache flush"})
+	assertContainsInOrder(t, finalizeScript, []string{"--skip-themes --skip-plugins option update home https://client.app1-linode.nonfiction.dev", "--skip-themes --skip-plugins option update siteurl https://client.app1-linode.nonfiction.dev", "search-replace http://localhost:18432 https://client.app1-linode.nonfiction.dev --all-tables-with-prefix --skip-columns=guid", "theme is-installed remote-theme", "theme activate remote-theme", "cache flush"})
 	if !strings.Contains(finalizeScript, "skipping theme activation") {
 		t.Fatalf("remote finalize script missing missing-theme warning:\n%s", finalizeScript)
 	}

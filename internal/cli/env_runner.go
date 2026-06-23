@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"net/url"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -365,6 +366,15 @@ func normalizeWordPressURL(value string, assumeHTTPS bool) string {
 	return strings.TrimRight(value, "/")
 }
 
+func normalizeWordPressDestinationURL(value string, assumeHTTPS bool) (string, error) {
+	destinationURL := normalizeWordPressURL(value, assumeHTTPS)
+	parsed, err := url.Parse(destinationURL)
+	if destinationURL == "" || err != nil || parsed.Scheme == "" || parsed.Host == "" || (parsed.Scheme != "http" && parsed.Scheme != "https") {
+		return "", fmt.Errorf("invalid destination WordPress URL %q", strings.TrimSpace(value))
+	}
+	return destinationURL, nil
+}
+
 func envLocalWordPressURL(cfg envConfig) string {
 	return envSnapshotWordPressURL(cfg)
 }
@@ -373,12 +383,25 @@ func envWpSearchReplaceArgs(cfg envConfig, sourceURL, destinationURL string) []s
 	return envWpArgs(cfg, "search-replace", sourceURL, destinationURL, "--all-tables-with-prefix", "--skip-columns=guid")
 }
 
+func envWpOptionUpdateArgs(cfg envConfig, optionName, value string) []string {
+	return envWpArgs(cfg, "--skip-themes", "--skip-plugins", "option", "update", optionName, value)
+}
+
 func envFinalizeLocalRestore(cfg envConfig, sourceURL string) error {
 	if err := runCommandSpecWithPreview(execSpec{Dir: localEnvDir(cfg), Args: envWpContentPermissionsArgs(cfg)}, envWpBootstrapPreviewArgs(cfg, "fix WordPress content permissions")); err != nil {
 		return err
 	}
 	sourceURL = normalizeWordPressURL(sourceURL, false)
-	destinationURL := normalizeWordPressURL(envLocalWordPressURL(cfg), false)
+	destinationURL, err := normalizeWordPressDestinationURL(envLocalWordPressURL(cfg), false)
+	if err != nil {
+		return err
+	}
+	if err := runCommandSpec(execSpec{Dir: localEnvDir(cfg), Args: envWpOptionUpdateArgs(cfg, "home", destinationURL)}); err != nil {
+		return err
+	}
+	if err := runCommandSpec(execSpec{Dir: localEnvDir(cfg), Args: envWpOptionUpdateArgs(cfg, "siteurl", destinationURL)}); err != nil {
+		return err
+	}
 	if sourceURL != "" && destinationURL != "" && sourceURL != destinationURL {
 		if err := runCommandSpec(execSpec{Dir: localEnvDir(cfg), Args: envWpSearchReplaceArgs(cfg, sourceURL, destinationURL)}); err != nil {
 			return err
