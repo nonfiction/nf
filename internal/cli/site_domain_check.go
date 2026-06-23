@@ -37,6 +37,17 @@ type siteDomainTLSCheckResult struct {
 	Error    string
 }
 
+type siteDomainOutputField struct {
+	Key   string
+	Value string
+}
+
+type siteDomainDNSCheckResult struct {
+	OK     bool
+	Result string
+	Detail string
+}
+
 type siteDomainProviderCheck struct {
 	Ready                     bool
 	Primary                   bool
@@ -58,12 +69,112 @@ type siteDomainReadinessResult struct {
 	NextStep string
 }
 
+const siteDomainOutputWidth = 88
+
+func siteDomainField(key, value string) siteDomainOutputField {
+	return siteDomainOutputField{Key: key, Value: value}
+}
+
+func siteDomainStatus(ok bool) string {
+	if ok {
+		return "ok"
+	}
+	return "pending"
+}
+
+func printSiteDomainField(indent int, key, value string) {
+	for _, line := range siteDomainWrappedFieldLines(indent, key, value) {
+		fmt.Println(line)
+	}
+}
+
+func printSiteDomainStatusBlock(status, subject string, fields ...siteDomainOutputField) {
+	for _, line := range siteDomainStatusBlockLines(status, subject, fields...) {
+		fmt.Println(line)
+	}
+}
+
+func siteDomainStatusBlockLines(status, subject string, fields ...siteDomainOutputField) []string {
+	lines := append([]string{}, siteDomainWrapWithPrefix("  ["+status+"] ", strings.TrimSpace(subject))...)
+	for _, field := range fields {
+		lines = append(lines, siteDomainWrappedFieldLines(4, field.Key, field.Value)...)
+	}
+	return lines
+}
+
+func siteDomainWrappedFieldLines(indent int, key, value string) []string {
+	key = strings.TrimSpace(key)
+	value = strings.TrimSpace(value)
+	if key == "" || value == "" {
+		return nil
+	}
+	prefix := strings.Repeat(" ", indent) + key + ": "
+	return siteDomainWrapWithPrefix(prefix, value)
+}
+
+func siteDomainWrapWithPrefix(prefix, value string) []string {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return []string{prefix}
+	}
+	limit := siteDomainOutputWidth - len(prefix)
+	if limit < 20 {
+		limit = 20
+	}
+	parts := siteDomainWrapText(value, limit)
+	lines := make([]string, 0, len(parts))
+	continuation := strings.Repeat(" ", len(prefix))
+	for i, part := range parts {
+		if i == 0 {
+			lines = append(lines, prefix+part)
+		} else {
+			lines = append(lines, continuation+part)
+		}
+	}
+	return lines
+}
+
+func siteDomainWrapText(value string, limit int) []string {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return []string{""}
+	}
+	lines := []string{}
+	for len(value) > limit {
+		cut := strings.LastIndex(value[:limit+1], " ")
+		if cut <= 0 {
+			cut = limit
+		}
+		lines = append(lines, strings.TrimSpace(value[:cut]))
+		value = strings.TrimSpace(value[cut:])
+	}
+	if value != "" {
+		lines = append(lines, value)
+	}
+	return lines
+}
+
+func siteDomainErrorSummary(detail string) string {
+	lower := strings.ToLower(detail)
+	switch {
+	case strings.Contains(lower, "no such host") || strings.Contains(lower, "not found"):
+		return "lookup failed"
+	case strings.Contains(lower, "timeout") || strings.Contains(lower, "deadline exceeded"):
+		return "timed out"
+	case strings.Contains(lower, "certificate") || strings.Contains(lower, "tls"):
+		return "TLS failed"
+	default:
+		return "request failed"
+	}
+}
+
 func cmdSiteDomainCheck(plan siteDomainPlan) int {
 	result, err := printSiteDomainReadinessCheck(plan)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "%v\n", err)
 		return 1
 	}
+	fmt.Println()
 	printSiteDomainCheckNextStep(plan, result)
 	if result.Ready {
 		fmt.Println("Overall: ready")
@@ -79,14 +190,19 @@ func printSiteDomainReadinessCheck(plan siteDomainPlan) (siteDomainReadinessResu
 	if err != nil {
 		return siteDomainReadinessResult{}, err
 	}
+	fmt.Println()
 	for _, line := range providerCheck.Description {
 		fmt.Println(line)
 	}
+	fmt.Println()
 	dnsReady := printSiteDomainDNSCheck(plan, providerCheck.DNSRecords)
+	fmt.Println()
 	httpReady := printSiteDomainHTTPChecks(plan)
+	fmt.Println()
 	tlsReady := printSiteDomainTLSChecks(plan)
 	originTLSReady := true
 	if siteDomainCloudflareStrict(plan) {
+		fmt.Println()
 		originTLSReady = printSiteDomainOriginTLSChecks(plan)
 	}
 	ready := providerCheck.Ready && dnsReady && httpReady && tlsReady && originTLSReady
@@ -100,20 +216,22 @@ func printSiteDomainReadinessCheck(plan siteDomainPlan) (siteDomainReadinessResu
 			} else {
 				nextStep = "point public DNS records at Kinsta, then run nf domain check again"
 			}
+		} else if !dnsReady {
+			nextStep = "point public DNS records at Kinsta, then run nf domain check again"
 		}
 	}
 	return siteDomainReadinessResult{Ready: ready, Primary: providerCheck.Primary, NextStep: nextStep}, nil
 }
 
 func printSiteDomainCheckNextStep(plan siteDomainPlan, result siteDomainReadinessResult) {
-	fmt.Println("Next step:")
+	fmt.Println("Next step")
 	if result.Ready && result.Primary {
 		fmt.Println("  domain is primary and public checks passed")
 	} else if result.Ready {
 		domains := plan.allDomains()
 		if len(domains) == 1 && cachedExternalPlanDomainRole(plan, domains[0]) == "secondary" {
 			fmt.Println("  domain is ready as a secondary redirect")
-			fmt.Printf("  optional primary promotion: nf domain primary %s %s%s\n", plan.EnvID, plan.Canonical, siteDomainProxyArg(plan.ProxyMode))
+			printSiteDomainField(2, "optional primary promotion", fmt.Sprintf("nf domain primary %s %s%s", plan.EnvID, plan.Canonical, siteDomainProxyArg(plan.ProxyMode)))
 		} else if allPlanDomainsCachedExternal(plan) {
 			if len(domains) == 1 {
 				fmt.Println("  domain is ready in its current role")
@@ -161,30 +279,32 @@ func siteDomainProxyArg(proxyMode string) string {
 }
 
 func printSiteDomainCheckHeader(plan siteDomainPlan) {
-	fmt.Println("Public domain check:")
-	fmt.Printf("  env:       %s\n", plan.EnvID)
-	fmt.Printf("  provider:  %s\n", plan.Provider)
+	fmt.Println("Public domain check")
+	printSiteDomainField(2, "env", plan.EnvID)
+	printSiteDomainField(2, "provider", plan.Provider)
 	if plan.Target.TargetRef != "" {
-		fmt.Printf("  target:    %s\n", plan.Target.TargetRef)
+		printSiteDomainField(2, "target", plan.Target.TargetRef)
 	}
 	if plan.CurrentURL != "" {
-		fmt.Printf("  current:   %s\n", plan.CurrentURL)
+		printSiteDomainField(2, "current", plan.CurrentURL)
 	}
 	if plan.InternalURL != "" {
-		fmt.Printf("  fallback:  %s\n", plan.InternalURL)
+		printSiteDomainField(2, "fallback", plan.InternalURL)
 	}
 	if plan.Primary {
-		fmt.Printf("  primary:   %s\n", plan.Canonical)
+		printSiteDomainField(2, "primary", plan.Canonical)
 		if len(plan.Aliases) > 0 {
-			fmt.Printf("  secondary: %s\n", strings.Join(plan.Aliases, ", "))
+			printSiteDomainField(2, "secondary", strings.Join(plan.Aliases, ", "))
 		}
+	} else if len(plan.allDomains()) == 1 {
+		printSiteDomainField(2, "domain", plan.allDomains()[0])
 	} else {
-		fmt.Printf("  domains:   %s\n", strings.Join(plan.allDomains(), ", "))
+		printSiteDomainField(2, "domains", strings.Join(plan.allDomains(), ", "))
 	}
 	if plan.ProxyMode != "" {
-		fmt.Printf("  proxy:     %s\n", displaySiteDomainProxyMode(plan.ProxyMode))
+		printSiteDomainField(2, "proxy", displaySiteDomainProxyMode(plan.ProxyMode))
 	} else if plan.Provider == "linode" {
-		fmt.Println("  proxy:     none")
+		printSiteDomainField(2, "proxy", "none")
 	}
 }
 
@@ -211,7 +331,7 @@ func checkKinstaSiteDomainProvider(plan siteDomainPlan) (siteDomainProviderCheck
 	if err != nil {
 		return siteDomainProviderCheck{}, err
 	}
-	out := siteDomainProviderCheck{Ready: true, Description: []string{"Kinsta:"}}
+	out := siteDomainProviderCheck{Ready: true, Description: []string{"Kinsta"}}
 	for i, name := range plan.allDomains() {
 		role := "secondary"
 		if plan.Primary && i == 0 {
@@ -220,7 +340,10 @@ func checkKinstaSiteDomainProvider(plan siteDomainPlan) (siteDomainProviderCheck
 		domain, ok := kinsta.FindDomain(domains, name)
 		if !ok {
 			out.Ready = false
-			out.Description = append(out.Description, fmt.Sprintf("  domain %s (%s): missing", name, role))
+			out.Description = append(out.Description, siteDomainStatusBlockLines("pending", name,
+				siteDomainField("role", role),
+				siteDomainField("status", "missing"),
+			)...)
 			continue
 		}
 		if i == 0 && domain.IsPrimary {
@@ -229,15 +352,7 @@ func checkKinstaSiteDomainProvider(plan siteDomainPlan) (siteDomainProviderCheck
 		if domain.IsPrimary {
 			role = "primary"
 		}
-		records, err := client.DomainRecords(ctx, domain.ID)
-		if err != nil {
-			return siteDomainProviderCheck{}, err
-		}
-		primaryLabel := ""
-		if domain.IsPrimary {
-			primaryLabel = ", primary"
-		}
-		out.Description = append(out.Description, fmt.Sprintf("  domain %s (%s): present%s", name, role, primaryLabel))
+		records, recordsErr := kinstaDomainRecords(ctx, client, domain.ID)
 		verificationLabel, verificationReady, verificationKnown := kinstaDomainVerificationState(domain)
 		verificationDetail := ""
 		if !verificationKnown && strings.TrimSpace(domain.ID) != "" {
@@ -250,22 +365,49 @@ func checkKinstaSiteDomainProvider(plan siteDomainPlan) (siteDomainProviderCheck
 				verificationKnown = true
 			}
 		}
-		out.Description = append(out.Description, fmt.Sprintf("    verification: %s%s", verificationLabel, verificationDetail))
+		fields := []siteDomainOutputField{
+			siteDomainField("role", role),
+			siteDomainField("status", "present"),
+			siteDomainField("verification", verificationLabel),
+		}
+		if domain.IsPrimary {
+			fields = append(fields, siteDomainField("primary", "yes"))
+		}
+		if recordsErr != nil {
+			fields = append(fields,
+				siteDomainField("provider DNS records", "unavailable"),
+				siteDomainField("detail", recordsErr.Error()),
+			)
+		}
+		if verificationDetail != "" {
+			fields = append(fields, siteDomainField("verification detail", strings.Trim(verificationDetail, " ()")))
+		}
 		if verificationKnown && !verificationReady {
 			out.Ready = false
 			out.KinstaVerificationPending = true
 		}
 		routingLabel, routingReady, routingKnown := kinstaDomainPointingState(domain)
-		out.Description = append(out.Description, fmt.Sprintf("    routing: %s", kinstaDomainRoutingDescription(routingLabel, routingKnown, records)))
+		fields = append(fields, siteDomainField("routing", kinstaDomainRoutingDescription(routingLabel, routingKnown)))
 		if routingKnown && !routingReady {
 			out.Ready = false
 			out.KinstaPointingPending = true
 		} else if !routingKnown && len(records.Pointing) > 0 {
 			out.KinstaPointingPending = true
 		}
+		providerStatus := "ok"
+		if (verificationKnown && !verificationReady) || (routingKnown && !routingReady) {
+			providerStatus = "pending"
+		}
+		out.Description = append(out.Description, siteDomainStatusBlockLines(providerStatus, name, fields...)...)
 		out.DNSRecords = append(out.DNSRecords, kinstaDNSExpectations(name, records)...)
 	}
 	return out, nil
+}
+
+func kinstaDomainRecords(ctx context.Context, client *kinsta.Client, domainID string) (kinsta.DomainRecords, error) {
+	recordsCtx, cancel := context.WithTimeout(ctx, 8*time.Second)
+	defer cancel()
+	return client.DomainRecords(recordsCtx, domainID)
 }
 
 func kinstaDomainVerificationState(domain kinsta.Domain) (string, bool, bool) {
@@ -348,14 +490,14 @@ func normalizeKinstaDomainStatusValue(value string) string {
 	return strings.Trim(value, "_")
 }
 
-func kinstaDomainRoutingDescription(label string, known bool, records kinsta.DomainRecords) string {
+func kinstaDomainRoutingDescription(label string, known bool) string {
 	switch label {
 	case "pointed":
 		return "pointed"
 	case "pending":
 		return "pending; point public DNS to Kinsta"
 	}
-	if !known && len(records.Pointing) > 0 {
+	if !known {
 		return "check public DNS below"
 	}
 	return "unknown"
@@ -376,16 +518,22 @@ func kinstaDNSExpectations(domain string, records kinsta.DomainRecords) []siteDo
 }
 
 func checkLinodeSiteDomainProvider(plan siteDomainPlan) siteDomainProviderCheck {
-	out := siteDomainProviderCheck{Ready: true, Description: []string{"Linode target:"}}
+	out := siteDomainProviderCheck{Ready: true, Description: []string{"Linode target"}}
 	if siteDomainCloudflareStrict(plan) {
-		out.Description = append(out.Description, "  proxy mode: cloudflare (Cloudflare validates visitor HTTPS and origin certificate hostname)")
+		out.Description = append(out.Description, siteDomainStatusBlockLines("unchecked", "proxy mode",
+			siteDomainField("mode", "cloudflare"),
+			siteDomainField("detail", "Cloudflare validates visitor HTTPS and origin certificate hostname"),
+		)...)
 	} else if proxyIP, ok := siteDomainReverseProxyIP(plan); ok {
-		out.Description = append(out.Description, fmt.Sprintf("  proxy mode: reverse proxy %s (public DNS resolves to proxy; origin uses target wildcard certificate)", proxyIP.String()))
+		out.Description = append(out.Description, siteDomainStatusBlockLines("unchecked", "proxy mode",
+			siteDomainField("mode", "reverse proxy "+proxyIP.String()),
+			siteDomainField("detail", "public DNS resolves to proxy; origin uses target wildcard certificate"),
+		)...)
 	}
 	remote, err := runSSHOutputFn(remoteSudoBashArgs(plan.Target, renderLinodeDomainCheckScript(plan)))
 	if err != nil {
 		out.Ready = false
-		out.Description = append(out.Description, fmt.Sprintf("  remote readiness: error: %v", err))
+		out.Description = append(out.Description, siteDomainStatusBlockLines("pending", "remote readiness", siteDomainField("detail", err.Error()))...)
 	} else {
 		values := keyValueLines(string(remote))
 		for _, item := range []struct{ key, label string }{
@@ -396,7 +544,7 @@ func checkLinodeSiteDomainProvider(plan siteDomainPlan) siteDomainProviderCheck 
 			{"cert", "certificate"},
 		} {
 			value := firstNonEmpty(values[item.key], "unknown")
-			out.Description = append(out.Description, fmt.Sprintf("  %s: %s", item.label, value))
+			out.Description = append(out.Description, siteDomainStatusBlockLines(linodeDomainProviderStatus(plan, item.key, value), item.label, siteDomainField("status", value))...)
 		}
 		if values["vhost"] != "present" || values["enabled"] != "present" {
 			out.Ready = false
@@ -426,6 +574,49 @@ func checkLinodeSiteDomainProvider(plan siteDomainPlan) siteDomainProviderCheck 
 		out.Primary = true
 	}
 	return out
+}
+
+func linodeDomainProviderStatus(plan siteDomainPlan, key, value string) string {
+	if _, ok := siteDomainReverseProxyIP(plan); ok {
+		switch key {
+		case "vhost", "enabled":
+			if value == "present" {
+				return "ok"
+			}
+			return "pending"
+		case "cert":
+			if value == "wildcard-missing" {
+				return "pending"
+			}
+			return "unchecked"
+		default:
+			return "unchecked"
+		}
+	}
+	switch key {
+	case "vhost", "enabled":
+		if value == "present" {
+			return "ok"
+		}
+		return "pending"
+	case "timer":
+		if value == "active" || value == "not-required" {
+			return "ok"
+		}
+		return "pending"
+	case "service":
+		if value == "failed" {
+			return "pending"
+		}
+		return "unchecked"
+	case "cert":
+		if value == "ready" || value == "wildcard-origin" {
+			return "ok"
+		}
+		return "pending"
+	default:
+		return "unchecked"
+	}
 }
 
 func renderLinodeDomainCheckScript(plan siteDomainPlan) string {
@@ -483,27 +674,70 @@ func keyValueLines(output string) map[string]string {
 }
 
 func printSiteDomainDNSCheck(plan siteDomainPlan, records []siteDomainExpectedDNSRecord) bool {
-	fmt.Println("DNS:")
+	fmt.Println("DNS")
 	if siteDomainCloudflareProxy(plan) {
 		return printSiteDomainCloudflareDNSCheck(plan)
 	}
 	if len(records) == 0 {
+		if plan.Provider == "kinsta" {
+			printSiteDomainStatusBlock("unchecked", "provider DNS records",
+				siteDomainField("result", "unavailable from provider"),
+				siteDomainField("fallback", "checking public DNS resolution"),
+			)
+			return printSiteDomainPublicDNSCheck(plan)
+		}
 		if plan.Provider == "linode" && plan.TargetHostname != "" {
-			fmt.Printf("  unchecked: point %s at target %s\n", strings.Join(plan.allDomains(), ", "), plan.TargetHostname)
+			printSiteDomainStatusBlock("unchecked", "provider DNS records",
+				siteDomainField("domains", strings.Join(plan.allDomains(), ", ")),
+				siteDomainField("target", plan.TargetHostname),
+			)
 		} else {
-			fmt.Println("  unchecked: no provider DNS records available")
+			printSiteDomainStatusBlock("unchecked", "provider DNS records",
+				siteDomainField("result", "no provider DNS records available"),
+			)
 		}
 		return false
 	}
 	ready := true
 	for _, record := range records {
-		ok, detail := checkSiteDomainDNSRecord(record)
-		status := "ok"
-		if !ok {
-			status = "pending"
+		result := checkSiteDomainDNSRecord(record)
+		if !result.OK {
 			ready = false
 		}
-		fmt.Printf("  %s %s -> %s: %s%s\n", record.Type, record.Name, record.Value, status, detail)
+		printSiteDomainStatusBlock(siteDomainStatus(result.OK), record.Type,
+			siteDomainField("name", record.Name),
+			siteDomainField("expected", record.Value),
+			siteDomainField("result", result.Result),
+			siteDomainField("detail", result.Detail),
+		)
+	}
+	return ready
+}
+
+func printSiteDomainPublicDNSCheck(plan siteDomainPlan) bool {
+	ready := true
+	for _, domain := range plan.allDomains() {
+		hosts, err := siteDomainLookupHostFn(domain)
+		if err != nil || len(hosts) == 0 {
+			ready = false
+			if err != nil {
+				printSiteDomainStatusBlock("pending", "public DNS",
+					siteDomainField("domain", domain),
+					siteDomainField("result", "lookup failed"),
+					siteDomainField("detail", err.Error()),
+				)
+			} else {
+				printSiteDomainStatusBlock("pending", "public DNS",
+					siteDomainField("domain", domain),
+					siteDomainField("result", "no public DNS records found"),
+				)
+			}
+			continue
+		}
+		printSiteDomainStatusBlock("ok", "public DNS",
+			siteDomainField("domain", domain),
+			siteDomainField("resolves to", strings.Join(hosts, ", ")),
+		)
 	}
 	return ready
 }
@@ -511,7 +745,7 @@ func printSiteDomainDNSCheck(plan siteDomainPlan, records []siteDomainExpectedDN
 func printSiteDomainCloudflareDNSCheck(plan siteDomainPlan) bool {
 	ranges := siteDomainCloudflareIPRangesFn()
 	if ranges.Warning != "" {
-		fmt.Printf("  warning: %s\n", ranges.Warning)
+		printSiteDomainStatusBlock("warning", "Cloudflare IP ranges", siteDomainField("detail", ranges.Warning))
 	}
 	ready := true
 	for _, domain := range plan.allDomains() {
@@ -519,19 +753,35 @@ func printSiteDomainCloudflareDNSCheck(plan siteDomainPlan) bool {
 		if err != nil || len(hosts) == 0 {
 			ready = false
 			if err != nil {
-				fmt.Printf("  %s: pending (%s)\n", domain, err)
+				printSiteDomainStatusBlock("pending", "Cloudflare DNS",
+					siteDomainField("domain", domain),
+					siteDomainField("result", "lookup failed"),
+					siteDomainField("detail", err.Error()),
+				)
 			} else {
-				fmt.Printf("  %s: pending (no public DNS records found)\n", domain)
+				printSiteDomainStatusBlock("pending", "Cloudflare DNS",
+					siteDomainField("domain", domain),
+					siteDomainField("result", "no public DNS records found"),
+				)
 			}
 			continue
 		}
 		outside := cloudflareDNSHostsOutsideRanges(hosts, ranges)
 		if len(outside) > 0 {
 			ready = false
-			fmt.Printf("  %s: pending (resolves publicly to %s; %s not in Cloudflare IP ranges)\n", domain, strings.Join(hosts, ", "), strings.Join(outside, ", "))
+			printSiteDomainStatusBlock("pending", "Cloudflare DNS",
+				siteDomainField("domain", domain),
+				siteDomainField("resolves to", strings.Join(hosts, ", ")),
+				siteDomainField("result", "non-Cloudflare address found"),
+				siteDomainField("outside ranges", strings.Join(outside, ", ")),
+			)
 			continue
 		}
-		fmt.Printf("  %s: ok (resolves publicly to Cloudflare IPs %s; origin IP match skipped for %s)\n", domain, strings.Join(hosts, ", "), displaySiteDomainProxyMode(plan.ProxyMode))
+		printSiteDomainStatusBlock("ok", "Cloudflare DNS",
+			siteDomainField("domain", domain),
+			siteDomainField("resolves to", strings.Join(hosts, ", ")),
+			siteDomainField("origin check", "skipped for "+displaySiteDomainProxyMode(plan.ProxyMode)),
+		)
 	}
 	return ready
 }
@@ -658,41 +908,41 @@ func bundledCloudflareIPRanges() siteDomainIPRangeSet {
 	return siteDomainIPRangeSet{Prefixes: prefixes, Source: source}
 }
 
-func checkSiteDomainDNSRecord(record siteDomainExpectedDNSRecord) (bool, string) {
+func checkSiteDomainDNSRecord(record siteDomainExpectedDNSRecord) siteDomainDNSCheckResult {
 	switch strings.ToUpper(record.Type) {
 	case "A", "AAAA":
 		hosts, err := siteDomainLookupHostFn(record.Name)
 		if err != nil {
-			return false, " (" + err.Error() + ")"
+			return siteDomainDNSCheckResult{Result: "lookup failed", Detail: err.Error()}
 		}
 		for _, host := range hosts {
 			if strings.TrimSpace(host) == record.Value {
-				return true, ""
+				return siteDomainDNSCheckResult{OK: true, Result: "matches expected"}
 			}
 		}
-		return false, fmt.Sprintf(" (got %s)", strings.Join(hosts, ", "))
+		return siteDomainDNSCheckResult{Result: "unexpected DNS value", Detail: "got " + strings.Join(hosts, ", ")}
 	case "TXT":
 		values, err := siteDomainLookupTXTFn(record.Name)
 		if err != nil {
-			return false, " (" + err.Error() + ")"
+			return siteDomainDNSCheckResult{Result: "lookup failed", Detail: err.Error()}
 		}
 		for _, value := range values {
 			if value == record.Value {
-				return true, ""
+				return siteDomainDNSCheckResult{OK: true, Result: "matches expected"}
 			}
 		}
-		return false, fmt.Sprintf(" (got %s)", strings.Join(values, ", "))
+		return siteDomainDNSCheckResult{Result: "unexpected DNS value", Detail: "got " + strings.Join(values, ", ")}
 	case "CNAME":
 		value, err := siteDomainLookupCNAMEFn(record.Name)
 		if err != nil {
-			return false, " (" + err.Error() + ")"
+			return siteDomainDNSCheckResult{Result: "lookup failed", Detail: err.Error()}
 		}
 		if normalizeDNSName(value) == normalizeDNSName(record.Value) {
-			return true, ""
+			return siteDomainDNSCheckResult{OK: true, Result: "matches expected"}
 		}
-		return false, fmt.Sprintf(" (got %s)", strings.TrimSuffix(value, "."))
+		return siteDomainDNSCheckResult{Result: "unexpected DNS value", Detail: "got " + strings.TrimSuffix(value, ".")}
 	default:
-		return false, " (record type is not checked)"
+		return siteDomainDNSCheckResult{Result: "record type is not checked"}
 	}
 }
 
@@ -701,30 +951,43 @@ func normalizeDNSName(value string) string {
 }
 
 func printSiteDomainHTTPChecks(plan siteDomainPlan) bool {
-	fmt.Println("HTTP:")
+	fmt.Println("HTTP")
 	ready := true
 	for _, domain := range plan.allDomains() {
 		result := siteDomainHTTPStatusFn(domain)
+		url := "http://" + domain + "/"
 		if result.Error != "" {
-			fmt.Printf("  http://%s: pending (%s)\n", domain, result.Error)
+			printSiteDomainStatusBlock("pending", "HTTP",
+				siteDomainField("url", url),
+				siteDomainField("result", siteDomainErrorSummary(result.Error)),
+				siteDomainField("detail", result.Error),
+			)
 			ready = false
 			continue
 		}
 		if siteDomainRedirectsToUnexpectedInternalHostname(plan, result.Location) {
-			fmt.Printf("  http://%s: pending (redirects to internal hostname %s)\n", domain, plan.InternalHostname)
+			printSiteDomainStatusBlock("pending", "HTTP",
+				siteDomainField("url", url),
+				siteDomainField("result", "redirects to internal hostname"),
+				siteDomainField("location", result.Location),
+				siteDomainField("internal hostname", plan.InternalHostname),
+			)
 			ready = false
 			continue
 		}
 		if result.StatusCode >= 500 || result.StatusCode == 0 {
-			fmt.Printf("  http://%s: pending (status %d)\n", domain, result.StatusCode)
+			printSiteDomainStatusBlock("pending", "HTTP",
+				siteDomainField("url", url),
+				siteDomainField("status", fmt.Sprint(result.StatusCode)),
+			)
 			ready = false
 			continue
 		}
-		location := ""
-		if result.Location != "" {
-			location = " -> " + result.Location
-		}
-		fmt.Printf("  http://%s: ok (status %d%s)\n", domain, result.StatusCode, location)
+		printSiteDomainStatusBlock("ok", "HTTP",
+			siteDomainField("url", url),
+			siteDomainField("status", fmt.Sprint(result.StatusCode)),
+			siteDomainField("location", result.Location),
+		)
 	}
 	return ready
 }
@@ -760,49 +1023,70 @@ func checkSiteDomainHTTPS(domain string) siteDomainHTTPCheckResult {
 }
 
 func printSiteDomainTLSChecks(plan siteDomainPlan) bool {
-	fmt.Println("HTTPS:")
+	fmt.Println("HTTPS")
 	ready := true
 	for _, domain := range plan.allDomains() {
+		url := "https://" + domain + "/"
 		result := siteDomainTLSStatusFn(domain)
 		if !result.OK {
-			fmt.Printf("  https://%s: pending (%s)\n", domain, firstNonEmpty(result.Error, "TLS certificate is not ready"))
+			detail := firstNonEmpty(result.Error, "TLS certificate is not ready")
+			printSiteDomainStatusBlock("pending", "HTTPS",
+				siteDomainField("url", url),
+				siteDomainField("result", siteDomainErrorSummary(detail)),
+				siteDomainField("detail", detail),
+			)
 			ready = false
 			continue
 		}
 		httpsResult := siteDomainHTTPSStatusFn(domain)
 		if httpsResult.Error != "" {
-			fmt.Printf("  https://%s: pending (%s)\n", domain, httpsResult.Error)
+			printSiteDomainStatusBlock("pending", "HTTPS",
+				siteDomainField("url", url),
+				siteDomainField("result", siteDomainErrorSummary(httpsResult.Error)),
+				siteDomainField("detail", httpsResult.Error),
+			)
 			ready = false
 			continue
 		}
 		if isSameHTTPSRedirect(domain, httpsResult.Location) {
-			fmt.Printf("  https://%s: pending (redirects to itself; likely Cloudflare Flexible SSL or HTTPS redirect loop)\n", domain)
+			printSiteDomainStatusBlock("pending", "HTTPS",
+				siteDomainField("url", url),
+				siteDomainField("result", "redirect loop"),
+				siteDomainField("detail", "redirects to itself; likely Cloudflare Flexible SSL or HTTPS redirect loop"),
+			)
 			ready = false
 			continue
 		}
 		if siteDomainRedirectsToUnexpectedInternalHostname(plan, httpsResult.Location) {
-			fmt.Printf("  https://%s: pending (redirects to internal hostname %s)\n", domain, plan.InternalHostname)
+			printSiteDomainStatusBlock("pending", "HTTPS",
+				siteDomainField("url", url),
+				siteDomainField("result", "redirects to internal hostname"),
+				siteDomainField("location", httpsResult.Location),
+				siteDomainField("internal hostname", plan.InternalHostname),
+			)
 			ready = false
 			continue
 		}
 		if httpsResult.StatusCode >= 500 || httpsResult.StatusCode == 0 {
-			fmt.Printf("  https://%s: pending (status %d)\n", domain, httpsResult.StatusCode)
+			printSiteDomainStatusBlock("pending", "HTTPS",
+				siteDomainField("url", url),
+				siteDomainField("status", fmt.Sprint(httpsResult.StatusCode)),
+			)
 			ready = false
 			continue
 		}
-		expires := ""
+		fields := []siteDomainOutputField{siteDomainField("url", url)}
 		if !result.NotAfter.IsZero() {
-			expires = " expires " + result.NotAfter.Format("2006-01-02")
+			fields = append(fields, siteDomainField("expires", result.NotAfter.Format("2006-01-02")))
 		}
-		issuer := ""
 		if result.Issuer != "" {
-			issuer = " issuer " + result.Issuer
+			fields = append(fields, siteDomainField("issuer", result.Issuer))
 		}
-		status := ""
 		if httpsResult.StatusCode != 0 {
-			status = fmt.Sprintf(" status %d", httpsResult.StatusCode)
+			fields = append(fields, siteDomainField("status", fmt.Sprint(httpsResult.StatusCode)))
 		}
-		fmt.Printf("  https://%s: ok%s%s%s\n", domain, expires, issuer, status)
+		fields = append(fields, siteDomainField("location", httpsResult.Location))
+		printSiteDomainStatusBlock("ok", "HTTPS", fields...)
 	}
 	return ready
 }
@@ -843,29 +1127,37 @@ func isSameHTTPSRedirect(domain, location string) bool {
 }
 
 func printSiteDomainOriginTLSChecks(plan siteDomainPlan) bool {
-	fmt.Println("Origin HTTPS:")
+	fmt.Println("Origin HTTPS")
 	origin := firstNonEmpty(plan.TargetIPv4, plan.TargetIPv6, plan.TargetHostname, plan.Target.SSHHost)
 	if origin == "" {
-		fmt.Println("  unchecked: no cached Linode origin address")
+		printSiteDomainStatusBlock("unchecked", "origin HTTPS", siteDomainField("result", "no cached Linode origin address"))
 		return false
 	}
 	ready := true
 	for _, domain := range plan.allDomains() {
 		result := siteDomainOriginTLSFn(domain, origin)
 		if !result.OK {
-			fmt.Printf("  https://%s @ %s: pending (%s)\n", domain, origin, firstNonEmpty(result.Error, "origin TLS certificate is not ready"))
+			detail := firstNonEmpty(result.Error, "origin TLS certificate is not ready")
+			printSiteDomainStatusBlock("pending", "origin HTTPS",
+				siteDomainField("domain", domain),
+				siteDomainField("origin", origin),
+				siteDomainField("result", siteDomainErrorSummary(detail)),
+				siteDomainField("detail", detail),
+			)
 			ready = false
 			continue
 		}
-		expires := ""
+		fields := []siteDomainOutputField{
+			siteDomainField("domain", domain),
+			siteDomainField("origin", origin),
+		}
 		if !result.NotAfter.IsZero() {
-			expires = " expires " + result.NotAfter.Format("2006-01-02")
+			fields = append(fields, siteDomainField("expires", result.NotAfter.Format("2006-01-02")))
 		}
-		issuer := ""
 		if result.Issuer != "" {
-			issuer = " issuer " + result.Issuer
+			fields = append(fields, siteDomainField("issuer", result.Issuer))
 		}
-		fmt.Printf("  https://%s @ %s: ok%s%s\n", domain, origin, expires, issuer)
+		printSiteDomainStatusBlock("ok", "origin HTTPS", fields...)
 	}
 	return ready
 }

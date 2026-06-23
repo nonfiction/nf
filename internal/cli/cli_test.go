@@ -6770,11 +6770,140 @@ func TestRunSiteDomainKinstaCheckReportsReady(t *testing.T) {
 			t.Fatalf("Run(domain check kinsta) = %d, want 0", got)
 		}
 	})
-	for _, want := range []string{"Public domain check:", "provider:  kinsta", "fallback:  https://client.kinsta.nonfiction.dev", "domains:   www.client.com, client.com", "Kinsta:", "domain www.client.com (primary): present, primary", "domain client.com (secondary): present", "verification: verified", "routing: pointed", "TXT _kinsta.www.client.com -> verify-token: ok", "CNAME www.client.com -> hosting.kinsta.cloud: ok", "A client.com -> 203.0.113.20: ok", "http://client.com: ok (status 301 -> https://www.client.com/)", "https://www.client.com: ok expires 2026-12-31 issuer Let's Encrypt", "domain is primary and public checks passed", "Overall: ready"} {
-		if !strings.Contains(output, want) {
-			t.Fatalf("domain kinsta check output missing %q:\n%s", want, output)
-		}
+	assertContainsInOrder(t, output, []string{"Public domain check", "provider: kinsta", "fallback: https://client.kinsta.nonfiction.dev", "domains: www.client.com, client.com", "Kinsta", "[ok] www.client.com", "role: primary", "status: present", "verification: verified", "primary: yes", "routing: pointed", "[ok] client.com", "role: secondary", "DNS", "[ok] TXT", "name: _kinsta.www.client.com", "expected: verify-token", "[ok] CNAME", "name: www.client.com", "expected: hosting.kinsta.cloud", "[ok] A", "name: client.com", "expected: 203.0.113.20", "HTTP", "url: http://client.com/", "status: 301", "location: https://www.client.com/", "HTTPS", "url: https://www.client.com/", "expires: 2026-12-31", "issuer: Let's Encrypt", "domain is primary and public checks passed", "Overall: ready"})
+}
+
+func TestRunSiteDomainKinstaCheckUsesPublicDNSWhenProviderRecordsAreMissing(t *testing.T) {
+	stateDir := t.TempDir()
+	t.Setenv("NF_STATE_HOME", stateDir)
+	t.Setenv("KINSTA_API_KEY", "test-token")
+	if err := state.SaveStateRecords("sites", []map[string]any{{
+		"provider": "kinsta",
+		"site_id":  "sanjel.kinsta",
+		"env_id":   "sanjel.kinsta:live",
+		"name":     "sanjel",
+		"env":      "live",
+		"target":   "kinsta",
+		"hostname": "sanjel.kinsta.nonfiction.dev",
+		"url":      "https://sanjel.kinsta.nonfiction.dev",
+		"path":     "/www/sanjel/public",
+		"ssh":      map[string]any{"host": "203.0.113.10", "port": "12345", "user": "sanjel"},
+		"kinsta":   map[string]any{"site_id": "ksite123", "environment_id": "kenv-live", "domain_id": "kdom-internal"},
+		"domains":  []map[string]any{{"name": "sanjelenergyservices.nonserver.com", "role": "secondary", "management": "external", "status": "active", "domain_id": "kdom-energy"}},
+	}}); err != nil {
+		t.Fatalf("SaveStateRecords(sites) error = %v", err)
 	}
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.Method + " " + r.URL.Path {
+		case "GET /sites/environments/kenv-live/domains":
+			_ = json.NewEncoder(w).Encode(map[string]any{"environment": map[string]any{"site_domains": []map[string]any{{"id": "kdom-energy", "name": "sanjelenergyservices.nonserver.com", "is_verified": true}}}})
+		case "GET /sites/environments/domains/kdom-energy/verification-records":
+			_ = json.NewEncoder(w).Encode(map[string]any{"site_domain": map[string]any{}})
+		default:
+			t.Fatalf("unexpected Kinsta request: %s %s", r.Method, r.URL.Path)
+		}
+	}))
+	t.Cleanup(server.Close)
+	t.Setenv("KINSTA_BASE_URL", server.URL)
+
+	oldLookupHost := siteDomainLookupHostFn
+	oldHTTP := siteDomainHTTPStatusFn
+	oldHTTPS := siteDomainHTTPSStatusFn
+	oldTLS := siteDomainTLSStatusFn
+	siteDomainLookupHostFn = func(host string) ([]string, error) {
+		if host == "sanjelenergyservices.nonserver.com" {
+			return []string{"104.18.1.2", "104.18.2.2"}, nil
+		}
+		return nil, fmt.Errorf("unexpected host lookup %s", host)
+	}
+	siteDomainHTTPStatusFn = func(domain string) siteDomainHTTPCheckResult {
+		return siteDomainHTTPCheckResult{StatusCode: 301, Location: "https://sanjel.kinsta.nonfiction.dev/"}
+	}
+	siteDomainHTTPSStatusFn = func(domain string) siteDomainHTTPCheckResult {
+		return siteDomainHTTPCheckResult{StatusCode: 301, Location: "https://sanjel.kinsta.nonfiction.dev/"}
+	}
+	siteDomainTLSStatusFn = func(domain string) siteDomainTLSCheckResult {
+		return siteDomainTLSCheckResult{OK: true, NotAfter: time.Date(2026, 9, 20, 0, 0, 0, 0, time.UTC), Issuer: "WE1"}
+	}
+	t.Cleanup(func() {
+		siteDomainLookupHostFn = oldLookupHost
+		siteDomainHTTPStatusFn = oldHTTP
+		siteDomainHTTPSStatusFn = oldHTTPS
+		siteDomainTLSStatusFn = oldTLS
+	})
+
+	output := captureStdout(t, func() {
+		if got := Run([]string{"domain", "check", "sanjel.kinsta:live", "sanjelenergyservices.nonserver.com", "--non-interactive"}); got != 0 {
+			t.Fatalf("Run(domain check kinsta missing provider records) = %d, want 0", got)
+		}
+	})
+	assertContainsInOrder(t, output, []string{"Public domain check", "provider: kinsta", "domain: sanjelenergyservices.nonserver.com", "Kinsta", "[ok] sanjelenergyservices.nonserver.com", "role: secondary", "status: present", "verification: verified", "routing: check public DNS below", "DNS", "[unchecked] provider DNS records", "result: unavailable from provider", "fallback: checking public DNS resolution", "[ok] public DNS", "domain: sanjelenergyservices.nonserver.com", "resolves to: 104.18.1.2, 104.18.2.2", "HTTP", "url: http://sanjelenergyservices.nonserver.com/", "status: 301", "location: https://sanjel.kinsta.nonfiction.dev/", "HTTPS", "url: https://sanjelenergyservices.nonserver.com/", "expires: 2026-09-20", "issuer: WE1", "status: 301", "domain is ready as a secondary redirect", "optional primary promotion: nf domain primary sanjel.kinsta:live", "sanjelenergyservices.nonserver.com", "Overall: ready"})
+}
+
+func TestRunSiteDomainKinstaCheckMissingProviderRecordsStillRequiresPublicDNS(t *testing.T) {
+	stateDir := t.TempDir()
+	t.Setenv("NF_STATE_HOME", stateDir)
+	t.Setenv("KINSTA_API_KEY", "test-token")
+	if err := state.SaveStateRecords("sites", []map[string]any{{
+		"provider": "kinsta",
+		"site_id":  "sanjel.kinsta",
+		"env_id":   "sanjel.kinsta:live",
+		"name":     "sanjel",
+		"env":      "live",
+		"target":   "kinsta",
+		"hostname": "sanjel.kinsta.nonfiction.dev",
+		"url":      "https://sanjel.kinsta.nonfiction.dev",
+		"path":     "/www/sanjel/public",
+		"ssh":      map[string]any{"host": "203.0.113.10", "port": "12345", "user": "sanjel"},
+		"kinsta":   map[string]any{"site_id": "ksite123", "environment_id": "kenv-live", "domain_id": "kdom-internal"},
+		"domains":  []map[string]any{{"name": "missing.nonserver.com", "role": "secondary", "management": "external", "status": "pending", "domain_id": "kdom-missing"}},
+	}}); err != nil {
+		t.Fatalf("SaveStateRecords(sites) error = %v", err)
+	}
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.Method + " " + r.URL.Path {
+		case "GET /sites/environments/kenv-live/domains":
+			_ = json.NewEncoder(w).Encode(map[string]any{"environment": map[string]any{"site_domains": []map[string]any{{"id": "kdom-missing", "name": "missing.nonserver.com", "is_verified": true}}}})
+		case "GET /sites/environments/domains/kdom-missing/verification-records":
+			http.Error(w, "upstream timeout", http.StatusGatewayTimeout)
+		default:
+			t.Fatalf("unexpected Kinsta request: %s %s", r.Method, r.URL.Path)
+		}
+	}))
+	t.Cleanup(server.Close)
+	t.Setenv("KINSTA_BASE_URL", server.URL)
+
+	oldLookupHost := siteDomainLookupHostFn
+	oldHTTP := siteDomainHTTPStatusFn
+	oldHTTPS := siteDomainHTTPSStatusFn
+	oldTLS := siteDomainTLSStatusFn
+	siteDomainLookupHostFn = func(host string) ([]string, error) {
+		return nil, fmt.Errorf("lookup %s: no such host", host)
+	}
+	siteDomainHTTPStatusFn = func(domain string) siteDomainHTTPCheckResult {
+		return siteDomainHTTPCheckResult{Error: fmt.Sprintf("lookup %s: no such host", domain)}
+	}
+	siteDomainHTTPSStatusFn = func(domain string) siteDomainHTTPCheckResult {
+		return siteDomainHTTPCheckResult{Error: fmt.Sprintf("lookup %s: no such host", domain)}
+	}
+	siteDomainTLSStatusFn = func(domain string) siteDomainTLSCheckResult {
+		return siteDomainTLSCheckResult{Error: fmt.Sprintf("lookup %s: no such host", domain)}
+	}
+	t.Cleanup(func() {
+		siteDomainLookupHostFn = oldLookupHost
+		siteDomainHTTPStatusFn = oldHTTP
+		siteDomainHTTPSStatusFn = oldHTTPS
+		siteDomainTLSStatusFn = oldTLS
+	})
+
+	output := captureStdout(t, func() {
+		if got := Run([]string{"domain", "check", "sanjel.kinsta:live", "missing.nonserver.com", "--non-interactive"}); got != 2 {
+			t.Fatalf("Run(domain check kinsta missing public DNS) = %d, want 2", got)
+		}
+	})
+	assertContainsInOrder(t, output, []string{"Public domain check", "provider: kinsta", "domain: missing.nonserver.com", "Kinsta", "[ok] missing.nonserver.com", "provider DNS records: unavailable", "detail: Kinsta GET /sites/environments/domains/kdom-missing/verification-records", "returned 504 Gateway Timeout: upstream timeout", "DNS", "[unchecked] provider DNS records", "fallback: checking public DNS resolution", "[pending] public DNS", "domain: missing.nonserver.com", "result: lookup failed", "detail: lookup missing.nonserver.com: no such host", "HTTP", "url: http://missing.nonserver.com/", "result: lookup failed", "HTTPS", "url: https://missing.nonserver.com/", "result: lookup failed", "point public DNS records at Kinsta, then run nf domain check again", "Overall: pending"})
 }
 
 func TestRunSiteDomainKinstaCheckReportsVerifiedNotPointed(t *testing.T) {
@@ -6847,11 +6976,7 @@ func TestRunSiteDomainKinstaCheckReportsVerifiedNotPointed(t *testing.T) {
 			t.Fatalf("Run(domain check kinsta verified not pointed) = %d, want 2", got)
 		}
 	})
-	for _, want := range []string{"Public domain check:", "provider:  kinsta", "domains:   sanjelcanada.nonserver.com", "Kinsta:", "domain sanjelcanada.nonserver.com (secondary): present", "verification: verified", "routing: check public DNS below", "A sanjelcanada.nonserver.com -> 162.159.134.42: pending", "CNAME www -> sanjelcanada.nonserver.com: pending", "http://sanjelcanada.nonserver.com: pending", "https://sanjelcanada.nonserver.com: pending", "point public DNS records at Kinsta, then run nf domain check again", "Overall: pending"} {
-		if !strings.Contains(output, want) {
-			t.Fatalf("domain kinsta verified-not-pointed output missing %q:\n%s", want, output)
-		}
-	}
+	assertContainsInOrder(t, output, []string{"Public domain check", "provider: kinsta", "domain: sanjelcanada.nonserver.com", "Kinsta", "[ok] sanjelcanada.nonserver.com", "verification: verified", "routing: check public DNS below", "DNS", "[pending] A", "name: sanjelcanada.nonserver.com", "expected: 162.159.134.42", "result: lookup failed", "[pending] CNAME", "name: www", "expected: sanjelcanada.nonserver.com", "result: lookup failed", "HTTP", "url: http://sanjelcanada.nonserver.com/", "result: lookup failed", "HTTPS", "url: https://sanjelcanada.nonserver.com/", "result: lookup failed", "point public DNS records at Kinsta, then run nf domain check again", "Overall: pending"})
 }
 
 func TestRunSiteDomainLinodeCheckReportsPending(t *testing.T) {
@@ -6902,11 +7027,7 @@ func TestRunSiteDomainLinodeCheckReportsPending(t *testing.T) {
 			t.Fatalf("Run(domain check linode) = %d, want 2", got)
 		}
 	})
-	for _, want := range []string{"Public domain check:", "provider:  linode", "target:    app1-linode", "Linode target:", "nginx vhost: present", "certbot timer: active", "certificate: missing", "A www.client.com -> 203.0.113.10: pending (got 198.51.100.9)", "http://www.client.com: ok (status 301 -> https://client.app1-linode.nonfiction.dev/)", "https://www.client.com: pending (certificate is not ready)", "wait for pending checks", "Overall: pending"} {
-		if !strings.Contains(output, want) {
-			t.Fatalf("domain linode check output missing %q:\n%s", want, output)
-		}
-	}
+	assertContainsInOrder(t, output, []string{"Public domain check", "provider: linode", "target: app1-linode", "domains: www.client.com, client.com", "Linode target", "[ok] nginx vhost", "status: present", "[ok] certbot timer", "status: active", "[pending] certificate", "status: missing", "DNS", "[pending] A", "name: www.client.com", "expected: 203.0.113.10", "detail: got 198.51.100.9", "HTTP", "url: http://www.client.com/", "status: 301", "location: https://client.app1-linode.nonfiction.dev/", "HTTPS", "url: https://www.client.com/", "result: TLS failed", "detail: certificate is not ready", "wait for pending checks", "Overall: pending"})
 	joinedArgs := strings.Join(sshArgs, " ")
 	for _, want := range []string{"ssh", "nonfiction@app1-linode.nonfiction.dev", "nf-site-domain-www-client-com", "nf-site-domain-client-com", "nf-domain-www-client-com-tls.timer", "nf-domain-client-com-tls.timer"} {
 		if !strings.Contains(joinedArgs, want) {
@@ -6969,12 +7090,8 @@ func TestRunSiteDomainLinodeCheckProxyIPUsesProxyDNS(t *testing.T) {
 			t.Fatalf("Run(domain check linode proxy IP) = %d, want 0", got)
 		}
 	})
-	for _, want := range []string{"Public domain check:", "proxy:     159.203.49.164", "proxy mode: reverse proxy 159.203.49.164", "certbot timer: missing", "certificate: missing", "A www.client.com -> 159.203.49.164: ok", "https://www.client.com: ok expires 2026-12-31 issuer Let's Encrypt", "domain checks passed", "Overall: ready"} {
-		if !strings.Contains(output, want) {
-			t.Fatalf("domain linode proxy IP check output missing %q:\n%s", want, output)
-		}
-	}
-	if strings.Contains(output, "Origin HTTPS:") {
+	assertContainsInOrder(t, output, []string{"Public domain check", "proxy: 159.203.49.164", "Linode target", "[unchecked] proxy mode", "mode: reverse proxy 159.203.49.164", "[ok] nginx vhost", "[unchecked] certbot timer", "status: missing", "[unchecked] certificate", "status: missing", "DNS", "[ok] A", "name: www.client.com", "expected: 159.203.49.164", "result: matches expected", "HTTPS", "url: https://www.client.com/", "expires: 2026-12-31", "issuer: Let's Encrypt", "domain checks passed", "Overall: ready"})
+	if strings.Contains(output, "Origin HTTPS") {
 		t.Fatalf("proxy IP check should not run origin TLS checks:\n%s", output)
 	}
 }
@@ -7021,11 +7138,7 @@ func TestRunSiteDomainLinodeCheckCachedSecondaryIsReady(t *testing.T) {
 			t.Fatalf("Run(domain check cached secondary) = %d, want 0", got)
 		}
 	})
-	for _, want := range []string{"Public domain check:", "domains:   client.com", "A client.com -> 203.0.113.10: ok", "http://client.com: ok (status 302 -> https://www.client.com/)", "https://client.com: ok expires 2026-12-31 issuer Let's Encrypt", "domain is ready as a secondary redirect", "optional primary promotion: nf domain primary client.app1-linode:live client.com", "Overall: ready"} {
-		if !strings.Contains(output, want) {
-			t.Fatalf("cached secondary check output missing %q:\n%s", want, output)
-		}
-	}
+	assertContainsInOrder(t, output, []string{"Public domain check", "domain: client.com", "DNS", "[ok] A", "name: client.com", "expected: 203.0.113.10", "HTTP", "url: http://client.com/", "status: 302", "location: https://www.client.com/", "HTTPS", "url: https://client.com/", "expires: 2026-12-31", "issuer: Let's Encrypt", "domain is ready as a secondary redirect", "optional primary promotion: nf domain primary client.app1-linode:live client.com", "Overall: ready"})
 	if strings.Contains(output, "ready for primary") {
 		t.Fatalf("cached secondary check should not imply primary is required:\n%s", output)
 	}
@@ -7073,11 +7186,7 @@ func TestRunSiteDomainLinodeCheckCachedSecondaryRedirectingToInternalPrimaryIsRe
 			t.Fatalf("Run(domain check cached secondary internal primary) = %d, want 0", got)
 		}
 	})
-	for _, want := range []string{"Public domain check:", "current:   https://client.app1-linode.nonfiction.dev", "fallback:  https://client.app1-linode.nonfiction.dev", "domains:   client.com", "A client.com -> 203.0.113.10: ok", "http://client.com: ok (status 302 -> https://client.app1-linode.nonfiction.dev/)", "https://client.com: ok expires 2026-12-31 issuer Let's Encrypt status 302", "domain is ready as a secondary redirect", "optional primary promotion: nf domain primary client.app1-linode:live client.com", "Overall: ready"} {
-		if !strings.Contains(output, want) {
-			t.Fatalf("cached secondary internal-primary check output missing %q:\n%s", want, output)
-		}
-	}
+	assertContainsInOrder(t, output, []string{"Public domain check", "current: https://client.app1-linode.nonfiction.dev", "fallback: https://client.app1-linode.nonfiction.dev", "domain: client.com", "DNS", "[ok] A", "name: client.com", "HTTP", "url: http://client.com/", "status: 302", "location: https://client.app1-linode.nonfiction.dev/", "HTTPS", "url: https://client.com/", "expires: 2026-12-31", "issuer: Let's Encrypt", "status: 302", "domain is ready as a secondary redirect", "optional primary promotion: nf domain primary client.app1-linode:live client.com", "Overall: ready"})
 	for _, unwanted := range []string{"redirects to internal hostname", "Overall: pending"} {
 		if strings.Contains(output, unwanted) {
 			t.Fatalf("cached secondary internal-primary check should not contain %q:\n%s", unwanted, output)
@@ -7150,7 +7259,7 @@ func TestRunSiteDomainLinodeCheckRejectsHTTPSInternalRedirect(t *testing.T) {
 			t.Fatalf("Run(domain check linode proxy IP internal redirect) = %d, want 2", got)
 		}
 	})
-	for _, want := range []string{"https://www.client.com: pending (redirects to internal hostname client.app1-linode.nonfiction.dev)", "Overall: pending"} {
+	for _, want := range []string{"[pending] HTTPS", "url: https://www.client.com/", "result: redirects to internal hostname", "internal hostname: client.app1-linode.nonfiction.dev", "Overall: pending"} {
 		if !strings.Contains(output, want) {
 			t.Fatalf("domain check output missing %q:\n%s", want, output)
 		}
@@ -7421,7 +7530,7 @@ func TestRunSiteDomainRemoveWithoutArgsPromptsEnvDomainsAndProxy(t *testing.T) {
 	}
 }
 
-func TestRunSiteDomainCheckWithoutArgsPromptsEnvDomainAndProxy(t *testing.T) {
+func TestRunSiteDomainCheckWithoutArgsPromptsEnvDomainAndUsesCachedProxy(t *testing.T) {
 	setupLinodeDomainPromptFixture(t, map[string]any{"hostname": "www.client.com", "url": "https://www.client.com", "primary_domain": "www.client.com", "internal_hostname": "client.app1-linode.nonfiction.dev", "internal_url": "https://client.app1-linode.nonfiction.dev", "domains": []map[string]any{{"name": "www.client.com", "role": "primary", "management": "external", "status": "active", "proxy_mode": ""}, {"name": "assets.client.com", "role": "secondary", "management": "external", "status": "active", "proxy_mode": "cloudflare"}}})
 	t.Cleanup(withInteractiveDomainPrompts(t))
 
@@ -7439,11 +7548,6 @@ func TestRunSiteDomainCheckWithoutArgsPromptsEnvDomainAndProxy(t *testing.T) {
 				t.Fatalf("domain picker options = %#v", options)
 			}
 			return "www.client.com", nil
-		case "Choose Linode proxy mode":
-			if len(options) == 0 || options[0].Label != "Direct (no proxy)" {
-				t.Fatalf("proxy mode options = %#v, want Direct (no proxy)", options)
-			}
-			return "direct", nil
 		default:
 			t.Fatalf("unexpected select %q with options %#v", title, options)
 			return "", nil
@@ -7476,15 +7580,100 @@ func TestRunSiteDomainCheckWithoutArgsPromptsEnvDomainAndProxy(t *testing.T) {
 			t.Fatalf("Run(domain check picker) = %d, want 0", got)
 		}
 	})
-	for _, want := range []string{"Public domain check:", "domains:   www.client.com", "proxy:     none", "Overall: ready"} {
+	for _, want := range []string{"Public domain check", "domain: www.client.com", "proxy: none", "Overall: ready"} {
 		if !strings.Contains(output, want) {
 			t.Fatalf("domain check picker output missing %q:\n%s", want, output)
 		}
 	}
-	for _, want := range []string{"Choose a domain to check", "Choose Linode proxy mode"} {
+	for _, want := range []string{"Choose a domain to check"} {
 		if !slices.Contains(selectCalls, want) {
 			t.Fatalf("select calls = %#v, missing %q", selectCalls, want)
 		}
+	}
+	if slices.Contains(selectCalls, "Choose Linode proxy mode") {
+		t.Fatalf("domain check should use cached proxy mode without prompting; select calls = %#v", selectCalls)
+	}
+}
+
+func TestResolveSiteDomainProxyDecisionCheckUsesCachedProxyWithoutPrompt(t *testing.T) {
+	oldInteractive := siteIsInteractiveFn
+	oldSelect := siteDomainSelectFn
+	siteIsInteractiveFn = func() bool { return true }
+	siteDomainSelectFn = func(title string, options []ui.SelectOption) (string, error) {
+		t.Fatalf("unexpected proxy prompt %q with options %#v", title, options)
+		return "", nil
+	}
+	t.Cleanup(func() {
+		siteIsInteractiveFn = oldInteractive
+		siteDomainSelectFn = oldSelect
+	})
+
+	record := map[string]any{"domains": []map[string]any{
+		{"name": "www.client.com", "role": "primary", "management": "external", "proxy_mode": ""},
+		{"name": "assets.client.com", "role": "secondary", "management": "external", "proxy_mode": "cloudflare"},
+	}}
+	for _, tt := range []struct {
+		name string
+		want string
+	}{
+		{name: "www.client.com", want: ""},
+		{name: "assets.client.com", want: "cloudflare"},
+	} {
+		opts, err := resolveSiteDomainProxyDecision("check", siteDomainOptions{domains: []string{tt.name}}, record)
+		if err != nil {
+			t.Fatalf("resolveSiteDomainProxyDecision(%q) error = %v", tt.name, err)
+		}
+		if !opts.proxySet || opts.proxyMode != tt.want {
+			t.Fatalf("resolveSiteDomainProxyDecision(%q) proxySet=%t proxyMode=%q, want true %q", tt.name, opts.proxySet, opts.proxyMode, tt.want)
+		}
+	}
+}
+
+func TestResolveSiteDomainProxyDecisionCheckHonorsExplicitProxyOverride(t *testing.T) {
+	oldSelect := siteDomainSelectFn
+	siteDomainSelectFn = func(title string, options []ui.SelectOption) (string, error) {
+		t.Fatalf("unexpected proxy prompt %q with options %#v", title, options)
+		return "", nil
+	}
+	t.Cleanup(func() { siteDomainSelectFn = oldSelect })
+
+	record := map[string]any{"domains": []map[string]any{{"name": "www.client.com", "role": "primary", "management": "external", "proxy_mode": "cloudflare"}}}
+	opts, err := resolveSiteDomainProxyDecision("check", siteDomainOptions{domains: []string{"www.client.com"}, proxySet: true, proxyMode: ""}, record)
+	if err != nil {
+		t.Fatalf("resolveSiteDomainProxyDecision(explicit no-proxy) error = %v", err)
+	}
+	if !opts.proxySet || opts.proxyMode != "" {
+		t.Fatalf("explicit no-proxy override proxySet=%t proxyMode=%q, want true empty", opts.proxySet, opts.proxyMode)
+	}
+}
+
+func TestResolveSiteDomainProxyDecisionCheckPromptsWhenCacheUnknown(t *testing.T) {
+	oldInteractive := siteIsInteractiveFn
+	oldSelect := siteDomainSelectFn
+	siteIsInteractiveFn = func() bool { return true }
+	var promptTitle string
+	siteDomainSelectFn = func(title string, options []ui.SelectOption) (string, error) {
+		promptTitle = title
+		if len(options) == 0 || options[0].Label != "Direct (no proxy)" {
+			t.Fatalf("proxy prompt options = %#v, want Direct (no proxy) first", options)
+		}
+		return "cloudflare", nil
+	}
+	t.Cleanup(func() {
+		siteIsInteractiveFn = oldInteractive
+		siteDomainSelectFn = oldSelect
+	})
+
+	record := map[string]any{"domains": []map[string]any{{"name": "other.client.com", "role": "secondary", "management": "external", "proxy_mode": ""}}}
+	opts, err := resolveSiteDomainProxyDecision("check", siteDomainOptions{domains: []string{"www.client.com"}}, record)
+	if err != nil {
+		t.Fatalf("resolveSiteDomainProxyDecision(unknown cache) error = %v", err)
+	}
+	if promptTitle != "Choose Linode proxy mode" {
+		t.Fatalf("proxy prompt title = %q", promptTitle)
+	}
+	if !opts.proxySet || opts.proxyMode != "cloudflare" {
+		t.Fatalf("unknown cache proxySet=%t proxyMode=%q, want true cloudflare", opts.proxySet, opts.proxyMode)
 	}
 }
 
@@ -7610,11 +7799,7 @@ func TestRunSiteDomainLinodeCheckCloudflareRejectsNonCloudflareDNS(t *testing.T)
 			t.Fatalf("Run(domain check linode cloudflare) = %d, want 2", got)
 		}
 	})
-	for _, want := range []string{"Public domain check:", "proxy:     cloudflare", "proxy mode: cloudflare", "certbot timer: active", "certificate: ready", "www.client.com: pending (resolves publicly to 198.51.100.9; 198.51.100.9 not in Cloudflare IP ranges)", "https://www.client.com: ok expires 2026-12-31 issuer Cloudflare Inc ECC", "wait for pending checks", "Overall: pending"} {
-		if !strings.Contains(output, want) {
-			t.Fatalf("domain linode cloudflare check output missing %q:\n%s", want, output)
-		}
-	}
+	assertContainsInOrder(t, output, []string{"Public domain check", "proxy: cloudflare", "Linode target", "[unchecked] proxy mode", "mode: cloudflare", "[ok] certbot timer", "status: active", "[ok] certificate", "status: ready", "DNS", "[pending] Cloudflare DNS", "domain: www.client.com", "resolves to: 198.51.100.9", "result: non-Cloudflare address found", "outside ranges: 198.51.100.9", "HTTPS", "url: https://www.client.com/", "expires: 2026-12-31", "issuer: Cloudflare Inc ECC", "Origin HTTPS", "origin: 203.0.113.10", "issuer: Let's Encrypt", "wait for pending checks", "Overall: pending"})
 }
 
 func TestRunSiteDomainLinodeCheckCloudflareChecksOriginTLS(t *testing.T) {
@@ -7676,11 +7861,7 @@ func TestRunSiteDomainLinodeCheckCloudflareChecksOriginTLS(t *testing.T) {
 			t.Fatalf("Run(domain check linode cloudflare) = %d, want 0", got)
 		}
 	})
-	for _, want := range []string{"Public domain check:", "proxy:     cloudflare", "proxy mode: cloudflare", "certbot timer: active", "certificate: ready", "www.client.com: ok (resolves publicly to Cloudflare IPs 104.16.1.1, 104.16.2.2; origin IP match skipped for cloudflare)", "https://www.client.com: ok expires 2026-12-31 issuer Cloudflare Inc ECC", "Origin HTTPS:", "https://www.client.com @ 203.0.113.10: ok expires 2026-09-12 issuer Let's Encrypt", "domain checks passed", "Overall: ready"} {
-		if !strings.Contains(output, want) {
-			t.Fatalf("domain linode cloudflare check output missing %q:\n%s", want, output)
-		}
-	}
+	assertContainsInOrder(t, output, []string{"Public domain check", "proxy: cloudflare", "Linode target", "[unchecked] proxy mode", "mode: cloudflare", "[ok] certbot timer", "status: active", "[ok] certificate", "status: ready", "DNS", "[ok] Cloudflare DNS", "domain: www.client.com", "resolves to: 104.16.1.1, 104.16.2.2", "origin check: skipped for cloudflare", "HTTPS", "url: https://www.client.com/", "expires: 2026-12-31", "issuer: Cloudflare Inc ECC", "Origin HTTPS", "[ok] origin HTTPS", "domain: www.client.com", "origin: 203.0.113.10", "expires: 2026-09-12", "issuer: Let's Encrypt", "domain checks passed", "Overall: ready"})
 }
 
 func TestIsSameHTTPSRedirect(t *testing.T) {

@@ -1154,6 +1154,11 @@ func resolveSiteDomainProxyDecision(action string, opts siteDomainOptions, recor
 	if err != nil {
 		return opts, err
 	}
+	if action == "check" && cachedProxyModeKnown {
+		opts.proxyMode = cachedProxyMode
+		opts.proxySet = true
+		return opts, nil
+	}
 	if opts.nonInteractive {
 		if cachedProxyModeKnown {
 			opts.proxyMode = cachedProxyMode
