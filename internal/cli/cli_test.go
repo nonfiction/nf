@@ -6588,7 +6588,7 @@ func TestRunSiteDomainKinstaCheckReportsReady(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.Method + " " + r.URL.Path {
 		case "GET /sites/environments/kenv-live/domains":
-			_ = json.NewEncoder(w).Encode(map[string]any{"environment": map[string]any{"site_domains": []map[string]any{{"id": "kdom-www", "name": "www.client.com", "is_primary": true}, {"id": "kdom-apex", "name": "client.com"}}}})
+			_ = json.NewEncoder(w).Encode(map[string]any{"environment": map[string]any{"site_domains": []map[string]any{{"id": "kdom-www", "name": "www.client.com", "is_primary": true, "is_verified": true, "is_pointing": true}, {"id": "kdom-apex", "name": "client.com", "is_verified": true, "is_pointing": true}}}})
 		case "GET /sites/environments/domains/kdom-www/verification-records":
 			_ = json.NewEncoder(w).Encode(map[string]any{"site_domain": map[string]any{"verification_records": []map[string]any{{"name": "_kinsta.www.client.com", "type": "TXT", "content": "verify-token"}}, "pointing_records": []map[string]any{{"name": "www.client.com", "type": "CNAME", "content": "hosting.kinsta.cloud"}}}})
 		case "GET /sites/environments/domains/kdom-apex/verification-records":
@@ -6650,9 +6650,86 @@ func TestRunSiteDomainKinstaCheckReportsReady(t *testing.T) {
 			t.Fatalf("Run(domain check kinsta) = %d, want 0", got)
 		}
 	})
-	for _, want := range []string{"Public domain check:", "provider:  kinsta", "fallback:  https://client.kinsta.nonfiction.dev", "domains:   www.client.com, client.com", "Kinsta:", "domain www.client.com (primary): present, primary", "domain client.com (secondary): present", "TXT _kinsta.www.client.com -> verify-token: ok", "CNAME www.client.com -> hosting.kinsta.cloud: ok", "A client.com -> 203.0.113.20: ok", "http://client.com: ok (status 301 -> https://www.client.com/)", "https://www.client.com: ok expires 2026-12-31 issuer Let's Encrypt", "domain is primary and public checks passed", "Overall: ready"} {
+	for _, want := range []string{"Public domain check:", "provider:  kinsta", "fallback:  https://client.kinsta.nonfiction.dev", "domains:   www.client.com, client.com", "Kinsta:", "domain www.client.com (primary): present, primary", "domain client.com (secondary): present", "verification: verified", "routing: pointed", "TXT _kinsta.www.client.com -> verify-token: ok", "CNAME www.client.com -> hosting.kinsta.cloud: ok", "A client.com -> 203.0.113.20: ok", "http://client.com: ok (status 301 -> https://www.client.com/)", "https://www.client.com: ok expires 2026-12-31 issuer Let's Encrypt", "domain is primary and public checks passed", "Overall: ready"} {
 		if !strings.Contains(output, want) {
 			t.Fatalf("domain kinsta check output missing %q:\n%s", want, output)
+		}
+	}
+}
+
+func TestRunSiteDomainKinstaCheckReportsVerifiedNotPointed(t *testing.T) {
+	stateDir := t.TempDir()
+	t.Setenv("NF_STATE_HOME", stateDir)
+	t.Setenv("KINSTA_API_KEY", "test-token")
+	if err := state.SaveStateRecords("sites", []map[string]any{{
+		"provider": "kinsta",
+		"site_id":  "sanjel.kinsta",
+		"env_id":   "sanjel.kinsta:live",
+		"name":     "sanjel",
+		"env":      "live",
+		"target":   "kinsta",
+		"hostname": "sanjel.kinsta.nonfiction.dev",
+		"url":      "https://sanjel.kinsta.nonfiction.dev",
+		"path":     "/www/sanjel/public",
+		"ssh":      map[string]any{"host": "203.0.113.10", "port": "12345", "user": "sanjel"},
+		"kinsta":   map[string]any{"site_id": "ksite123", "environment_id": "kenv-live", "domain_id": "kdom-internal"},
+		"domains":  []map[string]any{{"name": "sanjelcanada.nonserver.com", "role": "secondary", "management": "external", "status": "pending", "domain_id": "kdom-canada"}},
+	}}); err != nil {
+		t.Fatalf("SaveStateRecords(sites) error = %v", err)
+	}
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.Method + " " + r.URL.Path {
+		case "GET /sites/environments/kenv-live/domains":
+			_ = json.NewEncoder(w).Encode(map[string]any{"environment": map[string]any{"site_domains": []map[string]any{{"id": "kdom-canada", "name": "sanjelcanada.nonserver.com"}}}})
+		case "GET /sites/environments/domains/kdom-canada/verification-records":
+			_ = json.NewEncoder(w).Encode(map[string]any{"site_domain": map[string]any{"pointing_records": []map[string]any{{"name": "sanjelcanada.nonserver.com", "type": "A", "content": "162.159.134.42"}, {"name": "www", "type": "CNAME", "content": "sanjelcanada.nonserver.com"}}}})
+		case "POST /":
+			_ = json.NewEncoder(w).Encode(map[string]any{"data": map[string]any{"validateVerificationRecordsOfSiteDomains": []map[string]any{{"idSiteDomain": "kdom-canada", "isValid": true}}}})
+		default:
+			t.Fatalf("unexpected Kinsta request: %s %s", r.Method, r.URL.Path)
+		}
+	}))
+	t.Cleanup(server.Close)
+	t.Setenv("KINSTA_BASE_URL", server.URL)
+	t.Setenv("KINSTA_GRAPHQL_URL", server.URL)
+
+	oldLookupHost := siteDomainLookupHostFn
+	oldLookupCNAME := siteDomainLookupCNAMEFn
+	oldHTTP := siteDomainHTTPStatusFn
+	oldHTTPS := siteDomainHTTPSStatusFn
+	oldTLS := siteDomainTLSStatusFn
+	siteDomainLookupHostFn = func(host string) ([]string, error) {
+		return nil, fmt.Errorf("lookup %s: no such host", host)
+	}
+	siteDomainLookupCNAMEFn = func(host string) (string, error) {
+		return "", fmt.Errorf("lookup %s: no such host", host)
+	}
+	siteDomainHTTPStatusFn = func(domain string) siteDomainHTTPCheckResult {
+		return siteDomainHTTPCheckResult{Error: fmt.Sprintf("lookup %s: no such host", domain)}
+	}
+	siteDomainHTTPSStatusFn = func(domain string) siteDomainHTTPCheckResult {
+		return siteDomainHTTPCheckResult{Error: fmt.Sprintf("lookup %s: no such host", domain)}
+	}
+	siteDomainTLSStatusFn = func(domain string) siteDomainTLSCheckResult {
+		return siteDomainTLSCheckResult{Error: fmt.Sprintf("lookup %s: no such host", domain)}
+	}
+	t.Cleanup(func() {
+		siteDomainLookupHostFn = oldLookupHost
+		siteDomainLookupCNAMEFn = oldLookupCNAME
+		siteDomainHTTPStatusFn = oldHTTP
+		siteDomainHTTPSStatusFn = oldHTTPS
+		siteDomainTLSStatusFn = oldTLS
+	})
+
+	output := captureStdout(t, func() {
+		if got := Run([]string{"domain", "check", "sanjel.kinsta:live", "sanjelcanada.nonserver.com", "--non-interactive"}); got != 2 {
+			t.Fatalf("Run(domain check kinsta verified not pointed) = %d, want 2", got)
+		}
+	})
+	for _, want := range []string{"Public domain check:", "provider:  kinsta", "domains:   sanjelcanada.nonserver.com", "Kinsta:", "domain sanjelcanada.nonserver.com (secondary): present", "verification: verified", "routing: check public DNS below", "A sanjelcanada.nonserver.com -> 162.159.134.42: pending", "CNAME www -> sanjelcanada.nonserver.com: pending", "http://sanjelcanada.nonserver.com: pending", "https://sanjelcanada.nonserver.com: pending", "point public DNS records at Kinsta, then run nf domain check again", "Overall: pending"} {
+		if !strings.Contains(output, want) {
+			t.Fatalf("domain kinsta verified-not-pointed output missing %q:\n%s", want, output)
 		}
 	}
 }

@@ -38,10 +38,12 @@ type siteDomainTLSCheckResult struct {
 }
 
 type siteDomainProviderCheck struct {
-	Ready       bool
-	Primary     bool
-	DNSRecords  []siteDomainExpectedDNSRecord
-	Description []string
+	Ready                     bool
+	Primary                   bool
+	DNSRecords                []siteDomainExpectedDNSRecord
+	Description               []string
+	KinstaVerificationPending bool
+	KinstaPointingPending     bool
 }
 
 type siteDomainIPRangeSet struct {
@@ -51,8 +53,9 @@ type siteDomainIPRangeSet struct {
 }
 
 type siteDomainReadinessResult struct {
-	Ready   bool
-	Primary bool
+	Ready    bool
+	Primary  bool
+	NextStep string
 }
 
 func cmdSiteDomainCheck(plan siteDomainPlan) int {
@@ -87,7 +90,19 @@ func printSiteDomainReadinessCheck(plan siteDomainPlan) (siteDomainReadinessResu
 		originTLSReady = printSiteDomainOriginTLSChecks(plan)
 	}
 	ready := providerCheck.Ready && dnsReady && httpReady && tlsReady && originTLSReady
-	return siteDomainReadinessResult{Ready: ready, Primary: providerCheck.Primary}, nil
+	nextStep := ""
+	if !ready && plan.Provider == "kinsta" {
+		if providerCheck.KinstaVerificationPending {
+			nextStep = "create or fix Kinsta verification DNS records, then run nf domain check again"
+		} else if providerCheck.KinstaPointingPending {
+			if dnsReady {
+				nextStep = "wait for Kinsta to detect domain pointing, then run nf domain check again"
+			} else {
+				nextStep = "point public DNS records at Kinsta, then run nf domain check again"
+			}
+		}
+	}
+	return siteDomainReadinessResult{Ready: ready, Primary: providerCheck.Primary, NextStep: nextStep}, nil
 }
 
 func printSiteDomainCheckNextStep(plan siteDomainPlan, result siteDomainReadinessResult) {
@@ -96,6 +111,8 @@ func printSiteDomainCheckNextStep(plan siteDomainPlan, result siteDomainReadines
 		fmt.Println("  domain is primary and public checks passed")
 	} else if result.Ready {
 		fmt.Printf("  ready for primary: nf domain primary %s %s%s\n", plan.EnvID, plan.Canonical, siteDomainProxyArg(plan.ProxyMode))
+	} else if strings.TrimSpace(result.NextStep) != "" {
+		fmt.Printf("  %s\n", result.NextStep)
 	} else {
 		fmt.Println("  wait for pending checks, then run nf domain check again")
 	}
@@ -177,18 +194,136 @@ func checkKinstaSiteDomainProvider(plan siteDomainPlan) (siteDomainProviderCheck
 		if domain.IsPrimary {
 			role = "primary"
 		}
+		records, err := client.DomainRecords(ctx, domain.ID)
+		if err != nil {
+			return siteDomainProviderCheck{}, err
+		}
 		primaryLabel := ""
 		if domain.IsPrimary {
 			primaryLabel = ", primary"
 		}
 		out.Description = append(out.Description, fmt.Sprintf("  domain %s (%s): present%s", name, role, primaryLabel))
-		records, err := client.DomainRecords(ctx, domain.ID)
-		if err != nil {
-			return siteDomainProviderCheck{}, err
+		verificationLabel, verificationReady, verificationKnown := kinstaDomainVerificationState(domain)
+		verificationDetail := ""
+		if !verificationKnown && strings.TrimSpace(domain.ID) != "" {
+			validation, err := client.ValidateDomainVerification(ctx, domain.ID)
+			if err != nil {
+				verificationDetail = fmt.Sprintf(" (Kinsta validation check unavailable: %v)", err)
+			} else if validationLabel, validationReady, validationKnown := kinstaDomainVerificationValidationState(validation); validationKnown {
+				verificationLabel = validationLabel
+				verificationReady = validationReady
+				verificationKnown = true
+			}
+		}
+		out.Description = append(out.Description, fmt.Sprintf("    verification: %s%s", verificationLabel, verificationDetail))
+		if verificationKnown && !verificationReady {
+			out.Ready = false
+			out.KinstaVerificationPending = true
+		}
+		routingLabel, routingReady, routingKnown := kinstaDomainPointingState(domain)
+		out.Description = append(out.Description, fmt.Sprintf("    routing: %s", kinstaDomainRoutingDescription(routingLabel, routingKnown, records)))
+		if routingKnown && !routingReady {
+			out.Ready = false
+			out.KinstaPointingPending = true
+		} else if !routingKnown && len(records.Pointing) > 0 {
+			out.KinstaPointingPending = true
 		}
 		out.DNSRecords = append(out.DNSRecords, kinstaDNSExpectations(name, records)...)
 	}
 	return out, nil
+}
+
+func kinstaDomainVerificationState(domain kinsta.Domain) (string, bool, bool) {
+	if domain.IsVerified != nil {
+		if *domain.IsVerified {
+			return "verified", true, true
+		}
+		return "pending", false, true
+	}
+	for _, value := range []string{domain.VerificationStatus, domain.Status, domain.State, domain.DomainStatus} {
+		if ready, ok := kinstaDomainVerificationStatusValue(value); ok {
+			if ready {
+				return "verified", true, true
+			}
+			return "pending", false, true
+		}
+	}
+	return "unknown", false, false
+}
+
+func kinstaDomainVerificationStatusValue(value string) (bool, bool) {
+	status := normalizeKinstaDomainStatusValue(value)
+	switch status {
+	case "verified", "valid", "active", "complete", "completed", "success", "successful", "domain_live", "live", "point_domain", "point_your_domain", "pointing_required", "ready_to_point":
+		return true, true
+	case "unverified", "not_verified", "not_valid", "invalid", "pending", "pending_verification", "verification_pending", "requires_verification", "needs_verification", "verifying", "checking":
+		return false, true
+	default:
+		return false, false
+	}
+}
+
+func kinstaDomainVerificationValidationState(validation kinsta.DomainVerificationValidation) (string, bool, bool) {
+	if validation.Valid {
+		return "verified", true, true
+	}
+	if len(validation.Records) > 0 {
+		return "pending", false, true
+	}
+	return "unknown", false, false
+}
+
+func kinstaDomainPointingState(domain kinsta.Domain) (string, bool, bool) {
+	if domain.IsPointing != nil {
+		if *domain.IsPointing {
+			return "pointed", true, true
+		}
+		return "pending", false, true
+	}
+	for _, value := range []string{domain.DNSStatus, domain.DomainStatus, domain.Status, domain.State} {
+		if ready, ok := kinstaDomainPointingStatusValue(value); ok {
+			if ready {
+				return "pointed", true, true
+			}
+			return "pending", false, true
+		}
+	}
+	return "unknown", false, false
+}
+
+func kinstaDomainPointingStatusValue(value string) (bool, bool) {
+	status := normalizeKinstaDomainStatusValue(value)
+	switch status {
+	case "pointed", "live", "domain_live", "active", "connected", "dns_verified":
+		return true, true
+	case "not_pointed", "unpointed", "pending", "pending_dns", "dns_pending", "requires_dns", "needs_dns", "checking", "point_domain", "point_your_domain", "pointing_required", "ready_to_point", "verified":
+		return false, true
+	default:
+		return false, false
+	}
+}
+
+func normalizeKinstaDomainStatusValue(value string) string {
+	value = strings.ToLower(strings.TrimSpace(value))
+	value = strings.ReplaceAll(value, "-", "_")
+	value = strings.ReplaceAll(value, " ", "_")
+	for strings.Contains(value, "__") {
+		value = strings.ReplaceAll(value, "__", "_")
+	}
+	return strings.Trim(value, "_")
+}
+
+func kinstaDomainRoutingDescription(label string, known bool, records kinsta.DomainRecords) string {
+	switch label {
+	case "pointed":
+		return "pointed"
+	case "pending":
+		return "pending; point public DNS to Kinsta"
+	}
+	if !known && len(records.Pointing) > 0 {
+		return "check public DNS below"
+	}
+	return "unknown"
 }
 
 func kinstaDNSExpectations(domain string, records kinsta.DomainRecords) []siteDomainExpectedDNSRecord {

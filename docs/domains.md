@@ -122,7 +122,7 @@ nf domain check production
 
 With no arguments, interactive `domain check` prompts for an env/remote and the cached external domains to check.
 
-`nf domain check` reports provider/server readiness, expected public DNS, HTTP reachability, HTTPS certificate status, and whether the domain is already primary. It exits `0` when public checks are ready and `2` when DNS, HTTP, HTTPS, or provider readiness is still pending.
+`nf domain check` reports provider/server readiness, expected public DNS, HTTP reachability, HTTPS certificate status, and whether the domain is already primary. For Kinsta domains, it also reports domain verification separately from routing/pointing so a verified domain can clearly show the next step as pointing public DNS at Kinsta. It exits `0` when public checks are ready and `2` when DNS, HTTP, HTTPS, or provider readiness is still pending.
 
 For Cloudflare-proxied Linode domains:
 
