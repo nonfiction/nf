@@ -172,6 +172,35 @@ func stubLocalAvailableDisk(t *testing.T, available int64) {
 	t.Cleanup(func() { localAvailableDiskBytesFn = oldLocalAvailableDiskBytes })
 }
 
+func stubLocalAvailableDiskOutputs(t *testing.T, outputs ...int64) {
+	t.Helper()
+	oldLocalAvailableDiskBytes := localAvailableDiskBytesFn
+	localAvailableDiskBytesFn = func(string) (int64, error) {
+		if len(outputs) == 0 {
+			t.Fatalf("unexpected localAvailableDiskBytesFn call")
+			return 0, nil
+		}
+		output := outputs[0]
+		outputs = outputs[1:]
+		return output, nil
+	}
+	t.Cleanup(func() { localAvailableDiskBytesFn = oldLocalAvailableDiskBytes })
+}
+
+func stubLocalWordPressTransferEstimate(t *testing.T, estimate int64) {
+	t.Helper()
+	oldLocalWordPressTransferEstimateBytes := localWordPressTransferEstimateBytesFn
+	localWordPressTransferEstimateBytesFn = func(envConfig) (int64, error) { return estimate, nil }
+	t.Cleanup(func() { localWordPressTransferEstimateBytesFn = oldLocalWordPressTransferEstimateBytes })
+}
+
+func stubLocalSnapshotExpandedSize(t *testing.T, expandedSize int64) {
+	t.Helper()
+	oldLocalSnapshotExpandedSizeBytes := localSnapshotExpandedSizeBytesFn
+	localSnapshotExpandedSizeBytesFn = func(envConfig, string) (int64, error) { return expandedSize, nil }
+	t.Cleanup(func() { localSnapshotExpandedSizeBytesFn = oldLocalSnapshotExpandedSizeBytes })
+}
+
 func TestRunHelpShowsTopLevelCommandsOutsideGit(t *testing.T) {
 	workdir := t.TempDir()
 	oldwd, err := os.Getwd()
@@ -12203,6 +12232,7 @@ func TestRunEnvSnapshotAddSkipsComposeUpWhenReady(t *testing.T) {
 		t.Fatalf("WriteFile(docker) error = %v", err)
 	}
 	t.Setenv("PATH", dockerDir+string(os.PathListSeparator)+os.Getenv("PATH"))
+	stubLocalWordPressTransferEstimate(t, 1024)
 
 	oldwd, err := os.Getwd()
 	if err != nil {
@@ -12455,6 +12485,8 @@ func TestRunEnvSnapshotUseSkipsComposeUpWhenReady(t *testing.T) {
 	}
 	t.Setenv("DOCKER_LOG", logPath)
 	t.Setenv("PATH", dockerDir+string(os.PathListSeparator)+os.Getenv("PATH"))
+	stubLocalWordPressTransferEstimate(t, 1024)
+	stubLocalSnapshotExpandedSize(t, 1024)
 	oldIsInteractive := envSnapshotIsInteractive
 	oldConfirm := envSnapshotConfirm
 	envSnapshotIsInteractive = func() bool { return true }
@@ -12507,6 +12539,8 @@ func TestRunEnvSnapshotUseYesSkipsInteractiveConfirmation(t *testing.T) {
 	}
 	t.Setenv("DOCKER_LOG", logPath)
 	t.Setenv("PATH", dockerDir+string(os.PathListSeparator)+os.Getenv("PATH"))
+	stubLocalWordPressTransferEstimate(t, 1024)
+	stubLocalSnapshotExpandedSize(t, 1024)
 	oldConfirm := envSnapshotConfirm
 	envSnapshotConfirm = func(prompt string, defaultYes bool) (bool, error) {
 		t.Fatalf("envSnapshotConfirm called with %q", prompt)
@@ -12552,6 +12586,8 @@ func TestRunEnvSnapshotUseRemoteImportsThenRestores(t *testing.T) {
 	}
 	t.Setenv("DOCKER_LOG", logPath)
 	t.Setenv("PATH", dockerDir+string(os.PathListSeparator)+os.Getenv("PATH"))
+	stubLocalWordPressTransferEstimate(t, 1024)
+	stubLocalSnapshotExpandedSize(t, 1024)
 	oldConfirm := envSnapshotConfirm
 	envSnapshotConfirm = func(prompt string, defaultYes bool) (bool, error) {
 		t.Fatalf("envSnapshotConfirm called with %q", prompt)
@@ -12625,6 +12661,8 @@ func TestRunEnvImportRestoresSiteExportIntoLocalEnv(t *testing.T) {
 	}
 	t.Setenv("DOCKER_LOG", logPath)
 	t.Setenv("PATH", dockerDir+string(os.PathListSeparator)+os.Getenv("PATH"))
+	stubLocalWordPressTransferEstimate(t, 1024)
+	stubLocalSnapshotExpandedSize(t, 1024)
 	oldConfirm := envSnapshotConfirm
 	envSnapshotConfirm = func(prompt string, defaultYes bool) (bool, error) {
 		t.Fatalf("envSnapshotConfirm called with %q", prompt)
@@ -12710,6 +12748,31 @@ func TestRunEnvImportDryRunDoesNotCreateSnapshot(t *testing.T) {
 	}
 }
 
+func TestEnvSnapshotCreateArchivesChecksLocalSpaceBeforeDocker(t *testing.T) {
+	configHome := t.TempDir()
+	t.Setenv("NF_CONFIG_HOME", configHome)
+	t.Setenv("NF_DATA_HOME", configHome)
+	dockerDir := t.TempDir()
+	markerPath := filepath.Join(t.TempDir(), "docker-called")
+	dockerScript := []byte("#!/bin/sh\ntouch \"$DOCKER_CALLED\"\nexit 0\n")
+	if err := os.WriteFile(filepath.Join(dockerDir, "docker"), dockerScript, 0o755); err != nil {
+		t.Fatalf("WriteFile(docker) error = %v", err)
+	}
+	t.Setenv("DOCKER_CALLED", markerPath)
+	t.Setenv("PATH", dockerDir+string(os.PathListSeparator)+os.Getenv("PATH"))
+	cfg := envConfig{ProjectSlug: "client", EnvDir: config.EnvDir("client"), Compose: "docker compose", WordpressService: "wordpress", DockerUser: "nonfiction"}
+	stubLocalWordPressTransferEstimate(t, 1073741824)
+	stubLocalAvailableDisk(t, 1)
+
+	err := envSnapshotCreateArchives(cfg, "too-large")
+	if err == nil || !strings.Contains(err.Error(), "not enough disk space for local snapshot workspace") {
+		t.Fatalf("envSnapshotCreateArchives() error = %v, want local disk-space error", err)
+	}
+	if _, statErr := os.Stat(markerPath); !os.IsNotExist(statErr) {
+		t.Fatalf("docker command ran before disk check: %v", statErr)
+	}
+}
+
 func TestExecuteEnvPullFinalizesLocalDestinationThemeAndCache(t *testing.T) {
 	configHome := t.TempDir()
 	t.Setenv("NF_CONFIG_HOME", configHome)
@@ -12736,6 +12799,8 @@ func TestExecuteEnvPullFinalizesLocalDestinationThemeAndCache(t *testing.T) {
 	t.Cleanup(func() { runRsyncCommandFn = oldRunRsync })
 	stubEnvRemoteDiskOutput(t, "1024\n", "1073741824\n", "2048\n")
 	stubLocalAvailableDisk(t, 1073741824)
+	stubLocalWordPressTransferEstimate(t, 1024)
+	stubLocalSnapshotExpandedSize(t, 1024)
 
 	captureStdout(t, func() {
 		if got := executeEnvPull(cfg, target); got != 0 {
@@ -12778,6 +12843,8 @@ func TestExecuteEnvPullSkipsMissingLocalDestinationTheme(t *testing.T) {
 	t.Cleanup(func() { runRsyncCommandFn = oldRunRsync })
 	stubEnvRemoteDiskOutput(t, "1024\n", "1073741824\n", "2048\n")
 	stubLocalAvailableDisk(t, 1073741824)
+	stubLocalWordPressTransferEstimate(t, 1024)
+	stubLocalSnapshotExpandedSize(t, 1024)
 
 	stderr := captureStderr(t, func() {
 		captureStdout(t, func() {
@@ -12839,15 +12906,18 @@ func TestExecuteEnvPushFinalizesRemoteDestinationThemeAndCache(t *testing.T) {
 		return nil
 	}
 	t.Cleanup(func() { runSSHCommandFn = oldRunSSH })
-	stubEnvRemoteDiskOutput(t, "1024\n", "1073741824\n")
+	stubEnvRemoteDiskOutput(t, "1024\n", "1073741824\n", "1073741824\n", "1073741824\n")
+	stubLocalAvailableDisk(t, 1073741824)
+	stubLocalWordPressTransferEstimate(t, 1024)
+	stubLocalSnapshotExpandedSize(t, 1024)
 
 	captureStdout(t, func() {
 		if got := executeEnvPush(cfg, target); got != 0 {
 			t.Fatalf("executeEnvPush() = %d, want 0", got)
 		}
 	})
-	if len(sshCommands) != 4 {
-		t.Fatalf("ssh commands len = %d, want mkdir/export/import/finalize: %#v", len(sshCommands), sshCommands)
+	if len(sshCommands) != 6 {
+		t.Fatalf("ssh commands len = %d, want mkdir/export/import/finalize/cleanup/cleanup: %#v", len(sshCommands), sshCommands)
 	}
 	importScript := sshCommands[2][len(sshCommands[2])-1]
 	finalizeScript := sshCommands[3][len(sshCommands[3])-1]
@@ -12864,6 +12934,9 @@ func TestExecuteEnvPushFinalizesRemoteDestinationThemeAndCache(t *testing.T) {
 	if !slices.Contains(rsyncArgs, "--progress") {
 		t.Fatalf("push rsync args missing --progress: %#v", rsyncArgs)
 	}
+	if !strings.Contains(sshCommands[4][len(sshCommands[4])-1], "rm -rf -- /tmp/nf-push-") || !strings.Contains(sshCommands[5][len(sshCommands[5])-1], "rm -rf -- /tmp/nf-backup-") {
+		t.Fatalf("push cleanup commands = %#v", sshCommands[4:])
+	}
 }
 
 func TestExecuteEnvPushChecksRemoteSpaceBeforeRsync(t *testing.T) {
@@ -12878,6 +12951,9 @@ func TestExecuteEnvPushChecksRemoteSpaceBeforeRsync(t *testing.T) {
 	cfg := envConfig{ProjectSlug: "client", EnvDir: config.EnvDir("client"), Compose: "docker compose", WordpressService: "wordpress", DockerUser: "nonfiction", UploadsPath: "uploads", WordpressPort: 18432}
 	target := envRemoteSyncTarget{RemoteName: "production", Provider: "kinsta", SiteID: "client-kinsta", Env: "live", URL: "https://www.example.com/", SSHUser: "client", SSHHost: "203.0.113.10", SSHPort: "12345", WordPressPath: "/www/client/public", WPCommand: "wp"}
 	scripts := stubEnvRemoteDiskOutput(t, "0\n", "1\n")
+	stubLocalAvailableDisk(t, 1073741824)
+	stubLocalWordPressTransferEstimate(t, 1024)
+	stubLocalSnapshotExpandedSize(t, 1024)
 	oldRunSSH := runSSHCommandFn
 	runSSHCommandFn = func(args []string) error {
 		t.Fatalf("runSSHCommandFn called after failed disk check: %#v", args)
@@ -12918,7 +12994,9 @@ func TestExecuteEnvPullChecksLocalSpaceBeforeRsync(t *testing.T) {
 	cfg := envConfig{ProjectSlug: "client", EnvDir: config.EnvDir("client"), Compose: "docker compose", WordpressService: "wordpress", DockerUser: "nonfiction", UploadsPath: "uploads", WordpressPort: 18432}
 	target := envRemoteSyncTarget{RemoteName: "production", Provider: "linode", SiteID: "client.app1-linode", Env: "live", URL: "https://client.app1-linode.nonfiction.dev/", SSHUser: "nonfiction", SSHHost: "app1-linode.nonfiction.dev", SSHPort: "22", WordPressPath: "/var/www/sites/client/public", WPCommand: "sudo -u www-data wp", SudoFileOps: true}
 	stubEnvRemoteDiskOutput(t, "0\n", "1073741824\n", "1073741824\n")
-	stubLocalAvailableDisk(t, 1)
+	stubLocalAvailableDiskOutputs(t, 1073741824, 1)
+	stubLocalWordPressTransferEstimate(t, 1024)
+	stubLocalSnapshotExpandedSize(t, 1024)
 	oldRunSSH := runSSHCommandFn
 	var sshCommands [][]string
 	runSSHCommandFn = func(args []string) error {
@@ -12943,8 +13021,55 @@ func TestExecuteEnvPullChecksLocalSpaceBeforeRsync(t *testing.T) {
 	if !strings.Contains(stderr, "not enough disk space for local pull snapshot") {
 		t.Fatalf("stderr missing local disk error:\n%s", stderr)
 	}
-	if len(sshCommands) != 1 || !strings.Contains(sshCommands[0][len(sshCommands[0])-1], "db export") {
+	if len(sshCommands) != 2 || !strings.Contains(sshCommands[0][len(sshCommands[0])-1], "db export") || !strings.Contains(sshCommands[1][len(sshCommands[1])-1], "rm -rf -- /tmp/nf-pull-") {
 		t.Fatalf("ssh commands before local disk failure = %#v", sshCommands)
+	}
+}
+
+func TestExecuteEnvPullCleansRemoteTempAfterExportFailure(t *testing.T) {
+	configHome := t.TempDir()
+	t.Setenv("NF_CONFIG_HOME", configHome)
+	t.Setenv("NF_DATA_HOME", configHome)
+	dockerDir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dockerDir, "docker"), []byte("#!/bin/sh\nexit 0\n"), 0o755); err != nil {
+		t.Fatalf("WriteFile(docker) error = %v", err)
+	}
+	t.Setenv("PATH", dockerDir+string(os.PathListSeparator)+os.Getenv("PATH"))
+	cfg := envConfig{ProjectSlug: "client", EnvDir: config.EnvDir("client"), Compose: "docker compose", WordpressService: "wordpress", DockerUser: "nonfiction", UploadsPath: "uploads", WordpressPort: 18432}
+	target := envRemoteSyncTarget{RemoteName: "production", Provider: "linode", SiteID: "client.app1-linode", Env: "live", URL: "https://client.app1-linode.nonfiction.dev/", SSHUser: "nonfiction", SSHHost: "app1-linode.nonfiction.dev", SSHPort: "22", WordPressPath: "/var/www/sites/client/public", WPCommand: "sudo -u www-data wp", SudoFileOps: true}
+	stubEnvRemoteDiskOutput(t, "0\n", "1073741824\n")
+	stubLocalAvailableDisk(t, 1073741824)
+	stubLocalWordPressTransferEstimate(t, 1024)
+	stubLocalSnapshotExpandedSize(t, 1024)
+	oldRunSSH := runSSHCommandFn
+	var sshCommands [][]string
+	runSSHCommandFn = func(args []string) error {
+		sshCommands = append(sshCommands, append([]string(nil), args...))
+		if len(sshCommands) == 1 {
+			return fmt.Errorf("export failed")
+		}
+		return nil
+	}
+	t.Cleanup(func() { runSSHCommandFn = oldRunSSH })
+	oldRunRsync := runRsyncCommandFn
+	runRsyncCommandFn = func(args []string) error {
+		t.Fatalf("runRsyncCommandFn called after failed export: %#v", args)
+		return nil
+	}
+	t.Cleanup(func() { runRsyncCommandFn = oldRunRsync })
+
+	stderr := captureStderr(t, func() {
+		captureStdout(t, func() {
+			if got := executeEnvPull(cfg, target); got != 1 {
+				t.Fatalf("executeEnvPull() = %d, want 1", got)
+			}
+		})
+	})
+	if !strings.Contains(stderr, "export failed") {
+		t.Fatalf("stderr missing export error:\n%s", stderr)
+	}
+	if len(sshCommands) != 2 || !strings.Contains(sshCommands[0][len(sshCommands[0])-1], "db export") || !strings.Contains(sshCommands[1][len(sshCommands[1])-1], "rm -rf -- /tmp/nf-pull-") {
+		t.Fatalf("ssh commands = %#v, want export then cleanup", sshCommands)
 	}
 }
 
@@ -16993,6 +17118,7 @@ func TestRunEnvResetPrintsUnderlyingCommands(t *testing.T) {
 	writeTestWPDefaults(t, "test-salt")
 	t.Setenv("DOCKER_LOG", logPath)
 	t.Setenv("PATH", dockerDir+string(os.PathListSeparator)+os.Getenv("PATH"))
+	stubLocalWordPressTransferEstimate(t, 1024)
 
 	oldwd, err := os.Getwd()
 	if err != nil {

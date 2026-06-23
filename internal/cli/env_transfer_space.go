@@ -3,8 +3,12 @@ package cli
 // Disk-space and transfer helpers for env push/pull.
 
 import (
+	"archive/tar"
+	"compress/gzip"
 	"fmt"
+	"io"
 	"os"
+	"path"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -69,6 +73,25 @@ func ensureDiskSpace(label, path string, requiredBytes, availableBytes int64) er
 	}
 	fmt.Printf("Disk space ok for %s: need %s, available %s\n", label, formatEnvSnapshotSize(requiredBytes), formatEnvSnapshotSize(availableBytes))
 	return nil
+}
+
+func ensureLocalSnapshotCreateDiskSpace(cfg envConfig) (int64, error) {
+	estimate, err := localWordPressTransferEstimateBytesFn(cfg)
+	if err != nil {
+		return 0, err
+	}
+	if err := ensureLocalDiskSpace(envSnapshotProjectDir(cfg), "snapshot workspace", envTransferRequiredBytes(estimate)); err != nil {
+		return 0, err
+	}
+	return estimate, nil
+}
+
+func ensureLocalSnapshotRestoreDiskSpace(cfg envConfig, name string) error {
+	expandedSize, err := localSnapshotExpandedSizeBytesFn(cfg, name)
+	if err != nil {
+		return err
+	}
+	return ensureLocalDiskSpace(envSnapshotDir(cfg, name), "restore workspace", envTransferRequiredBytes(expandedSize))
 }
 
 func localAvailableDiskBytes(path string) (int64, error) {
@@ -145,6 +168,76 @@ func localPathSizeBytes(path string) (int64, error) {
 	return total, err
 }
 
+func localWordPressTransferEstimateBytes(cfg envConfig) (int64, error) {
+	output, err := runCommandSpecOutputSilentFn(execSpec{Dir: localEnvDir(cfg), Args: envSnapshotComposeArgs(cfg, localWordPressTransferEstimateScript())})
+	if err != nil {
+		return 0, err
+	}
+	return parseDiskBytes([]byte(output))
+}
+
+func localSnapshotExpandedSizeBytes(cfg envConfig, name string) (int64, error) {
+	databaseSize, err := gzipUncompressedSizeBytes(envSnapshotHostDatabaseArchive(cfg, name))
+	if err != nil {
+		return 0, err
+	}
+	wpContentSize, err := tarGzExpandedSizeBytes(envSnapshotHostWpContentArchive(cfg, name))
+	if err != nil {
+		return 0, err
+	}
+	return addEnvTransferBytes(databaseSize, wpContentSize), nil
+}
+
+func gzipUncompressedSizeBytes(filePath string) (int64, error) {
+	file, err := os.Open(filePath)
+	if err != nil {
+		return 0, err
+	}
+	defer file.Close()
+	reader, err := gzip.NewReader(file)
+	if err != nil {
+		return 0, err
+	}
+	defer reader.Close()
+	written, err := io.Copy(io.Discard, reader)
+	if err != nil {
+		return 0, err
+	}
+	return written, nil
+}
+
+func tarGzExpandedSizeBytes(filePath string) (int64, error) {
+	file, err := os.Open(filePath)
+	if err != nil {
+		return 0, err
+	}
+	defer file.Close()
+	gz, err := gzip.NewReader(file)
+	if err != nil {
+		return 0, err
+	}
+	defer gz.Close()
+	reader := tar.NewReader(gz)
+	total := int64(0)
+	for {
+		header, err := reader.Next()
+		if err == io.EOF {
+			break
+		}
+		if err != nil {
+			return 0, err
+		}
+		if header.Typeflag != tar.TypeReg && header.Typeflag != tar.TypeRegA {
+			continue
+		}
+		if total > maxInt64-header.Size {
+			return maxInt64, nil
+		}
+		total += header.Size
+	}
+	return total, nil
+}
+
 func remoteAvailableDiskBytes(target envRemoteSyncTarget, remotePath string) (int64, error) {
 	output, err := runSSHOutputFn(remoteSSHArgs(target, remoteAvailableDiskScript(remotePath)))
 	if err != nil {
@@ -179,6 +272,25 @@ func parseDiskBytes(output []byte) (int64, error) {
 		return 0, fmt.Errorf("parse disk-space probe output %q: %w", strings.TrimSpace(string(output)), err)
 	}
 	return value, nil
+}
+
+func localWordPressTransferEstimateScript() string {
+	sql := shellQuoteArg("SELECT COALESCE(SUM(data_length + index_length), 0) FROM information_schema.tables WHERE table_schema = DATABASE()")
+	return fmt.Sprintf(`set -eu
+wp_path=/var/www/html
+bytes=0
+for dir in wp-content/uploads wp-content/plugins wp-content/mu-plugins wp-content/languages; do
+  if [ -e "$wp_path/$dir" ]; then
+    kb=$(du -sk "$wp_path/$dir" 2>/dev/null | awk 'NR==1 { printf "%%.0f\n", $1 }')
+    case "$kb" in ''|*[!0-9]*) kb=0 ;; esac
+    bytes=$((bytes + kb * 1024))
+  fi
+done
+db_bytes=$(wp --path="$wp_path" db query %s --skip-column-names 2>/dev/null | awk 'NR==1 { gsub(/[^0-9]/, "", $0); print $0 }' || true)
+case "$db_bytes" in ''|*[!0-9]*) db_bytes=0 ;; esac
+bytes=$((bytes + db_bytes))
+printf '%%s\n' "$bytes"
+`, sql)
 }
 
 func remoteAvailableDiskScript(remotePath string) string {
@@ -216,4 +328,28 @@ case "$db_bytes" in ''|*[!0-9]*) db_bytes=0 ;; esac
 bytes=$((bytes + db_bytes))
 printf '%%s\n' "$bytes"
 `, wpPath, target.WPCommand, wpPath, sql)
+}
+
+func cleanupRemoteTempDir(target envRemoteSyncTarget, remotePath string) {
+	if !isSafeRemoteTempDir(remotePath) {
+		fmt.Fprintf(os.Stderr, "Warning: refusing to clean unsafe remote temp dir %q.\n", remotePath)
+		return
+	}
+	if err := runSSHCommandFn(remoteSSHArgs(target, "rm -rf -- "+shellQuoteArg(path.Clean(remotePath)))); err != nil {
+		fmt.Fprintf(os.Stderr, "Warning: failed to clean remote temp dir %s: %v\n", remotePath, err)
+	}
+}
+
+func isSafeRemoteTempDir(remotePath string) bool {
+	cleaned := path.Clean(strings.TrimSpace(remotePath))
+	if path.Dir(cleaned) != "/tmp" {
+		return false
+	}
+	base := path.Base(cleaned)
+	for _, prefix := range []string{"nf-pull-", "nf-push-", "nf-backup-", "nf-snapshot-", "nf-export-"} {
+		if strings.HasPrefix(base, prefix) && len(base) > len(prefix) {
+			return true
+		}
+	}
+	return false
 }

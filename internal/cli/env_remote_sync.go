@@ -496,7 +496,17 @@ func executeEnvPull(cfg envConfig, target envRemoteSyncTarget) int {
 		fmt.Fprintln(os.Stderr, err)
 		return 1
 	}
+	if err := os.Chmod(envSnapshotDir(cfg, name), 0o777); err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		return 1
+	}
 	remoteTmp := remoteSyncTempDir(cfg, target, "pull")
+	remoteTmpCreated := false
+	defer func() {
+		if remoteTmpCreated {
+			cleanupRemoteTempDir(target, remoteTmp)
+		}
+	}()
 	remoteEstimate, err := remoteWordPressTransferEstimateBytes(target)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, err)
@@ -506,6 +516,7 @@ func executeEnvPull(cfg envConfig, target envRemoteSyncTarget) int {
 		fmt.Fprintln(os.Stderr, err)
 		return 1
 	}
+	remoteTmpCreated = true
 	if err := runSSHCommandFn(remoteSSHArgs(target, remoteExportScript(target, remoteTmp))); err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		return 1
@@ -566,16 +577,38 @@ func executeEnvPush(cfg envConfig, target envRemoteSyncTarget) int {
 		fmt.Fprintln(os.Stderr, err)
 		return 1
 	}
+	snapshotExpandedSize, err := localSnapshotExpandedSizeBytesFn(cfg, name)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		return 1
+	}
 	remoteEstimate, err := remoteWordPressTransferEstimateBytes(target)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		return 1
 	}
-	remoteRequired := envTransferRequiredBytes(addEnvTransferBytes(snapshotSize, remoteEstimate))
-	if err := ensureRemoteDiskSpace(target, path.Dir(remoteTmp), "push workspace", remoteRequired); err != nil {
+	if err := ensureRemoteDiskSpace(target, path.Dir(remoteTmp), "push workspace", envTransferRequiredBytes(snapshotSize)); err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		return 1
 	}
+	remoteTmpCreated := false
+	backupTmp := ""
+	backupComplete := false
+	pushSucceeded := false
+	defer func() {
+		if remoteTmpCreated {
+			cleanupRemoteTempDir(target, remoteTmp)
+		}
+		if backupTmp == "" {
+			return
+		}
+		if pushSucceeded || !backupComplete {
+			cleanupRemoteTempDir(target, backupTmp)
+			return
+		}
+		fmt.Fprintf(os.Stderr, "Remote backup retained for recovery: %s\n", backupTmp)
+	}()
+	remoteTmpCreated = true
 	if err := runSSHCommandFn(remoteSSHArgs(target, "rm -rf "+shellQuoteArg(remoteTmp)+" && mkdir -p "+shellQuoteArg(remoteTmp))); err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		return 1
@@ -584,8 +617,17 @@ func executeEnvPush(cfg envConfig, target envRemoteSyncTarget) int {
 		fmt.Fprintln(os.Stderr, err)
 		return 1
 	}
-	backupTmp := remoteSyncTempDir(cfg, target, "backup")
+	if err := ensureRemoteDiskSpace(target, path.Dir(remoteTmp), "push backup/import workspace", envTransferRequiredBytes(addEnvTransferBytes(remoteEstimate, snapshotExpandedSize))); err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		return 1
+	}
+	backupTmp = remoteSyncTempDir(cfg, target, "backup")
 	if err := runSSHCommandFn(remoteSSHArgs(target, remoteExportScript(target, backupTmp))); err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		return 1
+	}
+	backupComplete = true
+	if err := ensureRemoteDiskSpace(target, path.Dir(remoteTmp), "push import workspace", envTransferRequiredBytes(snapshotExpandedSize)); err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		return 1
 	}
@@ -597,7 +639,8 @@ func executeEnvPush(cfg envConfig, target envRemoteSyncTarget) int {
 		fmt.Fprintln(os.Stderr, err)
 		return 1
 	}
-	fmt.Printf("Env pushed.\n\nLocal snapshot: %s\nRemote backup: %s\n", name, backupTmp)
+	pushSucceeded = true
+	fmt.Printf("Env pushed.\n\nLocal snapshot: %s\nRemote backup: cleaned up after successful push\n", name)
 	return 0
 }
 

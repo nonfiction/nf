@@ -9,6 +9,7 @@ import (
 	"net/url"
 	"os"
 	"os/exec"
+	"path"
 	"path/filepath"
 	"sort"
 	"strings"
@@ -222,8 +223,11 @@ func envSnapshotRestoreScript(cfg envConfig, name string) string {
 	wpContentArchive := envSnapshotContainerWpContentArchive(name)
 	repoPlugins := shellQuoteArg(envRepoPluginSlugList(cfg))
 	excludes := envRepoPluginTarExcludeArgs(cfg)
+	tmpDir := path.Join(envSnapshotContainerDir(name), ".restore-tmp")
 	return fmt.Sprintf(`set -eu
-tmpdir="$(mktemp -d)"
+tmpdir=%s
+rm -rf "$tmpdir"
+mkdir -p "$tmpdir"
 trap 'rm -rf "$tmpdir"' EXIT
 gzip -cd "%s" > "$tmpdir/database.sql"
 wp db import "$tmpdir/database.sql"
@@ -261,7 +265,7 @@ if [ -f "%s" ]; then
   copy_dir_contents "$extract_dir/wp-content/languages" /var/www/html/wp-content/languages
   copy_dir_contents "$extract_dir/wp-content/plugins" /var/www/html/wp-content/plugins
 fi
-`, databaseArchive, wpContentArchive, excludes, wpContentArchive, repoPlugins)
+`, shellQuoteArg(tmpDir), databaseArchive, wpContentArchive, excludes, wpContentArchive, repoPlugins)
 }
 
 func envSnapshotComposeArgs(cfg envConfig, args ...string) []string {
@@ -342,6 +346,9 @@ func envSnapshotCreateArchives(cfg envConfig, name string) error {
 	if err := os.Chmod(envSnapshotDir(cfg, name), 0o777); err != nil {
 		return err
 	}
+	if _, err := ensureLocalSnapshotCreateDiskSpace(cfg); err != nil {
+		return err
+	}
 	if err := runCommandSpecNoPreview(execSpec{Dir: localEnvDir(cfg), Args: envSnapshotComposeArgs(cfg, envSnapshotCreateScript(cfg, name))}); err != nil {
 		return err
 	}
@@ -349,6 +356,9 @@ func envSnapshotCreateArchives(cfg envConfig, name string) error {
 }
 
 func envSnapshotRestoreArchives(cfg envConfig, name string) error {
+	if err := ensureLocalSnapshotRestoreDiskSpace(cfg, name); err != nil {
+		return err
+	}
 	if err := runCommandSpecNoPreview(execSpec{Dir: localEnvDir(cfg), Args: envSnapshotComposeArgs(cfg, envSnapshotRestoreScript(cfg, name))}); err != nil {
 		return err
 	}
