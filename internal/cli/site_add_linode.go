@@ -9,7 +9,6 @@ import (
 	"strings"
 
 	"github.com/nonfiction/nf/internal/state"
-	"github.com/nonfiction/nf/internal/ui"
 )
 
 func ensureSiteNotCached(records []map[string]any, site string) error {
@@ -264,7 +263,7 @@ func cmdSiteAdd(args siteAddArgs) int {
 		if args.withStaging {
 			message = fmt.Sprintf("Add site %q with live and staging envs on target %q?", plan.Site, plan.TargetName)
 		}
-		confirmed, err := ui.Confirm(message, false)
+		confirmed, err := siteAddConfirmFn(message, false)
 		if err != nil {
 			fmt.Fprintln(os.Stderr, err)
 			return 1

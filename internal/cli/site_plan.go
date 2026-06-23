@@ -27,6 +27,7 @@ type siteAddArgs struct {
 	passwordVersion    string
 	passwordVersionSet bool
 	withStaging        bool
+	withStagingSet     bool
 	execute            bool
 	dryRun             bool
 	yes                bool

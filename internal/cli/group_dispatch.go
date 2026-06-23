@@ -328,7 +328,7 @@ func runSite(argv []string) int {
 }
 
 func runSiteAdd(argv []string) int {
-	if len(argv) == 0 || argv[0] == "help" || argv[0] == "--help" || argv[0] == "-h" {
+	if len(argv) > 0 && (argv[0] == "help" || argv[0] == "--help" || argv[0] == "-h") {
 		printGroupHelp("site add", []helpLine{
 			{"<target> <site> [flags]", "create a live env"},
 			{},
@@ -360,6 +360,7 @@ func runSiteAdd(argv []string) int {
 			args.dryRun = true
 		case "--with-staging":
 			args.withStaging = true
+			args.withStagingSet = true
 		case "--password-version":
 			if i+1 >= len(argv) || strings.TrimSpace(argv[i+1]) == "" {
 				fmt.Fprintln(os.Stderr, "--password-version requires a value")
@@ -441,12 +442,12 @@ func runSiteAdd(argv []string) int {
 			positionals = append(positionals, arg)
 		}
 	}
-	if len(positionals) != 2 {
-		fmt.Fprintln(os.Stderr, "site add takes exactly target and site")
+	var err error
+	args, err = resolveSiteAddArgs(args, positionals)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, err)
 		return 1
 	}
-	args.target = positionals[0]
-	args.site = positionals[1]
 	if err := validateSiteAddSlug(args.site); err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		return 1

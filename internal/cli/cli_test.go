@@ -3626,6 +3626,319 @@ func TestRunSiteAddLinodeDryRunPlansLiveOnlyByDefault(t *testing.T) {
 	}
 }
 
+func TestRunSiteAddWithoutArgumentsPromptsForTargetSiteAndStaging(t *testing.T) {
+	configDir := t.TempDir()
+	stateDir := t.TempDir()
+	t.Setenv("NF_CONFIG_HOME", configDir)
+	t.Setenv("NF_STATE_HOME", stateDir)
+	t.Setenv("NF_PASSWORD_SALT", "test-salt")
+	if err := saveGlobalConfig(map[string]string{"base_domain": "nonfiction.dev", "default_wp_email": "web@nonfiction.ca", "default_wp_user": "admin", "linode_default_user": "nonfiction"}); err != nil {
+		t.Fatalf("saveGlobalConfig() error = %v", err)
+	}
+	if err := state.SaveStateRecords("providers", []map[string]any{{"provider": "linode", "targets": []map[string]any{{"name": "app1-linode", "provider": "linode", "hostname": "app1-linode.nonfiction.dev", "php": map[string]any{"version": "8.3", "service": "php8.3-fpm"}, "ssh": map[string]any{"user": "nonfiction", "host": "app1-linode.nonfiction.dev"}}}}}); err != nil {
+		t.Fatalf("SaveStateRecords(providers) error = %v", err)
+	}
+
+	oldSelect := siteAddSelectFn
+	oldPrompt := siteAddPromptStringFn
+	oldConfirm := siteAddConfirmFn
+	oldInteractive := siteIsInteractiveFn
+	oldRunSSH := runSSHScriptFn
+	t.Cleanup(func() {
+		siteAddSelectFn = oldSelect
+		siteAddPromptStringFn = oldPrompt
+		siteAddConfirmFn = oldConfirm
+		siteIsInteractiveFn = oldInteractive
+		runSSHScriptFn = oldRunSSH
+	})
+
+	siteIsInteractiveFn = func() bool { return true }
+	var targetOptions []ui.SelectOption
+	var stagingOptions []ui.SelectOption
+	siteAddSelectFn = func(title string, options []ui.SelectOption) (string, error) {
+		switch title {
+		case "Choose a target":
+			targetOptions = append([]ui.SelectOption(nil), options...)
+			return "app1-linode", nil
+		case "Create a staging environment too":
+			stagingOptions = append([]ui.SelectOption(nil), options...)
+			return "yes", nil
+		default:
+			t.Fatalf("unexpected select title %q", title)
+			return "", nil
+		}
+	}
+	var prompts []string
+	siteAddPromptStringFn = func(prompt, defaultValue string, allowBlank bool) (string, error) {
+		prompts = append(prompts, prompt)
+		if prompt != "Site name" {
+			t.Fatalf("unexpected prompt %q", prompt)
+		}
+		return "foobar", nil
+	}
+	var confirmMessage string
+	siteAddConfirmFn = func(prompt string, defaultYes bool) (bool, error) {
+		confirmMessage = prompt
+		if defaultYes {
+			t.Fatalf("site add confirm defaultYes = true, want false")
+		}
+		return true, nil
+	}
+	var sshUser, sshHost, sshScript string
+	runSSHScriptFn = func(user, host, script string) error {
+		sshUser, sshHost, sshScript = user, host, script
+		return nil
+	}
+
+	output := captureStdout(t, func() {
+		if got := Run([]string{"site", "add"}); got != 0 {
+			t.Fatalf("Run(site add) = %d, want 0", got)
+		}
+	})
+	if len(targetOptions) != 1 || targetOptions[0] != (ui.SelectOption{Value: "app1-linode", Label: "app1-linode (linode)"}) {
+		t.Fatalf("target options = %#v", targetOptions)
+	}
+	if len(stagingOptions) != 2 || stagingOptions[0].Value != "yes" || stagingOptions[1] != (ui.SelectOption{Value: "no", Label: "No", Default: true}) {
+		t.Fatalf("staging options = %#v", stagingOptions)
+	}
+	if !reflect.DeepEqual(prompts, []string{"Site name"}) {
+		t.Fatalf("prompts = %#v", prompts)
+	}
+	if confirmMessage != "Add site \"foobar\" with live and staging envs on target \"app1-linode\"?" {
+		t.Fatalf("confirm message = %q", confirmMessage)
+	}
+	if sshUser != "nonfiction" || sshHost != "app1-linode.nonfiction.dev" || !strings.Contains(sshScript, "foobar-staging.app1-linode.nonfiction.dev") {
+		t.Fatalf("ssh call = user %q host %q script contains staging=%v", sshUser, sshHost, strings.Contains(sshScript, "foobar-staging.app1-linode.nonfiction.dev"))
+	}
+	for _, want := range []string{"Add site plan:", "target: app1-linode", "site: foobar", "env staging:", "mode: execute", "Site added."} {
+		if !strings.Contains(output, want) {
+			t.Fatalf("site add output missing %q:\n%s", want, output)
+		}
+	}
+	sites, err := state.LoadStateRecords("sites")
+	if err != nil {
+		t.Fatalf("LoadStateRecords(sites) error = %v", err)
+	}
+	if len(sites) != 2 {
+		t.Fatalf("sites len = %d, want 2: %#v", len(sites), sites)
+	}
+}
+
+func TestRunSiteAddPromptsUntilSiteNameIsValidAndAvailable(t *testing.T) {
+	configDir := t.TempDir()
+	stateDir := t.TempDir()
+	t.Setenv("NF_CONFIG_HOME", configDir)
+	t.Setenv("NF_STATE_HOME", stateDir)
+	t.Setenv("NF_PASSWORD_SALT", "test-salt")
+	if err := saveGlobalConfig(map[string]string{"base_domain": "nonfiction.dev", "default_wp_email": "web@nonfiction.ca", "default_wp_user": "admin", "linode_default_user": "nonfiction"}); err != nil {
+		t.Fatalf("saveGlobalConfig() error = %v", err)
+	}
+	if err := state.SaveStateRecords("providers", []map[string]any{{"provider": "linode", "targets": []map[string]any{{"name": "app1-linode", "provider": "linode", "hostname": "app1-linode.nonfiction.dev", "ssh_user": "nonfiction"}}}}); err != nil {
+		t.Fatalf("SaveStateRecords(providers) error = %v", err)
+	}
+	if err := state.SaveStateRecords("sites", []map[string]any{{"provider": "linode", "site_id": "taken.app1-linode", "name": "taken", "env": "live", "target": "app1-linode"}}); err != nil {
+		t.Fatalf("SaveStateRecords(sites) error = %v", err)
+	}
+
+	oldSelect := siteAddSelectFn
+	oldPrompt := siteAddPromptStringFn
+	oldInteractive := siteIsInteractiveFn
+	oldRunSSH := runSSHScriptFn
+	t.Cleanup(func() {
+		siteAddSelectFn = oldSelect
+		siteAddPromptStringFn = oldPrompt
+		siteIsInteractiveFn = oldInteractive
+		runSSHScriptFn = oldRunSSH
+	})
+	siteIsInteractiveFn = func() bool { return true }
+	siteAddSelectFn = func(title string, options []ui.SelectOption) (string, error) {
+		switch title {
+		case "Choose a target":
+			return "app1-linode", nil
+		case "Create a staging environment too":
+			return "no", nil
+		default:
+			t.Fatalf("unexpected select title %q", title)
+			return "", nil
+		}
+	}
+	answers := []string{"Client", "taken", "fresh"}
+	siteAddPromptStringFn = func(prompt, defaultValue string, allowBlank bool) (string, error) {
+		if prompt != "Site name" {
+			t.Fatalf("unexpected prompt %q", prompt)
+		}
+		if len(answers) == 0 {
+			t.Fatal("site prompt called too many times")
+		}
+		answer := answers[0]
+		answers = answers[1:]
+		return answer, nil
+	}
+	runSSHScriptFn = func(user, host, script string) error {
+		t.Fatalf("runSSHScriptFn called during dry-run")
+		return nil
+	}
+
+	var output string
+	stderr := captureStderr(t, func() {
+		output = captureStdout(t, func() {
+			if got := Run([]string{"site", "add", "--dry-run"}); got != 0 {
+				t.Fatalf("Run(site add --dry-run) = %d, want 0", got)
+			}
+		})
+	})
+	for _, want := range []string{"invalid site slug \"Client\"", "Site \"taken.app1-linode\" already exists in local site cache."} {
+		if !strings.Contains(stderr, want) {
+			t.Fatalf("stderr missing %q:\n%s", want, stderr)
+		}
+	}
+	for _, want := range []string{"site: fresh", "site id: fresh.app1-linode", "mode: dry-run"} {
+		if !strings.Contains(output, want) {
+			t.Fatalf("output missing %q:\n%s", want, output)
+		}
+	}
+	if len(answers) != 0 {
+		t.Fatalf("unused prompt answers: %#v", answers)
+	}
+	if _, err := os.Stat(filepath.Join(stateDir, "sites.json")); err != nil {
+		t.Fatalf("sites.json should still exist with fixture: %v", err)
+	}
+}
+
+func TestRunSiteAddKinstaPromptsUntilKinstaSlugIsValidAndAvailable(t *testing.T) {
+	configDir := t.TempDir()
+	stateDir := t.TempDir()
+	t.Setenv("NF_CONFIG_HOME", configDir)
+	t.Setenv("NF_STATE_HOME", stateDir)
+	t.Setenv("NF_PASSWORD_SALT", "test-salt")
+	t.Setenv("KINSTA_API_KEY", "kinsta-token")
+	if err := saveGlobalConfig(map[string]string{"base_domain": "nonfiction.dev", "default_wp_email": "web@nonfiction.ca", "default_wp_user": "admin", "dnsimple_account_id": "14", "kinsta_default_region": "ca-toronto-1"}); err != nil {
+		t.Fatalf("saveGlobalConfig() error = %v", err)
+	}
+	if err := state.SaveStateRecords("providers", []map[string]any{{"provider": "kinsta", "targets": []map[string]any{{"name": "kinsta", "provider": "kinsta", "company_id": "company-123", "status": "active"}}}}); err != nil {
+		t.Fatalf("SaveStateRecords(providers) error = %v", err)
+	}
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		switch r.Method + " " + r.URL.Path {
+		case "GET /sites":
+			_ = json.NewEncoder(w).Encode(map[string]any{"company": map[string]any{"sites": []map[string]any{}}})
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	t.Cleanup(server.Close)
+	t.Setenv("KINSTA_BASE_URL", server.URL)
+
+	oldLookup := kinstaLookupHost
+	oldProvision := kinstaProvisionSiteFn
+	oldSelect := siteAddSelectFn
+	oldPrompt := siteAddPromptStringFn
+	oldInteractive := siteIsInteractiveFn
+	t.Cleanup(func() {
+		kinstaLookupHost = oldLookup
+		kinstaProvisionSiteFn = oldProvision
+		siteAddSelectFn = oldSelect
+		siteAddPromptStringFn = oldPrompt
+		siteIsInteractiveFn = oldInteractive
+	})
+	kinstaLookupHost = func(host string) ([]string, error) {
+		switch host {
+		case "nonfiction.kinsta.cloud":
+			return []string{"203.0.113.10"}, nil
+		case "nonfiction2.kinsta.cloud":
+			return nil, &net.DNSError{Err: "no such host", Name: host, IsNotFound: true}
+		default:
+			t.Fatalf("unexpected Kinsta lookup host %q", host)
+			return nil, nil
+		}
+	}
+	kinstaProvisionSiteFn = func(plan kinstaSiteAddPlan) (kinstaProvisionResult, error) {
+		t.Fatalf("kinstaProvisionSiteFn called during dry-run")
+		return kinstaProvisionResult{}, nil
+	}
+	siteIsInteractiveFn = func() bool { return true }
+	siteAddSelectFn = func(title string, options []ui.SelectOption) (string, error) {
+		switch title {
+		case "Choose a target":
+			return "kinsta", nil
+		case "Create a staging environment too":
+			return "no", nil
+		default:
+			t.Fatalf("unexpected select title %q", title)
+			return "", nil
+		}
+	}
+	kinstaSlugAnswers := []string{"bad slug", "nonfiction2"}
+	siteAddPromptStringFn = func(prompt, defaultValue string, allowBlank bool) (string, error) {
+		switch prompt {
+		case "Site name":
+			return "nonfiction", nil
+		case "Kinsta slug":
+			if defaultValue != "nonfiction" {
+				t.Fatalf("Kinsta slug default = %q, want nonfiction", defaultValue)
+			}
+			if len(kinstaSlugAnswers) == 0 {
+				t.Fatal("Kinsta slug prompt called too many times")
+			}
+			answer := kinstaSlugAnswers[0]
+			kinstaSlugAnswers = kinstaSlugAnswers[1:]
+			return answer, nil
+		default:
+			t.Fatalf("unexpected prompt %q", prompt)
+			return "", nil
+		}
+	}
+
+	var output string
+	stderr := captureStderr(t, func() {
+		output = captureStdout(t, func() {
+			if got := Run([]string{"site", "add", "--dry-run"}); got != 0 {
+				t.Fatalf("Run(site add --dry-run) = %d, want 0", got)
+			}
+		})
+	})
+	for _, want := range []string{"Kinsta slug \"nonfiction\" appears unavailable", "invalid Kinsta slug \"bad slug\""} {
+		if !strings.Contains(stderr, want) {
+			t.Fatalf("stderr missing %q:\n%s", want, stderr)
+		}
+	}
+	for _, want := range []string{"site: nonfiction", "kinsta slug: nonfiction2", "site id: nonfiction.kinsta", "mode: dry-run"} {
+		if !strings.Contains(output, want) {
+			t.Fatalf("output missing %q:\n%s", want, output)
+		}
+	}
+	if len(kinstaSlugAnswers) != 0 {
+		t.Fatalf("unused Kinsta slug prompt answers: %#v", kinstaSlugAnswers)
+	}
+}
+
+func TestRunSiteAddNonInteractiveRequiresTargetAndSite(t *testing.T) {
+	oldSelect := siteAddSelectFn
+	oldPrompt := siteAddPromptStringFn
+	t.Cleanup(func() {
+		siteAddSelectFn = oldSelect
+		siteAddPromptStringFn = oldPrompt
+	})
+	siteAddSelectFn = func(title string, options []ui.SelectOption) (string, error) {
+		t.Fatalf("siteAddSelectFn called in non-interactive mode")
+		return "", nil
+	}
+	siteAddPromptStringFn = func(prompt, defaultValue string, allowBlank bool) (string, error) {
+		t.Fatalf("siteAddPromptStringFn called in non-interactive mode")
+		return "", nil
+	}
+
+	stderr := captureStderr(t, func() {
+		if got := Run([]string{"site", "add", "--non-interactive"}); got != 1 {
+			t.Fatalf("Run(site add --non-interactive) = %d, want 1", got)
+		}
+	})
+	if !strings.Contains(stderr, "site add requires target and site in non-interactive mode") {
+		t.Fatalf("stderr = %q", stderr)
+	}
+}
+
 func TestBuildSiteAddPlanUsesMatchingProjectPasswordVersion(t *testing.T) {
 	configDir := t.TempDir()
 	stateDir := t.TempDir()

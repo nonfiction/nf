@@ -16,7 +16,6 @@ import (
 	"github.com/nonfiction/nf/internal/envwizard"
 	"github.com/nonfiction/nf/internal/kinsta"
 	"github.com/nonfiction/nf/internal/state"
-	"github.com/nonfiction/nf/internal/ui"
 )
 
 func kinstaSiteID(site string) string {
@@ -322,7 +321,7 @@ func cmdKinstaSiteAdd(args siteAddArgs) int {
 				message = fmt.Sprintf("Resume site %q with live and staging envs on target %q?", plan.Site, plan.TargetName)
 			}
 		}
-		confirmed, err := ui.Confirm(message, false)
+		confirmed, err := siteAddConfirmFn(message, false)
 		if err != nil {
 			fmt.Fprintln(os.Stderr, err)
 			return 1
@@ -371,18 +370,11 @@ func provisionKinstaSite(plan kinstaSiteAddPlan) (kinstaProvisionResult, error) 
 	}
 	client := newKinstaClient(token)
 	ctx := context.Background()
-	companyID := plan.CompanyID
-	if companyID == "" {
-		validate, err := client.Validate(ctx)
-		if err != nil {
-			return kinstaProvisionResult{}, err
-		}
-		companyID = strings.TrimSpace(validate.Company)
-		if companyID == "" {
-			return kinstaProvisionResult{}, fmt.Errorf("Kinsta /v2/validate did not return a company uuid")
-		}
-		plan.CompanyID = companyID
+	companyID, err := resolveKinstaCompanyID(ctx, client, plan.CompanyID)
+	if err != nil {
+		return kinstaProvisionResult{}, err
 	}
+	plan.CompanyID = companyID
 	kinstaSite, err := ensureKinstaSite(ctx, client, plan, companyID)
 	if err != nil {
 		return kinstaProvisionResult{}, err
@@ -422,6 +414,22 @@ func newKinstaClient(token string) *kinsta.Client {
 		options = append(options, kinsta.WithGraphQLURL(graphqlURL))
 	}
 	return kinsta.NewClient(firstNonEmpty(envwizard.Value("KINSTA_BASE_URL"), "https://api.kinsta.com/v2"), token, options...)
+}
+
+func resolveKinstaCompanyID(ctx context.Context, client *kinsta.Client, companyID string) (string, error) {
+	companyID = strings.TrimSpace(companyID)
+	if companyID != "" {
+		return companyID, nil
+	}
+	validate, err := client.Validate(ctx)
+	if err != nil {
+		return "", err
+	}
+	companyID = strings.TrimSpace(validate.Company)
+	if companyID == "" {
+		return "", fmt.Errorf("Kinsta /v2/validate did not return a company uuid")
+	}
+	return companyID, nil
 }
 
 func provisionKinstaSelectedEnvs(ctx context.Context, client *kinsta.Client, dnsToken string, plan kinstaSiteAddPlan, companyID, kinstaSiteID string, liveEnv kinsta.Environment) (kinstaProvisionResult, error) {
@@ -927,20 +935,12 @@ func kinstaEnvPath(user, webRoot string) string {
 
 func ensureKinstaSite(ctx context.Context, client *kinsta.Client, plan kinstaSiteAddPlan, companyID string) (kinsta.Site, error) {
 	kinstaSlug := firstNonEmpty(strings.TrimSpace(plan.KinstaSlug), plan.Site)
-	sites, err := client.ListSites(ctx, companyID)
+	site, found, err := findOrValidateKinstaSiteSlug(ctx, client, companyID, kinstaSlug)
 	if err != nil {
 		return kinsta.Site{}, err
 	}
-	if site, ok := findKinstaSiteForRequestedSlug(sites, kinstaSlug); ok {
-		if err := validateKinstaSiteReturnedSlug(site, kinstaSlug); err != nil {
-			return kinsta.Site{}, err
-		}
+	if found {
 		return site, nil
-	}
-	// Only probe the shared *.kinsta.cloud namespace after confirming the slug
-	// is not already an exact canonical site in this Kinsta account.
-	if err := verifyKinstaCloudSlugAvailable(kinstaSlug); err != nil {
-		return kinsta.Site{}, err
 	}
 	fmt.Printf("Creating Kinsta site %s in %s...\n", kinstaSlug, plan.Region)
 	opID, err := client.CreateSite(ctx, kinsta.CreateSiteRequest{
@@ -964,7 +964,7 @@ func ensureKinstaSite(ctx context.Context, client *kinsta.Client, plan kinstaSit
 	if err := waitKinstaOperation(ctx, client, opID); err != nil {
 		return kinsta.Site{}, err
 	}
-	sites, err = client.ListSites(ctx, companyID)
+	sites, err := client.ListSites(ctx, companyID)
 	if err != nil {
 		return kinsta.Site{}, err
 	}
@@ -975,6 +975,38 @@ func ensureKinstaSite(ctx context.Context, client *kinsta.Client, plan kinstaSit
 		return site, nil
 	}
 	return kinsta.Site{}, fmt.Errorf("Kinsta site %q was created but was not found in site list", kinstaSlug)
+}
+
+func findOrValidateKinstaSiteSlug(ctx context.Context, client *kinsta.Client, companyID, kinstaSlug string) (kinsta.Site, bool, error) {
+	sites, err := client.ListSites(ctx, companyID)
+	if err != nil {
+		return kinsta.Site{}, false, err
+	}
+	if site, ok := findKinstaSiteForRequestedSlug(sites, kinstaSlug); ok {
+		if err := validateKinstaSiteReturnedSlug(site, kinstaSlug); err != nil {
+			return kinsta.Site{}, false, kinstaSlugRetryError{err: err}
+		}
+		return site, true, nil
+	}
+	// Only probe the shared *.kinsta.cloud namespace after confirming the slug
+	// is not already an exact canonical site in this Kinsta account.
+	if err := verifyKinstaCloudSlugAvailable(kinstaSlug); err != nil {
+		return kinsta.Site{}, false, kinstaSlugRetryError{err: err}
+	}
+	return kinsta.Site{}, false, nil
+}
+
+type kinstaSlugRetryError struct {
+	err error
+}
+
+func (e kinstaSlugRetryError) Error() string { return e.err.Error() }
+
+func (e kinstaSlugRetryError) Unwrap() error { return e.err }
+
+func isKinstaSlugRetryError(err error) bool {
+	var retry kinstaSlugRetryError
+	return errors.As(err, &retry)
 }
 
 func findKinstaSiteForRequestedSlug(sites []kinsta.Site, requested string) (kinsta.Site, bool) {

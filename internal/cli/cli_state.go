@@ -50,6 +50,9 @@ var (
 	runCommandSpecOutputSilentFn   = runCommandSpecOutputSilent
 	targetSelectFn                 = ui.Select
 	providerSelectFn               = ui.Select
+	siteAddSelectFn                = ui.Select
+	siteAddPromptStringFn          = ui.PromptString
+	siteAddConfirmFn               = ui.Confirm
 	siteSelectFn                   = ui.Select
 	siteDomainSelectFn             = ui.Select
 	siteDomainMultiSelectFn        = ui.MultiSelect
