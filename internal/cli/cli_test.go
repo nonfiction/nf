@@ -345,7 +345,7 @@ func TestGroupedHelpScreensUseIntendedOrder(t *testing.T) {
 		{
 			name:   "config",
 			render: func() string { return captureStdout(t, func() { _ = runConfigHelp() }) },
-			values: []string{"show", "init", "\n\n  set-base-domain <domain>", "set-default-wp-email <email>", "set-default-wp-user <user>", "set-basicauth-default-user <user>", "set-db-default-user <user>", "\nDocker Defaults:\n", "set-docker-db-image <image>", "\nKinsta Defaults:\n", "set-kinsta-default-region <region>", "set-kinsta-default-php <version>", "\nLinode Defaults:\n", "set-linode-default-region <region>", "set-linode-default-type <type>", "set-linode-default-image <image>", "set-linode-default-user <user>"},
+			values: []string{"show", "get <key>", "set <key> <value>", "unset <key>", "keys", "edit", "init", "\nExamples:\n", "nf config show", "nf config keys", "nf config get", "pick a key", "nf config set", "pick a key and value", "nf config get kinsta.php", "nf config set kinsta.php 8.3", "nf config unset kinsta.region"},
 		},
 		{
 			name:   "password",
@@ -406,6 +406,7 @@ func TestRunCompletionPrintsBashAndZshScripts(t *testing.T) {
 }
 
 func TestRunCompleteSuggestsStaticAndCachedValues(t *testing.T) {
+	t.Setenv("NF_CONFIG_HOME", t.TempDir())
 	stateDir := t.TempDir()
 	t.Setenv("NF_STATE_HOME", stateDir)
 	if err := state.SaveStateRecords("providers", []map[string]any{{
@@ -782,20 +783,38 @@ func TestRunCompleteSuggestsStaticAndCachedValues(t *testing.T) {
 	}
 
 	configOutput := captureStdout(t, func() {
-		if got := Run([]string{"__complete", "--", "config", "set-basic"}); got != 0 {
-			t.Fatalf("Run(__complete config set-basic) = %d, want 0", got)
+		if got := Run([]string{"__complete", "--", "config", "se"}); got != 0 {
+			t.Fatalf("Run(__complete config se) = %d, want 0", got)
 		}
 	})
-	if strings.TrimSpace(configOutput) != "set-basicauth-default-user" {
-		t.Fatalf("config completion = %q, want set-basicauth-default-user", configOutput)
+	if strings.TrimSpace(configOutput) != "set" {
+		t.Fatalf("config completion = %q, want set", configOutput)
 	}
 	configDBOutput := captureStdout(t, func() {
-		if got := Run([]string{"__complete", "--", "config", "set-db"}); got != 0 {
-			t.Fatalf("Run(__complete config set-db) = %d, want 0", got)
+		if got := Run([]string{"__complete", "--", "config", "get", "database."}); got != 0 {
+			t.Fatalf("Run(__complete config get database.) = %d, want 0", got)
 		}
 	})
-	if strings.TrimSpace(configDBOutput) != "set-db-default-user" {
-		t.Fatalf("config db completion = %q, want set-db-default-user", configDBOutput)
+	if strings.TrimSpace(configDBOutput) != "database.user" {
+		t.Fatalf("config key completion = %q, want database.user", configDBOutput)
+	}
+	configSetKeyOutput := captureStdout(t, func() {
+		if got := Run([]string{"__complete", "--", "config", "set", ""}); got != 0 {
+			t.Fatalf("Run(__complete config set) = %d, want 0", got)
+		}
+	})
+	for _, want := range []string{"core.base-domain\n", "kinsta.php\n", "linode.user\n"} {
+		if !strings.Contains(configSetKeyOutput, want) {
+			t.Fatalf("config set key completion missing %q:\n%s", want, configSetKeyOutput)
+		}
+	}
+	configSetValueOutput := captureStdout(t, func() {
+		if got := Run([]string{"__complete", "--", "config", "set", "kinsta.php", ""}); got != 0 {
+			t.Fatalf("Run(__complete config set kinsta.php) = %d, want 0", got)
+		}
+	})
+	if strings.TrimSpace(configSetValueOutput) != "8.3" {
+		t.Fatalf("config set value completion = %q, want 8.3", configSetValueOutput)
 	}
 	envUpFlagOutput := captureStdout(t, func() {
 		if got := Run([]string{"__complete", "--", "env", "up", "--"}); got != 0 {
@@ -1405,11 +1424,11 @@ func TestRunConfigSetKinstaDefaultPHP(t *testing.T) {
 	t.Setenv("NF_CONFIG_HOME", configDir)
 
 	output := captureStdout(t, func() {
-		if got := Run([]string{"config", "set-kinsta-default-php", "8.3"}); got != 0 {
-			t.Fatalf("Run(config set-kinsta-default-php) = %d, want 0", got)
+		if got := Run([]string{"config", "set", "kinsta.php", "8.3"}); got != 0 {
+			t.Fatalf("Run(config set kinsta.php) = %d, want 0", got)
 		}
 	})
-	if !strings.Contains(output, "Set kinsta_default_php") {
+	if !strings.Contains(output, "Set kinsta.php = 8.3") || !strings.Contains(output, "Path "+config.ConfigFile()) {
 		t.Fatalf("output = %q, want set message", output)
 	}
 	values, err := loadGlobalConfig()
@@ -1418,6 +1437,236 @@ func TestRunConfigSetKinstaDefaultPHP(t *testing.T) {
 	}
 	if got := values["kinsta_default_php"]; got != "8.3" {
 		t.Fatalf("kinsta_default_php = %q, want 8.3", got)
+	}
+}
+
+func TestRunConfigGetKinstaDefaultPHP(t *testing.T) {
+	configDir := t.TempDir()
+	t.Setenv("NF_CONFIG_HOME", configDir)
+	if err := saveGlobalConfig(map[string]string{"kinsta_default_php": "8.2"}); err != nil {
+		t.Fatalf("saveGlobalConfig() error = %v", err)
+	}
+
+	output := captureStdout(t, func() {
+		if got := Run([]string{"config", "get", "kinsta.php"}); got != 0 {
+			t.Fatalf("Run(config get kinsta.php) = %d, want 0", got)
+		}
+	})
+	if got, want := strings.TrimSpace(output), "8.2"; got != want {
+		t.Fatalf("config get kinsta.php = %q, want %q", got, want)
+	}
+}
+
+func TestRunConfigGetPromptsForKeyWhenMissing(t *testing.T) {
+	configDir := t.TempDir()
+	t.Setenv("NF_CONFIG_HOME", configDir)
+	if err := saveGlobalConfig(map[string]string{"kinsta_default_php": "8.2"}); err != nil {
+		t.Fatalf("saveGlobalConfig() error = %v", err)
+	}
+
+	oldSelect := configSelectFn
+	oldInteractive := configIsInteractive
+	t.Cleanup(func() {
+		configSelectFn = oldSelect
+		configIsInteractive = oldInteractive
+	})
+	configIsInteractive = func() bool { return true }
+	configSelectFn = func(title string, options []ui.SelectOption) (string, error) {
+		if title != "Choose a config key" {
+			t.Fatalf("select title = %q, want Choose a config key", title)
+		}
+		if !slices.ContainsFunc(options, func(option ui.SelectOption) bool {
+			return option.Value == "kinsta.php" && strings.Contains(option.Label, "default Kinsta PHP version")
+		}) {
+			t.Fatalf("select options missing kinsta.php: %#v", options)
+		}
+		return "kinsta.php", nil
+	}
+
+	output := captureStdout(t, func() {
+		if got := Run([]string{"config", "get"}); got != 0 {
+			t.Fatalf("Run(config get) = %d, want 0", got)
+		}
+	})
+	if got, want := strings.TrimSpace(output), "8.2"; got != want {
+		t.Fatalf("config get picker output = %q, want %q", got, want)
+	}
+}
+
+func TestRunConfigGetWithoutKeyRequiresInteractive(t *testing.T) {
+	oldInteractive := configIsInteractive
+	t.Cleanup(func() { configIsInteractive = oldInteractive })
+	configIsInteractive = func() bool { return false }
+
+	stderr := captureStderr(t, func() {
+		if got := Run([]string{"config", "get"}); got == 0 {
+			t.Fatalf("Run(config get) = 0, want failure")
+		}
+	})
+	if !strings.Contains(stderr, "config get requires a key") {
+		t.Fatalf("stderr = %q, want interactive error", stderr)
+	}
+}
+
+func TestRunConfigSetPromptsForKeyAndValueWhenMissing(t *testing.T) {
+	configDir := t.TempDir()
+	t.Setenv("NF_CONFIG_HOME", configDir)
+	if err := saveGlobalConfig(map[string]string{"kinsta_default_php": "8.2"}); err != nil {
+		t.Fatalf("saveGlobalConfig() error = %v", err)
+	}
+
+	oldSelect := configSelectFn
+	oldPromptString := configPromptString
+	oldInteractive := configIsInteractive
+	t.Cleanup(func() {
+		configSelectFn = oldSelect
+		configPromptString = oldPromptString
+		configIsInteractive = oldInteractive
+	})
+	configIsInteractive = func() bool { return true }
+	configSelectFn = func(title string, options []ui.SelectOption) (string, error) {
+		if title != "Choose a config key" {
+			t.Fatalf("select title = %q, want Choose a config key", title)
+		}
+		return "kinsta.php", nil
+	}
+	configPromptString = func(prompt, defaultValue string, allowBlank bool) (string, error) {
+		if prompt != "Value for kinsta.php" {
+			t.Fatalf("prompt = %q, want Value for kinsta.php", prompt)
+		}
+		if defaultValue != "8.2" {
+			t.Fatalf("prompt default = %q, want 8.2", defaultValue)
+		}
+		if allowBlank {
+			t.Fatalf("allowBlank = true, want false")
+		}
+		return "8.3", nil
+	}
+
+	output := captureStdout(t, func() {
+		if got := Run([]string{"config", "set"}); got != 0 {
+			t.Fatalf("Run(config set) = %d, want 0", got)
+		}
+	})
+	if !strings.Contains(output, "Set kinsta.php = 8.3") {
+		t.Fatalf("output = %q, want set message", output)
+	}
+	values, err := loadGlobalConfig()
+	if err != nil {
+		t.Fatalf("loadGlobalConfig() error = %v", err)
+	}
+	if got := values["kinsta_default_php"]; got != "8.3" {
+		t.Fatalf("kinsta_default_php = %q, want 8.3", got)
+	}
+}
+
+func TestRunConfigSetPromptsForValueWhenKeyProvided(t *testing.T) {
+	configDir := t.TempDir()
+	t.Setenv("NF_CONFIG_HOME", configDir)
+
+	oldPromptString := configPromptString
+	oldInteractive := configIsInteractive
+	t.Cleanup(func() {
+		configPromptString = oldPromptString
+		configIsInteractive = oldInteractive
+	})
+	configIsInteractive = func() bool { return true }
+	configPromptString = func(prompt, defaultValue string, allowBlank bool) (string, error) {
+		if prompt != "Value for kinsta.php" {
+			t.Fatalf("prompt = %q, want Value for kinsta.php", prompt)
+		}
+		if defaultValue != "8.3" {
+			t.Fatalf("prompt default = %q, want default 8.3", defaultValue)
+		}
+		return "8.4", nil
+	}
+
+	output := captureStdout(t, func() {
+		if got := Run([]string{"config", "set", "kinsta.php"}); got != 0 {
+			t.Fatalf("Run(config set kinsta.php) = %d, want 0", got)
+		}
+	})
+	if !strings.Contains(output, "Set kinsta.php = 8.4") {
+		t.Fatalf("output = %q, want set message", output)
+	}
+}
+
+func TestRunConfigSetWithoutArgsRequiresInteractive(t *testing.T) {
+	oldInteractive := configIsInteractive
+	t.Cleanup(func() { configIsInteractive = oldInteractive })
+	configIsInteractive = func() bool { return false }
+
+	stderr := captureStderr(t, func() {
+		if got := Run([]string{"config", "set"}); got == 0 {
+			t.Fatalf("Run(config set) = 0, want failure")
+		}
+	})
+	if !strings.Contains(stderr, "config set requires a key and value") {
+		t.Fatalf("stderr = %q, want interactive error", stderr)
+	}
+}
+
+func TestRunConfigUnsetKinstaRegion(t *testing.T) {
+	configDir := t.TempDir()
+	t.Setenv("NF_CONFIG_HOME", configDir)
+	if err := saveGlobalConfig(map[string]string{"kinsta_default_region": "us-central1", "kinsta_default_php": "8.3"}); err != nil {
+		t.Fatalf("saveGlobalConfig() error = %v", err)
+	}
+
+	output := captureStdout(t, func() {
+		if got := Run([]string{"config", "unset", "kinsta.region"}); got != 0 {
+			t.Fatalf("Run(config unset kinsta.region) = %d, want 0", got)
+		}
+	})
+	if !strings.Contains(output, "Unset kinsta.region") || !strings.Contains(output, "Path "+config.ConfigFile()) {
+		t.Fatalf("output = %q, want unset message", output)
+	}
+	values, err := loadGlobalConfig()
+	if err != nil {
+		t.Fatalf("loadGlobalConfig() error = %v", err)
+	}
+	if _, ok := values["kinsta_default_region"]; ok {
+		t.Fatalf("kinsta_default_region still present: %#v", values)
+	}
+	if got := values["kinsta_default_php"]; got != "8.3" {
+		t.Fatalf("kinsta_default_php = %q, want preserved value", got)
+	}
+}
+
+func TestRunConfigKeysListsExpectedKeys(t *testing.T) {
+	output := captureStdout(t, func() {
+		if got := Run([]string{"config", "keys"}); got != 0 {
+			t.Fatalf("Run(config keys) = %d, want 0", got)
+		}
+	})
+	assertContainsInOrder(t, output, []string{
+		"Config keys\n",
+		"Core\n",
+		"core.base-domain",
+		"core.password-salt",
+		"WordPress\n",
+		"wordpress.admin-email",
+		"Database\n",
+		"database.user",
+		"Docker\n",
+		"docker.images.wordpress",
+		"DNSimple\n",
+		"dnsimple.account-id",
+		"Kinsta\n",
+		"kinsta.php",
+		"Linode\n",
+		"linode.user",
+	})
+}
+
+func TestRunConfigUnknownKeyFailsClearly(t *testing.T) {
+	stderr := captureStderr(t, func() {
+		if got := Run([]string{"config", "get", "kinsta.foo"}); got == 0 {
+			t.Fatalf("Run(config get kinsta.foo) = 0, want failure")
+		}
+	})
+	if !strings.Contains(stderr, "Unknown config key: kinsta.foo") || !strings.Contains(stderr, "nf config keys") {
+		t.Fatalf("stderr = %q, want unknown-key guidance", stderr)
 	}
 }
 
@@ -1430,8 +1679,8 @@ func TestRunConfigSetBasicAuthDefaultUser(t *testing.T) {
 			t.Fatalf("Run(config set-basicauth-default-user) = %d, want 0", got)
 		}
 	})
-	if !strings.Contains(output, "Set basicauth_default_user") {
-		t.Fatalf("output = %q, want set message", output)
+	if !strings.Contains(output, "Deprecated. Use:") || !strings.Contains(output, "nf config set wordpress.basic-auth-user preview") || !strings.Contains(output, "Set wordpress.basic-auth-user = preview") {
+		t.Fatalf("output = %q, want deprecated set message", output)
 	}
 	values, err := loadGlobalConfig()
 	if err != nil {
@@ -1447,11 +1696,11 @@ func TestRunConfigSetDBDefaultUser(t *testing.T) {
 	t.Setenv("NF_CONFIG_HOME", configDir)
 
 	output := captureStdout(t, func() {
-		if got := Run([]string{"config", "set-db-default-user", "dbadmin"}); got != 0 {
-			t.Fatalf("Run(config set-db-default-user) = %d, want 0", got)
+		if got := Run([]string{"config", "set", "database.user", "dbadmin"}); got != 0 {
+			t.Fatalf("Run(config set database.user) = %d, want 0", got)
 		}
 	})
-	if !strings.Contains(output, "Set db_default_user") {
+	if !strings.Contains(output, "Set database.user = dbadmin") {
 		t.Fatalf("output = %q, want set message", output)
 	}
 	values, err := loadGlobalConfig()

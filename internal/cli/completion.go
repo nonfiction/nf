@@ -110,7 +110,7 @@ func completeContextCandidates(args []string) []string {
 	case "domain":
 		return siteDomainCompletionCandidates(args[1:])
 	case "config":
-		return []string{"init", "show", "set-base-domain", "set-default-wp-email", "set-default-wp-user", "set-basicauth-default-user", "set-db-default-user", "set-docker-db-image", "set-docker-wordpress-image", "set-docker-user", "set-kinsta-default-region", "set-kinsta-default-php", "set-linode-default-region", "set-linode-default-type", "set-linode-default-image", "set-linode-default-user", "help"}
+		return configCompletionCandidates(args[1:])
 	case "password":
 		return passwordCompletionCandidates(args[1:])
 	case "remote":
@@ -126,6 +126,38 @@ func completeContextCandidates(args []string) []string {
 	default:
 		return nil
 	}
+}
+
+func configCompletionCandidates(args []string) []string {
+	if len(args) == 0 {
+		return []string{"show", "get", "set", "unset", "keys", "edit", "init", "help"}
+	}
+	switch args[0] {
+	case "get", "set", "unset":
+		if len(args) == 1 {
+			return configKeyNames()
+		}
+		if args[0] == "set" && len(args) == 2 {
+			return configSetValueCompletionCandidates(args[1])
+		}
+	}
+	return nil
+}
+
+func configSetValueCompletionCandidates(key string) []string {
+	spec, ok := lookupConfigKey(key)
+	if !ok || spec.Sensitive {
+		return nil
+	}
+	values, err := loadGlobalConfig()
+	if err != nil {
+		return nil
+	}
+	value := spec.promptDefault(values)
+	if value == "" {
+		return nil
+	}
+	return []string{value}
 }
 
 func passwordCompletionCandidates(args []string) []string {

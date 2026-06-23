@@ -181,26 +181,22 @@ func runDomainHelp() int {
 
 func runConfigHelp() int {
 	printCommandHelp("config", []helpLine{
-		{"show", "show global config"},
-		{"init", "initialize local config"},
-		{},
-		{"set-base-domain <domain>", "set provider base domain"},
-		{"set-default-wp-email <email>", "set default WordPress email"},
-		{"set-default-wp-user <user>", "set default WordPress user"},
-		{"set-basicauth-default-user <user>", "set default basic-auth user"},
-		{"set-db-default-user <user>", "set default database access user"},
-	}, helpSection{"Docker Defaults", []helpLine{
-		{"set-docker-db-image <image>", "set default Docker database image"},
-		{"set-docker-wordpress-image <image>", "set default Docker WordPress image"},
-		{"set-docker-user <user>", "set default Docker shell user"},
-	}}, helpSection{"Kinsta Defaults", []helpLine{
-		{"set-kinsta-default-region <region>", "set default Kinsta region"},
-		{"set-kinsta-default-php <version>", "set default Kinsta PHP version"},
-	}}, helpSection{"Linode Defaults", []helpLine{
-		{"set-linode-default-region <region>", "set default Linode region"},
-		{"set-linode-default-type <type>", "set default Linode type"},
-		{"set-linode-default-image <image>", "set default Linode image"},
-		{"set-linode-default-user <user>", "set default Linode SSH user"},
+		{"show", "show effective config"},
+		{"get <key>", "show a config value"},
+		{"set <key> <value>", "set a config value"},
+		{"unset <key>", "unset a config value"},
+		{"keys", "list available config keys"},
+		{"edit", "edit config file"},
+		{"init", "initialize config"},
+	}, helpSection{"Examples", []helpLine{
+		{"nf config show", ""},
+		{"nf config keys", ""},
+		{"nf config get", "pick a key"},
+		{"nf config set", "pick a key and value"},
+		{"nf config get kinsta.php", ""},
+		{"nf config set kinsta.php 8.3", ""},
+		{"nf config set linode.region ca-central", ""},
+		{"nf config unset kinsta.region", ""},
 	}})
 	return 0
 }

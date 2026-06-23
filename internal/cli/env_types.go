@@ -184,6 +184,8 @@ var (
 	envSnapshotSelect        = ui.Select
 	envSnapshotIsInteractive = envSnapshotInteractive
 	envRemoteSyncConfirm     = ui.Confirm
+	configSelectFn           = ui.Select
 	configPromptString       = ui.PromptString
+	configPromptSecret       = ui.PromptSecret
 	configIsInteractive      = envwizard.IsInteractiveTerminal
 )

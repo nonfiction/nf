@@ -7,12 +7,12 @@ import (
 	"flag"
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 
 	"github.com/nonfiction/nf/internal/config"
 	"github.com/nonfiction/nf/internal/envwizard"
-	"github.com/nonfiction/nf/internal/passwords"
 	"github.com/nonfiction/nf/internal/state"
 )
 
@@ -32,105 +32,59 @@ func runConfig(argv []string) int {
 			return 1
 		}
 		return cmdConfigInit(*nonInteractive)
-	case "set-base-domain":
-		if len(argv) != 2 || strings.TrimSpace(argv[1]) == "" {
-			fmt.Fprintln(os.Stderr, "config set-base-domain takes exactly one domain")
-			return 1
-		}
-		return cmdConfigSet("base_domain", argv[1])
-	case "set-default-wp-email":
-		if len(argv) != 2 || strings.TrimSpace(argv[1]) == "" {
-			fmt.Fprintln(os.Stderr, "config set-default-wp-email takes exactly one email")
-			return 1
-		}
-		return cmdConfigSet("default_wp_email", argv[1])
-	case "set-default-wp-user":
-		if len(argv) != 2 || strings.TrimSpace(argv[1]) == "" {
-			fmt.Fprintln(os.Stderr, "config set-default-wp-user takes exactly one user")
-			return 1
-		}
-		return cmdConfigSet("default_wp_user", argv[1])
-	case "set-basicauth-default-user":
-		if len(argv) != 2 || strings.TrimSpace(argv[1]) == "" {
-			fmt.Fprintln(os.Stderr, "config set-basicauth-default-user takes exactly one user")
-			return 1
-		}
-		return cmdConfigSet("basicauth_default_user", argv[1])
-	case "set-db-default-user":
-		if len(argv) != 2 || strings.TrimSpace(argv[1]) == "" {
-			fmt.Fprintln(os.Stderr, "config set-db-default-user takes exactly one user")
-			return 1
-		}
-		if err := validateDBDefaultUser(argv[1]); err != nil {
-			fmt.Fprintln(os.Stderr, err)
-			return 1
-		}
-		return cmdConfigSet("db_default_user", argv[1])
-	case "set-docker-db-image":
-		if len(argv) != 2 || strings.TrimSpace(argv[1]) == "" {
-			fmt.Fprintln(os.Stderr, "config set-docker-db-image takes exactly one image")
-			return 1
-		}
-		return cmdConfigSet("docker_db_image", argv[1])
-	case "set-docker-wordpress-image":
-		if len(argv) != 2 || strings.TrimSpace(argv[1]) == "" {
-			fmt.Fprintln(os.Stderr, "config set-docker-wordpress-image takes exactly one image")
-			return 1
-		}
-		return cmdConfigSet("docker_wordpress_image", argv[1])
-	case "set-docker-user":
-		if len(argv) != 2 || strings.TrimSpace(argv[1]) == "" {
-			fmt.Fprintln(os.Stderr, "config set-docker-user takes exactly one user")
-			return 1
-		}
-		if err := validateDockerUser(argv[1]); err != nil {
-			fmt.Fprintln(os.Stderr, err)
-			return 1
-		}
-		return cmdConfigSet("docker_user", argv[1])
-	case "set-kinsta-default-region":
-		if len(argv) != 2 || strings.TrimSpace(argv[1]) == "" {
-			fmt.Fprintln(os.Stderr, "config set-kinsta-default-region takes exactly one region")
-			return 1
-		}
-		return cmdConfigSet("kinsta_default_region", argv[1])
-	case "set-kinsta-default-php":
-		if len(argv) != 2 || strings.TrimSpace(argv[1]) == "" {
-			fmt.Fprintln(os.Stderr, "config set-kinsta-default-php takes exactly one version")
-			return 1
-		}
-		return cmdConfigSet("kinsta_default_php", argv[1])
-	case "set-linode-default-region":
-		if len(argv) != 2 || strings.TrimSpace(argv[1]) == "" {
-			fmt.Fprintln(os.Stderr, "config set-linode-default-region takes exactly one region")
-			return 1
-		}
-		return cmdConfigSet("linode_default_region", argv[1])
-	case "set-linode-default-type":
-		if len(argv) != 2 || strings.TrimSpace(argv[1]) == "" {
-			fmt.Fprintln(os.Stderr, "config set-linode-default-type takes exactly one type")
-			return 1
-		}
-		return cmdConfigSet("linode_default_type", argv[1])
-	case "set-linode-default-image":
-		if len(argv) != 2 || strings.TrimSpace(argv[1]) == "" {
-			fmt.Fprintln(os.Stderr, "config set-linode-default-image takes exactly one image")
-			return 1
-		}
-		return cmdConfigSet("linode_default_image", argv[1])
-	case "set-linode-default-user":
-		if len(argv) != 2 || strings.TrimSpace(argv[1]) == "" {
-			fmt.Fprintln(os.Stderr, "config set-linode-default-user takes exactly one user")
-			return 1
-		}
-		return cmdConfigSet("linode_default_user", argv[1])
 	case "show":
 		if len(argv) != 1 {
 			fmt.Fprintln(os.Stderr, "config show takes no arguments")
 			return 1
 		}
 		return cmdConfigShow()
+	case "get":
+		if len(argv) == 1 {
+			return cmdConfigGetInteractive()
+		}
+		if len(argv) != 2 || strings.TrimSpace(argv[1]) == "" {
+			fmt.Fprintln(os.Stderr, "config get takes exactly one key")
+			return 1
+		}
+		return cmdConfigGet(argv[1])
+	case "set":
+		if len(argv) == 1 {
+			return cmdConfigSetInteractive("")
+		}
+		if len(argv) == 2 && strings.TrimSpace(argv[1]) != "" {
+			return cmdConfigSetInteractive(argv[1])
+		}
+		if len(argv) != 3 || strings.TrimSpace(argv[1]) == "" || strings.TrimSpace(argv[2]) == "" {
+			fmt.Fprintln(os.Stderr, "config set takes exactly one key and one value")
+			return 1
+		}
+		return cmdConfigSetKey(argv[1], argv[2])
+	case "unset":
+		if len(argv) != 2 || strings.TrimSpace(argv[1]) == "" {
+			fmt.Fprintln(os.Stderr, "config unset takes exactly one key")
+			return 1
+		}
+		return cmdConfigUnset(argv[1])
+	case "keys":
+		if len(argv) != 1 {
+			fmt.Fprintln(os.Stderr, "config keys takes no arguments")
+			return 1
+		}
+		return cmdConfigKeys()
+	case "edit":
+		if len(argv) != 1 {
+			fmt.Fprintln(os.Stderr, "config edit takes no arguments")
+			return 1
+		}
+		return cmdConfigEdit()
 	default:
+		if key, ok := deprecatedConfigSetterKey(argv[0]); ok {
+			if len(argv) != 2 || strings.TrimSpace(argv[1]) == "" {
+				fmt.Fprintf(os.Stderr, "config %s takes exactly one value\n", argv[0])
+				return 1
+			}
+			return cmdDeprecatedConfigSet(argv[0], key, argv[1])
+		}
 		fmt.Fprintln(os.Stderr, "unsupported config command")
 		return 1
 	}
@@ -332,18 +286,205 @@ func validateConfigInitSetting(setting configInitSetting, value string) error {
 	return setting.Validate(value)
 }
 
-func cmdConfigSet(key, value string) int {
+func cmdConfigGet(key string) int {
+	spec, ok := lookupConfigKey(key)
+	if !ok {
+		printUnknownConfigKey(key)
+		return 1
+	}
 	values, err := loadGlobalConfig()
 	if err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		return 1
 	}
-	values[key] = strings.TrimSpace(value)
-	if err := saveGlobalConfig(values); err != nil {
+	fmt.Println(spec.getValue(values))
+	return 0
+}
+
+func cmdConfigGetInteractive() int {
+	if !configIsInteractive() {
+		fmt.Fprintln(os.Stderr, "config get requires a key")
+		return 1
+	}
+	spec, err := promptConfigKey("Choose a config key")
+	if err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		return 1
 	}
-	fmt.Printf("Set %s\n", key)
+	return cmdConfigGet(spec.Key)
+}
+
+func cmdConfigSetKey(key, value string) int {
+	spec, ok := lookupConfigKey(key)
+	if !ok {
+		printUnknownConfigKey(key)
+		return 1
+	}
+	return cmdConfigSetSpec(spec, value)
+}
+
+func cmdConfigSetInteractive(key string) int {
+	if !configIsInteractive() {
+		fmt.Fprintln(os.Stderr, "config set requires a key and value")
+		return 1
+	}
+	var spec configKeySpec
+	if strings.TrimSpace(key) == "" {
+		selected, err := promptConfigKey("Choose a config key")
+		if err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			return 1
+		}
+		spec = selected
+	} else {
+		selected, ok := lookupConfigKey(key)
+		if !ok {
+			printUnknownConfigKey(key)
+			return 1
+		}
+		spec = selected
+	}
+
+	values, err := loadGlobalConfig()
+	if err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		return 1
+	}
+	value, err := promptConfigValue(spec, values)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		return 1
+	}
+	return cmdConfigSetSpec(spec, value)
+}
+
+func promptConfigKey(title string) (configKeySpec, error) {
+	selected, err := configSelectFn(title, configKeySelectOptions())
+	if err != nil {
+		return configKeySpec{}, err
+	}
+	spec, ok := lookupConfigKey(selected)
+	if !ok {
+		return configKeySpec{}, fmt.Errorf("Unknown config key: %s", strings.TrimSpace(selected))
+	}
+	return spec, nil
+}
+
+func promptConfigValue(spec configKeySpec, values map[string]string) (string, error) {
+	prompt := fmt.Sprintf("Value for %s", spec.Key)
+	if spec.Sensitive {
+		return configPromptSecret(prompt)
+	}
+	defaultValue := spec.promptDefault(values)
+	value, err := configPromptString(prompt, defaultValue, false)
+	if err != nil {
+		return "", err
+	}
+	value = strings.TrimSpace(value)
+	if value == "" {
+		value = defaultValue
+	}
+	return value, nil
+}
+
+func cmdConfigSetSpec(spec configKeySpec, value string) int {
+	values, err := loadGlobalConfig()
+	if err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		return 1
+	}
+	stored, err := spec.setValue(values, value)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		return 1
+	}
+	if spec.EnvKey == "" {
+		if err := saveGlobalConfig(values); err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			return 1
+		}
+	}
+	fmt.Printf("Set %s = %s\n", spec.Key, spec.safeSetOutput(stored))
+	fmt.Printf("Path %s\n", spec.path())
+	return 0
+}
+
+func cmdConfigUnset(key string) int {
+	spec, ok := lookupConfigKey(key)
+	if !ok {
+		printUnknownConfigKey(key)
+		return 1
+	}
+	values, err := loadGlobalConfig()
+	if err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		return 1
+	}
+	if err := spec.unsetValue(values); err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		return 1
+	}
+	if spec.EnvKey == "" {
+		if err := saveGlobalConfig(values); err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			return 1
+		}
+	}
+	fmt.Printf("Unset %s\n", spec.Key)
+	fmt.Printf("Path %s\n", spec.path())
+	return 0
+}
+
+func cmdConfigKeys() int {
+	fmt.Println("Config keys")
+	fmt.Println(strings.Repeat("─", len("Config keys")))
+	group := ""
+	rows := []helpLine{}
+	flush := func() {
+		if group == "" {
+			return
+		}
+		fmt.Println()
+		fmt.Println(group)
+		printHelpLinesWithIndent(rows, "  ", 30)
+	}
+	for _, spec := range configKeyRegistry {
+		if spec.Group != group {
+			flush()
+			group = spec.Group
+			rows = []helpLine{}
+		}
+		rows = append(rows, helpLine{Command: spec.Key, Description: spec.Description})
+	}
+	flush()
+	return 0
+}
+
+func cmdConfigEdit() int {
+	path := config.ConfigFile()
+	if _, err := os.Stat(path); err != nil {
+		if !os.IsNotExist(err) {
+			fmt.Fprintln(os.Stderr, err)
+			return 1
+		}
+		if err := saveGlobalConfig(map[string]string{}); err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			return 1
+		}
+	}
+	editor := firstNonEmpty(os.Getenv("VISUAL"), os.Getenv("EDITOR"), "vi")
+	parts := strings.Fields(editor)
+	if len(parts) == 0 {
+		parts = []string{"vi"}
+	}
+	cmd := exec.Command(parts[0], append(parts[1:], path)...)
+	cmd.Stdout = os.Stdout
+	cmd.Stderr = os.Stderr
+	cmd.Stdin = os.Stdin
+	if err := cmd.Run(); err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		return 1
+	}
 	return 0
 }
 
@@ -353,76 +494,89 @@ func cmdConfigShow() int {
 		fmt.Fprintln(os.Stderr, err)
 		return 1
 	}
-	saltStatus := "unset"
-	if _, err := passwords.SecretSalt(); err == nil {
-		saltStatus = "set"
-	}
 	fmt.Println("config")
 	fmt.Println(strings.Repeat("─", len("config")))
 	printDetailRows([]detailRow{{label: "Path", value: config.ConfigFile()}})
-	fmt.Println()
-	fmt.Println("Core")
-	printIndentedDetailRows([]detailRow{
-		{label: "Base domain", value: configShowValue(values, "base_domain", "")},
-		{label: "Password salt", value: saltStatus},
-	}, 2)
-	fmt.Println()
-	fmt.Println("WordPress")
-	printIndentedDetailRows([]detailRow{
-		{label: "Admin email", value: configShowValue(values, "default_wp_email", "")},
-		{label: "Admin user", value: configShowValue(values, "default_wp_user", defaultWordPressAdminUser)},
-		{label: "Basic auth user", value: configShowValue(values, "basicauth_default_user", "nonfiction")},
-	}, 2)
-	fmt.Println()
-	fmt.Println("Database")
-	printIndentedDetailRows([]detailRow{
-		{label: "User", value: configShowValueAny(values, []string{"db_default_user", "adminer_default_user"}, defaultDatabaseUser)},
-	}, 2)
-	fmt.Println()
-	fmt.Println("Docker")
-	printIndentedDetailRows([]detailRow{
-		{label: "User", value: configShowValue(values, "docker_user", defaultDockerUser)},
-		{label: "DB image", value: configShowValue(values, "docker_db_image", defaultDockerDBImage)},
-		{label: "WordPress image", value: configShowValue(values, "docker_wordpress_image", defaultDockerWordpressImage)},
-	}, 2)
-	fmt.Println()
-	fmt.Println("DNSimple")
-	printIndentedDetailRows([]detailRow{{label: "Account ID", value: configShowValue(values, "dnsimple_account_id", "")}}, 2)
-	fmt.Println()
-	fmt.Println("Kinsta")
-	printIndentedDetailRows([]detailRow{
-		{label: "Region", value: configShowValue(values, "kinsta_default_region", "")},
-		{label: "PHP", value: configShowValue(values, "kinsta_default_php", "8.3")},
-	}, 2)
-	fmt.Println()
-	fmt.Println("Linode")
-	printIndentedDetailRows([]detailRow{
-		{label: "Region", value: configShowValue(values, "linode_default_region", "ca-central")},
-		{label: "Type", value: configShowValue(values, "linode_default_type", "g6-standard-1")},
-		{label: "Image", value: configShowValue(values, "linode_default_image", "")},
-		{label: "User", value: configShowValue(values, "linode_default_user", "nonfiction")},
-	}, 2)
+	for _, group := range configShowGroups(values) {
+		fmt.Println()
+		fmt.Println(group.name)
+		printIndentedDetailRows(group.rows, 2)
+	}
 	return 0
 }
 
-func configShowValue(values map[string]string, key, fallback string) string {
-	if value := strings.TrimSpace(values[key]); value != "" {
-		return value
-	}
-	if fallback != "" {
-		return fallback + " (default)"
-	}
-	return "unset"
+type configShowGroup struct {
+	name string
+	rows []detailRow
 }
 
-func configShowValueAny(values map[string]string, keys []string, fallback string) string {
-	for _, key := range keys {
-		if value := strings.TrimSpace(values[key]); value != "" {
-			return value
+func configShowGroups(values map[string]string) []configShowGroup {
+	groups := []configShowGroup{}
+	current := configShowGroup{}
+	flush := func() {
+		if current.name != "" {
+			groups = append(groups, current)
 		}
 	}
-	if fallback != "" {
-		return fallback + " (default)"
+	for _, spec := range configKeyRegistry {
+		if spec.Group != current.name {
+			flush()
+			current = configShowGroup{name: spec.Group}
+		}
+		current.rows = append(current.rows, detailRow{label: spec.Label, value: spec.displayValue(values)})
 	}
-	return "unset"
+	flush()
+	return groups
+}
+
+func printUnknownConfigKey(key string) {
+	fmt.Fprintf(os.Stderr, "Unknown config key: %s\n\n", strings.TrimSpace(key))
+	fmt.Fprintln(os.Stderr, "Run:")
+	fmt.Fprintln(os.Stderr, "  nf config keys")
+}
+
+func deprecatedConfigSetterKey(command string) (string, bool) {
+	switch command {
+	case "set-base-domain":
+		return "core.base-domain", true
+	case "set-default-wp-email":
+		return "wordpress.admin-email", true
+	case "set-default-wp-user":
+		return "wordpress.admin-user", true
+	case "set-basicauth-default-user":
+		return "wordpress.basic-auth-user", true
+	case "set-db-default-user":
+		return "database.user", true
+	case "set-docker-db-image":
+		return "docker.images.db", true
+	case "set-docker-wordpress-image":
+		return "docker.images.wordpress", true
+	case "set-docker-user":
+		return "docker.user", true
+	case "set-kinsta-default-region":
+		return "kinsta.region", true
+	case "set-kinsta-default-php":
+		return "kinsta.php", true
+	case "set-linode-default-region":
+		return "linode.region", true
+	case "set-linode-default-type":
+		return "linode.type", true
+	case "set-linode-default-image":
+		return "linode.image", true
+	case "set-linode-default-user":
+		return "linode.user", true
+	default:
+		return "", false
+	}
+}
+
+func cmdDeprecatedConfigSet(command, key, value string) int {
+	spec, ok := lookupConfigKey(key)
+	if !ok {
+		printUnknownConfigKey(key)
+		return 1
+	}
+	fmt.Println("Deprecated. Use:")
+	fmt.Printf("  nf config set %s %s\n", spec.Key, strings.TrimSpace(value))
+	return cmdConfigSetSpec(spec, value)
 }

@@ -92,6 +92,63 @@ func SetEnvFile(path string, updates map[string]string) ([]string, error) {
 	return updateEnvFile(path, updates, true)
 }
 
+func UnsetEnvFile(path string, keys []string) ([]string, error) {
+	remove := map[string]bool{}
+	for _, key := range keys {
+		key = strings.TrimSpace(key)
+		if key != "" {
+			remove[key] = true
+		}
+	}
+	if len(remove) == 0 {
+		return nil, nil
+	}
+
+	data, err := os.ReadFile(path)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil, nil
+		}
+		return nil, err
+	}
+
+	lines := strings.Split(strings.ReplaceAll(string(data), "\r\n", "\n"), "\n")
+	for len(lines) > 0 && lines[len(lines)-1] == "" {
+		lines = lines[:len(lines)-1]
+	}
+
+	kept := make([]string, 0, len(lines))
+	removed := []string{}
+	for _, rawLine := range lines {
+		trimmed := strings.TrimSpace(rawLine)
+		if trimmed == "" || strings.HasPrefix(trimmed, "#") {
+			kept = append(kept, rawLine)
+			continue
+		}
+		content := trimmed
+		if strings.HasPrefix(content, "export ") {
+			content = strings.TrimSpace(strings.TrimPrefix(content, "export "))
+		}
+		key, _, ok := strings.Cut(content, "=")
+		if !ok {
+			kept = append(kept, rawLine)
+			continue
+		}
+		key = strings.TrimSpace(key)
+		if remove[key] {
+			removed = append(removed, key)
+			continue
+		}
+		kept = append(kept, rawLine)
+	}
+
+	sort.Strings(removed)
+	if err := writeEnvFile(path, kept); err != nil {
+		return nil, err
+	}
+	return removed, nil
+}
+
 func updateEnvFile(path string, updates map[string]string, overwrite bool) ([]string, error) {
 	if len(updates) == 0 {
 		return nil, nil
