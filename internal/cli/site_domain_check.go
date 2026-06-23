@@ -110,12 +110,47 @@ func printSiteDomainCheckNextStep(plan siteDomainPlan, result siteDomainReadines
 	if result.Ready && result.Primary {
 		fmt.Println("  domain is primary and public checks passed")
 	} else if result.Ready {
-		fmt.Printf("  ready for primary: nf domain primary %s %s%s\n", plan.EnvID, plan.Canonical, siteDomainProxyArg(plan.ProxyMode))
+		domains := plan.allDomains()
+		if len(domains) == 1 && cachedExternalPlanDomainRole(plan, domains[0]) == "secondary" {
+			fmt.Println("  domain is ready as a secondary redirect")
+			fmt.Printf("  optional primary promotion: nf domain primary %s %s%s\n", plan.EnvID, plan.Canonical, siteDomainProxyArg(plan.ProxyMode))
+		} else if allPlanDomainsCachedExternal(plan) {
+			if len(domains) == 1 {
+				fmt.Println("  domain is ready in its current role")
+			} else {
+				fmt.Println("  domains are ready in their current roles")
+			}
+		} else {
+			fmt.Println("  domain checks passed")
+		}
 	} else if strings.TrimSpace(result.NextStep) != "" {
 		fmt.Printf("  %s\n", result.NextStep)
 	} else {
 		fmt.Println("  wait for pending checks, then run nf domain check again")
 	}
+}
+
+func allPlanDomainsCachedExternal(plan siteDomainPlan) bool {
+	domains := plan.allDomains()
+	if len(domains) == 0 {
+		return false
+	}
+	for _, domain := range domains {
+		if !recordHasCachedExternalSiteDomain(plan.Record, domain) {
+			return false
+		}
+	}
+	return true
+}
+
+func cachedExternalPlanDomainRole(plan siteDomainPlan, domain string) string {
+	needle := normalizeDomainName(domain)
+	for _, cached := range siteDomainListDomains(plan.Record) {
+		if cached.name == needle && cached.management == "external" {
+			return cached.role
+		}
+	}
+	return ""
 }
 
 func siteDomainProxyArg(proxyMode string) string {
@@ -675,7 +710,7 @@ func printSiteDomainHTTPChecks(plan siteDomainPlan) bool {
 			ready = false
 			continue
 		}
-		if siteDomainRedirectsToInternalHostname(plan, result.Location) {
+		if siteDomainRedirectsToUnexpectedInternalHostname(plan, result.Location) {
 			fmt.Printf("  http://%s: pending (redirects to internal hostname %s)\n", domain, plan.InternalHostname)
 			ready = false
 			continue
@@ -745,7 +780,7 @@ func printSiteDomainTLSChecks(plan siteDomainPlan) bool {
 			ready = false
 			continue
 		}
-		if siteDomainRedirectsToInternalHostname(plan, httpsResult.Location) {
+		if siteDomainRedirectsToUnexpectedInternalHostname(plan, httpsResult.Location) {
 			fmt.Printf("  https://%s: pending (redirects to internal hostname %s)\n", domain, plan.InternalHostname)
 			ready = false
 			continue
@@ -773,10 +808,26 @@ func printSiteDomainTLSChecks(plan siteDomainPlan) bool {
 }
 
 func siteDomainRedirectsToInternalHostname(plan siteDomainPlan, location string) bool {
-	if plan.InternalHostname == "" {
+	return siteDomainRedirectsToHostname(location, plan.InternalHostname)
+}
+
+func siteDomainRedirectsToUnexpectedInternalHostname(plan siteDomainPlan, location string) bool {
+	if !siteDomainRedirectsToInternalHostname(plan, location) {
 		return false
 	}
-	return strings.Contains(strings.ToLower(location), strings.ToLower(plan.InternalHostname))
+	return !siteDomainRedirectsToHostname(location, currentSiteDomainCanonicalHostname(plan))
+}
+
+func currentSiteDomainCanonicalHostname(plan siteDomainPlan) string {
+	return firstNonEmpty(cachedExternalPrimaryDomain(plan.Record), plan.CurrentHostname, plan.InternalHostname)
+}
+
+func siteDomainRedirectsToHostname(location, hostname string) bool {
+	hostname = normalizeDomainName(hostname)
+	if hostname == "" {
+		return false
+	}
+	return hostnameFromURLish(location) == hostname
 }
 
 func isSameHTTPSRedirect(domain, location string) bool {

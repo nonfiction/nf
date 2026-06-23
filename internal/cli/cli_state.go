@@ -53,6 +53,7 @@ var (
 	siteSelectFn                   = ui.Select
 	siteDomainSelectFn             = ui.Select
 	siteDomainMultiSelectFn        = ui.MultiSelect
+	siteDomainMultiSelectNoneFn    = ui.MultiSelectNoneSelected
 	siteDomainPromptStringFn       = ui.PromptString
 	remoteSelectFn                 = ui.Select
 	remotePromptString             = ui.PromptString

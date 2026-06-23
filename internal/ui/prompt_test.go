@@ -154,3 +154,18 @@ func TestMultiSelectModelDefaultsToAllSelected(t *testing.T) {
 		t.Fatalf("multi-select result = %#v, want only second option selected", m)
 	}
 }
+
+func TestMultiSelectModelCanStartWithNoneSelected(t *testing.T) {
+	m := newMultiSelectModelWithInitial("Choose", []SelectOption{{Label: "One", Value: "1"}, {Label: "Two", Value: "2"}}, false)
+	if got := len(m.selectedValues()); got != 0 {
+		t.Fatalf("selectedValues count = %d, want 0", got)
+	}
+
+	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeySpace})
+	m = updated.(multiSelectModel)
+	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	m = updated.(multiSelectModel)
+	if !m.answered || len(m.result) != 1 || m.result[0] != "1" {
+		t.Fatalf("multi-select result = %#v, want only first option selected", m)
+	}
+}

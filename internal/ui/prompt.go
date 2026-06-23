@@ -170,9 +170,13 @@ func newSelectModel(title string, options []SelectOption) selectModel {
 }
 
 func newMultiSelectModel(title string, options []SelectOption) multiSelectModel {
+	return newMultiSelectModelWithInitial(title, options, true)
+}
+
+func newMultiSelectModelWithInitial(title string, options []SelectOption, selected bool) multiSelectModel {
 	checked := make([]bool, len(options))
 	for i := range checked {
-		checked[i] = true
+		checked[i] = selected
 	}
 	return multiSelectModel{title: title, options: options, checked: checked, width: 64, viewport: 8}
 }
@@ -547,10 +551,18 @@ func Select(title string, options []SelectOption) (string, error) {
 }
 
 func MultiSelect(title string, options []SelectOption) ([]string, error) {
+	return runMultiSelect(newMultiSelectModel(title, options), options)
+}
+
+func MultiSelectNoneSelected(title string, options []SelectOption) ([]string, error) {
+	return runMultiSelect(newMultiSelectModelWithInitial(title, options, false), options)
+}
+
+func runMultiSelect(initial multiSelectModel, options []SelectOption) ([]string, error) {
 	if len(options) == 0 {
 		return nil, fmt.Errorf("no options available")
 	}
-	program := tea.NewProgram(newMultiSelectModel(title, options))
+	program := tea.NewProgram(initial)
 	model, err := program.Run()
 	if err != nil {
 		return nil, err

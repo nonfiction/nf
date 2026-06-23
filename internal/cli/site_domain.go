@@ -54,6 +54,7 @@ type siteDomainPlan struct {
 	Primary          bool
 	RedirectTarget   string
 	ProxyMode        string
+	DomainProxyModes map[string]string
 	SearchReplace    bool
 	DeleteCert       bool
 	CurrentURL       string
@@ -232,7 +233,11 @@ type siteDomainListDomain struct {
 func siteDomainListDomains(record map[string]any) []siteDomainListDomain {
 	seen := map[string]int{}
 	domains := []siteDomainListDomain{}
-	envProxyMode := firstRecordString(record, "proxy_mode")
+	domainEntries := siteDomainEntryValues(record["domains"])
+	envProxyMode := ""
+	if len(domainEntries) == 0 {
+		envProxyMode = firstRecordString(record, "proxy_mode")
+	}
 	addDomain := func(name, role, management, status, proxyMode string) {
 		name = normalizeDomainName(hostnameFromURLish(name))
 		if name == "" || siteDomainWildcardName(name) {
@@ -272,7 +277,7 @@ func siteDomainListDomains(record map[string]any) []siteDomainListDomain {
 	}
 	publicStatus := firstRecordString(record, "domain_state")
 	hasExternalPrimary := false
-	for _, entry := range siteDomainEntryValues(record["domains"]) {
+	for _, entry := range domainEntries {
 		if typed, ok := entry.(map[string]any); ok {
 			role := normalizeSiteDomainRole(firstRecordString(typed, "role", "type"))
 			management := firstNonEmpty(normalizeSiteDomainManagement(firstRecordString(typed, "management")), "external")
@@ -298,7 +303,7 @@ func siteDomainListDomains(record map[string]any) []siteDomainListDomain {
 		}
 		addDomain(defaultHost, role, "internal", "active", "")
 	}
-	for _, entry := range siteDomainEntryValues(record["domains"]) {
+	for _, entry := range domainEntries {
 		role := ""
 		management := ""
 		status := publicStatus
@@ -311,12 +316,12 @@ func siteDomainListDomains(record map[string]any) []siteDomainListDomain {
 		}
 		addDomain(siteDomainEntryName(entry), role, management, status, proxyMode)
 	}
-	addDomain(firstRecordString(record, "primary_domain"), "primary", "external", firstNonEmpty(publicStatus, "active"), firstRecordString(record, "proxy_mode"))
+	addDomain(firstRecordString(record, "primary_domain"), "primary", "external", firstNonEmpty(publicStatus, "active"), envProxyMode)
 	if host := hostnameFromURLish(firstRecordString(record, "hostname")); !looksLikeInternalSiteHostname(record, host) {
-		addDomain(host, "primary", "external", firstNonEmpty(publicStatus, "active"), firstRecordString(record, "proxy_mode"))
+		addDomain(host, "primary", "external", firstNonEmpty(publicStatus, "active"), envProxyMode)
 	}
 	if host := hostnameFromURLish(firstRecordString(record, "url", "site_url", "home_url")); !looksLikeInternalSiteHostname(record, host) {
-		addDomain(host, "primary", "external", firstNonEmpty(publicStatus, "active"), firstRecordString(record, "proxy_mode"))
+		addDomain(host, "primary", "external", firstNonEmpty(publicStatus, "active"), envProxyMode)
 	}
 	return domains
 }
@@ -888,6 +893,9 @@ func resolveSiteDomainActionOptions(action string, opts siteDomainOptions, recor
 	if err != nil {
 		return opts, err
 	}
+	if action == "primary" && len(opts.domains) == 1 && !recordHasCachedExternalSiteDomain(record, opts.domains[0]) {
+		return opts, uncachedPrimaryDomainError(siteRecordEnvID(record), opts.domains[0])
+	}
 	provider := strings.ToLower(strings.TrimSpace(recordValueString(record["provider"])))
 	switch provider {
 	case "linode":
@@ -968,11 +976,11 @@ func resolveSiteDomainDomains(action string, opts siteDomainOptions, record map[
 		if opts.nonInteractive || !siteIsInteractiveFn() {
 			return opts, nil
 		}
-		selected, err := promptSiteDomainMultipleDomains(record, "check")
+		selected, err := promptSiteDomainSingleDomain(record, "check")
 		if err != nil {
 			return opts, err
 		}
-		opts.domains = selected
+		opts.domains = []string{selected}
 	}
 	return opts, nil
 }
@@ -984,7 +992,7 @@ func splitSiteDomainPromptDomains(value string) []string {
 }
 
 func promptSiteDomainSingleDomain(record map[string]any, action string) (string, error) {
-	options := siteDomainCachedExternalOptions(record)
+	options := siteDomainCachedExternalOptions(record, true)
 	if len(options) == 0 {
 		return "", ProjectError{Msg: "No cached external domains found. Add a domain first or pass one explicitly."}
 	}
@@ -992,11 +1000,21 @@ func promptSiteDomainSingleDomain(record map[string]any, action string) (string,
 }
 
 func promptSiteDomainMultipleDomains(record map[string]any, action string) ([]string, error) {
-	options := siteDomainCachedExternalOptions(record)
+	options := siteDomainCachedExternalOptions(record, false)
+	if action == "remove" {
+		options = siteDomainCachedExternalSecondaryOptions(record)
+	}
 	if len(options) == 0 {
+		if action == "remove" {
+			return nil, ProjectError{Msg: "No cached external secondary domains found. Make another domain primary first if needed."}
+		}
 		return nil, ProjectError{Msg: "No cached external domains found. Add a domain first or pass domains explicitly."}
 	}
-	selected, err := siteDomainMultiSelectFn("Choose domains to "+action, options)
+	multiSelectFn := siteDomainMultiSelectFn
+	if action == "remove" {
+		multiSelectFn = siteDomainMultiSelectNoneFn
+	}
+	selected, err := multiSelectFn("Choose domains to "+action, options)
 	if err != nil {
 		return nil, err
 	}
@@ -1010,7 +1028,7 @@ func promptSiteDomainMultipleDomains(record map[string]any, action string) ([]st
 	return domains, nil
 }
 
-func siteDomainCachedExternalOptions(record map[string]any) []ui.SelectOption {
+func siteDomainCachedExternalOptions(record map[string]any, defaultPrimary bool) []ui.SelectOption {
 	options := []ui.SelectOption{}
 	for _, domain := range siteDomainListDomains(record) {
 		if domain.management != "external" || domain.name == "" {
@@ -1020,37 +1038,142 @@ func siteDomainCachedExternalOptions(record map[string]any) []ui.SelectOption {
 		if domain.role != "" {
 			label += " (" + domain.role + ")"
 		}
-		options = append(options, ui.SelectOption{Value: domain.name, Label: label, Default: domain.role == "primary"})
+		options = append(options, ui.SelectOption{Value: domain.name, Label: label, Default: defaultPrimary && domain.role == "primary"})
 	}
 	return options
+}
+
+func siteDomainCachedExternalSecondaryOptions(record map[string]any) []ui.SelectOption {
+	options := []ui.SelectOption{}
+	for _, domain := range siteDomainListDomains(record) {
+		if domain.management != "external" || domain.role != "secondary" || domain.name == "" {
+			continue
+		}
+		label := domain.name
+		if domain.role != "" {
+			label += " (" + domain.role + ")"
+		}
+		options = append(options, ui.SelectOption{Value: domain.name, Label: label})
+	}
+	return options
+}
+
+func cachedSiteDomainProxyMode(record map[string]any, domains []string) (string, bool, error) {
+	targets := siteDomainNameSet(domains)
+	if len(targets) == 0 {
+		return "", false, nil
+	}
+	domainEntries := siteDomainEntryValues(record["domains"])
+	if len(domainEntries) > 0 {
+		matched := map[string]bool{}
+		modes := map[string]bool{}
+		cachedMode := ""
+		for _, entry := range domainEntries {
+			typed, ok := entry.(map[string]any)
+			if !ok {
+				continue
+			}
+			name := normalizeDomainName(siteDomainEntryName(entry))
+			if !targets[name] {
+				continue
+			}
+			management := firstNonEmpty(normalizeSiteDomainManagement(firstRecordString(typed, "management")), "external")
+			if management != "external" {
+				continue
+			}
+			proxyMode, err := normalizeSiteDomainProxyMode(firstRecordString(typed, "proxy_mode"))
+			if err != nil {
+				return "", false, err
+			}
+			matched[name] = true
+			modes[proxyMode] = true
+			cachedMode = proxyMode
+		}
+		if len(matched) != len(targets) {
+			return "", false, nil
+		}
+		if len(modes) > 1 {
+			return "", false, ProjectError{Msg: "cached domains use mixed proxy modes; pass domains with matching proxy modes or specify --proxy/--no-proxy"}
+		}
+		return cachedMode, true, nil
+	}
+
+	proxyMode, err := normalizeSiteDomainProxyMode(firstRecordString(record, "proxy_mode"))
+	if err != nil {
+		return "", false, err
+	}
+	if proxyMode == "" {
+		return "", false, nil
+	}
+	return proxyMode, true, nil
+}
+
+func siteDomainPlanProxyModes(record map[string]any, domains []string, requestedDomains map[string]bool, proxyMode string) (map[string]string, error) {
+	modes := map[string]string{}
+	for _, domain := range domains {
+		name := normalizeDomainName(domain)
+		if name == "" {
+			continue
+		}
+		mode := proxyMode
+		if !requestedDomains[name] {
+			cachedMode, ok, err := cachedSiteDomainProxyMode(record, []string{name})
+			if err != nil {
+				return nil, err
+			}
+			if ok {
+				mode = cachedMode
+			}
+		}
+		modes[name] = mode
+	}
+	return modes, nil
+}
+
+func (plan siteDomainPlan) proxyModeForDomain(domain string) string {
+	if mode, ok := plan.DomainProxyModes[normalizeDomainName(domain)]; ok {
+		return mode
+	}
+	return plan.ProxyMode
+}
+
+func (plan siteDomainPlan) withProxyModeForDomain(domain string) siteDomainPlan {
+	plan.ProxyMode = plan.proxyModeForDomain(domain)
+	return plan
 }
 
 func resolveSiteDomainProxyDecision(action string, opts siteDomainOptions, record map[string]any) (siteDomainOptions, error) {
 	if opts.proxySet {
 		return opts, nil
 	}
-	cachedProxyMode, err := normalizeSiteDomainProxyMode(firstRecordString(record, "proxy_mode"))
+	proxyDomains := opts.domains
+	if action == "check" && len(proxyDomains) == 0 {
+		proxyDomains = cachedExternalSiteDomainNames(record)
+	}
+	cachedProxyMode, cachedProxyModeKnown, err := cachedSiteDomainProxyMode(record, proxyDomains)
 	if err != nil {
 		return opts, err
 	}
 	if opts.nonInteractive {
-		if cachedProxyMode != "" {
+		if cachedProxyModeKnown {
 			opts.proxyMode = cachedProxyMode
+			opts.proxySet = true
 			return opts, nil
 		}
 		return opts, ProjectError{Msg: fmt.Sprintf("domain %s requires --proxy or --no-proxy in non-interactive mode", action)}
 	}
 	if !siteIsInteractiveFn() {
-		if cachedProxyMode != "" {
+		if cachedProxyModeKnown {
 			opts.proxyMode = cachedProxyMode
+			opts.proxySet = true
 			return opts, nil
 		}
 		return opts, ProjectError{Msg: fmt.Sprintf("domain %s requires --proxy or --no-proxy", action)}
 	}
 	options := []ui.SelectOption{
-		{Value: "direct", Label: "Direct / no proxy", Default: cachedProxyMode == ""},
-		{Value: "cloudflare", Label: "Cloudflare", Default: cachedProxyMode == "cloudflare"},
-		{Value: "ip", Label: "Reverse proxy IP", Default: cachedProxyMode != "" && cachedProxyMode != "cloudflare"},
+		{Value: "direct", Label: "Direct (no proxy)", Default: !cachedProxyModeKnown || cachedProxyMode == ""},
+		{Value: "cloudflare", Label: "Cloudflare", Default: cachedProxyModeKnown && cachedProxyMode == "cloudflare"},
+		{Value: "ip", Label: "Reverse proxy IP", Default: cachedProxyModeKnown && cachedProxyMode != "" && cachedProxyMode != "cloudflare"},
 	}
 	selected, err := siteDomainSelectFn("Choose Linode proxy mode", options)
 	if err != nil {
@@ -1063,7 +1186,7 @@ func resolveSiteDomainProxyDecision(action string, opts siteDomainOptions, recor
 		opts.proxyMode = "cloudflare"
 	case "ip":
 		defaultIP := ""
-		if cachedProxyMode != "" && cachedProxyMode != "cloudflare" {
+		if cachedProxyModeKnown && cachedProxyMode != "" && cachedProxyMode != "cloudflare" {
 			defaultIP = cachedProxyMode
 		}
 		value, err := siteDomainPromptStringFn("Reverse proxy public IP", defaultIP, false)
@@ -1124,6 +1247,8 @@ func buildSiteDomainPlan(siteID, env, action string, opts siteDomainOptions) (si
 	if len(domains) == 0 {
 		return siteDomainPlan{}, ProjectError{Msg: fmt.Sprintf("domain %s requires at least one domain", action)}
 	}
+	requestedDomains := append([]string{}, domains...)
+	requestedDomainSet := siteDomainNameSet(requestedDomains)
 	currentURL := firstRecordString(record, "url", "site_url", "home_url")
 	currentHostname := hostnameFromURLish(firstNonEmpty(currentURL, firstRecordString(record, "hostname")))
 	internalHostname := firstRecordString(record, "internal_hostname")
@@ -1139,11 +1264,17 @@ func buildSiteDomainPlan(siteID, env, action string, opts siteDomainOptions) (si
 			if siteDomainIsDefaultHostname(record, domain) {
 				return siteDomainPlan{}, ProjectError{Msg: fmt.Sprintf("%s is an nf-managed default domain for %s and cannot be removed with domain remove.", domain, canonicalEnvID(siteID, env))}
 			}
+			if !recordHasCachedExternalSecondarySiteDomain(record, domain) {
+				return siteDomainPlan{}, ProjectError{Msg: fmt.Sprintf("%s is not a cached external secondary domain for %s. Only external secondary domains can be removed; make another domain primary first if needed.", normalizeDomainName(domain), canonicalEnvID(siteID, env))}
+			}
 		}
 	}
 	existingPrimary := cachedExternalPrimaryDomain(record)
 	primary := action == "primary"
 	canonical := domains[0]
+	if primary && !recordHasCachedExternalSiteDomain(record, canonical) {
+		return siteDomainPlan{}, uncachedPrimaryDomainError(canonicalEnvID(siteID, env), canonical)
+	}
 	if primary {
 		for _, existing := range cachedExternalSiteDomainNames(record) {
 			if existing != canonical {
@@ -1170,7 +1301,13 @@ func buildSiteDomainPlan(siteID, env, action string, opts siteDomainOptions) (si
 	}
 	proxyMode := opts.proxyMode
 	if !opts.proxySet && strings.TrimSpace(proxyMode) == "" {
-		proxyMode = firstRecordString(record, "proxy_mode")
+		cachedProxyMode, cachedProxyModeKnown, err := cachedSiteDomainProxyMode(record, requestedDomains)
+		if err != nil {
+			return siteDomainPlan{}, err
+		}
+		if cachedProxyModeKnown {
+			proxyMode = cachedProxyMode
+		}
 	}
 	plan := siteDomainPlan{
 		Action:           action,
@@ -1216,6 +1353,11 @@ func buildSiteDomainPlan(siteID, env, action string, opts siteDomainOptions) (si
 			return siteDomainPlan{}, err
 		}
 		plan.ProxyMode = proxyMode
+		domainProxyModes, err := siteDomainPlanProxyModes(record, domains, requestedDomainSet, proxyMode)
+		if err != nil {
+			return siteDomainPlan{}, err
+		}
+		plan.DomainProxyModes = domainProxyModes
 		resolvedTarget, err := cachedSiteTarget(target.TargetRef)
 		if err != nil {
 			return siteDomainPlan{}, err
@@ -1798,6 +1940,7 @@ func applySiteDomainRemoveCacheFields(record map[string]any, plan siteDomainPlan
 	} else {
 		record["domains"] = remaining
 		delete(record, "domain_state")
+		delete(record, "proxy_mode")
 	}
 	if removeSet[normalizeDomainName(firstRecordString(record, "primary_domain"))] || removeSet[normalizeDomainName(hostnameFromURLish(firstNonEmpty(firstRecordString(record, "url", "site_url", "home_url"), firstRecordString(record, "hostname"))))] {
 		delete(record, "primary_domain")
@@ -1862,9 +2005,7 @@ func applySiteDomainCacheFields(record map[string]any, plan siteDomainPlan, resu
 		delete(record, "domains")
 	}
 	delete(record, "domain_state")
-	if plan.ProxyMode != "" {
-		record["proxy_mode"] = plan.ProxyMode
-	}
+	delete(record, "proxy_mode")
 	if plan.Primary {
 		record["hostname"] = plan.Canonical
 		record["url"] = "https://" + plan.Canonical
@@ -1894,8 +2035,8 @@ func siteDomainCacheEntries(plan siteDomainPlan, result siteDomainProviderResult
 			status = "active"
 		}
 		entry := map[string]any{"name": name, "role": role, "management": "external", "status": status}
-		if plan.ProxyMode != "" {
-			entry["proxy_mode"] = plan.ProxyMode
+		if proxyMode := plan.proxyModeForDomain(name); proxyMode != "" {
+			entry["proxy_mode"] = proxyMode
 		}
 		if domainID := result.domainID(name); domainID != "" {
 			entry["domain_id"] = domainID
@@ -2066,6 +2207,38 @@ func recordHasSiteDomain(record map[string]any, domain string) bool {
 	return false
 }
 
+func recordHasCachedExternalSiteDomain(record map[string]any, domain string) bool {
+	needle := normalizeDomainName(domain)
+	if needle == "" {
+		return false
+	}
+	for _, cached := range cachedExternalSiteDomainNames(record) {
+		if cached == needle {
+			return true
+		}
+	}
+	return false
+}
+
+func recordHasCachedExternalSecondarySiteDomain(record map[string]any, domain string) bool {
+	needle := normalizeDomainName(domain)
+	if needle == "" {
+		return false
+	}
+	for _, cached := range siteDomainListDomains(record) {
+		if cached.name == needle && cached.management == "external" && cached.role == "secondary" {
+			return true
+		}
+	}
+	return false
+}
+
+func uncachedPrimaryDomainError(envID, domain string) ProjectError {
+	domain = normalizeDomainName(domain)
+	envID = strings.TrimSpace(envID)
+	return ProjectError{Msg: fmt.Sprintf("%s is not a cached external domain for %s. Run nf domain add %s %s first.", domain, envID, envID, domain)}
+}
+
 func printSiteDomainStaleWarnings(plan siteDomainPlan) {
 	records, err := state.LoadStateRecords("sites")
 	if err != nil {
@@ -2085,7 +2258,11 @@ func printSiteDomainStaleWarnings(plan siteDomainPlan) {
 				continue
 			}
 			printed[envID+"|"+domain] = true
-			proxyArg := siteDomainProxyArg(firstRecordString(record, "proxy_mode"))
+			proxyMode := ""
+			if cachedProxyMode, ok, err := cachedSiteDomainProxyMode(record, []string{domain}); err == nil && ok {
+				proxyMode = cachedProxyMode
+			}
+			proxyArg := siteDomainProxyArg(proxyMode)
 			fmt.Printf("Warning: %s is also cached on %s; after cutover run: nf domain remove %s %s%s\n", domain, envID, envID, domain, proxyArg)
 		}
 	}
@@ -2097,8 +2274,7 @@ func linodeDomainCacheUpdateJQFilter() string {
       (if ((.internal_hostname // "") == "" and $internal_hostname != "") then .internal_hostname = $internal_hostname else . end)
       | (if ((.internal_url // "") == "" and $internal_url != "") then .internal_url = $internal_url else . end)
       | (.domains = (((.domains // []) | map(select((.name // .domain // .domain_name // .hostname // "") as $name | (($names | index($name)) == null))) | map(if $primary == "1" and ((.management // "external") == "external") then (.role = "secondary") else . end)) + $domains))
-      | del(.domain_state)
-      | (if $proxy_mode != "" then .proxy_mode = $proxy_mode else . end)
+      | del(.domain_state, .proxy_mode)
       | (if $primary == "1" then (.hostname = $canonical | .url = $url | .primary_domain = $canonical) else . end)
     )
   else . end)`
@@ -2107,7 +2283,7 @@ func linodeDomainCacheUpdateJQFilter() string {
 func linodeDomainCacheRemoveJQFilter() string {
 	return `  map(if (.site_id == $site_id and .env == $env) then
     (.domains = ((.domains // []) | map(select((.name // .domain // .domain_name // .hostname // "") as $name | (($remove_domains | index($name)) == null)))))
-    | (if ((.domains // []) | length) == 0 then del(.domains, .domain_state, .proxy_mode) else del(.domain_state) end)
+    | (if ((.domains // []) | length) == 0 then del(.domains, .domain_state, .proxy_mode) else del(.domain_state, .proxy_mode) end)
     | (if $reset_primary == "1" then (del(.primary_domain) | (if $internal_hostname != "" then .hostname = $internal_hostname else . end) | (if $internal_url != "" then .url = $internal_url else . end)) else . end)
   else . end)`
 }
@@ -2117,19 +2293,6 @@ func renderLinodeDomainBindingScript(plan siteDomainPlan) string {
 	domains := plan.allDomains()
 	domainEntries, _ := json.Marshal(siteDomainCacheEntries(plan, siteDomainProviderResult{}))
 	domainNames, _ := json.Marshal(domains)
-	expectedIPs := []string{}
-	_, reverseProxyIP := siteDomainReverseProxyIP(plan)
-	if !siteDomainCloudflareStrict(plan) && !reverseProxyIP {
-		for _, ip := range []string{plan.TargetIPv4, plan.TargetIPv6} {
-			if strings.TrimSpace(ip) != "" {
-				expectedIPs = append(expectedIPs, ip)
-			}
-		}
-	}
-	cloudflareRanges := []string{}
-	if siteDomainCloudflareProxy(plan) {
-		cloudflareRanges = siteDomainBundledCloudflareIPRangeStrings()
-	}
 	fileSlug := plan.FileSlug
 	if fileSlug == "" {
 		fileSlug = envIDFileSlug(plan.EnvID)
@@ -2164,7 +2327,9 @@ func renderLinodeDomainBindingScript(plan siteDomainPlan) string {
 	b.WriteString("  | \"\\($name) on \\(.site_id // .site // .id // \"unknown\"):\\(.env // \"unknown\")\"\n")
 	b.WriteString("' /var/lib/nf/sites.json | sed -n '1p')\n")
 	b.WriteString("if [ -n \"$conflict\" ]; then echo \"Domain already exists on this target: $conflict\" >&2; exit 1; fi\n")
+	needsDaemonReload := false
 	for _, domain := range domains {
+		domainPlan := plan.withProxyModeForDomain(domain)
 		art := linodeDomainArtifacts(domain)
 		role := "secondary"
 		if plan.Primary && domain == plan.Canonical {
@@ -2174,7 +2339,21 @@ func renderLinodeDomainBindingScript(plan siteDomainPlan) string {
 		if redirectTarget == "" {
 			redirectTarget = plan.Canonical
 		}
+		expectedIPs := []string{}
+		_, reverseProxyIP := siteDomainReverseProxyIP(domainPlan)
+		if !siteDomainCloudflareStrict(domainPlan) && !reverseProxyIP {
+			for _, ip := range []string{plan.TargetIPv4, plan.TargetIPv6} {
+				if strings.TrimSpace(ip) != "" {
+					expectedIPs = append(expectedIPs, ip)
+				}
+			}
+		}
+		cloudflareRanges := []string{}
+		if siteDomainCloudflareProxy(domainPlan) {
+			cloudflareRanges = siteDomainBundledCloudflareIPRangeStrings()
+		}
 		if reverseProxyIP {
+			needsDaemonReload = true
 			b.WriteString("systemctl disable --now ")
 			b.WriteString(q(art.ServiceName + ".timer"))
 			b.WriteString(" >/dev/null 2>&1 || true\n")
@@ -2188,10 +2367,10 @@ func renderLinodeDomainBindingScript(plan siteDomainPlan) string {
 			b.WriteString(".timer ")
 			b.WriteString(q(art.IssueScript))
 			b.WriteByte('\n')
-			b.WriteString(renderLinodeDomainRefreshScript(plan, art, fileSlug, role, redirectTarget))
+			b.WriteString(renderLinodeDomainRefreshScript(domainPlan, art, fileSlug, role, redirectTarget))
 			continue
 		}
-		b.WriteString(renderLinodeDomainRefreshScript(plan, art, fileSlug, role, redirectTarget))
+		b.WriteString(renderLinodeDomainRefreshScript(domainPlan, art, fileSlug, role, redirectTarget))
 		b.WriteString(renderLinodeDomainIssueScript(art, expectedIPs, cloudflareRanges))
 		b.WriteString("cat >/etc/systemd/system/")
 		b.WriteString(art.ServiceName)
@@ -2217,7 +2396,7 @@ func renderLinodeDomainBindingScript(plan siteDomainPlan) string {
 		b.WriteString(q(art.ServiceName + ".service"))
 		b.WriteString(" || true\n")
 	}
-	if reverseProxyIP {
+	if needsDaemonReload {
 		b.WriteString("systemctl daemon-reload\n")
 	}
 	if plan.Primary {
