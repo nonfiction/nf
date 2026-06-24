@@ -218,12 +218,53 @@ fi
 `, containerDir, containerDir, containerDir, excludes, wpContentArchive, wpContentArchive)
 }
 
+func envSnapshotCreateWpContentTransferArchiveScript(cfg envConfig, name string) string {
+	containerDir := envSnapshotContainerDir(name)
+	archive := envSnapshotContainerWpContentTransferArchive(name)
+	excludes := envRepoPluginTarExcludeArgs(cfg)
+	return fmt.Sprintf(`set -eu
+mkdir -p "%s"
+dirs=""
+for dir in wp-content/plugins wp-content/mu-plugins wp-content/languages; do
+  if [ -e "/var/www/html/$dir" ]; then
+    dirs="$dirs $dir"
+  fi
+done
+if [ -n "$dirs" ]; then
+  # shellcheck disable=SC2086
+  tar -C /var/www/html %s -czf "%s" $dirs
+else
+  tar -C /var/www/html -czf "%s" --files-from /dev/null
+fi
+`, containerDir, excludes, archive, archive)
+}
+
+func envPushTransferCreateScript(cfg envConfig, name string) string {
+	containerDir := envSnapshotContainerDir(name)
+	wpContentArchiveScript := envSnapshotCreateWpContentTransferArchiveScript(cfg, name)
+	return fmt.Sprintf(`set -eu
+mkdir -p "%s"
+wp db export "%s/database.sql"
+gzip -f "%s/database.sql"
+%s`, containerDir, containerDir, containerDir, wpContentArchiveScript)
+}
+
 func envSnapshotRestoreScript(cfg envConfig, name string) string {
+	return envSnapshotRestoreScriptWithUploads(cfg, name, true)
+}
+
+func envSnapshotRestoreScriptWithUploads(cfg envConfig, name string, includeUploads bool) string {
 	databaseArchive := envSnapshotContainerDatabaseArchive(name)
 	wpContentArchive := envSnapshotContainerWpContentArchive(name)
 	repoPlugins := shellQuoteArg(envRepoPluginSlugList(cfg))
 	excludes := envRepoPluginTarExcludeArgs(cfg)
 	tmpDir := path.Join(envSnapshotContainerDir(name), ".restore-tmp")
+	uploadsClear := ""
+	uploadsCopy := ""
+	if includeUploads {
+		uploadsClear = "  clear_dir_contents /var/www/html/wp-content/uploads\n"
+		uploadsCopy = "  copy_dir_contents \"$extract_dir/wp-content/uploads\" /var/www/html/wp-content/uploads\n"
+	}
 	return fmt.Sprintf(`set -eu
 tmpdir=%s
 rm -rf "$tmpdir"
@@ -249,8 +290,7 @@ if [ -f "%s" ]; then
     [ -d "$source" ] || return 0
     find "$source" -mindepth 1 -maxdepth 1 -exec cp -a {} "$dest"/ \;
   }
-  clear_dir_contents /var/www/html/wp-content/uploads
-  clear_dir_contents /var/www/html/wp-content/mu-plugins
+%s  clear_dir_contents /var/www/html/wp-content/mu-plugins
   clear_dir_contents /var/www/html/wp-content/languages
   mkdir -p /var/www/html/wp-content/plugins
   repo_plugins=%s
@@ -260,12 +300,11 @@ if [ -f "%s" ]; then
     case " $repo_plugins " in *" $base "*) continue ;; esac
     rm -rf "$entry"
   done
-  copy_dir_contents "$extract_dir/wp-content/uploads" /var/www/html/wp-content/uploads
-  copy_dir_contents "$extract_dir/wp-content/mu-plugins" /var/www/html/wp-content/mu-plugins
+%s  copy_dir_contents "$extract_dir/wp-content/mu-plugins" /var/www/html/wp-content/mu-plugins
   copy_dir_contents "$extract_dir/wp-content/languages" /var/www/html/wp-content/languages
   copy_dir_contents "$extract_dir/wp-content/plugins" /var/www/html/wp-content/plugins
 fi
-`, shellQuoteArg(tmpDir), databaseArchive, wpContentArchive, excludes, wpContentArchive, repoPlugins)
+`, shellQuoteArg(tmpDir), databaseArchive, wpContentArchive, excludes, wpContentArchive, uploadsClear, repoPlugins, uploadsCopy)
 }
 
 func envSnapshotComposeArgs(cfg envConfig, args ...string) []string {
@@ -355,11 +394,28 @@ func envSnapshotCreateArchives(cfg envConfig, name string) error {
 	return nil
 }
 
+func envPushTransferCreateArchives(cfg envConfig, name string) error {
+	if err := os.MkdirAll(envSnapshotDir(cfg, name), 0o755); err != nil {
+		return err
+	}
+	if err := os.Chmod(envSnapshotDir(cfg, name), 0o777); err != nil {
+		return err
+	}
+	if _, err := ensureLocalPushTransferCreateDiskSpace(cfg); err != nil {
+		return err
+	}
+	return runCommandSpecNoPreview(execSpec{Dir: localEnvDir(cfg), Args: envSnapshotComposeArgs(cfg, envPushTransferCreateScript(cfg, name))})
+}
+
 func envSnapshotRestoreArchives(cfg envConfig, name string) error {
+	return envSnapshotRestoreArchivesWithUploads(cfg, name, true)
+}
+
+func envSnapshotRestoreArchivesWithUploads(cfg envConfig, name string, includeUploads bool) error {
 	if err := ensureLocalSnapshotRestoreDiskSpace(cfg, name); err != nil {
 		return err
 	}
-	if err := runCommandSpecNoPreview(execSpec{Dir: localEnvDir(cfg), Args: envSnapshotComposeArgs(cfg, envSnapshotRestoreScript(cfg, name))}); err != nil {
+	if err := runCommandSpecNoPreview(execSpec{Dir: localEnvDir(cfg), Args: envSnapshotComposeArgs(cfg, envSnapshotRestoreScriptWithUploads(cfg, name, includeUploads))}); err != nil {
 		return err
 	}
 	return nil

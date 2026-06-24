@@ -587,7 +587,7 @@ func chooseProjectRemote(action string) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	return remoteSelectFn("Choose a remote to "+action, options)
+	return remoteSelectFn(projectRemoteSelectTitle(action), options)
 }
 
 func chooseProjectRemoteOrOnly(action string) (string, error) {
@@ -598,7 +598,18 @@ func chooseProjectRemoteOrOnly(action string) (string, error) {
 	if len(options) == 1 {
 		return options[0].Value, nil
 	}
-	return remoteSelectFn("Choose a remote to "+action, options)
+	return remoteSelectFn(projectRemoteSelectTitle(action), options)
+}
+
+func projectRemoteSelectTitle(action string) string {
+	switch action {
+	case "push":
+		return "Choose a remote to push to"
+	case "pull":
+		return "Choose a remote to pull from"
+	default:
+		return "Choose a remote to " + action
+	}
 }
 
 func projectRemoteSelectOptions(action string) ([]ui.SelectOption, error) {

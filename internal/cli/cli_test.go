@@ -201,6 +201,21 @@ func stubLocalSnapshotExpandedSize(t *testing.T, expandedSize int64) {
 	t.Cleanup(func() { localSnapshotExpandedSizeBytesFn = oldLocalSnapshotExpandedSizeBytes })
 }
 
+func stubLocalPushTransferSizes(t *testing.T, archiveSize, expandedSize int64) {
+	t.Helper()
+	oldEstimateSize := localPushTransferEstimateBytesFn
+	oldArchiveSize := localPushTransferArchiveSizeBytesFn
+	oldExpandedSize := localPushTransferExpandedSizeBytesFn
+	localPushTransferEstimateBytesFn = func(envConfig) (int64, error) { return addEnvTransferBytes(archiveSize, expandedSize), nil }
+	localPushTransferArchiveSizeBytesFn = func(envConfig, string) (int64, error) { return archiveSize, nil }
+	localPushTransferExpandedSizeBytesFn = func(envConfig, string) (int64, error) { return expandedSize, nil }
+	t.Cleanup(func() {
+		localPushTransferEstimateBytesFn = oldEstimateSize
+		localPushTransferArchiveSizeBytesFn = oldArchiveSize
+		localPushTransferExpandedSizeBytesFn = oldExpandedSize
+	})
+}
+
 func TestRunHelpShowsTopLevelCommandsOutsideGit(t *testing.T) {
 	workdir := t.TempDir()
 	oldwd, err := os.Getwd()
@@ -10732,8 +10747,20 @@ func TestRunEnvPullPreflightResolvesLinodeTargetFromProvidersCache(t *testing.T)
 			t.Fatalf("Run(env pull --dry-run) = %d, want 0", got)
 		}
 	})
-	if selectedTitle != "Choose a remote to pull" || !strings.Contains(stdout, "live remote") {
+	if selectedTitle != "Choose a remote to pull from" || !strings.Contains(stdout, "live remote") {
 		t.Fatalf("env pull picker title/output = %q /\n%s", selectedTitle, stdout)
+	}
+}
+
+func TestProjectRemoteSelectTitleUsesDirectionalPushPullWording(t *testing.T) {
+	if got := projectRemoteSelectTitle("push"); got != "Choose a remote to push to" {
+		t.Fatalf("projectRemoteSelectTitle(push) = %q", got)
+	}
+	if got := projectRemoteSelectTitle("pull"); got != "Choose a remote to pull from" {
+		t.Fatalf("projectRemoteSelectTitle(pull) = %q", got)
+	}
+	if got := projectRemoteSelectTitle("remove"); got != "Choose a remote to remove" {
+		t.Fatalf("projectRemoteSelectTitle(remove) = %q", got)
 	}
 }
 
@@ -12791,9 +12818,9 @@ func TestExecuteEnvPullFinalizesLocalDestinationThemeAndCache(t *testing.T) {
 	runSSHCommandFn = func(args []string) error { return nil }
 	t.Cleanup(func() { runSSHCommandFn = oldRunSSH })
 	oldRunRsync := runRsyncCommandFn
-	var rsyncArgs []string
+	var rsyncCommands [][]string
 	runRsyncCommandFn = func(args []string) error {
-		rsyncArgs = append([]string(nil), args...)
+		rsyncCommands = append(rsyncCommands, append([]string(nil), args...))
 		return nil
 	}
 	t.Cleanup(func() { runRsyncCommandFn = oldRunRsync })
@@ -12807,7 +12834,7 @@ func TestExecuteEnvPullFinalizesLocalDestinationThemeAndCache(t *testing.T) {
 			t.Fatalf("executeEnvPull() = %d, want 0", got)
 		}
 	})
-	assertContainsInOrder(t, stdout, []string{"Preparing local safety snapshot before remote pull...", "Checking available disk space for local snapshot workspace...", "Estimating remote database and uploads size for pull...", "Checking available disk space for remote export workspace...", "Preparing remote database and uploads export for pull...", "Measuring remote pull export...", "Checking available disk space for local pull snapshot...", "Preparing to rsync remote database and uploads to local...", "Restoring pulled database and uploads into local env...", "Finalizing local WordPress URL, theme, and cache..."})
+	assertContainsInOrder(t, stdout, []string{"Preparing local safety snapshot before remote pull...", "Checking available disk space for local snapshot workspace...", "Estimating remote database and non-upload wp-content size for pull...", "Checking available disk space for remote export workspace...", "Preparing remote database and non-upload wp-content export for pull...", "Measuring remote pull export...", "Checking available disk space for local pull snapshot...", "Preparing to rsync remote database and non-upload wp-content to local...", "Restoring pulled database and non-upload wp-content into local env...", "Preparing to rsync remote uploads to local...", "Finalizing local WordPress URL, theme, and cache...", "Recording complete pulled snapshot locally..."})
 	logData, err := os.ReadFile(logPath)
 	if err != nil {
 		t.Fatalf("ReadFile(docker log) error = %v", err)
@@ -12817,8 +12844,14 @@ func TestExecuteEnvPullFinalizesLocalDestinationThemeAndCache(t *testing.T) {
 	if strings.Contains(logText, "wp\ntheme\nactivate\nremote-theme") {
 		t.Fatalf("pull activated remote theme slug locally:\n%s", logText)
 	}
-	if !slices.Contains(rsyncArgs, "--progress") {
-		t.Fatalf("pull rsync args missing --progress: %#v", rsyncArgs)
+	if len(rsyncCommands) != 2 {
+		t.Fatalf("pull rsync commands len = %d, want archive and uploads: %#v", len(rsyncCommands), rsyncCommands)
+	}
+	if !slices.Contains(rsyncCommands[0], "--progress") || !slices.Contains(rsyncCommands[1], "--progress") || !slices.Contains(rsyncCommands[1], "--delete") {
+		t.Fatalf("pull rsync args missing progress/delete: %#v", rsyncCommands)
+	}
+	if !strings.Contains(rsyncCommands[1][len(rsyncCommands[1])-2], "/wp-content/uploads/") || rsyncCommands[1][len(rsyncCommands[1])-1] != cfg.managedUploadsDir()+string(filepath.Separator) {
+		t.Fatalf("pull uploads rsync args = %#v", rsyncCommands[1])
 	}
 }
 
@@ -12892,11 +12925,14 @@ func TestExecuteEnvPushFinalizesRemoteDestinationThemeAndCache(t *testing.T) {
 	}
 	t.Setenv("PATH", dockerDir+string(os.PathListSeparator)+os.Getenv("PATH"))
 	cfg := envConfig{ProjectSlug: "client", EnvDir: config.EnvDir("client"), Compose: "docker compose", WordpressService: "wordpress", DockerUser: "nonfiction", ThemeMountSlug: "local-theme", ThemeSlug: "remote-theme", UploadsPath: "uploads", WordpressPort: 18432}
+	if err := os.MkdirAll(cfg.managedUploadsDir(), 0o755); err != nil {
+		t.Fatalf("MkdirAll(uploads) error = %v", err)
+	}
 	target := envRemoteSyncTarget{RemoteName: "live", Provider: "linode", SiteID: "client.app1-linode", Env: "live", URL: "https://client.app1-linode.nonfiction.dev/", SSHUser: "nonfiction", SSHHost: "app1-linode.nonfiction.dev", SSHPort: "22", WordPressPath: "/var/www/sites/client/public", WPCommand: "sudo -u www-data wp", SudoFileOps: true}
 	oldRunRsync := runRsyncCommandFn
-	var rsyncArgs []string
+	var rsyncCommands [][]string
 	runRsyncCommandFn = func(args []string) error {
-		rsyncArgs = append([]string(nil), args...)
+		rsyncCommands = append(rsyncCommands, append([]string(nil), args...))
 		return nil
 	}
 	t.Cleanup(func() { runRsyncCommandFn = oldRunRsync })
@@ -12910,14 +12946,20 @@ func TestExecuteEnvPushFinalizesRemoteDestinationThemeAndCache(t *testing.T) {
 	stubEnvRemoteDiskOutput(t, "1024\n", "1073741824\n", "1073741824\n", "1073741824\n")
 	stubLocalAvailableDisk(t, 1073741824)
 	stubLocalWordPressTransferEstimate(t, 1024)
-	stubLocalSnapshotExpandedSize(t, 1024)
+	stubLocalPushTransferSizes(t, 1024, 1024)
 
 	stdout := captureStdout(t, func() {
 		if got := executeEnvPush(cfg, target); got != 0 {
 			t.Fatalf("executeEnvPush() = %d, want 0", got)
 		}
 	})
-	assertContainsInOrder(t, stdout, []string{"Preparing local database and uploads snapshot for remote push...", "Checking available disk space for local snapshot workspace...", "Measuring local push snapshot...", "Estimating current remote database and uploads size for backup...", "Checking available disk space for remote push backup workspace...", "Creating remote backup before push...", "Checking available disk space for remote push workspace...", "Preparing remote push workspace...", "Preparing to rsync local database and uploads to remote...", "Checking available disk space for remote push import workspace...", "Importing pushed database and uploads on remote...", "Finalizing remote WordPress URL, theme, and cache..."})
+	assertContainsInOrder(t, stdout, []string{"Preparing local database and non-upload wp-content transfer for remote push...", "Checking available disk space for local push transfer workspace...", "Measuring local push transfer payload...", "Estimating current remote database and uploads size for backup...", "Checking available disk space for remote push backup workspace...", "Creating remote backup before push...", "Checking available disk space for remote push workspace...", "Preparing remote push workspace...", "Preparing to rsync local database archive to remote...", "Preparing to rsync local non-upload wp-content archive to remote...", "Checking available disk space for remote push import workspace...", "Importing pushed database and non-upload wp-content on remote...", "Preparing to rsync local uploads to remote...", "Finalizing remote WordPress URL, theme, and cache...", "Env pushed.", "Remote backup: cleaned up after successful push to avoid production disk growth"})
+	if strings.Contains(stdout, "Local snapshot:") {
+		t.Fatalf("push stdout advertised a retained local snapshot:\n%s", stdout)
+	}
+	if matches, err := filepath.Glob(filepath.Join(envSnapshotProjectDir(cfg), "push-live-*")); err != nil || len(matches) != 0 {
+		t.Fatalf("push left local transfer workspace matches = %#v, err = %v", matches, err)
+	}
 	if len(sshCommands) != 6 {
 		t.Fatalf("ssh commands len = %d, want mkdir/export/import/finalize/cleanup/cleanup: %#v", len(sshCommands), sshCommands)
 	}
@@ -12933,11 +12975,70 @@ func TestExecuteEnvPushFinalizesRemoteDestinationThemeAndCache(t *testing.T) {
 	if strings.Contains(finalizeScript, "theme activate local-theme") {
 		t.Fatalf("push activated local theme mount slug remotely:\n%s", finalizeScript)
 	}
-	if !slices.Contains(rsyncArgs, "--progress") {
-		t.Fatalf("push rsync args missing --progress: %#v", rsyncArgs)
+	if len(rsyncCommands) != 3 {
+		t.Fatalf("push rsync commands len = %d, want database/archive/uploads: %#v", len(rsyncCommands), rsyncCommands)
+	}
+	if !slices.Contains(rsyncCommands[0], "--progress") || !slices.Contains(rsyncCommands[1], "--progress") || !slices.Contains(rsyncCommands[2], "--progress") || !slices.Contains(rsyncCommands[2], "--delete") {
+		t.Fatalf("push rsync args missing progress/delete: %#v", rsyncCommands)
+	}
+	if !strings.HasSuffix(rsyncCommands[0][len(rsyncCommands[0])-1], "/database.sql.gz") || !strings.HasSuffix(rsyncCommands[1][len(rsyncCommands[1])-1], "/wp-content.tar.gz") {
+		t.Fatalf("push archive rsync args = %#v", rsyncCommands[:2])
+	}
+	if rsyncCommands[2][len(rsyncCommands[2])-2] != cfg.managedUploadsDir()+string(filepath.Separator) || !strings.Contains(rsyncCommands[2][len(rsyncCommands[2])-1], "/wp-content/uploads/") || !slices.Contains(rsyncCommands[2], "--rsync-path=sudo rsync") || !slices.Contains(rsyncCommands[2], "--chown=www-data:www-data") {
+		t.Fatalf("push uploads rsync args = %#v", rsyncCommands[2])
 	}
 	if !strings.Contains(sshCommands[4][len(sshCommands[4])-1], "rm -rf -- /tmp/nf-push-") || !strings.Contains(sshCommands[5][len(sshCommands[5])-1], "rm -rf -- /tmp/nf-backup-") {
 		t.Fatalf("push cleanup commands = %#v", sshCommands[4:])
+	}
+}
+
+func TestExecuteEnvPushRetainsRemoteBackupAfterRemoteChangeFailure(t *testing.T) {
+	configHome := t.TempDir()
+	t.Setenv("NF_CONFIG_HOME", configHome)
+	t.Setenv("NF_DATA_HOME", configHome)
+	dockerDir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dockerDir, "docker"), []byte("#!/bin/sh\nexit 0\n"), 0o755); err != nil {
+		t.Fatalf("WriteFile(docker) error = %v", err)
+	}
+	t.Setenv("PATH", dockerDir+string(os.PathListSeparator)+os.Getenv("PATH"))
+	cfg := envConfig{ProjectSlug: "client", EnvDir: config.EnvDir("client"), Compose: "docker compose", WordpressService: "wordpress", DockerUser: "nonfiction", ThemeSlug: "remote-theme", UploadsPath: "uploads", WordpressPort: 18432}
+	if err := os.MkdirAll(cfg.managedUploadsDir(), 0o755); err != nil {
+		t.Fatalf("MkdirAll(uploads) error = %v", err)
+	}
+	target := envRemoteSyncTarget{RemoteName: "production", Provider: "linode", SiteID: "client.app1-linode", Env: "live", URL: "https://client.app1-linode.nonfiction.dev/", SSHUser: "nonfiction", SSHHost: "app1-linode.nonfiction.dev", SSHPort: "22", WordPressPath: "/var/www/sites/client/public", WPCommand: "sudo -u www-data wp", SudoFileOps: true}
+	stubEnvRemoteDiskOutput(t, "1024\n", "1073741824\n", "1073741824\n", "1073741824\n")
+	stubLocalAvailableDisk(t, 1073741824)
+	stubLocalWordPressTransferEstimate(t, 1024)
+	stubLocalPushTransferSizes(t, 1024, 1024)
+	oldRunRsync := runRsyncCommandFn
+	runRsyncCommandFn = func(args []string) error { return nil }
+	t.Cleanup(func() { runRsyncCommandFn = oldRunRsync })
+	oldRunSSH := runSSHCommandFn
+	var sshCommands [][]string
+	runSSHCommandFn = func(args []string) error {
+		sshCommands = append(sshCommands, append([]string(nil), args...))
+		if strings.Contains(args[len(args)-1], "cache flush") {
+			return fmt.Errorf("finalize failed")
+		}
+		return nil
+	}
+	t.Cleanup(func() { runSSHCommandFn = oldRunSSH })
+
+	stderr := captureStderr(t, func() {
+		captureStdout(t, func() {
+			if got := executeEnvPush(cfg, target); got != 1 {
+				t.Fatalf("executeEnvPush() = %d, want 1", got)
+			}
+		})
+	})
+	assertContainsInOrder(t, stderr, []string{"finalize failed", "Remote backup retained for recovery: /tmp/nf-backup-", "Remove it after recovery to free production disk space."})
+	if len(sshCommands) != 5 || !strings.Contains(sshCommands[4][len(sshCommands[4])-1], "rm -rf -- /tmp/nf-push-") {
+		t.Fatalf("ssh commands = %#v, want backup/export/import/finalize plus push cleanup", sshCommands)
+	}
+	for _, command := range sshCommands {
+		if strings.Contains(command[len(command)-1], "rm -rf -- /tmp/nf-backup-") {
+			t.Fatalf("remote backup was cleaned up after failed push: %#v", sshCommands)
+		}
 	}
 }
 
@@ -12951,11 +13052,14 @@ func TestExecuteEnvPushChecksRemoteSpaceBeforeRsync(t *testing.T) {
 	}
 	t.Setenv("PATH", dockerDir+string(os.PathListSeparator)+os.Getenv("PATH"))
 	cfg := envConfig{ProjectSlug: "client", EnvDir: config.EnvDir("client"), Compose: "docker compose", WordpressService: "wordpress", DockerUser: "nonfiction", UploadsPath: "uploads", WordpressPort: 18432}
+	if err := os.MkdirAll(cfg.managedUploadsDir(), 0o755); err != nil {
+		t.Fatalf("MkdirAll(uploads) error = %v", err)
+	}
 	target := envRemoteSyncTarget{RemoteName: "production", Provider: "kinsta", SiteID: "client-kinsta", Env: "live", URL: "https://www.example.com/", SSHUser: "client", SSHHost: "203.0.113.10", SSHPort: "12345", WordPressPath: "/www/client/public", WPCommand: "wp"}
 	scripts := stubEnvRemoteDiskOutput(t, "0\n", "1\n")
 	stubLocalAvailableDisk(t, 1073741824)
 	stubLocalWordPressTransferEstimate(t, 1024)
-	stubLocalSnapshotExpandedSize(t, 1024)
+	stubLocalPushTransferSizes(t, 1024, 1024)
 	oldRunSSH := runSSHCommandFn
 	runSSHCommandFn = func(args []string) error {
 		t.Fatalf("runSSHCommandFn called after failed disk check: %#v", args)
@@ -12994,11 +13098,14 @@ func TestExecuteEnvPushChecksPostBackupSpaceBeforeRsync(t *testing.T) {
 	}
 	t.Setenv("PATH", dockerDir+string(os.PathListSeparator)+os.Getenv("PATH"))
 	cfg := envConfig{ProjectSlug: "client", EnvDir: config.EnvDir("client"), Compose: "docker compose", WordpressService: "wordpress", DockerUser: "nonfiction", UploadsPath: "uploads", WordpressPort: 18432}
+	if err := os.MkdirAll(cfg.managedUploadsDir(), 0o755); err != nil {
+		t.Fatalf("MkdirAll(uploads) error = %v", err)
+	}
 	target := envRemoteSyncTarget{RemoteName: "production", Provider: "linode", SiteID: "client.app1-linode", Env: "live", URL: "https://client.app1-linode.nonfiction.dev/", SSHUser: "nonfiction", SSHHost: "app1-linode.nonfiction.dev", SSHPort: "22", WordPressPath: "/var/www/sites/client/public", WPCommand: "sudo -u www-data wp", SudoFileOps: true}
 	stubEnvRemoteDiskOutput(t, "1024\n", "1073741824\n", "1\n")
 	stubLocalAvailableDisk(t, 1073741824)
 	stubLocalWordPressTransferEstimate(t, 1024)
-	stubLocalSnapshotExpandedSize(t, 1024)
+	stubLocalPushTransferSizes(t, 1024, 1024)
 	oldRunSSH := runSSHCommandFn
 	var sshCommands [][]string
 	runSSHCommandFn = func(args []string) error {
@@ -13123,12 +13230,12 @@ func TestRemoteImportScriptPreservesRepoPluginDirs(t *testing.T) {
 	cfg := envConfig{RepoPluginMounts: []envPluginMount{{Slug: "agency-credit", Host: "/repo/plugins/agency-credit"}}}
 	target := envRemoteSyncTarget{WordPressPath: "/var/www/sites/client/public", WPCommand: "sudo -u www-data wp", SudoFileOps: true}
 	script := remoteImportScript(cfg, target, "/tmp/nf-push-client")
-	for _, want := range []string{"repo_plugins=agency-credit", "case \" $repo_plugins \" in *\" $base \"*) continue ;; esac", "sudo rm -rf \"$entry\"", "sudo tar --exclude=wp-content/plugins/agency-credit -tzf /tmp/nf-push-client/wp-content.tar.gz >/dev/null", "sudo tar --exclude=wp-content/plugins/agency-credit -xzf /tmp/nf-push-client/wp-content.tar.gz -C /var/www/sites/client/public", "clear_dir_contents /var/www/sites/client/public/wp-content/uploads", "sudo chown -R www-data:www-data /var/www/sites/client/public/wp-content/uploads"} {
+	for _, want := range []string{"repo_plugins=agency-credit", "case \" $repo_plugins \" in *\" $base \"*) continue ;; esac", "sudo rm -rf \"$entry\"", "sudo tar --exclude=wp-content/plugins/agency-credit -tzf /tmp/nf-push-client/wp-content.tar.gz >/dev/null", "sudo tar --exclude=wp-content/plugins/agency-credit -xzf /tmp/nf-push-client/wp-content.tar.gz -C /var/www/sites/client/public", "clear_dir_contents /var/www/sites/client/public/wp-content/mu-plugins", "sudo chown -R www-data:www-data /var/www/sites/client/public/wp-content/plugins"} {
 		if !strings.Contains(script, want) {
 			t.Fatalf("remote import script missing %q:\n%s", want, script)
 		}
 	}
-	for _, unwanted := range []string{"wp-content-extract", "copy_dir_contents", "rm -rf /var/www/sites/client/public/wp-content/uploads /var/www/sites/client/public/wp-content/plugins", "rm -rf /var/www/sites/client/public/wp-content/plugins", "tar --no-overwrite-dir"} {
+	for _, unwanted := range []string{"wp-content-extract", "copy_dir_contents", "clear_dir_contents /var/www/sites/client/public/wp-content/uploads", "chown -R www-data:www-data /var/www/sites/client/public/wp-content/uploads", "rm -rf /var/www/sites/client/public/wp-content/uploads /var/www/sites/client/public/wp-content/plugins", "rm -rf /var/www/sites/client/public/wp-content/plugins", "tar --no-overwrite-dir"} {
 		if strings.Contains(script, unwanted) {
 			t.Fatalf("remote import script should not remove repo plugin mount point %q:\n%s", unwanted, script)
 		}

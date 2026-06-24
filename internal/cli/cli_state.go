@@ -50,7 +50,10 @@ var (
 	runCommandSpecOutputSilentFn          = runCommandSpecOutputSilent
 	localAvailableDiskBytesFn             = localAvailableDiskBytes
 	localWordPressTransferEstimateBytesFn = localWordPressTransferEstimateBytes
+	localPushTransferEstimateBytesFn      = localPushTransferEstimateBytes
 	localSnapshotExpandedSizeBytesFn      = localSnapshotExpandedSizeBytes
+	localPushTransferArchiveSizeBytesFn   = localPushTransferArchiveSizeBytes
+	localPushTransferExpandedSizeBytesFn  = localPushTransferExpandedSizeBytes
 	targetSelectFn                        = ui.Select
 	providerSelectFn                      = ui.Select
 	siteAddSelectFn                       = ui.Select

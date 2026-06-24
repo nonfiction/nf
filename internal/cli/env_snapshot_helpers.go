@@ -59,12 +59,20 @@ func envSnapshotContainerWpContentArchive(name string) string {
 	return path.Join(envSnapshotContainerDir(name), "wp-content.tar.gz")
 }
 
+func envSnapshotContainerWpContentTransferArchive(name string) string {
+	return path.Join(envSnapshotContainerDir(name), ".wp-content-transfer.tar.gz")
+}
+
 func envSnapshotHostDatabaseArchive(cfg envConfig, name string) string {
 	return filepath.Join(envSnapshotDir(cfg, name), "database.sql.gz")
 }
 
 func envSnapshotHostWpContentArchive(cfg envConfig, name string) string {
 	return filepath.Join(envSnapshotDir(cfg, name), "wp-content.tar.gz")
+}
+
+func envSnapshotHostWpContentTransferArchive(cfg envConfig, name string) string {
+	return filepath.Join(envSnapshotDir(cfg, name), ".wp-content-transfer.tar.gz")
 }
 
 func envSnapshotMetadataPath(cfg envConfig, name string) string {

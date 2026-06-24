@@ -24,6 +24,18 @@ func envRemoteRsyncArgs(target envRemoteSyncTarget, source, destination string) 
 	return []string{"rsync", "-az", "--progress", "-e", "ssh -p " + target.SSHPort, source, destination}
 }
 
+func envRemoteUploadsRsyncArgs(target envRemoteSyncTarget, source, destination string, push bool) []string {
+	args := []string{"rsync", "-az", "--delete", "--progress", "--no-owner", "--no-group"}
+	if target.SudoFileOps {
+		args = append(args, "--rsync-path=sudo rsync")
+		if push {
+			args = append(args, "--chown=www-data:www-data")
+		}
+	}
+	args = append(args, "-e", "ssh -p "+target.SSHPort, source, destination)
+	return args
+}
+
 func envTransferRequiredBytes(size int64) int64 {
 	if size < 0 {
 		size = 0
@@ -94,6 +106,17 @@ func ensureLocalSnapshotCreateDiskSpace(cfg envConfig) (int64, error) {
 		return 0, err
 	}
 	if err := ensureLocalDiskSpace(envSnapshotProjectDir(cfg), "snapshot workspace", envTransferRequiredBytes(estimate)); err != nil {
+		return 0, err
+	}
+	return estimate, nil
+}
+
+func ensureLocalPushTransferCreateDiskSpace(cfg envConfig) (int64, error) {
+	estimate, err := localPushTransferEstimateBytesFn(cfg)
+	if err != nil {
+		return 0, err
+	}
+	if err := ensureLocalDiskSpace(envSnapshotProjectDir(cfg), "push transfer workspace", envTransferRequiredBytes(estimate)); err != nil {
 		return 0, err
 	}
 	return estimate, nil
@@ -182,7 +205,15 @@ func localPathSizeBytes(path string) (int64, error) {
 }
 
 func localWordPressTransferEstimateBytes(cfg envConfig) (int64, error) {
-	output, err := runCommandSpecOutputSilentFn(execSpec{Dir: localEnvDir(cfg), Args: envSnapshotComposeArgs(cfg, localWordPressTransferEstimateScript())})
+	return localWordPressTransferEstimateBytesWithUploads(cfg, true)
+}
+
+func localPushTransferEstimateBytes(cfg envConfig) (int64, error) {
+	return localWordPressTransferEstimateBytesWithUploads(cfg, false)
+}
+
+func localWordPressTransferEstimateBytesWithUploads(cfg envConfig, includeUploads bool) (int64, error) {
+	output, err := runCommandSpecOutputSilentFn(execSpec{Dir: localEnvDir(cfg), Args: envSnapshotComposeArgs(cfg, localWordPressTransferEstimateScript(includeUploads))})
 	if err != nil {
 		return 0, err
 	}
@@ -195,6 +226,30 @@ func localSnapshotExpandedSizeBytes(cfg envConfig, name string) (int64, error) {
 		return 0, err
 	}
 	wpContentSize, err := tarGzExpandedSizeBytes(envSnapshotHostWpContentArchive(cfg, name))
+	if err != nil {
+		return 0, err
+	}
+	return addEnvTransferBytes(databaseSize, wpContentSize), nil
+}
+
+func localPushTransferArchiveSizeBytes(cfg envConfig, name string) (int64, error) {
+	databaseSize, err := localPathSizeBytes(envSnapshotHostDatabaseArchive(cfg, name))
+	if err != nil {
+		return 0, err
+	}
+	wpContentSize, err := localPathSizeBytes(envSnapshotHostWpContentTransferArchive(cfg, name))
+	if err != nil {
+		return 0, err
+	}
+	return addEnvTransferBytes(databaseSize, wpContentSize), nil
+}
+
+func localPushTransferExpandedSizeBytes(cfg envConfig, name string) (int64, error) {
+	databaseSize, err := gzipUncompressedSizeBytes(envSnapshotHostDatabaseArchive(cfg, name))
+	if err != nil {
+		return 0, err
+	}
+	wpContentSize, err := tarGzExpandedSizeBytes(envSnapshotHostWpContentTransferArchive(cfg, name))
 	if err != nil {
 		return 0, err
 	}
@@ -268,7 +323,11 @@ func remotePathSizeBytes(target envRemoteSyncTarget, remotePath string) (int64, 
 }
 
 func remoteWordPressTransferEstimateBytes(target envRemoteSyncTarget) (int64, error) {
-	output, err := runSSHOutputFn(remoteSSHArgs(target, remoteWordPressTransferEstimateScript(target)))
+	return remoteWordPressTransferEstimateBytesWithUploads(target, true)
+}
+
+func remoteWordPressTransferEstimateBytesWithUploads(target envRemoteSyncTarget, includeUploads bool) (int64, error) {
+	output, err := runSSHOutputFn(remoteSSHArgs(target, remoteWordPressTransferEstimateScript(target, includeUploads)))
 	if err != nil {
 		return 0, err
 	}
@@ -287,12 +346,16 @@ func parseDiskBytes(output []byte) (int64, error) {
 	return value, nil
 }
 
-func localWordPressTransferEstimateScript() string {
+func localWordPressTransferEstimateScript(includeUploads bool) string {
 	sql := shellQuoteArg("SELECT COALESCE(SUM(data_length + index_length), 0) FROM information_schema.tables WHERE table_schema = DATABASE()")
+	dirs := "wp-content/plugins wp-content/mu-plugins wp-content/languages"
+	if includeUploads {
+		dirs = "wp-content/uploads " + dirs
+	}
 	return fmt.Sprintf(`set -eu
 wp_path=/var/www/html
 bytes=0
-for dir in wp-content/uploads wp-content/plugins wp-content/mu-plugins wp-content/languages; do
+for dir in %s; do
   if [ -e "$wp_path/$dir" ]; then
     kb=$(du -sk "$wp_path/$dir" 2>/dev/null | awk 'NR==1 { printf "%%.0f\n", $1 }')
     case "$kb" in ''|*[!0-9]*) kb=0 ;; esac
@@ -303,7 +366,7 @@ db_bytes=$(wp --path="$wp_path" db query %s --skip-column-names 2>/dev/null | aw
 case "$db_bytes" in ''|*[!0-9]*) db_bytes=0 ;; esac
 bytes=$((bytes + db_bytes))
 printf '%%s\n' "$bytes"
-`, sql)
+`, dirs, sql)
 }
 
 func remoteAvailableDiskScript(remotePath string) string {
@@ -323,13 +386,17 @@ fi
 `, quoted, quoted)
 }
 
-func remoteWordPressTransferEstimateScript(target envRemoteSyncTarget) string {
+func remoteWordPressTransferEstimateScript(target envRemoteSyncTarget, includeUploads bool) string {
 	wpPath := shellQuoteArg(target.WordPressPath)
 	sql := shellQuoteArg("SELECT COALESCE(SUM(data_length + index_length), 0) FROM information_schema.tables WHERE table_schema = DATABASE()")
+	dirs := "wp-content/plugins wp-content/mu-plugins wp-content/languages"
+	if includeUploads {
+		dirs = "wp-content/uploads " + dirs
+	}
 	return fmt.Sprintf(`set -eu
 wp_path=%s
 bytes=0
-for dir in wp-content/uploads wp-content/plugins wp-content/mu-plugins wp-content/languages; do
+for dir in %s; do
   if [ -e "$wp_path/$dir" ]; then
     kb=$(du -sk "$wp_path/$dir" 2>/dev/null | awk 'NR==1 { printf "%%.0f\n", $1 }')
     case "$kb" in ''|*[!0-9]*) kb=0 ;; esac
@@ -340,7 +407,7 @@ db_bytes=$(%s --path=%s db query %s --skip-column-names 2>/dev/null | awk 'NR==1
 case "$db_bytes" in ''|*[!0-9]*) db_bytes=0 ;; esac
 bytes=$((bytes + db_bytes))
 printf '%%s\n' "$bytes"
-`, wpPath, target.WPCommand, wpPath, sql)
+`, wpPath, dirs, target.WPCommand, wpPath, sql)
 }
 
 func cleanupRemoteTempDir(target envRemoteSyncTarget, remotePath string) {
