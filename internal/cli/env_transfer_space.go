@@ -49,6 +49,7 @@ func addEnvTransferBytes(values ...int64) int64 {
 }
 
 func ensureLocalDiskSpace(path, label string, requiredBytes int64) error {
+	fmt.Printf("Checking available disk space for local %s...\n", label)
 	available, err := localAvailableDiskBytesFn(path)
 	if err != nil {
 		return fmt.Errorf("check local disk space for %s: %w", label, err)
@@ -57,6 +58,7 @@ func ensureLocalDiskSpace(path, label string, requiredBytes int64) error {
 }
 
 func ensureRemoteDiskSpace(target envRemoteSyncTarget, path, label string, requiredBytes int64) error {
+	fmt.Printf("Checking available disk space for remote %s...\n", label)
 	available, err := remoteAvailableDiskBytes(target, path)
 	if err != nil {
 		return fmt.Errorf("check remote disk space for %s: %w", label, err)
@@ -69,10 +71,21 @@ func ensureDiskSpace(label, path string, requiredBytes, availableBytes int64) er
 		return nil
 	}
 	if availableBytes < requiredBytes {
-		return fmt.Errorf("not enough disk space for %s at %s: need %s, available %s", label, path, formatEnvSnapshotSize(requiredBytes), formatEnvSnapshotSize(availableBytes))
+		requiredText, availableText := formatEnvDiskSpacePair(requiredBytes, availableBytes)
+		return fmt.Errorf("not enough disk space for %s at %s: need %s, available %s", label, path, requiredText, availableText)
 	}
 	fmt.Printf("Disk space ok for %s: need %s, available %s\n", label, formatEnvSnapshotSize(requiredBytes), formatEnvSnapshotSize(availableBytes))
 	return nil
+}
+
+func formatEnvDiskSpacePair(requiredBytes, availableBytes int64) (string, string) {
+	requiredText := formatEnvSnapshotSize(requiredBytes)
+	availableText := formatEnvSnapshotSize(availableBytes)
+	if requiredText == availableText && requiredBytes != availableBytes {
+		requiredText = fmt.Sprintf("%s (%d bytes)", requiredText, requiredBytes)
+		availableText = fmt.Sprintf("%s (%d bytes)", availableText, availableBytes)
+	}
+	return requiredText, availableText
 }
 
 func ensureLocalSnapshotCreateDiskSpace(cfg envConfig) (int64, error) {

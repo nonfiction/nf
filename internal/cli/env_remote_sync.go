@@ -285,20 +285,18 @@ func remoteImportScript(cfg envConfig, target envRemoteSyncTarget, remoteTmp str
 	fileOp := remoteFileOpPrefix(target)
 	repoPlugins := shellQuoteArg(envRepoPluginSlugList(cfg))
 	excludes := envRepoPluginTarExcludeArgs(cfg)
-	extractDir := path.Join(remoteTmp, "wp-content-extract")
 	chown := ""
 	if target.SudoFileOps {
 		chown = fmt.Sprintf("sudo chown -R www-data:www-data %s/wp-content/uploads %s/wp-content/plugins %s/wp-content/mu-plugins %s/wp-content/languages 2>/dev/null || true\n", shellQuoteArg(target.WordPressPath), shellQuoteArg(target.WordPressPath), shellQuoteArg(target.WordPressPath), shellQuoteArg(target.WordPressPath))
 	}
 	return fmt.Sprintf(`set -eu
+if [ -f %s/wp-content.tar.gz ]; then
+  %star %s -tzf %s/wp-content.tar.gz >/dev/null
+fi
 tmp_sql=%s/database.sql
 gzip -cd %s/database.sql.gz > "$tmp_sql"
 %s --path=%s db import "$tmp_sql"
 if [ -f %s/wp-content.tar.gz ]; then
-  extract_dir=%s
-  %srm -rf "$extract_dir"
-  %smkdir -p "$extract_dir"
-  %star %s -xzf %s/wp-content.tar.gz -C "$extract_dir"
   clear_dir_contents() {
     dir="$1"
     if [ -e "$dir" ] && [ ! -d "$dir" ]; then
@@ -306,12 +304,6 @@ if [ -f %s/wp-content.tar.gz ]; then
     fi
     %smkdir -p "$dir"
     %sfind "$dir" -mindepth 1 -maxdepth 1 -exec rm -rf {} +
-  }
-  copy_dir_contents() {
-    source="$1"
-    dest="$2"
-    [ -d "$source" ] || return 0
-    %sfind "$source" -mindepth 1 -maxdepth 1 -exec cp -a {} "$dest"/ \;
   }
   clear_dir_contents %s/wp-content/uploads
   clear_dir_contents %s/wp-content/mu-plugins
@@ -324,12 +316,9 @@ if [ -f %s/wp-content.tar.gz ]; then
     case " $repo_plugins " in *" $base "*) continue ;; esac
     %srm -rf "$entry"
   done
-  copy_dir_contents "$extract_dir/wp-content/uploads" %s/wp-content/uploads
-  copy_dir_contents "$extract_dir/wp-content/mu-plugins" %s/wp-content/mu-plugins
-  copy_dir_contents "$extract_dir/wp-content/languages" %s/wp-content/languages
-  copy_dir_contents "$extract_dir/wp-content/plugins" %s/wp-content/plugins
+  %star %s -xzf %s/wp-content.tar.gz -C %s
 fi
-%s`, shellQuoteArg(remoteTmp), shellQuoteArg(remoteTmp), target.WPCommand, shellQuoteArg(target.WordPressPath), shellQuoteArg(remoteTmp), shellQuoteArg(extractDir), fileOp, fileOp, fileOp, excludes, shellQuoteArg(remoteTmp), fileOp, fileOp, fileOp, fileOp, shellQuoteArg(target.WordPressPath), shellQuoteArg(target.WordPressPath), shellQuoteArg(target.WordPressPath), fileOp, shellQuoteArg(target.WordPressPath), repoPlugins, shellQuoteArg(target.WordPressPath), shellQuoteArg(target.WordPressPath), shellQuoteArg(target.WordPressPath), fileOp, shellQuoteArg(target.WordPressPath), shellQuoteArg(target.WordPressPath), shellQuoteArg(target.WordPressPath), shellQuoteArg(target.WordPressPath), chown)
+%s`, shellQuoteArg(remoteTmp), fileOp, excludes, shellQuoteArg(remoteTmp), shellQuoteArg(remoteTmp), shellQuoteArg(remoteTmp), target.WPCommand, shellQuoteArg(target.WordPressPath), shellQuoteArg(remoteTmp), fileOp, fileOp, fileOp, shellQuoteArg(target.WordPressPath), shellQuoteArg(target.WordPressPath), shellQuoteArg(target.WordPressPath), fileOp, shellQuoteArg(target.WordPressPath), repoPlugins, shellQuoteArg(target.WordPressPath), shellQuoteArg(target.WordPressPath), shellQuoteArg(target.WordPressPath), fileOp, fileOp, excludes, shellQuoteArg(remoteTmp), shellQuoteArg(target.WordPressPath), chown)
 }
 
 func remoteWPSearchReplaceLine(target envRemoteSyncTarget, sourceURL, destinationURL string) string {
@@ -482,6 +471,7 @@ func executeEnvPull(cfg envConfig, target envRemoteSyncTarget) int {
 		fmt.Fprintf(os.Stderr, "env snapshot %q already exists.\n", safetyName)
 		return 1
 	}
+	fmt.Println("Preparing local safety snapshot before remote pull...")
 	if err := envSnapshotCreateArchives(cfg, safetyName); err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		return 1
@@ -507,6 +497,7 @@ func executeEnvPull(cfg envConfig, target envRemoteSyncTarget) int {
 			cleanupRemoteTempDir(target, remoteTmp)
 		}
 	}()
+	fmt.Println("Estimating remote database and uploads size for pull...")
 	remoteEstimate, err := remoteWordPressTransferEstimateBytes(target)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, err)
@@ -517,10 +508,12 @@ func executeEnvPull(cfg envConfig, target envRemoteSyncTarget) int {
 		return 1
 	}
 	remoteTmpCreated = true
+	fmt.Println("Preparing remote database and uploads export for pull...")
 	if err := runSSHCommandFn(remoteSSHArgs(target, remoteExportScript(target, remoteTmp))); err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		return 1
 	}
+	fmt.Println("Measuring remote pull export...")
 	remoteSize, err := remotePathSizeBytes(target, remoteTmp)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, err)
@@ -530,6 +523,7 @@ func executeEnvPull(cfg envConfig, target envRemoteSyncTarget) int {
 		fmt.Fprintln(os.Stderr, err)
 		return 1
 	}
+	fmt.Println("Preparing to rsync remote database and uploads to local...")
 	if err := runRsyncCommandFn(envRemoteRsyncArgs(target, target.SSHUser+"@"+target.SSHHost+":"+remoteTmp+"/", envSnapshotDir(cfg, name)+string(filepath.Separator))); err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		return 1
@@ -539,10 +533,12 @@ func executeEnvPull(cfg envConfig, target envRemoteSyncTarget) int {
 		fmt.Fprintln(os.Stderr, err)
 		return 1
 	}
+	fmt.Println("Restoring pulled database and uploads into local env...")
 	if err := envSnapshotRestoreArchives(cfg, name); err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		return 1
 	}
+	fmt.Println("Finalizing local WordPress URL, theme, and cache...")
 	if err := envFinalizeLocalRestore(cfg, normalizeWordPressURL(target.URL, true)); err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		return 1
@@ -562,6 +558,7 @@ func executeEnvPush(cfg envConfig, target envRemoteSyncTarget) int {
 		return 1
 	}
 	name := "push-" + target.RemoteName + "-" + defaultEnvSnapshotName(time.Now())
+	fmt.Println("Preparing local database and uploads snapshot for remote push...")
 	if err := envSnapshotCreateArchives(cfg, name); err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		return 1
@@ -572,6 +569,7 @@ func executeEnvPush(cfg envConfig, target envRemoteSyncTarget) int {
 		return 1
 	}
 	remoteTmp := remoteSyncTempDir(cfg, target, "push")
+	fmt.Println("Measuring local push snapshot...")
 	snapshotSize, err := localPathSizeBytes(envSnapshotDir(cfg, name))
 	if err != nil {
 		fmt.Fprintln(os.Stderr, err)
@@ -582,59 +580,68 @@ func executeEnvPush(cfg envConfig, target envRemoteSyncTarget) int {
 		fmt.Fprintln(os.Stderr, err)
 		return 1
 	}
+	fmt.Println("Estimating current remote database and uploads size for backup...")
 	remoteEstimate, err := remoteWordPressTransferEstimateBytes(target)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		return 1
 	}
-	if err := ensureRemoteDiskSpace(target, path.Dir(remoteTmp), "push workspace", envTransferRequiredBytes(snapshotSize)); err != nil {
+	backupTmp := remoteSyncTempDir(cfg, target, "backup")
+	if err := ensureRemoteDiskSpace(target, path.Dir(backupTmp), "push backup workspace", envTransferRequiredBytes(remoteEstimate)); err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		return 1
 	}
 	remoteTmpCreated := false
-	backupTmp := ""
+	backupTmpCreated := false
 	backupComplete := false
+	remoteChangeStarted := false
 	pushSucceeded := false
 	defer func() {
 		if remoteTmpCreated {
 			cleanupRemoteTempDir(target, remoteTmp)
 		}
-		if backupTmp == "" {
+		if !backupTmpCreated {
 			return
 		}
-		if pushSucceeded || !backupComplete {
+		if pushSucceeded || !backupComplete || !remoteChangeStarted {
 			cleanupRemoteTempDir(target, backupTmp)
 			return
 		}
 		fmt.Fprintf(os.Stderr, "Remote backup retained for recovery: %s\n", backupTmp)
 	}()
-	remoteTmpCreated = true
-	if err := runSSHCommandFn(remoteSSHArgs(target, "rm -rf "+shellQuoteArg(remoteTmp)+" && mkdir -p "+shellQuoteArg(remoteTmp))); err != nil {
-		fmt.Fprintln(os.Stderr, err)
-		return 1
-	}
-	if err := runRsyncCommandFn(envRemoteRsyncArgs(target, envSnapshotDir(cfg, name)+string(filepath.Separator), target.SSHUser+"@"+target.SSHHost+":"+remoteTmp+"/")); err != nil {
-		fmt.Fprintln(os.Stderr, err)
-		return 1
-	}
-	if err := ensureRemoteDiskSpace(target, path.Dir(remoteTmp), "push backup/import workspace", envTransferRequiredBytes(addEnvTransferBytes(remoteEstimate, snapshotExpandedSize))); err != nil {
-		fmt.Fprintln(os.Stderr, err)
-		return 1
-	}
-	backupTmp = remoteSyncTempDir(cfg, target, "backup")
+	backupTmpCreated = true
+	fmt.Println("Creating remote backup before push...")
 	if err := runSSHCommandFn(remoteSSHArgs(target, remoteExportScript(target, backupTmp))); err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		return 1
 	}
 	backupComplete = true
+	if err := ensureRemoteDiskSpace(target, path.Dir(remoteTmp), "push workspace", envTransferRequiredBytes(addEnvTransferBytes(snapshotSize, snapshotExpandedSize))); err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		return 1
+	}
+	remoteTmpCreated = true
+	fmt.Println("Preparing remote push workspace...")
+	if err := runSSHCommandFn(remoteSSHArgs(target, "rm -rf "+shellQuoteArg(remoteTmp)+" && mkdir -p "+shellQuoteArg(remoteTmp))); err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		return 1
+	}
+	fmt.Println("Preparing to rsync local database and uploads to remote...")
+	if err := runRsyncCommandFn(envRemoteRsyncArgs(target, envSnapshotDir(cfg, name)+string(filepath.Separator), target.SSHUser+"@"+target.SSHHost+":"+remoteTmp+"/")); err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		return 1
+	}
 	if err := ensureRemoteDiskSpace(target, path.Dir(remoteTmp), "push import workspace", envTransferRequiredBytes(snapshotExpandedSize)); err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		return 1
 	}
+	remoteChangeStarted = true
+	fmt.Println("Importing pushed database and uploads on remote...")
 	if err := runSSHCommandFn(remoteSSHArgs(target, remoteImportScript(cfg, target, remoteTmp))); err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		return 1
 	}
+	fmt.Println("Finalizing remote WordPress URL, theme, and cache...")
 	if err := runSSHCommandFn(remoteSSHArgs(target, finalizeScript)); err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		return 1
