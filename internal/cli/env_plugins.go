@@ -267,6 +267,8 @@ func cmdEnvPluginsCache(cfg envConfig, opts envPluginCacheOptions) int {
 		return cmdEnvPluginsCacheList()
 	case "show":
 		return cmdEnvPluginsCacheShow(opts.Slug)
+	case "remove":
+		return cmdEnvPluginsCacheRemove(opts.Slug)
 	default:
 		fmt.Fprintln(os.Stderr, "unsupported plugin cache command")
 		return 1
@@ -391,6 +393,28 @@ func cmdEnvPluginsCacheShow(slug string) int {
 		return 1
 	}
 	fmt.Printf("Plugin cache:\n  plugin: %s\n  status: %s\n  zip:    %s\n", slug, status, zipPath)
+	return 0
+}
+
+func cmdEnvPluginsCacheRemove(slug string) int {
+	if err := validatePluginSlug(slug); err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		return 1
+	}
+	pluginDir := config.PluginCachePluginDir(slug)
+	if _, err := os.Stat(pluginDir); err != nil {
+		if os.IsNotExist(err) {
+			fmt.Fprintf(os.Stderr, "plugin cache for %s does not exist: %s\n", slug, pluginDir)
+			return 1
+		}
+		fmt.Fprintln(os.Stderr, err)
+		return 1
+	}
+	if err := os.RemoveAll(pluginDir); err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		return 1
+	}
+	fmt.Printf("Removed WordPress plugin cache %s from %s\n", slug, pluginDir)
 	return 0
 }
 

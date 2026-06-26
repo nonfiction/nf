@@ -82,6 +82,7 @@ func runPluginHelp() int {
 		{"cache save <plugin>", "save an installed local plugin to the local nf plugin cache"},
 		{"cache list, cache ls", "list cached WordPress plugin zips"},
 		{"cache show <plugin>", "show local plugin cache details"},
+		{"cache remove, cache rm <plugin>", "remove a plugin from the local nf plugin cache"},
 	}})
 	return 0
 }
@@ -1001,7 +1002,7 @@ func parseEnvPluginCacheArgs(args []string) (envPluginCacheOptions, bool) {
 			fmt.Fprintln(os.Stderr, "plugin cache add requires a plugin slug and zip path")
 			return opts, false
 		}
-	case "save", "show":
+	case "save", "show", "remove":
 		if len(args) != 2 {
 			fmt.Fprintf(os.Stderr, "plugin cache %s requires exactly one plugin slug\n", cmd)
 			return opts, false

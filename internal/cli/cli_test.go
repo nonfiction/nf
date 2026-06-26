@@ -439,7 +439,7 @@ func TestGroupedHelpScreensUseIntendedOrder(t *testing.T) {
 		{
 			name:   "plugin",
 			render: func() string { return captureStdout(t, func() { _ = runPlugin([]string{"help"}) }) },
-			values: []string{"list, ls", "status [remote]", "diff [remote]", "\n\n  add <plugin>", "remove, rm <plugin>", "\n\n  install [remote]", "\nAdd Options:\n", "--source <source>", "--manual", "--note <note>", "--no-auto-update", "\nInstall Options:\n", "--dry-run", "--yes", "\nCache Commands:\n", "cache add <plugin> <zip>"},
+			values: []string{"list, ls", "status [remote]", "diff [remote]", "\n\n  add <plugin>", "remove, rm <plugin>", "\n\n  install [remote]", "\nAdd Options:\n", "--source <source>", "--manual", "--note <note>", "--no-auto-update", "\nInstall Options:\n", "--dry-run", "--yes", "\nCache Commands:\n", "cache add <plugin> <zip>", "cache remove, cache rm <plugin>"},
 		},
 	}
 
@@ -15730,6 +15730,57 @@ func TestRunEnvPluginsCacheAddListShow(t *testing.T) {
 		if !strings.Contains(showOutput, want) {
 			t.Fatalf("cache show output missing %q:\n%s", want, showOutput)
 		}
+	}
+	removeOutput := captureStdout(t, func() {
+		if got := Run([]string{"plugin", "cache", "remove", "acf-pro"}); got != 0 {
+			t.Fatalf("Run(cache remove) = %d, want 0", got)
+		}
+	})
+	cacheDir := filepath.Join(dataDir, "plugins", "acf-pro")
+	if !strings.Contains(removeOutput, "Removed WordPress plugin cache acf-pro from "+cacheDir) {
+		t.Fatalf("cache remove output missing cache dir:\n%s", removeOutput)
+	}
+	if _, err := os.Stat(cacheDir); !os.IsNotExist(err) {
+		t.Fatalf("cache dir still exists after remove: %v", err)
+	}
+}
+
+func TestRunEnvPluginsCacheRemoveAliasDeletesCachedPlugin(t *testing.T) {
+	repoRoot := t.TempDir()
+	if err := os.Mkdir(filepath.Join(repoRoot, ".git"), 0o755); err != nil {
+		t.Fatalf("Mkdir(.git) error = %v", err)
+	}
+	project := map[string]any{"version": 1, "project": map[string]any{"slug": "client"}}
+	data, err := json.MarshalIndent(project, "", "  ")
+	if err != nil {
+		t.Fatalf("MarshalIndent(project) error = %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(repoRoot, "nf.json"), append(data, '\n'), 0o644); err != nil {
+		t.Fatalf("WriteFile(nf.json) error = %v", err)
+	}
+	dataDir := t.TempDir()
+	t.Setenv("NF_DATA_HOME", dataDir)
+	cacheDir := filepath.Join(dataDir, "plugins", "acf-pro")
+	if err := os.MkdirAll(cacheDir, 0o755); err != nil {
+		t.Fatalf("MkdirAll(cacheDir) error = %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(cacheDir, "acf-pro.zip"), []byte("zip"), 0o644); err != nil {
+		t.Fatalf("WriteFile(cache zip) error = %v", err)
+	}
+	oldwd, err := os.Getwd()
+	if err != nil {
+		t.Fatalf("Getwd() error = %v", err)
+	}
+	if err := os.Chdir(repoRoot); err != nil {
+		t.Fatalf("Chdir() error = %v", err)
+	}
+	t.Cleanup(func() { _ = os.Chdir(oldwd) })
+
+	if got := Run([]string{"plugin", "cache", "rm", "acf-pro"}); got != 0 {
+		t.Fatalf("Run(cache rm) = %d, want 0", got)
+	}
+	if _, err := os.Stat(cacheDir); !os.IsNotExist(err) {
+		t.Fatalf("cache dir still exists after rm alias: %v", err)
 	}
 }
 
