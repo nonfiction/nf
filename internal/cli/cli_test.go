@@ -12190,6 +12190,18 @@ func TestRunEnvHelpShowsCommandsWithoutShortcuts(t *testing.T) {
 	}
 }
 
+func TestRunEnvImportWithoutArgsShowsHelp(t *testing.T) {
+	output := captureStdout(t, func() {
+		if got := Run([]string{"env", "import"}); got != 0 {
+			t.Fatalf("Run(env import) = %d, want 0", got)
+		}
+	})
+	assertContainsInOrder(t, output, []string{"env import", "\nUsage:\n", "nf env import <source>", "\nSource layout:\n", "source/", "database.sql.gz", "wp-content/", "uploads/", "plugins/", "mu-plugins/", "languages/", "\nUploads-only layout:\n", "source/", "database.sql.gz", "uploads/", "\nnf site export layout:\n", "manifest.json", "files/", "Imported paths", "database, wp-content/uploads, plugins, mu-plugins, languages", "\nOptions:\n", "--db <path>", "--source-url <url>", "--dry-run", "--yes"})
+	if strings.Contains(output, "requires exactly one source path") {
+		t.Fatalf("env import help showed old error:\n%s", output)
+	}
+}
+
 func TestRunEnvPluginIsRemoved(t *testing.T) {
 	repoRoot := t.TempDir()
 	if err := os.Mkdir(filepath.Join(repoRoot, ".git"), 0o755); err != nil {
@@ -12772,6 +12784,96 @@ func TestRunEnvImportDryRunDoesNotCreateSnapshot(t *testing.T) {
 	}
 	if _, err := os.Stat(envSnapshotDir(cfg, "dry-run-import")); !os.IsNotExist(err) {
 		t.Fatalf("dry-run import created snapshot: %v", err)
+	}
+}
+
+func TestResolveEnvImportSourceDetectsAnySQLDump(t *testing.T) {
+	sourceDir := filepath.Join(t.TempDir(), "source")
+	if err := os.MkdirAll(filepath.Join(sourceDir, "uploads"), 0o755); err != nil {
+		t.Fatalf("MkdirAll(uploads) error = %v", err)
+	}
+	dbPath := filepath.Join(sourceDir, "client-live-2026-06-26.sql.gz")
+	if err := os.WriteFile(dbPath, []byte("db"), 0o644); err != nil {
+		t.Fatalf("WriteFile(sql.gz) error = %v", err)
+	}
+	source, err := resolveEnvImportSource(envImportOptions{source: sourceDir})
+	if err != nil {
+		t.Fatalf("resolveEnvImportSource() error = %v", err)
+	}
+	if source.Database != dbPath {
+		t.Fatalf("Database = %q, want %q", source.Database, dbPath)
+	}
+}
+
+func TestResolveEnvImportSourcePrefersDatabaseSQLDump(t *testing.T) {
+	sourceDir := filepath.Join(t.TempDir(), "source")
+	if err := os.MkdirAll(filepath.Join(sourceDir, "uploads"), 0o755); err != nil {
+		t.Fatalf("MkdirAll(uploads) error = %v", err)
+	}
+	for _, name := range []string{"client-live.sql.gz", "database.sql", "database.sql.gz"} {
+		if err := os.WriteFile(filepath.Join(sourceDir, name), []byte(name), 0o644); err != nil {
+			t.Fatalf("WriteFile(%s) error = %v", name, err)
+		}
+	}
+	want := filepath.Join(sourceDir, "database.sql.gz")
+	source, err := resolveEnvImportSource(envImportOptions{source: sourceDir})
+	if err != nil {
+		t.Fatalf("resolveEnvImportSource() error = %v", err)
+	}
+	if source.Database != want {
+		t.Fatalf("Database = %q, want %q", source.Database, want)
+	}
+}
+
+func TestCreateEnvImportSnapshotSupportsTopLevelUploads(t *testing.T) {
+	_, cfg := writeTestEnvProject(t)
+	sourceDir := filepath.Join(t.TempDir(), "source")
+	if err := os.MkdirAll(filepath.Join(sourceDir, "uploads", "2026"), 0o755); err != nil {
+		t.Fatalf("MkdirAll(uploads) error = %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(sourceDir, "uploads", "2026", "image.jpg"), []byte("image"), 0o644); err != nil {
+		t.Fatalf("WriteFile(upload) error = %v", err)
+	}
+	dbPath := filepath.Join(sourceDir, "database.sql.gz")
+	if err := os.WriteFile(dbPath, []byte("db"), 0o644); err != nil {
+		t.Fatalf("WriteFile(database.sql.gz) error = %v", err)
+	}
+	source := envImportSource{InputPath: sourceDir, FilesPath: sourceDir, Database: dbPath}
+	if err := createEnvImportSnapshot(cfg, "top-level-uploads", source, time.Now()); err != nil {
+		t.Fatalf("createEnvImportSnapshot() error = %v", err)
+	}
+	extracted := filepath.Join(t.TempDir(), "extracted")
+	if err := extractTarGzArchive(envSnapshotHostWpContentArchive(cfg, "top-level-uploads"), extracted); err != nil {
+		t.Fatalf("extractTarGzArchive() error = %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(extracted, "wp-content", "uploads", "2026", "image.jpg")); err != nil {
+		t.Fatalf("top-level uploads were not imported as wp-content/uploads: %v", err)
+	}
+}
+
+func TestCreateEnvImportSnapshotSupportsUploadsDirectorySource(t *testing.T) {
+	_, cfg := writeTestEnvProject(t)
+	uploadsDir := filepath.Join(t.TempDir(), "uploads")
+	if err := os.MkdirAll(filepath.Join(uploadsDir, "2026"), 0o755); err != nil {
+		t.Fatalf("MkdirAll(uploads) error = %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(uploadsDir, "2026", "image.jpg"), []byte("image"), 0o644); err != nil {
+		t.Fatalf("WriteFile(upload) error = %v", err)
+	}
+	dbPath := filepath.Join(t.TempDir(), "database.sql")
+	if err := os.WriteFile(dbPath, []byte("db"), 0o644); err != nil {
+		t.Fatalf("WriteFile(database.sql) error = %v", err)
+	}
+	source := envImportSource{InputPath: uploadsDir, FilesPath: uploadsDir, Database: dbPath}
+	if err := createEnvImportSnapshot(cfg, "uploads-dir", source, time.Now()); err != nil {
+		t.Fatalf("createEnvImportSnapshot() error = %v", err)
+	}
+	extracted := filepath.Join(t.TempDir(), "extracted")
+	if err := extractTarGzArchive(envSnapshotHostWpContentArchive(cfg, "uploads-dir"), extracted); err != nil {
+		t.Fatalf("extractTarGzArchive() error = %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(extracted, "wp-content", "uploads", "2026", "image.jpg")); err != nil {
+		t.Fatalf("uploads directory source was not imported as wp-content/uploads: %v", err)
 	}
 }
 

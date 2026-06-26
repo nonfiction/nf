@@ -11,6 +11,7 @@ import (
 	"os"
 	"path"
 	"path/filepath"
+	"sort"
 	"strings"
 	"time"
 
@@ -346,16 +347,10 @@ func resolveEnvImportSource(opts envImportOptions) (envImportSource, error) {
 		}
 		source.Description = "nf site export"
 	} else if strings.TrimSpace(source.Database) == "" {
-		for _, candidate := range []string{"database.sql.gz", "database.sql"} {
-			candidatePath := filepath.Join(inputPath, candidate)
-			if _, err := os.Stat(candidatePath); err == nil {
-				source.Database = candidatePath
-				break
-			}
-		}
+		source.Database = envImportDatabasePath(inputPath)
 	}
 	if strings.TrimSpace(source.Database) == "" {
-		return envImportSource{}, ProjectError{Msg: "env import requires --db unless the source contains manifest.json or database.sql.gz"}
+		return envImportSource{}, ProjectError{Msg: "env import requires --db unless the source contains manifest.json or a .sql/.sql.gz file"}
 	}
 	if !filepath.IsAbs(source.Database) {
 		source.Database = filepath.Join(inputPath, source.Database)
@@ -367,6 +362,24 @@ func resolveEnvImportSource(opts envImportOptions) (envImportSource, error) {
 		return envImportSource{}, err
 	}
 	return source, nil
+}
+
+func envImportDatabasePath(inputPath string) string {
+	for _, candidate := range []string{"database.sql.gz", "database.sql"} {
+		candidatePath := filepath.Join(inputPath, candidate)
+		if _, err := os.Stat(candidatePath); err == nil {
+			return candidatePath
+		}
+	}
+	for _, pattern := range []string{"*.sql.gz", "*.sql"} {
+		matches, err := filepath.Glob(filepath.Join(inputPath, pattern))
+		if err != nil || len(matches) == 0 {
+			continue
+		}
+		sort.Strings(matches)
+		return matches[0]
+	}
+	return ""
 }
 
 func cmdEnvImport(cfg envConfig, opts envImportOptions) int {
@@ -520,9 +533,8 @@ func createWpContentImportArchive(filesPath, destinationPath string) error {
 	defer gz.Close()
 	writer := tar.NewWriter(gz)
 	defer writer.Close()
-	wpContent := filepath.Join(filesPath, "wp-content")
 	for _, dir := range []string{"uploads", "plugins", "mu-plugins", "languages"} {
-		sourceDir := filepath.Join(wpContent, dir)
+		sourceDir := envImportSourceDir(filesPath, dir)
 		if _, err := os.Stat(sourceDir); err != nil {
 			if os.IsNotExist(err) {
 				continue
@@ -534,6 +546,20 @@ func createWpContentImportArchive(filesPath, destinationPath string) error {
 		}
 	}
 	return nil
+}
+
+func envImportSourceDir(filesPath, dir string) string {
+	wpContentDir := filepath.Join(filesPath, "wp-content", dir)
+	if dir != "uploads" {
+		return wpContentDir
+	}
+	if _, err := os.Stat(wpContentDir); err == nil {
+		return wpContentDir
+	}
+	if filepath.Base(filepath.Clean(filesPath)) == "uploads" {
+		return filesPath
+	}
+	return filepath.Join(filesPath, "uploads")
 }
 
 func addPathToTar(writer *tar.Writer, sourcePath, archiveRoot string) error {

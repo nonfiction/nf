@@ -47,7 +47,7 @@ func Run(argv []string) int {
 		}
 		return runPlugin(argv[1:])
 	case "env":
-		if !envUpCommand(argv[1:]) && rejectOutsideProject(argv[0]) {
+		if !envUpCommand(argv[1:]) && !envImportHelpCommand(argv[1:]) && rejectOutsideProject(argv[0]) {
 			return 1
 		}
 		return runEnv(argv[1:])
@@ -75,6 +75,13 @@ func Run(argv []string) int {
 
 func envUpCommand(argv []string) bool {
 	return len(argv) > 0 && argv[0] == "up"
+}
+
+func envImportHelpCommand(argv []string) bool {
+	if len(argv) == 1 && argv[0] == "import" {
+		return true
+	}
+	return len(argv) == 2 && argv[0] == "import" && (argv[1] == "help" || argv[1] == "--help" || argv[1] == "-h")
 }
 
 func runTopicHelp(argv []string) int {

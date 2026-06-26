@@ -58,6 +58,45 @@ func runEnvHelp() int {
 	return 0
 }
 
+func runEnvImportHelp() int {
+	fmt.Println("env import")
+	fmt.Println("\nUsage:")
+	fmt.Println("  nf env import <source> [--db path] [--source-url url] [--name name] [--dry-run] [--yes]")
+	fmt.Println("\nSource layout:")
+	fmt.Println("  source/")
+	fmt.Println("    database.sql.gz        # preferred; any *.sql.gz or *.sql is also detected")
+	fmt.Println("    wp-content/")
+	fmt.Println("      uploads/")
+	fmt.Println("      plugins/")
+	fmt.Println("      mu-plugins/")
+	fmt.Println("      languages/")
+	fmt.Println("\nUploads-only layout:")
+	fmt.Println("  source/")
+	fmt.Println("    database.sql.gz        # preferred; any *.sql.gz or *.sql is also detected")
+	fmt.Println("    uploads/")
+	fmt.Println("\nnf site export layout:")
+	fmt.Println("  export/")
+	fmt.Println("    manifest.json")
+	fmt.Println("    database.sql.gz")
+	fmt.Println("    files/")
+	fmt.Println("      wp-content/")
+	fmt.Println("        uploads/")
+	fmt.Println("        plugins/")
+	fmt.Println("        mu-plugins/")
+	fmt.Println("        languages/")
+	fmt.Println("\nImported paths:")
+	fmt.Println("  database, wp-content/uploads, plugins, mu-plugins, languages")
+	fmt.Println("\nOptions:")
+	printHelpLines([]helpLine{
+		{"--db <path>", "database dump path when source does not contain a .sql/.sql.gz file"},
+		{"--source-url <url>", "source URL for import search-replace"},
+		{"--name <name>", "snapshot name for the imported source"},
+		{"--dry-run", "show the import plan only"},
+		{"--yes", "confirm destructive local import"},
+	})
+	return 0
+}
+
 func runPluginHelp() int {
 	printCommandHelp("plugin", []helpLine{
 		{"list, ls", "list configured WordPress plugins"},
@@ -557,6 +596,9 @@ func runEnv(argv []string) int {
 	}
 	var envImportOpts envImportOptions
 	if name == "import" {
+		if len(argv) == 1 || argv[1] == "help" || argv[1] == "--help" || argv[1] == "-h" {
+			return runEnvImportHelp()
+		}
 		var err error
 		envImportOpts, err = parseEnvImportArgs(argv[1:])
 		if err != nil {
