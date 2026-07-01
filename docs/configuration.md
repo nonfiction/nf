@@ -35,6 +35,64 @@ KINSTA_API_KEY=
 
 `dnsimple_account_id` is fetched from DNSimple with `DNSIMPLE_TOKEN` by `nf provider check dnsimple`; do not set `DNSIMPLE_ACCOUNT_ID` in `.env`.
 
+## Project Defines
+
+Project `wp-config.php` constants belong in `nf.json` only when their values are safe to commit. Secrets and license keys must use environment variable indirection and live in the shell environment or `~/.config/nf/.env`.
+
+```json
+{
+  "wordpress": {
+    "config": {
+      "defines": [
+        {
+          "name": "SOME_PLUGIN_FEATURE_FLAG",
+          "value": true
+        },
+        {
+          "name": "SOME_PLUGIN_LICENSE_KEY",
+          "env": "CLIENT_PLUGIN_LICENSE_KEY"
+        },
+        {
+          "name": "WP_ENVIRONMENT_TYPE",
+          "values": {
+            "local": { "value": "local" },
+            "production": { "value": "production" },
+            "default": { "value": "staging" }
+          }
+        },
+        {
+          "name": "OTGS_INSTALLER_SITE_KEY_WPML",
+          "values": {
+            "production": { "env": "CLIENT_WPML_SITE_KEY" },
+            "default": { "env": "CLIENT_WPML_STAGING_SITE_KEY" }
+          }
+        }
+      ]
+    }
+  }
+}
+```
+
+Use `nf define` to manage and reconcile these entries:
+
+```sh
+nf define list
+nf define status
+nf define status production
+nf define sync
+nf define sync production
+nf define add SOME_PLUGIN_FEATURE_FLAG true
+nf define add SOME_PLUGIN_LICENSE_KEY --env CLIENT_PLUGIN_LICENSE_KEY
+nf define add WP_ENVIRONMENT_TYPE production --for production
+nf define remove SOME_PLUGIN_FEATURE_FLAG
+```
+
+`nf define add` writes shared top-level `value` or `env` entries by default. Add `--for <selector>` only when a value differs for a remote, canonical env id, env name, `local`, or `default`. When a shared entry already exists, adding a selector-specific value promotes the shared entry to `values.default`.
+
+`nf define status` and `nf define list` show define names and sources only; they do not print resolved secret values. `nf define sync` patches `wp-config.php` with an atomic temp-file replace and does not create persistent backup files. Provider-owned constants such as `KINSTAMU_WHITELABEL` are rejected from project defines and are managed by provider repair commands instead.
+
+If `wp-config.php` already contains duplicate definitions for a configured constant, `nf define status` reports `duplicate` and `nf define sync` refuses to patch the file until the duplicate constants are resolved manually.
+
 Use:
 
 ```sh

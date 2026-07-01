@@ -38,6 +38,8 @@ Commands:
   remote      manage repo remotes
   env         manage the local development env
   theme       package clean artifacts and run theme tasks
+  plugin      manage configured WordPress plugins
+  define      manage configured WordPress constants
   alias       manage root-level WordPress content aliases
 
   init        initialize project metadata
@@ -93,6 +95,12 @@ nf remote add [name] [site.target:env]
 nf remote show <name>
 nf remote remove <name>
 nf remote list
+nf define list
+nf define status [remote]
+nf define sync [remote]
+nf define add <name> <value> [--for selector]
+nf define add <name> --env <var> [--for selector]
+nf define remove <name> [--for selector]
 nf alias list
 nf alias status [remote]
 nf alias sync [remote]
@@ -133,7 +141,7 @@ nf target add linode linode1 \
 * Linode site/env database creation grants the shared database access MySQL user privileges only on created site env databases and refuses to create a site DB user with the same name as the shared database access MySQL user. Site removal revokes per-database grants before dropping the databases.
 * `nf site basicauth ...` uses `basicauth_default_user` from `config.json` and a per-site derived password with `project.password_version` as the rotation source. Linode envs are managed over SSH by updating the selected env nginx vhost, including multi-vhost target nginx scripts. Kinsta Password protection exists in MyKinsta, but currently requires manual MyKinsta use because no public API endpoint is exposed.
 * `nf site cache [site|env]` clears a remote env cache. A site-only ref defaults to `:live`. Kinsta uses the Kinsta clear-site-cache API and waits for the operation. Linode purges the env nginx FastCGI cache directory and runs `wp cache flush` over SSH.
-* `nf site repair [site|env]` repairs provider-owned platform files for one remote env. Use `--dry-run` to preview. Interactive execution prompts for confirmation; non-interactive execution requires `--execute --yes`. Kinsta repair removes local-only `nf-mailpit.php` and restores Kinsta's required MU plugin from Kinsta's published package when missing. Linode repair refreshes nf nginx cache snippets, per-env cache config, the nf Linode cache MU plugin, and the internal env vhost while preserving existing basic-auth includes. Cached external domain vhosts are not rewritten by this command.
+* `nf site repair [site|env]` repairs provider-owned platform files for one remote env. Use `--dry-run` to preview. Interactive execution prompts for confirmation; non-interactive execution requires `--execute --yes`. Kinsta repair removes local-only `nf-mailpit.php`, restores Kinsta's required MU plugin from Kinsta's published package when missing, and enables the Kinsta MU-plugin whitelabel define so the admin UI says Server Cache. Linode repair refreshes nf nginx cache snippets, per-env cache config, the nf Server Cache MU plugin, and the internal env vhost while preserving existing basic-auth includes. Cached external domain vhosts are not rewritten by this command.
 * `nf domain list` shows cached domain inventory keyed by full env IDs like `client.linode1:live`. Columns are `role` (`primary` or `secondary`), `management` (`internal` or `external`), and `status` (`active`, `verified`, `unverified`, or `pending`). The generated provider hostname is internal and is primary only until an external primary is set; after that it remains listed as an internal secondary fallback. For Kinsta, the internal domain also anchors the canonical `nf` project slug for refresh/adoption.
 * `nf domain add ...` attaches external domains as secondaries and prints the DNS records the client must create. It never mutates public/client DNS, changes the primary domain, or runs search-replace. Kinsta domains are added through the Kinsta API and Kinsta verification/routing records are printed when available; if routing records are unavailable, the command points the user to MyKinsta Domains for the remaining DNS instructions. Linode domains create one nginx vhost, certbot script, and retry timer per domain on the target.
 * `nf domain check ...` is read-only and reports provider/server readiness, expected public DNS, HTTP reachability, HTTPS certificate status, and whether the domain is already primary. Kinsta checks report verification separately from routing/pointing, so a verified-but-not-pointed domain can tell the user to point public DNS at Kinsta. With no explicit domains, it checks cached external domains for the env. It exits `0` when public checks are ready and `2` when DNS, HTTP, HTTPS, or provider readiness is still pending. With `--proxy cloudflare`, Linode DNS checks verify public DNS resolves to Cloudflare IP ranges from Cloudflare's published list, skip origin-IP matching, and check direct Linode origin HTTPS with SNI so `Full (strict)` renewal problems are visible before Cloudflare starts returning 526 errors.
@@ -144,5 +152,6 @@ nf target add linode linode1 \
 * `nf alias ...` manages root-level webroot symlinks declared in top-level `aliases` in `nf.json`. Alias targets must be `wp-content` or descendants. `nf alias status [remote]` reports configured, missing, conflicting, and stale symlinks. `nf alias sync [remote]` creates or updates configured symlinks and prunes stale root symlinks, but never overwrites or removes real files/directories.
 * `nf site shell/wp ...` validate the cache, print the SSH or wp-cli command preview, then execute the remote command.
 * `nf env logs <remote>` resolves a configured repo remote, prints the SSH command preview, ensures `wp-content/debug.log` exists, and tails it on the remote host.
+* `nf define ...` manages `wordpress.config.defines` from `nf.json`. `list` prints configured names/selectors/sources without resolving secret values. `status [remote]` compares configured constants against local or remote `wp-config.php`. `sync [remote]` patches local or remote `wp-config.php` through a temp file and atomic replace, without persistent backups. `add` writes shared values by default; `--for <selector>` writes a remote/env-specific value and promotes an existing shared value to `values.default`. Use `--env <VAR>` for secrets and license keys; never commit those raw values to `nf.json`. Provider-owned constants such as `KINSTAMU_WHITELABEL` are rejected from project defines. Duplicate constants already present in `wp-config.php` are unsafe and block sync until resolved manually.
 * `nf env import <source>` imports external WordPress data into the local env after creating a safety snapshot. It never writes directly to a remote env.
 * `nf env push/pull [remote]` syncs database and mutable `wp-content` after an interactive confirmation. Omit `remote` to pick from configured repo remotes. Add `--dry-run` for a non-mutating plan, or use `--non-interactive` without `--execute` for preflight-only output.

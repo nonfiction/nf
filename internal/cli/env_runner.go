@@ -17,9 +17,10 @@ import (
 )
 
 type envCommandRunner struct {
-	name    string
-	cfg     envConfig
-	rebuild bool
+	name     string
+	cfg      envConfig
+	metadata map[string]any
+	rebuild  bool
 }
 
 func (c envCommandRunner) ensureUpInstalledActive(envDir string) error {
@@ -39,6 +40,11 @@ func (c envCommandRunner) ensureUpInstalledActive(envDir string) error {
 	}
 	if err := runCommandSpecWithPreview(execSpec{Dir: envDir, Args: envWpMailpitSMTPArgs(c.cfg)}, envWpBootstrapPreviewArgs(c.cfg, "configure Mailpit SMTP")); err != nil {
 		return err
+	}
+	if len(c.metadata) > 0 {
+		if err := ensureLocalWPConfigDefines(c.cfg, c.metadata); err != nil {
+			return err
+		}
 	}
 	if err := runCommandSpecQuiet(execSpec{Dir: envDir, Args: envWpProbeArgs(c.cfg, "core", "is-installed")}); err != nil {
 		if err := runCommandSpec(execSpec{Dir: envDir, Args: envWpCoreInstallArgs(c.cfg)}); err != nil {

@@ -63,6 +63,11 @@ func Run(argv []string) int {
 			return 1
 		}
 		return runAlias(argv[1:])
+	case "define":
+		if rejectOutsideProject(argv[0]) {
+			return 1
+		}
+		return runDefine(argv[1:])
 	case "config":
 		return runConfig(argv[1:])
 	case "password":
@@ -126,6 +131,11 @@ func runTopicHelp(argv []string) int {
 			return 1
 		}
 		return runAliasHelp()
+	case "define":
+		if rejectOutsideProject(argv[0]) {
+			return 1
+		}
+		return runDefineHelp()
 	case "config":
 		return runConfigHelp()
 	case "password":

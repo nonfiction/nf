@@ -17,7 +17,7 @@ nf env up
 nf env show
 ```
 
-`nf env up` is idempotent. It starts Docker Compose, configures Mailpit SMTP, installs WordPress if needed, and ensures the mounted theme is active.
+`nf env up` is idempotent. It starts Docker Compose, configures Mailpit SMTP, reconciles configured `wp-config.php` defines, installs WordPress if needed, and ensures the mounted theme is active.
 
 Rebuild the generated WordPress image when needed:
 
@@ -51,6 +51,24 @@ The generated WordPress Docker image includes useful CLI tools plus `wp-cli`. `n
 ```sh
 nf config set-docker-user <user>
 ```
+
+## Reconcile Defines
+
+Project-required `wp-config.php` constants can be declared in `nf.json` under `wordpress.config.defines`. `nf env up` applies local configured defines automatically. You can inspect or apply them explicitly with:
+
+```sh
+nf define status
+nf define sync
+```
+
+Remote envs use repo remotes:
+
+```sh
+nf define status production
+nf define sync production
+```
+
+Status and list output show define names and whether each value comes from a literal or environment variable, but do not print resolved secret values.
 
 ## Stop or Reset
 

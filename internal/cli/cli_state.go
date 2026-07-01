@@ -45,6 +45,7 @@ var (
 	runSSHScriptFn                        = runSSHScript
 	runSSHCommandFn                       = runSSHCommand
 	runSSHStdinCommandFn                  = runSSHStdinCommand
+	runSSHStdinOutputFn                   = runSSHStdinOutput
 	runSSHOutputFn                        = runSSHOutput
 	runRsyncCommandFn                     = runRsyncCommand
 	runCommandSpecOutputSilentFn          = runCommandSpecOutputSilent

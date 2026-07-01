@@ -142,6 +142,7 @@ func buildSiteRepairPlan(envRef string) (siteRepairPlan, error) {
 		plan.Actions = []string{
 			"remove local-only wp-content/mu-plugins/nf-mailpit.php if present",
 			"restore Kinsta's required MU plugin when kinsta-mu-plugins.php or kinsta-mu-plugins/ is missing",
+			"ensure KINSTAMU_WHITELABEL is enabled in wp-config.php",
 		}
 		plan.Script = renderKinstaSiteRepairScript(target.WordPressPath)
 	case "linode":
@@ -232,8 +233,9 @@ if [ ! -f "$plugin_file" ] || [ ! -d "$plugin_dir" ]; then
   cp "$tmp/extract/kinsta-mu-plugins.php" "$plugin_file"
   cp -R "$tmp/extract/kinsta-mu-plugins" "$plugin_dir"
 fi
+%s
 echo "Kinsta MU plugins repaired."
-`, q(sitePath), q(kinstaMUPluginsZipURL))
+`, q(sitePath), q(kinstaMUPluginsZipURL), renderWPConfigDefineScript(sitePath, []wpConfigDefine{kinstaWhitelabelWPConfigDefine()}))
 }
 
 func renderLinodeSiteRepairScript(sitePath, hostname, phpVersion string, fileSlugs []string) string {
@@ -307,7 +309,7 @@ rm -f "$tmp"
 ln -sf "$vhost" "/etc/nginx/sites-enabled/nf-site-$selected_file_slug"
 nginx -t
 systemctl reload nginx
-systemctl reload "php${php_version}-fpm" || systemctl restart "php${php_version}-fpm" || true
+systemctl reload "php${php_version}-fpm" || systemctl restart "php${php_version}-fpm"
 echo "Linode site platform files repaired."
 `)
 	return b.String()

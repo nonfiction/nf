@@ -190,6 +190,22 @@ func runAliasHelp() int {
 	return 0
 }
 
+func runDefineHelp() int {
+	printCommandHelp("define", []helpLine{
+		{"list, ls", "list configured wp-config defines"},
+		{"status [remote]", "show local or remote define status"},
+		{"sync [remote]", "sync local or remote wp-config defines"},
+		{},
+		{"add <name> <value>", "add a literal define to nf.json"},
+		{"add <name> --env <var>", "add an env-backed define to nf.json"},
+		{"remove, rm <name>", "remove a define from nf.json"},
+	}, helpSection{"Options", []helpLine{
+		{"--env <name>", "store an environment variable reference instead of a literal value"},
+		{"--for <selector>", "apply the value only for a remote/env selector"},
+	}})
+	return 0
+}
+
 func parseEnvRemoteSyncArgs(action string, args []string) (string, envRemoteSyncOptions, bool) {
 	var opts envRemoteSyncOptions
 	positionals := make([]string, 0, 1)
@@ -787,7 +803,7 @@ func runEnv(argv []string) int {
 	if name == "wp" {
 		extraArgs = normalizePassthroughArgs(extraArgs)
 	}
-	if err := (envCommandRunner{name: name, cfg: cfg, rebuild: rebuild}).Execute(root, extraArgs); err != nil {
+	if err := (envCommandRunner{name: name, cfg: cfg, metadata: metadata, rebuild: rebuild}).Execute(root, extraArgs); err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		return 1
 	}
@@ -1327,6 +1343,7 @@ func runHelp() int {
 			helpLine{"env", "manage the local development env"},
 			helpLine{"theme", "package clean artifacts and run theme tasks"},
 			helpLine{"plugin", "manage configured WordPress plugins"},
+			helpLine{"define", "manage configured WordPress constants"},
 			helpLine{"alias", "manage root-level WordPress content aliases"},
 			helpLine{"remote", "manage repo remotes"},
 			helpLine{"password", "derive passwords"},
@@ -1349,7 +1366,7 @@ func runHelp() int {
 
 func projectOnlyCommand(name string) bool {
 	switch name {
-	case "remote", "plugin", "theme", "env", "alias":
+	case "remote", "plugin", "theme", "env", "alias", "define":
 		return true
 	default:
 		return false

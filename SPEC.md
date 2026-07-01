@@ -306,6 +306,7 @@ Do not add old compatibility routes unless explicitly requested.
 * [x] `nf env show`
 * [x] `nf env shell`
 * [x] `nf env wp -- <args>`
+* [x] `nf define list/status/sync/add/remove`
 * [x] `nf plugin list`
 * [x] `nf plugin add <plugin> [--source <source>] [--manual] [--note <note>] [--no-activate] [--no-auto-update]`
 * [x] `nf plugin remove <plugin>`
@@ -354,6 +355,7 @@ These commands are implemented, but intentionally guarded because they touch rem
 * [x] `nf plugin install <remote>`: validates repo remote/cache, prints a reviewable plugin plan, and asks for confirmation unless `--yes` is passed
 * [x] `nf site export <env-id>`: validates cache, exports full remote WordPress filesystem plus database dump as a portable handoff directory
 * [x] `nf env import <source>`: creates a local import snapshot, creates a pre-restore safety snapshot, and restores external WordPress data into the local env only
+* [x] `nf define sync <remote>`: validates repo remote/cache and patches configured `wp-config.php` defines through stdin with redacted command output and atomic no-backup writes; provider-owned constants are rejected from project defines, and duplicate constants already present in `wp-config.php` block sync until manually resolved
 * [x] `nf env push <remote>`: validates repo remote/cache, prints a reviewable plan, and syncs with execute/confirmation gates
 * [x] `nf env pull <remote>`: validates repo remote/cache, prints a reviewable plan, and syncs with execute/confirmation gates
 
@@ -446,6 +448,7 @@ Tracked fields include:
 * project slug/name/type
 * WordPress/theme structure
 * WordPress plugin bootstrap intent
+* WordPress `wp-config.php` define intent, with secrets referenced by env var instead of stored in the repo
 * local env intent
 * artifact recipe
 * root-level alias map for paths under `wp-content`
@@ -487,7 +490,22 @@ Example shape:
         "activate": true,
         "auto_update": true
       }
-    ]
+    ],
+    "config": {
+      "defines": [
+        {
+          "name": "SOME_PLUGIN_LICENSE_KEY",
+          "env": "CLIENT_PLUGIN_LICENSE_KEY"
+        },
+        {
+          "name": "OTGS_INSTALLER_SITE_KEY_WPML",
+          "values": {
+            "production": { "env": "CLIENT_WPML_SITE_KEY" },
+            "default": { "env": "CLIENT_WPML_STAGING_SITE_KEY" }
+          }
+        }
+      ]
+    }
   },
   "env": {
     "compose": "docker compose",

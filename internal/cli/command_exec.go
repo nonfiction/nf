@@ -31,6 +31,30 @@ func runCommandSpec(spec execSpec) error {
 	return cmd.Run()
 }
 
+func runCommandSpecStdinWithPreview(spec execSpec, preview []string, stdin string) error {
+	if len(spec.Args) == 0 {
+		return fmt.Errorf("unsupported repo command type")
+	}
+	printCommandArgs(preview)
+	cmd := exec.Command(spec.Args[0], spec.Args[1:]...)
+	cmd.Dir = spec.Dir
+	cmd.Stdout = os.Stdout
+	cmd.Stderr = os.Stderr
+	cmd.Stdin = strings.NewReader(stdin)
+	return cmd.Run()
+}
+
+func runCommandSpecStdinOutputSilent(spec execSpec, stdin string) ([]byte, error) {
+	if len(spec.Args) == 0 {
+		return nil, fmt.Errorf("unsupported repo command type")
+	}
+	cmd := exec.Command(spec.Args[0], spec.Args[1:]...)
+	cmd.Dir = spec.Dir
+	cmd.Stderr = os.Stderr
+	cmd.Stdin = strings.NewReader(stdin)
+	return cmd.Output()
+}
+
 func runCommandSpecQuiet(spec execSpec) error {
 	if len(spec.Args) == 0 {
 		return fmt.Errorf("unsupported repo command type")

@@ -651,6 +651,46 @@ func TestRunCompleteSuggestsStaticAndCachedValues(t *testing.T) {
 	if strings.TrimSpace(siteShOutput) != "client-app1-linode:live" {
 		t.Fatalf("site sh completion = %q, want env id only", siteShOutput)
 	}
+	setupTestNFProjectWithMetadata(t, map[string]any{
+		"version":   1,
+		"project":   map[string]any{"slug": "client"},
+		"remotes":   map[string]any{"production": "client-app1-linode:live"},
+		"wordpress": map[string]any{"config": map[string]any{"defines": []any{map[string]any{"name": "OTGS_INSTALLER_SITE_KEY_WPML", "env": "CLIENT_WPML_SITE_KEY"}}}},
+	})
+	defineRootOutput := captureStdout(t, func() {
+		if got := Run([]string{"__complete", "--", "de"}); got != 0 {
+			t.Fatalf("Run(__complete de) = %d, want 0", got)
+		}
+	})
+	if strings.TrimSpace(defineRootOutput) != "define" {
+		t.Fatalf("define root completion = %q, want define", defineRootOutput)
+	}
+	defineCommandOutput := captureStdout(t, func() {
+		if got := Run([]string{"__complete", "--", "define", ""}); got != 0 {
+			t.Fatalf("Run(__complete define) = %d, want 0", got)
+		}
+	})
+	for _, want := range []string{"list\n", "status\n", "sync\n", "add\n", "remove\n", "rm\n"} {
+		if !strings.Contains(defineCommandOutput, want) {
+			t.Fatalf("define completion missing %q:\n%s", want, defineCommandOutput)
+		}
+	}
+	defineSyncOutput := captureStdout(t, func() {
+		if got := Run([]string{"__complete", "--", "define", "sync", "pro"}); got != 0 {
+			t.Fatalf("Run(__complete define sync pro) = %d, want 0", got)
+		}
+	})
+	if strings.TrimSpace(defineSyncOutput) != "production" {
+		t.Fatalf("define sync completion = %q, want production", defineSyncOutput)
+	}
+	defineRemoveOutput := captureStdout(t, func() {
+		if got := Run([]string{"__complete", "--", "define", "remove", "OT"}); got != 0 {
+			t.Fatalf("Run(__complete define remove OT) = %d, want 0", got)
+		}
+	})
+	if strings.TrimSpace(defineRemoveOutput) != "OTGS_INSTALLER_SITE_KEY_WPML" {
+		t.Fatalf("define remove completion = %q, want configured define", defineRemoveOutput)
+	}
 
 	sitePasswordOutput := captureStdout(t, func() {
 		if got := Run([]string{"__complete", "--", "site", "password", "client"}); got != 0 {
@@ -8302,11 +8342,15 @@ func setupLinodeDomainPromptFixture(t *testing.T, extra map[string]any) {
 
 func setupTestNFProject(t *testing.T, remotes map[string]any) string {
 	t.Helper()
+	return setupTestNFProjectWithMetadata(t, map[string]any{"version": 1, "project": map[string]any{"slug": "client"}, "remotes": remotes})
+}
+
+func setupTestNFProjectWithMetadata(t *testing.T, project map[string]any) string {
+	t.Helper()
 	repoRoot := t.TempDir()
 	if err := os.Mkdir(filepath.Join(repoRoot, ".git"), 0o755); err != nil {
 		t.Fatalf("Mkdir(.git) error = %v", err)
 	}
-	project := map[string]any{"version": 1, "project": map[string]any{"slug": "client"}, "remotes": remotes}
 	data, err := json.MarshalIndent(project, "", "  ")
 	if err != nil {
 		t.Fatalf("MarshalIndent(project) error = %v", err)
@@ -10916,7 +10960,7 @@ func TestRunSiteRepairKinstaPlansAndExecutesMUPluginRepair(t *testing.T) {
 			t.Fatalf("Run(site repair dry-run) = %d, want 0", got)
 		}
 	})
-	assertContainsInOrder(t, dryRunOutput, []string{"Site repair plan:", "env:      client-kinsta:live", "provider: kinsta", "path:     /www/client/public", "mode:     dry-run", "remove local-only wp-content/mu-plugins/nf-mailpit.php", "restore Kinsta's required MU plugin"})
+	assertContainsInOrder(t, dryRunOutput, []string{"Site repair plan:", "env:      client-kinsta:live", "provider: kinsta", "path:     /www/client/public", "mode:     dry-run", "remove local-only wp-content/mu-plugins/nf-mailpit.php", "restore Kinsta's required MU plugin", "ensure KINSTAMU_WHITELABEL is enabled in wp-config.php"})
 	if len(commands) != 0 {
 		t.Fatalf("dry-run executed SSH commands: %#v", commands)
 	}
@@ -10941,9 +10985,14 @@ func TestRunSiteRepairKinstaPlansAndExecutesMUPluginRepair(t *testing.T) {
 		t.Fatalf("commands len = %d, want 1: %#v", len(commands), commands)
 	}
 	command := strings.Join(commands[0], " ")
-	for _, want := range []string{"ssh -p 12345 client@203.0.113.10", "site_path=/www/client/public", "rm -f \"$mailpit_file\"", kinstaMUPluginsZipURL, "kinsta-mu-plugins.php", "cp -R \"$tmp/extract/kinsta-mu-plugins\" \"$plugin_dir\""} {
+	for _, want := range []string{"ssh -p 12345 client@203.0.113.10", "site_path=/www/client/public", "rm -f \"$mailpit_file\"", kinstaMUPluginsZipURL, "kinsta-mu-plugins.php", "cp -R \"$tmp/extract/kinsta-mu-plugins\" \"$plugin_dir\"", "KINSTAMU_WHITELABEL", "NF_WP_CONFIG_FILE", "tempnam($dir, '.nf-wp-config-')", "rename($tmp, $configFile)"} {
 		if !strings.Contains(command, want) {
 			t.Fatalf("kinsta repair command missing %q: %#v", want, commands[0])
+		}
+	}
+	for _, unwanted := range []string{".bak", "backup"} {
+		if strings.Contains(command, unwanted) {
+			t.Fatalf("kinsta repair command contains persistent backup marker %q: %#v", unwanted, commands[0])
 		}
 	}
 }
@@ -10980,10 +11029,316 @@ func TestRunSiteRepairLinodeRewritesInternalVhostWithCache(t *testing.T) {
 		t.Fatalf("commands len = %d, want 1: %#v", len(commands), commands)
 	}
 	command := strings.Join(commands[0], " ")
-	for _, want := range []string{"sudo bash -c", "site_path=/var/www/sites/foobar/public", "host_name=foobar.app1-linode.nonfiction.dev", "file_slugs=(foobar.app1-linode.live foobar.app1-linode)", "nf_linode_write_cache_snippets", "cache_zone=$(nf_linode_ensure_cache_config \"$site_path\")", "nf_linode_install_cache_mu_plugin \"$site_path\"", "rm -f \"$site_path/wp-content/mu-plugins/nf-mailpit.php\"", "basic_auth_snippet=\"/etc/nginx/snippets/nf-basic-auth-$selected_file_slug.conf\"", "if [ -f \"$basic_auth_snippet\" ]; then printf", "include /etc/nginx/snippets/nf-fastcgi-cache-bypass.conf;", "fastcgi_cache $cache_zone;", "include /etc/nginx/snippets/nf-fastcgi-cache.conf;", "nginx -t", "systemctl reload nginx"} {
+	for _, want := range []string{"sudo bash -c", "site_path=/var/www/sites/foobar/public", "host_name=foobar.app1-linode.nonfiction.dev", "file_slugs=(foobar.app1-linode.live foobar.app1-linode)", "nf_linode_write_cache_snippets", "cache_zone=$(nf_linode_ensure_cache_config \"$site_path\")", "nf_linode_install_cache_mu_plugin \"$site_path\"", "rm -f \"$site_path/wp-content/mu-plugins/nf-mailpit.php\"", "Plugin Name: nf Server Cache", "Server Cache", "server-tools", "Clear All Caches", "Clear Site Cache", "Clear Object Cache", "NF_LINODE_CACHE_AUTOPURGE_OPTION", "transition_post_status", "nf_linode_cache_clear_object", "top-secondary", "basic_auth_snippet=\"/etc/nginx/snippets/nf-basic-auth-$selected_file_slug.conf\"", "if [ -f \"$basic_auth_snippet\" ]; then printf", "include /etc/nginx/snippets/nf-fastcgi-cache-bypass.conf;", "fastcgi_cache $cache_zone;", "include /etc/nginx/snippets/nf-fastcgi-cache.conf;", "nginx -t", "systemctl reload nginx", "systemctl reload \"php${php_version}-fpm\" || systemctl restart \"php${php_version}-fpm\""} {
 		if !strings.Contains(command, want) {
 			t.Fatalf("linode repair command missing %q: %#v", want, commands[0])
 		}
+	}
+	if strings.Contains(command, "systemctl reload \"php${php_version}-fpm\" || systemctl restart \"php${php_version}-fpm\" || true") {
+		t.Fatalf("linode repair command masks php-fpm restart failures: %#v", commands[0])
+	}
+}
+
+func TestLoadWordPressConfigDefinesResolvesValuesWithoutLeakingSecrets(t *testing.T) {
+	t.Setenv("CLIENT_WPML_SITE_KEY", "wpml-secret-key")
+	t.Setenv("CLIENT_SHARED_LICENSE", "shared-secret")
+	metadata := map[string]any{
+		"wordpress": map[string]any{
+			"config": map[string]any{
+				"defines": []any{
+					map[string]any{
+						"name": "SHARED_LICENSE_KEY",
+						"env":  "CLIENT_SHARED_LICENSE",
+					},
+					map[string]any{
+						"name":  "TOP_LEVEL_FALLBACK",
+						"value": "shared-value",
+						"values": map[string]any{
+							"production": map[string]any{"value": "production-value"},
+						},
+					},
+					map[string]any{
+						"name": "WP_ENVIRONMENT_TYPE",
+						"values": map[string]any{
+							"local":      map[string]any{"value": "local"},
+							"production": map[string]any{"value": "production"},
+							"default":    map[string]any{"value": "staging"},
+						},
+					},
+					map[string]any{
+						"name": "OTGS_INSTALLER_SITE_KEY_WPML",
+						"values": map[string]any{
+							"production": map[string]any{"env": "CLIENT_WPML_SITE_KEY"},
+							"default":    map[string]any{"value": "fallback-key"},
+						},
+					},
+				},
+			},
+		},
+	}
+
+	remoteDefines, err := loadWordPressConfigDefines(metadata, wpConfigDefineSelector{RemoteName: "production", EnvID: "client-kinsta:live", Env: "live"})
+	if err != nil {
+		t.Fatalf("loadWordPressConfigDefines(remote) error = %v", err)
+	}
+	if got, want := len(remoteDefines), 4; got != want {
+		t.Fatalf("remote defines len = %d, want %d: %#v", got, want, remoteDefines)
+	}
+	byName := map[string]wpConfigDefine{}
+	for _, define := range remoteDefines {
+		byName[define.Name] = define
+	}
+	if got, want := byName["OTGS_INSTALLER_SITE_KEY_WPML"].PHPValue, "'wpml-secret-key'"; got != want {
+		t.Fatalf("OTGS PHPValue = %q, want %q", got, want)
+	}
+	if got, want := byName["OTGS_INSTALLER_SITE_KEY_WPML"].Source, "env CLIENT_WPML_SITE_KEY"; got != want {
+		t.Fatalf("OTGS Source = %q, want %q", got, want)
+	}
+	if got, want := byName["SHARED_LICENSE_KEY"].PHPValue, "'shared-secret'"; got != want {
+		t.Fatalf("SHARED_LICENSE_KEY PHPValue = %q, want %q", got, want)
+	}
+	if got, want := byName["TOP_LEVEL_FALLBACK"].PHPValue, "'production-value'"; got != want {
+		t.Fatalf("TOP_LEVEL_FALLBACK PHPValue = %q, want %q", got, want)
+	}
+	if got, want := byName["WP_ENVIRONMENT_TYPE"].PHPValue, "'production'"; got != want {
+		t.Fatalf("WP_ENVIRONMENT_TYPE PHPValue = %q, want %q", got, want)
+	}
+	listOutput := captureStdout(t, func() { _ = cmdDefineList(metadata) })
+	for _, want := range []string{"OTGS_INSTALLER_SITE_KEY_WPML", "env CLIENT_WPML_SITE_KEY", "SHARED_LICENSE_KEY", "env CLIENT_SHARED_LICENSE"} {
+		if !strings.Contains(listOutput, want) {
+			t.Fatalf("define list output missing %q:\n%s", want, listOutput)
+		}
+	}
+	for _, secret := range []string{"wpml-secret-key", "shared-secret"} {
+		if strings.Contains(listOutput, secret) {
+			t.Fatalf("define list leaked secret %q:\n%s", secret, listOutput)
+		}
+	}
+
+	localDefines, err := loadWordPressConfigDefines(metadata, wpConfigDefineSelector{Local: true})
+	if err != nil {
+		t.Fatalf("loadWordPressConfigDefines(local) error = %v", err)
+	}
+	localByName := map[string]wpConfigDefine{}
+	for _, define := range localDefines {
+		localByName[define.Name] = define
+	}
+	if got, want := localByName["OTGS_INSTALLER_SITE_KEY_WPML"].PHPValue, "'fallback-key'"; got != want {
+		t.Fatalf("local OTGS PHPValue = %q, want %q", got, want)
+	}
+	if got, want := localByName["TOP_LEVEL_FALLBACK"].PHPValue, "'shared-value'"; got != want {
+		t.Fatalf("local TOP_LEVEL_FALLBACK PHPValue = %q, want %q", got, want)
+	}
+	if got, want := localByName["WP_ENVIRONMENT_TYPE"].PHPValue, "'local'"; got != want {
+		t.Fatalf("local WP_ENVIRONMENT_TYPE PHPValue = %q, want %q", got, want)
+	}
+
+	missingEnvMetadata := map[string]any{"wordpress": map[string]any{"config": map[string]any{"defines": []any{map[string]any{"name": "OTGS_INSTALLER_SITE_KEY_WPML", "env": "MISSING_WPML_SITE_KEY"}}}}}
+	_, err = loadWordPressConfigDefines(missingEnvMetadata, wpConfigDefineSelector{Local: true})
+	if err == nil || !strings.Contains(err.Error(), "Expected MISSING_WPML_SITE_KEY") {
+		t.Fatalf("missing env error = %v, want Expected MISSING_WPML_SITE_KEY", err)
+	}
+	reservedMetadata := map[string]any{"wordpress": map[string]any{"config": map[string]any{"defines": []any{map[string]any{"name": "KINSTAMU_WHITELABEL", "value": true}}}}}
+	_, err = loadWordPressConfigDefines(reservedMetadata, wpConfigDefineSelector{Local: true})
+	if err == nil || !strings.Contains(err.Error(), "KINSTAMU_WHITELABEL is provider-owned") {
+		t.Fatalf("reserved define load error = %v, want provider-owned error", err)
+	}
+}
+
+func TestRenderWPConfigDefineScriptIsAtomicAndDoesNotCreateBackups(t *testing.T) {
+	script := renderWPConfigDefineScript("/www/client/public", []wpConfigDefine{
+		kinstaWhitelabelWPConfigDefine(),
+		{Name: "OTGS_INSTALLER_SITE_KEY_WPML", PHPValue: "'wpml-secret-key'", Source: "env CLIENT_WPML_SITE_KEY", Mode: wpConfigDefineModeForce},
+	})
+	for _, want := range []string{"site_path=/www/client/public", "KINSTAMU_WHITELABEL", "replace_false", "OTGS_INSTALLER_SITE_KEY_WPML", "/* That's all, stop editing! Happy publishing. */", "wp-settings.php", "preg_match_all", "Refusing to manage duplicate wp-config define", "tempnam($dir, '.nf-wp-config-')", "rename($tmp, $configFile)", "fileperms($configFile)", "fileowner($configFile)", "filegroup($configFile)"} {
+		if !strings.Contains(script, want) {
+			t.Fatalf("wp-config script missing %q:\n%s", want, script)
+		}
+	}
+	for _, unwanted := range []string{".bak", "backup"} {
+		if strings.Contains(script, unwanted) {
+			t.Fatalf("wp-config script contains persistent backup marker %q:\n%s", unwanted, script)
+		}
+	}
+	statusScript := renderWPConfigDefineStatusScript("/www/client/public", []wpConfigDefine{{Name: "OTGS_INSTALLER_SITE_KEY_WPML", PHPValue: "'wpml-secret-key'", Source: "env CLIENT_WPML_SITE_KEY"}})
+	for _, want := range []string{"preg_match_all", "duplicate"} {
+		if !strings.Contains(statusScript, want) {
+			t.Fatalf("wp-config status script missing %q:\n%s", want, statusScript)
+		}
+	}
+	if got := defineStatusExitCode("OTGS_INSTALLER_SITE_KEY_WPML\tenv CLIENT_WPML_SITE_KEY\tduplicate\n"); got != 1 {
+		t.Fatalf("defineStatusExitCode(duplicate) = %d, want 1", got)
+	}
+}
+
+func TestRunDefineStatusRemoteHidesSecret(t *testing.T) {
+	t.Setenv("NF_STATE_HOME", t.TempDir())
+	t.Setenv("CLIENT_WPML_SITE_KEY", "wpml-secret-key")
+	if err := state.SaveStateRecords("sites", []map[string]any{{"provider": "kinsta", "site_id": "client-kinsta", "env": "live", "url": "https://www.example.com/", "path": "/www/client/public", "ssh": map[string]any{"host": "203.0.113.10", "port": "12345", "user": "client"}}}); err != nil {
+		t.Fatalf("SaveStateRecords(sites) error = %v", err)
+	}
+	setupTestNFProjectWithMetadata(t, map[string]any{
+		"version": 1,
+		"project": map[string]any{"slug": "client", "name": "Client"},
+		"wordpress": map[string]any{
+			"theme_path": "theme",
+			"theme_slug": "theme",
+			"config": map[string]any{
+				"defines": []any{map[string]any{"name": "OTGS_INSTALLER_SITE_KEY_WPML", "env": "CLIENT_WPML_SITE_KEY"}},
+			},
+		},
+		"env":     map[string]any{"compose": "docker compose", "wordpress_service": "wordpress", "cli_service": "cli", "theme_mount_slug": "theme", "uploads_path": "uploads"},
+		"remotes": map[string]any{"production": "client-kinsta:live"},
+	})
+	var capturedArgs []string
+	var capturedScript string
+	oldRunSSHStdinOutput := runSSHStdinOutputFn
+	runSSHStdinOutputFn = func(args []string, script string) ([]byte, error) {
+		capturedArgs = append([]string(nil), args...)
+		capturedScript = script
+		return []byte("OTGS_INSTALLER_SITE_KEY_WPML\tenv CLIENT_WPML_SITE_KEY\tmissing\n"), nil
+	}
+	t.Cleanup(func() { runSSHStdinOutputFn = oldRunSSHStdinOutput })
+
+	output := captureStdout(t, func() {
+		if got := Run([]string{"define", "status", "production"}); got != 0 {
+			t.Fatalf("Run(define status production) = %d, want 0", got)
+		}
+	})
+	assertContainsInOrder(t, output, []string{"Define status:", "remote:   production", "provider: kinsta", "path:     /www/client/public/wp-config.php", "OTGS_INSTALLER_SITE_KEY_WPML", "env CLIENT_WPML_SITE_KEY", "missing"})
+	if strings.Contains(output, "wpml-secret-key") {
+		t.Fatalf("define status leaked secret:\n%s", output)
+	}
+	if got, want := strings.Join(capturedArgs, " "), "ssh -p 12345 client@203.0.113.10 bash -s"; got != want {
+		t.Fatalf("captured args = %q, want %q", got, want)
+	}
+	for _, want := range []string{"site_path=/www/client/public", "OTGS_INSTALLER_SITE_KEY_WPML", "'wpml-secret-key'"} {
+		if !strings.Contains(capturedScript, want) {
+			t.Fatalf("captured status script missing %q:\n%s", want, capturedScript)
+		}
+	}
+}
+
+func TestRunDefineSyncRemoteUsesStdinScript(t *testing.T) {
+	t.Setenv("NF_STATE_HOME", t.TempDir())
+	t.Setenv("CLIENT_WPML_SITE_KEY", "wpml-secret-key")
+	if err := state.SaveStateRecords("sites", []map[string]any{{"provider": "kinsta", "site_id": "client-kinsta", "env": "live", "url": "https://www.example.com/", "path": "/www/client/public", "ssh": map[string]any{"host": "203.0.113.10", "port": "12345", "user": "client"}}}); err != nil {
+		t.Fatalf("SaveStateRecords(sites) error = %v", err)
+	}
+	setupTestNFProjectWithMetadata(t, map[string]any{
+		"version": 1,
+		"project": map[string]any{"slug": "client", "name": "Client"},
+		"wordpress": map[string]any{
+			"theme_path": "theme",
+			"theme_slug": "theme",
+			"config": map[string]any{
+				"defines": []any{map[string]any{"name": "OTGS_INSTALLER_SITE_KEY_WPML", "env": "CLIENT_WPML_SITE_KEY"}},
+			},
+		},
+		"env":     map[string]any{"compose": "docker compose", "wordpress_service": "wordpress", "cli_service": "cli", "theme_mount_slug": "theme", "uploads_path": "uploads"},
+		"remotes": map[string]any{"production": "client-kinsta:live"},
+	})
+	var capturedArgs []string
+	var capturedScript string
+	oldRunSSHStdin := runSSHStdinCommandFn
+	runSSHStdinCommandFn = func(args []string, script string) error {
+		capturedArgs = append([]string(nil), args...)
+		capturedScript = script
+		return nil
+	}
+	t.Cleanup(func() { runSSHStdinCommandFn = oldRunSSHStdin })
+
+	output := captureStdout(t, func() {
+		if got := Run([]string{"define", "sync", "production"}); got != 0 {
+			t.Fatalf("Run(define sync production) = %d, want 0", got)
+		}
+	})
+	assertContainsInOrder(t, output, []string{"Define sync:", "remote:   production", "provider: kinsta", "> ssh -p 12345 client@203.0.113.10 '<sync defines>'", "Defines synced."})
+	if strings.Contains(output, "wpml-secret-key") {
+		t.Fatalf("define sync output leaked secret:\n%s", output)
+	}
+	if got, want := strings.Join(capturedArgs, " "), "ssh -p 12345 client@203.0.113.10 bash -s"; got != want {
+		t.Fatalf("captured args = %q, want %q", got, want)
+	}
+	for _, want := range []string{"site_path=/www/client/public", "OTGS_INSTALLER_SITE_KEY_WPML", "'wpml-secret-key'", "tempnam($dir, '.nf-wp-config-')", "rename($tmp, $configFile)"} {
+		if !strings.Contains(capturedScript, want) {
+			t.Fatalf("captured script missing %q:\n%s", want, capturedScript)
+		}
+	}
+}
+
+func TestRunDefineAddRemoveWritesSharedAndSelectorValues(t *testing.T) {
+	root := setupTestNFProjectWithMetadata(t, map[string]any{
+		"version": 1,
+		"project": map[string]any{"slug": "client"},
+	})
+	stderr := captureStderr(t, func() {
+		if got := Run([]string{"define", "add", "KINSTAMU_WHITELABEL", "true"}); got != 1 {
+			t.Fatalf("Run(define add KINSTAMU_WHITELABEL) = %d, want 1", got)
+		}
+	})
+	if !strings.Contains(stderr, "define KINSTAMU_WHITELABEL is provider-owned") {
+		t.Fatalf("reserved define stderr = %q", stderr)
+	}
+
+	if output := captureStdout(t, func() {
+		if got := Run([]string{"define", "add", "SOME_PLUGIN_CONSTANT", "true"}); got != 0 {
+			t.Fatalf("Run(define add literal) = %d, want 0", got)
+		}
+	}); !strings.Contains(output, "Added define SOME_PLUGIN_CONSTANT.") {
+		t.Fatalf("define add literal output = %q", output)
+	}
+	if got := Run([]string{"define", "add", "OTGS_INSTALLER_SITE_KEY_WPML", "--env", "CLIENT_WPML_SITE_KEY"}); got != 0 {
+		t.Fatalf("Run(define add env) = %d, want 0", got)
+	}
+	if got := Run([]string{"define", "add", "OTGS_INSTALLER_SITE_KEY_WPML", "--env", "CLIENT_WPML_PROD_KEY", "--for", "production"}); got != 0 {
+		t.Fatalf("Run(define add env for production) = %d, want 0", got)
+	}
+
+	metadata, err := loadProjectMetadataOrError(root)
+	if err != nil {
+		t.Fatalf("loadProjectMetadataOrError() error = %v", err)
+	}
+	defines := mapMapAtPath(metadata, "wordpress", "config")["defines"].([]any)
+	items := map[string]map[string]any{}
+	for _, raw := range defines {
+		item := raw.(map[string]any)
+		items[recordValueString(item["name"])] = item
+	}
+	if got, want := items["SOME_PLUGIN_CONSTANT"]["value"], true; got != want {
+		t.Fatalf("SOME_PLUGIN_CONSTANT value = %#v, want %#v", got, want)
+	}
+	wpml := items["OTGS_INSTALLER_SITE_KEY_WPML"]
+	if _, ok := wpml["env"]; ok {
+		t.Fatalf("WPML define kept top-level env after selector promotion: %#v", wpml)
+	}
+	values := wpml["values"].(map[string]any)
+	if got, want := recordValueString(values["default"].(map[string]any)["env"]), "CLIENT_WPML_SITE_KEY"; got != want {
+		t.Fatalf("WPML default env = %q, want %q", got, want)
+	}
+	if got, want := recordValueString(values["production"].(map[string]any)["env"]), "CLIENT_WPML_PROD_KEY"; got != want {
+		t.Fatalf("WPML production env = %q, want %q", got, want)
+	}
+
+	if got := Run([]string{"define", "rm", "OTGS_INSTALLER_SITE_KEY_WPML", "--for", "production"}); got != 0 {
+		t.Fatalf("Run(define rm --for production) = %d, want 0", got)
+	}
+	metadata, err = loadProjectMetadataOrError(root)
+	if err != nil {
+		t.Fatalf("loadProjectMetadataOrError() after rm error = %v", err)
+	}
+	defines = mapMapAtPath(metadata, "wordpress", "config")["defines"].([]any)
+	items = map[string]map[string]any{}
+	for _, raw := range defines {
+		item := raw.(map[string]any)
+		items[recordValueString(item["name"])] = item
+	}
+	values = items["OTGS_INSTALLER_SITE_KEY_WPML"]["values"].(map[string]any)
+	if _, ok := values["production"]; ok {
+		t.Fatalf("WPML production selector still present after remove: %#v", values)
+	}
+	if got, want := recordValueString(values["default"].(map[string]any)["env"]), "CLIENT_WPML_SITE_KEY"; got != want {
+		t.Fatalf("WPML default env after remove = %q, want %q", got, want)
 	}
 }
 
@@ -12665,11 +13020,16 @@ func TestRunEnvHelpShowsCommandsWithoutShortcuts(t *testing.T) {
 			t.Fatalf("runEnvHelp() output missing %q:\n%s", wanted, output)
 		}
 	}
-	for _, unwanted := range []string{"Shortcuts:", "nf env snapshots", "snapshot create", "snapshot restore", "plugin", "instance"} {
+	for _, unwanted := range []string{"Shortcuts:", "nf env snapshots", "snapshot create", "snapshot restore", "wp-config", "plugin", "instance"} {
 		if strings.Contains(output, unwanted) {
 			t.Fatalf("runEnvHelp() output unexpectedly contained %q:\n%s", unwanted, output)
 		}
 	}
+}
+
+func TestRunDefineHelpShowsCommands(t *testing.T) {
+	output := captureStdout(t, func() { _ = runDefineHelp() })
+	assertContainsInOrder(t, output, []string{"define", "list, ls", "status [remote]", "sync [remote]", "add <name> <value>", "add <name> --env <var>", "remove, rm <name>", "\nOptions:\n", "--env <name>", "--for <selector>"})
 }
 
 func TestRunEnvImportWithoutArgsShowsHelp(t *testing.T) {

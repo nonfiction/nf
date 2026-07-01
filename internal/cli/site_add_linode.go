@@ -58,6 +58,13 @@ func runSSHStdinCommand(args []string, script string) error {
 	return err
 }
 
+func runSSHStdinOutput(args []string, script string) ([]byte, error) {
+	cmd := exec.Command(args[0], args[1:]...)
+	cmd.Stderr = os.Stderr
+	cmd.Stdin = strings.NewReader(script)
+	return cmd.Output()
+}
+
 func runSSHOutput(args []string) ([]byte, error) {
 	cmd := exec.Command(args[0], args[1:]...)
 	cmd.Stderr = os.Stderr

@@ -50,6 +50,8 @@ nf theme rollback production --dry-run
 nf alias status production
 nf alias sync production
 nf plugin status production
+nf define status production
+nf define sync production
 nf env logs production
 nf env pull production --dry-run
 nf domain list production

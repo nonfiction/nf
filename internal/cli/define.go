@@ -1,0 +1,1176 @@
+package cli
+
+import (
+	"encoding/json"
+	"fmt"
+	"math"
+	"os"
+	"regexp"
+	"sort"
+	"strconv"
+	"strings"
+
+	"github.com/nonfiction/nf/internal/config"
+	"github.com/nonfiction/nf/internal/envwizard"
+)
+
+const (
+	wpConfigDefineModeForce        = "force"
+	wpConfigDefineModeReplaceFalse = "replace_false"
+)
+
+var wpConfigDefineNamePattern = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*$`)
+
+var providerOwnedWPConfigDefines = map[string]string{
+	"KINSTAMU_WHITELABEL": "Kinsta whitelabel is managed by nf site repair",
+}
+
+type wpConfigDefine struct {
+	Name     string
+	PHPValue string
+	Source   string
+	Mode     string
+}
+
+type wpConfigDefineSelector struct {
+	Local      bool
+	RemoteName string
+	EnvID      string
+	Env        string
+}
+
+type wpConfigPatchDefinition struct {
+	Name   string `json:"name"`
+	Value  string `json:"value"`
+	Mode   string `json:"mode"`
+	Source string `json:"source,omitempty"`
+}
+
+type defineValueSpec struct {
+	Env   string
+	Value any
+	IsEnv bool
+}
+
+func runDefine(argv []string) int {
+	if len(argv) == 0 || argv[0] == "help" || argv[0] == "--help" || argv[0] == "-h" {
+		return runDefineHelp()
+	}
+	cmd := cliCommandAlias(argv[0])
+	switch cmd {
+	case "list", "status", "sync", "add", "remove":
+	default:
+		fmt.Fprintln(os.Stderr, "unsupported define command")
+		return 1
+	}
+	if err := requireProjectContext("define " + cmd); err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		return 1
+	}
+	root, err := discoverProjectRootOrError()
+	if err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		return 1
+	}
+	metadata, err := loadProjectMetadataOrError(root)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		return 1
+	}
+	switch cmd {
+	case "list":
+		if len(argv) != 1 {
+			fmt.Fprintln(os.Stderr, "define list takes no arguments")
+			return 1
+		}
+		return cmdDefineList(metadata)
+	case "status":
+		remoteName, ok := parseDefineRemoteArg("status", argv[1:])
+		if !ok {
+			return 1
+		}
+		return cmdDefineStatus(root, metadata, remoteName)
+	case "sync":
+		remoteName, ok := parseDefineRemoteArg("sync", argv[1:])
+		if !ok {
+			return 1
+		}
+		return cmdDefineSync(root, metadata, remoteName)
+	case "add":
+		return cmdDefineAdd(root, metadata, argv[1:])
+	case "remove":
+		return cmdDefineRemove(root, metadata, argv[1:])
+	default:
+		return 1
+	}
+}
+
+func parseDefineRemoteArg(action string, args []string) (string, bool) {
+	if len(args) > 1 {
+		fmt.Fprintf(os.Stderr, "define %s takes at most one remote\n", action)
+		return "", false
+	}
+	if len(args) == 1 {
+		if strings.HasPrefix(args[0], "-") {
+			fmt.Fprintf(os.Stderr, "unknown define %s flag: %s\n", action, args[0])
+			return "", false
+		}
+		return strings.TrimSpace(args[0]), true
+	}
+	return "", true
+}
+
+func cmdDefineList(metadata map[string]any) int {
+	entries, err := configuredDefineEntries(metadata)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		return 1
+	}
+	fmt.Println("Configured defines:")
+	if len(entries) == 0 {
+		fmt.Println("  none")
+		return 0
+	}
+	rows := [][]string{{"name", "selector", "source"}}
+	for _, entry := range entries {
+		rows = append(rows, []string{entry.Name, entry.Selector, entry.Source})
+	}
+	fmt.Println(formatTable(rows))
+	return 0
+}
+
+func cmdDefineStatus(root string, metadata map[string]any, remoteName string) int {
+	if strings.TrimSpace(remoteName) == "" {
+		cfg, ok := loadEnvConfig(root, metadata)
+		if !ok {
+			fmt.Fprintln(os.Stderr, "Missing env metadata in nf.json. Run nf env up first.")
+			return 1
+		}
+		defines, err := loadWordPressConfigDefines(metadata, wpConfigDefineSelector{Local: true})
+		if err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			return 1
+		}
+		return cmdDefineStatusLocal(cfg, defines)
+	}
+	target, err := resolveEnvRemoteSyncTarget("define status", remoteName, metadata)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		return 1
+	}
+	selector := wpConfigDefineSelector{RemoteName: target.RemoteName, EnvID: canonicalEnvID(target.SiteID, target.Env), Env: target.Env}
+	defines, err := loadWordPressConfigDefines(metadata, selector)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		return 1
+	}
+	return cmdDefineStatusRemote(target, defines)
+}
+
+func cmdDefineStatusLocal(cfg envConfig, defines []wpConfigDefine) int {
+	fmt.Println("Define status:")
+	if len(defines) == 0 {
+		fmt.Println("No defines configured for local.")
+		return 0
+	}
+	script := renderWPConfigDefineStatusScript("/var/www/html", defines)
+	service := firstNonEmpty(cfg.WordpressService, "wordpress")
+	args := envComposeArgs(cfg, "exec", "-T", "--user", "root", service, "sh", "-s")
+	output, err := runCommandSpecStdinOutputSilent(execSpec{Dir: localEnvDir(cfg), Args: args}, script)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		return 1
+	}
+	fmt.Printf("  target: local\n")
+	fmt.Printf("  path:   /var/www/html/wp-config.php\n\n")
+	printDefineStatusOutput(string(output))
+	return defineStatusExitCode(string(output))
+}
+
+func cmdDefineStatusRemote(target envRemoteSyncTarget, defines []wpConfigDefine) int {
+	fmt.Println("Define status:")
+	printDefineRemoteHeader(target)
+	fmt.Printf("  path:     %s/wp-config.php\n\n", strings.TrimRight(target.WordPressPath, "/"))
+	if len(defines) == 0 {
+		fmt.Printf("No defines configured for %s.\n", target.RemoteName)
+		return 0
+	}
+	script := renderWPConfigDefineStatusScript(target.WordPressPath, defines)
+	output, err := runSSHStdinOutputFn(remoteDefineStdinArgs(target), script)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		return 1
+	}
+	printDefineStatusOutput(string(output))
+	return defineStatusExitCode(string(output))
+}
+
+func cmdDefineSync(root string, metadata map[string]any, remoteName string) int {
+	if strings.TrimSpace(remoteName) == "" {
+		cfg, ok := loadEnvConfig(root, metadata)
+		if !ok {
+			fmt.Fprintln(os.Stderr, "Missing env metadata in nf.json. Run nf env up first.")
+			return 1
+		}
+		defines, err := loadWordPressConfigDefines(metadata, wpConfigDefineSelector{Local: true})
+		if err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			return 1
+		}
+		return cmdDefineSyncLocal(cfg, defines)
+	}
+	target, err := resolveEnvRemoteSyncTarget("define sync", remoteName, metadata)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		return 1
+	}
+	selector := wpConfigDefineSelector{RemoteName: target.RemoteName, EnvID: canonicalEnvID(target.SiteID, target.Env), Env: target.Env}
+	defines, err := loadWordPressConfigDefines(metadata, selector)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		return 1
+	}
+	return cmdDefineSyncRemote(target, defines)
+}
+
+func cmdDefineSyncLocal(cfg envConfig, defines []wpConfigDefine) int {
+	fmt.Println("Define sync:")
+	if len(defines) == 0 {
+		fmt.Println("No defines configured for local.")
+		return 0
+	}
+	if err := ensureManagedEnv(cfg); err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		return 1
+	}
+	if err := runCommandSpecWithPreview(execSpec{Dir: localEnvDir(cfg), Args: envWpBootstrapReadyArgs(cfg)}, envWpBootstrapPreviewArgs(cfg, "wait for WordPress files")); err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		return 1
+	}
+	script := renderWPConfigDefineScript("/var/www/html", defines)
+	service := firstNonEmpty(cfg.WordpressService, "wordpress")
+	args := envComposeArgs(cfg, "exec", "-T", "--user", "root", service, "sh", "-s")
+	preview := envComposeArgs(cfg, "exec", "-T", "--user", "root", service, "<sync defines>")
+	if err := runCommandSpecStdinWithPreview(execSpec{Dir: localEnvDir(cfg), Args: args}, preview, script); err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		return 1
+	}
+	fmt.Println("Defines synced.")
+	return 0
+}
+
+func cmdDefineSyncRemote(target envRemoteSyncTarget, defines []wpConfigDefine) int {
+	fmt.Println("Define sync:")
+	printDefineRemoteHeader(target)
+	if len(defines) == 0 {
+		fmt.Printf("No defines configured for %s.\n", target.RemoteName)
+		return 0
+	}
+	script := renderWPConfigDefineScript(target.WordPressPath, defines)
+	args := remoteDefineStdinArgs(target)
+	printDefineRemoteCommand(target)
+	if err := runSSHStdinCommandFn(args, script); err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		return 1
+	}
+	fmt.Println("Defines synced.")
+	return 0
+}
+
+func cmdDefineAdd(root string, metadata map[string]any, args []string) int {
+	name, selector, spec, err := parseDefineAddArgs(args)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		return 1
+	}
+	if err := upsertConfiguredDefine(metadata, name, selector, spec); err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		return 1
+	}
+	if err := saveProjectMetadata(root, metadata); err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		return 1
+	}
+	if selector == "" {
+		fmt.Printf("Added define %s.\n", name)
+	} else {
+		fmt.Printf("Added define %s for %s.\n", name, selector)
+	}
+	return 0
+}
+
+func cmdDefineRemove(root string, metadata map[string]any, args []string) int {
+	name, selector, err := parseDefineRemoveArgs(args)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		return 1
+	}
+	if err := removeConfiguredDefine(metadata, name, selector); err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		return 1
+	}
+	if err := saveProjectMetadata(root, metadata); err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		return 1
+	}
+	if selector == "" {
+		fmt.Printf("Removed define %s.\n", name)
+	} else {
+		fmt.Printf("Removed define %s for %s.\n", name, selector)
+	}
+	return 0
+}
+
+func parseDefineAddArgs(args []string) (string, string, defineValueSpec, error) {
+	positionals := []string{}
+	selector := ""
+	envName := ""
+	for i := 0; i < len(args); i++ {
+		arg := args[i]
+		switch arg {
+		case "--env":
+			if envName != "" {
+				return "", "", defineValueSpec{}, fmt.Errorf("define add accepts --env only once")
+			}
+			if i+1 >= len(args) || strings.HasPrefix(args[i+1], "-") {
+				return "", "", defineValueSpec{}, fmt.Errorf("define add --env requires an environment variable name")
+			}
+			envName = strings.TrimSpace(args[i+1])
+			i++
+		case "--for":
+			if selector != "" {
+				return "", "", defineValueSpec{}, fmt.Errorf("define add accepts --for only once")
+			}
+			if i+1 >= len(args) || strings.HasPrefix(args[i+1], "-") {
+				return "", "", defineValueSpec{}, fmt.Errorf("define add --for requires a selector")
+			}
+			selector = strings.TrimSpace(args[i+1])
+			i++
+		default:
+			if strings.HasPrefix(arg, "-") {
+				return "", "", defineValueSpec{}, fmt.Errorf("unknown define add flag: %s", arg)
+			}
+			positionals = append(positionals, arg)
+		}
+	}
+	if envName != "" && len(positionals) != 1 {
+		return "", "", defineValueSpec{}, fmt.Errorf("define add with --env requires exactly one name")
+	}
+	if envName == "" && len(positionals) != 2 {
+		return "", "", defineValueSpec{}, fmt.Errorf("define add requires a name and value, or a name with --env")
+	}
+	name := strings.TrimSpace(positionals[0])
+	if err := validateProjectDefineName(name); err != nil {
+		return "", "", defineValueSpec{}, err
+	}
+	if selector != "" && strings.TrimSpace(selector) == "" {
+		return "", "", defineValueSpec{}, fmt.Errorf("define add --for requires a selector")
+	}
+	if envName != "" {
+		if err := validateDefineEnvName(envName); err != nil {
+			return "", "", defineValueSpec{}, err
+		}
+		return name, selector, defineValueSpec{Env: envName, IsEnv: true}, nil
+	}
+	return name, selector, defineValueSpec{Value: parseDefineCLIValue(positionals[1])}, nil
+}
+
+func parseDefineRemoveArgs(args []string) (string, string, error) {
+	positionals := []string{}
+	selector := ""
+	for i := 0; i < len(args); i++ {
+		arg := args[i]
+		switch arg {
+		case "--for":
+			if selector != "" {
+				return "", "", fmt.Errorf("define remove accepts --for only once")
+			}
+			if i+1 >= len(args) || strings.HasPrefix(args[i+1], "-") {
+				return "", "", fmt.Errorf("define remove --for requires a selector")
+			}
+			selector = strings.TrimSpace(args[i+1])
+			i++
+		default:
+			if strings.HasPrefix(arg, "-") {
+				return "", "", fmt.Errorf("unknown define remove flag: %s", arg)
+			}
+			positionals = append(positionals, arg)
+		}
+	}
+	if len(positionals) != 1 {
+		return "", "", fmt.Errorf("define remove requires exactly one name")
+	}
+	name := strings.TrimSpace(positionals[0])
+	if err := validateDefineName(name); err != nil {
+		return "", "", err
+	}
+	return name, selector, nil
+}
+
+func validateDefineName(name string) error {
+	if name == "" {
+		return fmt.Errorf("define name is required")
+	}
+	if !wpConfigDefineNamePattern.MatchString(name) {
+		return fmt.Errorf("define name must be a PHP constant name")
+	}
+	return nil
+}
+
+func validateProjectDefineName(name string) error {
+	if err := validateDefineName(name); err != nil {
+		return err
+	}
+	if reason, ok := providerOwnedWPConfigDefines[name]; ok {
+		return fmt.Errorf("define %s is provider-owned; %s", name, reason)
+	}
+	return nil
+}
+
+func validateConfiguredProjectDefineName(index int, name string) error {
+	if reason, ok := providerOwnedWPConfigDefines[name]; ok {
+		return ProjectError{Msg: fmt.Sprintf("nf.json wordpress.config.defines[%d].name %s is provider-owned; %s. Remove it from nf.json and run nf site repair for Kinsta platform repair.", index, name, reason)}
+	}
+	return nil
+}
+
+func validateDefineEnvName(name string) error {
+	if name == "" {
+		return fmt.Errorf("define env name is required")
+	}
+	if !wpConfigDefineNamePattern.MatchString(name) {
+		return fmt.Errorf("define env name must be an environment variable name")
+	}
+	return nil
+}
+
+func parseDefineCLIValue(value string) any {
+	switch strings.ToLower(value) {
+	case "true":
+		return true
+	case "false":
+		return false
+	default:
+		return value
+	}
+}
+
+func ensureWordPressConfigMap(metadata map[string]any) map[string]any {
+	wordpress, _ := metadata["wordpress"].(map[string]any)
+	if wordpress == nil {
+		wordpress = map[string]any{}
+		metadata["wordpress"] = wordpress
+	}
+	configMap, _ := wordpress["config"].(map[string]any)
+	if configMap == nil {
+		configMap = map[string]any{}
+		wordpress["config"] = configMap
+	}
+	return configMap
+}
+
+func configuredDefineArray(metadata map[string]any, create bool) ([]any, map[string]any, error) {
+	var configMap map[string]any
+	if create {
+		configMap = ensureWordPressConfigMap(metadata)
+	} else {
+		configMap = mapMapAtPath(metadata, "wordpress", "config")
+		if configMap == nil {
+			return nil, nil, nil
+		}
+	}
+	raw, ok := configMap["defines"]
+	if !ok {
+		if create {
+			defines := []any{}
+			configMap["defines"] = defines
+			return defines, configMap, nil
+		}
+		return nil, configMap, nil
+	}
+	defines, ok := raw.([]any)
+	if !ok {
+		return nil, configMap, ProjectError{Msg: "nf.json wordpress.config.defines must be an array"}
+	}
+	return defines, configMap, nil
+}
+
+func upsertConfiguredDefine(metadata map[string]any, name, selector string, spec defineValueSpec) error {
+	if err := validateProjectDefineName(name); err != nil {
+		return err
+	}
+	defines, configMap, err := configuredDefineArray(metadata, true)
+	if err != nil {
+		return err
+	}
+	idx := -1
+	var item map[string]any
+	for i, raw := range defines {
+		candidate, ok := raw.(map[string]any)
+		if !ok || candidate == nil {
+			return ProjectError{Msg: fmt.Sprintf("nf.json wordpress.config.defines[%d] must be an object", i)}
+		}
+		if recordValueString(candidate["name"]) == name {
+			idx = i
+			item = candidate
+			break
+		}
+	}
+	if item == nil {
+		item = map[string]any{"name": name}
+		defines = append(defines, item)
+		idx = len(defines) - 1
+	}
+	if selector == "" {
+		if _, hasValues := item["values"]; hasValues {
+			values, err := defineValuesMap(item)
+			if err != nil {
+				return err
+			}
+			values["default"] = defineValueSpecMap(spec)
+			delete(item, "value")
+			delete(item, "env")
+		} else {
+			setDefineValueSpec(item, spec)
+		}
+	} else {
+		values, err := ensureDefineValuesMap(item)
+		if err != nil {
+			return err
+		}
+		if _, hasValue := item["value"]; hasValue {
+			values["default"] = map[string]any{"value": item["value"]}
+			delete(item, "value")
+		}
+		if _, hasEnv := item["env"]; hasEnv {
+			values["default"] = map[string]any{"env": item["env"]}
+			delete(item, "env")
+		}
+		values[selector] = defineValueSpecMap(spec)
+	}
+	defines[idx] = item
+	sort.SliceStable(defines, func(i, j int) bool {
+		left, _ := defines[i].(map[string]any)
+		right, _ := defines[j].(map[string]any)
+		return recordValueString(left["name"]) < recordValueString(right["name"])
+	})
+	configMap["defines"] = defines
+	return nil
+}
+
+func removeConfiguredDefine(metadata map[string]any, name, selector string) error {
+	defines, configMap, err := configuredDefineArray(metadata, false)
+	if err != nil {
+		return err
+	}
+	if len(defines) == 0 {
+		return fmt.Errorf("define %s is not configured", name)
+	}
+	idx := -1
+	var item map[string]any
+	for i, raw := range defines {
+		candidate, ok := raw.(map[string]any)
+		if !ok || candidate == nil {
+			return ProjectError{Msg: fmt.Sprintf("nf.json wordpress.config.defines[%d] must be an object", i)}
+		}
+		if recordValueString(candidate["name"]) == name {
+			idx = i
+			item = candidate
+			break
+		}
+	}
+	if idx < 0 {
+		return fmt.Errorf("define %s is not configured", name)
+	}
+	if selector == "" {
+		defines = append(defines[:idx], defines[idx+1:]...)
+		configMap["defines"] = defines
+		return nil
+	}
+	values, err := defineValuesMap(item)
+	if err != nil {
+		return err
+	}
+	if _, ok := values[selector]; !ok {
+		return fmt.Errorf("define %s is not configured for %s", name, selector)
+	}
+	delete(values, selector)
+	if len(values) == 0 && item["value"] == nil && item["env"] == nil {
+		defines = append(defines[:idx], defines[idx+1:]...)
+	} else if len(values) == 0 {
+		delete(item, "values")
+		defines[idx] = item
+	} else {
+		item["values"] = values
+		defines[idx] = item
+	}
+	configMap["defines"] = defines
+	return nil
+}
+
+func setDefineValueSpec(item map[string]any, spec defineValueSpec) {
+	delete(item, "value")
+	delete(item, "env")
+	if spec.IsEnv {
+		item["env"] = spec.Env
+		return
+	}
+	item["value"] = spec.Value
+}
+
+func defineValueSpecMap(spec defineValueSpec) map[string]any {
+	if spec.IsEnv {
+		return map[string]any{"env": spec.Env}
+	}
+	return map[string]any{"value": spec.Value}
+}
+
+func ensureDefineValuesMap(item map[string]any) (map[string]any, error) {
+	if raw, ok := item["values"]; ok {
+		return normalizeDefineValuesMap(raw)
+	}
+	values := map[string]any{}
+	item["values"] = values
+	return values, nil
+}
+
+func defineValuesMap(item map[string]any) (map[string]any, error) {
+	raw, ok := item["values"]
+	if !ok {
+		return nil, fmt.Errorf("define %s has no selector-specific values", recordValueString(item["name"]))
+	}
+	return normalizeDefineValuesMap(raw)
+}
+
+func normalizeDefineValuesMap(raw any) (map[string]any, error) {
+	values, ok := raw.(map[string]any)
+	if !ok || values == nil {
+		return nil, ProjectError{Msg: "nf.json wordpress.config.defines values must be an object"}
+	}
+	return values, nil
+}
+
+type configuredDefineEntry struct {
+	Name     string
+	Selector string
+	Source   string
+}
+
+func configuredDefineEntries(metadata map[string]any) ([]configuredDefineEntry, error) {
+	defines, _, err := configuredDefineArray(metadata, false)
+	if err != nil {
+		return nil, err
+	}
+	entries := []configuredDefineEntry{}
+	for i, raw := range defines {
+		item, ok := raw.(map[string]any)
+		if !ok || item == nil {
+			return nil, ProjectError{Msg: fmt.Sprintf("nf.json wordpress.config.defines[%d] must be an object", i)}
+		}
+		name := strings.TrimSpace(recordValueString(item["name"]))
+		if name == "" {
+			return nil, ProjectError{Msg: fmt.Sprintf("nf.json wordpress.config.defines[%d].name is required", i)}
+		}
+		if err := validateConfiguredProjectDefineName(i, name); err != nil {
+			return nil, err
+		}
+		if _, hasValue := item["value"]; hasValue {
+			entries = append(entries, configuredDefineEntry{Name: name, Selector: "all", Source: "literal value"})
+		}
+		if envName := strings.TrimSpace(recordValueString(item["env"])); envName != "" {
+			entries = append(entries, configuredDefineEntry{Name: name, Selector: "all", Source: "env " + envName})
+		}
+		if rawValues, ok := item["values"]; ok {
+			values, ok := rawValues.(map[string]any)
+			if !ok || values == nil {
+				return nil, ProjectError{Msg: fmt.Sprintf("nf.json wordpress.config.defines[%d].values must be an object", i)}
+			}
+			keys := make([]string, 0, len(values))
+			for key := range values {
+				keys = append(keys, key)
+			}
+			sort.Strings(keys)
+			for _, key := range keys {
+				spec, ok := values[key].(map[string]any)
+				if !ok || spec == nil {
+					return nil, ProjectError{Msg: fmt.Sprintf("nf.json wordpress.config.defines[%d].values.%s for %s must be an object", i, key, name)}
+				}
+				entries = append(entries, configuredDefineEntry{Name: name, Selector: key, Source: defineSpecSource(spec)})
+			}
+		}
+	}
+	sort.Slice(entries, func(i, j int) bool {
+		if entries[i].Name == entries[j].Name {
+			return entries[i].Selector < entries[j].Selector
+		}
+		return entries[i].Name < entries[j].Name
+	})
+	return entries, nil
+}
+
+func defineSpecSource(spec map[string]any) string {
+	if envName := strings.TrimSpace(recordValueString(spec["env"])); envName != "" {
+		return "env " + envName
+	}
+	if _, ok := spec["value"]; ok {
+		return "literal value"
+	}
+	return "unconfigured"
+}
+
+func printDefineRemoteHeader(target envRemoteSyncTarget) {
+	fmt.Printf("  remote:   %s\n", target.RemoteName)
+	fmt.Printf("  site:     %s\n", target.SiteID)
+	fmt.Printf("  env:      %s\n", target.Env)
+	fmt.Printf("  provider: %s\n", target.Provider)
+}
+
+func printDefineRemoteCommand(target envRemoteSyncTarget) {
+	label := "<sync defines>"
+	if target.SudoFileOps {
+		label = "<sudo sync defines>"
+	}
+	fmt.Printf("> ssh -p %s %s@%s %s\n", target.SSHPort, target.SSHUser, target.SSHHost, shellQuoteArg(label))
+}
+
+func remoteDefineStdinArgs(target envRemoteSyncTarget) []string {
+	if target.SudoFileOps {
+		return remoteSSHArgs(target, "sudo bash -s")
+	}
+	return remoteSSHArgs(target, "bash -s")
+}
+
+func ensureLocalWPConfigDefines(cfg envConfig, metadata map[string]any) error {
+	defines, err := loadWordPressConfigDefines(metadata, wpConfigDefineSelector{Local: true})
+	if err != nil {
+		return err
+	}
+	if len(defines) == 0 {
+		return nil
+	}
+	script := renderWPConfigDefineScript("/var/www/html", defines)
+	service := firstNonEmpty(cfg.WordpressService, "wordpress")
+	args := envComposeArgs(cfg, "exec", "-T", "--user", "root", service, "sh", "-s")
+	preview := envComposeArgs(cfg, "exec", "-T", "--user", "root", service, "<sync defines>")
+	return runCommandSpecStdinWithPreview(execSpec{Dir: localEnvDir(cfg), Args: args}, preview, script)
+}
+
+func loadWordPressConfigDefines(metadata map[string]any, selector wpConfigDefineSelector) ([]wpConfigDefine, error) {
+	configMap := mapMapAtPath(metadata, "wordpress", "config")
+	if configMap == nil {
+		return nil, nil
+	}
+	value, ok := configMap["defines"]
+	if !ok {
+		return nil, nil
+	}
+	raw, ok := value.([]any)
+	if !ok {
+		return nil, ProjectError{Msg: "nf.json wordpress.config.defines must be an array"}
+	}
+	defines := make([]wpConfigDefine, 0, len(raw))
+	seen := map[string]struct{}{}
+	for i, item := range raw {
+		define, ok, err := parseWordPressConfigDefine(i, item, selector)
+		if err != nil {
+			return nil, err
+		}
+		if !ok {
+			continue
+		}
+		if _, exists := seen[define.Name]; exists {
+			return nil, ProjectError{Msg: fmt.Sprintf("nf.json wordpress.config.defines contains duplicate name %q", define.Name)}
+		}
+		seen[define.Name] = struct{}{}
+		defines = append(defines, define)
+	}
+	sort.Slice(defines, func(i, j int) bool { return defines[i].Name < defines[j].Name })
+	return defines, nil
+}
+
+func parseWordPressConfigDefine(index int, value any, selector wpConfigDefineSelector) (wpConfigDefine, bool, error) {
+	item, ok := value.(map[string]any)
+	if !ok || item == nil {
+		return wpConfigDefine{}, false, ProjectError{Msg: fmt.Sprintf("nf.json wordpress.config.defines[%d] must be an object", index)}
+	}
+	name := strings.TrimSpace(recordValueString(item["name"]))
+	if name == "" {
+		return wpConfigDefine{}, false, ProjectError{Msg: fmt.Sprintf("nf.json wordpress.config.defines[%d].name is required", index)}
+	}
+	if !wpConfigDefineNamePattern.MatchString(name) {
+		return wpConfigDefine{}, false, ProjectError{Msg: fmt.Sprintf("nf.json wordpress.config.defines[%d].name must be a PHP constant name", index)}
+	}
+	if err := validateConfiguredProjectDefineName(index, name); err != nil {
+		return wpConfigDefine{}, false, err
+	}
+	valueSpec := item
+	if values, ok := item["values"]; ok {
+		selected, matched, err := selectWordPressConfigDefineValue(index, name, values, selector)
+		if err != nil {
+			return wpConfigDefine{}, false, err
+		}
+		if matched {
+			valueSpec = selected
+		} else if _, hasValue := item["value"]; !hasValue && strings.TrimSpace(recordValueString(item["env"])) == "" {
+			return wpConfigDefine{}, false, nil
+		}
+	}
+	phpValue, source, err := parseWordPressConfigDefineValue(index, name, valueSpec)
+	if err != nil {
+		return wpConfigDefine{}, false, err
+	}
+	return wpConfigDefine{Name: name, PHPValue: phpValue, Source: source, Mode: wpConfigDefineModeForce}, true, nil
+}
+
+func selectWordPressConfigDefineValue(index int, name string, values any, selector wpConfigDefineSelector) (map[string]any, bool, error) {
+	valueMap, ok := values.(map[string]any)
+	if !ok || valueMap == nil {
+		return nil, false, ProjectError{Msg: fmt.Sprintf("nf.json wordpress.config.defines[%d].values must be an object", index)}
+	}
+	for _, key := range selector.wpConfigValueKeys() {
+		if raw, ok := valueMap[key]; ok {
+			selected, ok := raw.(map[string]any)
+			if !ok || selected == nil {
+				return nil, false, ProjectError{Msg: fmt.Sprintf("nf.json wordpress.config.defines[%d].values.%s for %s must be an object", index, key, name)}
+			}
+			return selected, true, nil
+		}
+	}
+	return nil, false, nil
+}
+
+func (s wpConfigDefineSelector) wpConfigValueKeys() []string {
+	keys := []string{}
+	if s.Local {
+		keys = append(keys, "local")
+	} else {
+		if strings.TrimSpace(s.RemoteName) != "" {
+			keys = append(keys, strings.TrimSpace(s.RemoteName))
+		}
+		if strings.TrimSpace(s.EnvID) != "" {
+			keys = append(keys, strings.TrimSpace(s.EnvID))
+		}
+		if strings.TrimSpace(s.Env) != "" {
+			keys = append(keys, strings.TrimSpace(s.Env))
+		}
+	}
+	keys = append(keys, "default")
+	return uniqueStringsPreserveOrder(keys)
+}
+
+func parseWordPressConfigDefineValue(index int, name string, spec map[string]any) (string, string, error) {
+	_, hasEnv := spec["env"]
+	value, hasValue := spec["value"]
+	if hasEnv && hasValue {
+		return "", "", ProjectError{Msg: fmt.Sprintf("nf.json wordpress.config.defines[%d] for %s must use either env or value, not both", index, name)}
+	}
+	if hasEnv {
+		envName := strings.TrimSpace(recordValueString(spec["env"]))
+		if envName == "" {
+			return "", "", ProjectError{Msg: fmt.Sprintf("nf.json wordpress.config.defines[%d].env for %s must not be empty", index, name)}
+		}
+		if !wpConfigDefineNamePattern.MatchString(envName) {
+			return "", "", ProjectError{Msg: fmt.Sprintf("nf.json wordpress.config.defines[%d].env for %s must be an environment variable name", index, name)}
+		}
+		resolved := envwizard.Value(envName)
+		if resolved == "" {
+			return "", "", ProjectError{Msg: fmt.Sprintf("Expected %s in the environment or %s for nf.json wordpress.config.defines[%d] %s.", envName, config.EnvFile(), index, name)}
+		}
+		return phpConfigDefineLiteral(resolved), "env " + envName, nil
+	}
+	if hasValue {
+		literal, err := phpConfigDefineValueLiteral(value)
+		if err != nil {
+			return "", "", ProjectError{Msg: fmt.Sprintf("nf.json wordpress.config.defines[%d].value for %s: %s", index, name, err)}
+		}
+		return literal, "literal value", nil
+	}
+	return "", "", ProjectError{Msg: fmt.Sprintf("nf.json wordpress.config.defines[%d] for %s requires env or value", index, name)}
+}
+
+func phpConfigDefineValueLiteral(value any) (string, error) {
+	switch typed := value.(type) {
+	case string:
+		return phpConfigDefineLiteral(typed), nil
+	case bool:
+		if typed {
+			return "true", nil
+		}
+		return "false", nil
+	case float64:
+		if math.IsNaN(typed) || math.IsInf(typed, 0) {
+			return "", fmt.Errorf("number must be finite")
+		}
+		if math.Trunc(typed) == typed {
+			return strconv.FormatInt(int64(typed), 10), nil
+		}
+		return strconv.FormatFloat(typed, 'f', -1, 64), nil
+	case int:
+		return strconv.Itoa(typed), nil
+	case nil:
+		return "", fmt.Errorf("null is not supported")
+	default:
+		return "", fmt.Errorf("value must be a string, boolean, or number")
+	}
+}
+
+func phpConfigDefineLiteral(value string) string {
+	value = strings.ReplaceAll(value, `\`, `\\`)
+	value = strings.ReplaceAll(value, `'`, `\'`)
+	return "'" + value + "'"
+}
+
+func kinstaWhitelabelWPConfigDefine() wpConfigDefine {
+	return wpConfigDefine{Name: "KINSTAMU_WHITELABEL", PHPValue: "true", Source: "Kinsta whitelabel", Mode: wpConfigDefineModeReplaceFalse}
+}
+
+func renderWPConfigDefineScript(sitePath string, defines []wpConfigDefine) string {
+	patches := make([]wpConfigPatchDefinition, 0, len(defines))
+	for _, define := range defines {
+		mode := firstNonEmpty(define.Mode, wpConfigDefineModeForce)
+		patches = append(patches, wpConfigPatchDefinition{Name: define.Name, Value: define.PHPValue, Mode: mode, Source: define.Source})
+	}
+	data, _ := json.Marshal(patches)
+	return fmt.Sprintf(`set -eu
+site_path=%s
+config_file="$site_path/wp-config.php"
+if [ ! -f "$config_file" ]; then
+  printf 'wp-config.php not found at %%s\n' "$config_file" >&2
+  exit 1
+fi
+export NF_WP_CONFIG_FILE="$config_file"
+php <<'PHP'
+<?php
+$configFile = getenv('NF_WP_CONFIG_FILE');
+$definitionsJson = <<<'JSON'
+%s
+JSON;
+
+$definitions = json_decode($definitionsJson, true);
+if (!is_array($definitions)) {
+    fwrite(STDERR, "Invalid nf wp-config definitions.\n");
+    exit(1);
+}
+
+$contents = file_get_contents($configFile);
+if ($contents === false) {
+    fwrite(STDERR, "Could not read wp-config.php.\n");
+    exit(1);
+}
+
+function nf_wp_config_define_statement($name, $value) {
+    return "define('" . str_replace("'", "\\'", $name) . "', " . $value . ");";
+}
+
+function nf_wp_config_insert_statement($contents, $statement) {
+    $insert = "\n/* nf-managed wp-config defines */\n" . $statement . "\n";
+    $marker = "/* That's all, stop editing! Happy publishing. */";
+    $pos = strpos($contents, $marker);
+    if ($pos !== false) {
+        return substr($contents, 0, $pos) . $insert . substr($contents, $pos);
+    }
+    if (preg_match('/require_once\s*\(?\s*ABSPATH\s*\.\s*[\'\"]wp-settings\.php[\'\"]\s*\)?\s*;/', $contents, $match, PREG_OFFSET_CAPTURE)) {
+        $pos = $match[0][1];
+        return substr($contents, 0, $pos) . $insert . substr($contents, $pos);
+    }
+    throw new RuntimeException('Could not find a safe insertion point in wp-config.php.');
+}
+
+function nf_wp_config_define_matches($contents, $name) {
+    $pattern = '/define\s*\(\s*[\'\"]' . preg_quote($name, '/') . '[\'\"]\s*,(.*?)\)\s*;/s';
+    $count = preg_match_all($pattern, $contents, $matches, PREG_OFFSET_CAPTURE);
+    if ($count === false) {
+        throw new RuntimeException('Could not inspect wp-config.php define for ' . $name . '.');
+    }
+    return [$count, $matches];
+}
+
+$changed = false;
+foreach ($definitions as $definition) {
+    $name = (string) ($definition['name'] ?? '');
+    $value = (string) ($definition['value'] ?? '');
+    $mode = (string) ($definition['mode'] ?? 'force');
+    if ($name === '' || $value === '') {
+        fwrite(STDERR, "Invalid nf wp-config definition.\n");
+        exit(1);
+    }
+    $statement = nf_wp_config_define_statement($name, $value);
+    try {
+        [$matchCount, $matches] = nf_wp_config_define_matches($contents, $name);
+    } catch (RuntimeException $error) {
+        fwrite(STDERR, $error->getMessage() . "\n");
+        exit(1);
+    }
+    if ($matchCount > 1) {
+        fwrite(STDERR, 'Refusing to manage duplicate wp-config define for ' . $name . ". Remove duplicate definitions first.\n");
+        exit(1);
+    }
+    if ($matchCount === 1) {
+        $existing = trim($matches[1][0][0]);
+        if ($mode === 'replace_false' && !preg_match('/^false$/i', $existing)) {
+            continue;
+        }
+        if ($existing === $value) {
+            continue;
+        }
+        $start = $matches[0][0][1];
+        $length = strlen($matches[0][0][0]);
+        $contents = substr($contents, 0, $start) . $statement . substr($contents, $start + $length);
+        $changed = true;
+        continue;
+    }
+    try {
+        $contents = nf_wp_config_insert_statement($contents, $statement);
+    } catch (RuntimeException $error) {
+        fwrite(STDERR, $error->getMessage() . "\n");
+        exit(1);
+    }
+    $changed = true;
+}
+
+if (!$changed) {
+    echo "wp-config.php already matches nf defines.\n";
+    exit(0);
+}
+if (strpos($contents, 'wp-settings.php') === false) {
+    fwrite(STDERR, "Refusing to write wp-config.php without wp-settings.php.\n");
+    exit(1);
+}
+
+$dir = dirname($configFile);
+$tmp = tempnam($dir, '.nf-wp-config-');
+if ($tmp === false) {
+    fwrite(STDERR, "Could not create temporary wp-config file.\n");
+    exit(1);
+}
+$mode = fileperms($configFile) & 0777;
+$owner = fileowner($configFile);
+$group = filegroup($configFile);
+if (file_put_contents($tmp, $contents) === false) {
+    @unlink($tmp);
+    fwrite(STDERR, "Could not write temporary wp-config file.\n");
+    exit(1);
+}
+@chown($tmp, $owner);
+@chgrp($tmp, $group);
+@chmod($tmp, $mode);
+if (!@rename($tmp, $configFile)) {
+    @unlink($tmp);
+    fwrite(STDERR, "Could not replace wp-config.php.\n");
+    exit(1);
+}
+@chmod($configFile, $mode);
+echo "wp-config.php updated.\n";
+PHP
+`, shellQuoteArg(sitePath), string(data))
+}
+
+func renderWPConfigDefineStatusScript(sitePath string, defines []wpConfigDefine) string {
+	patches := make([]wpConfigPatchDefinition, 0, len(defines))
+	for _, define := range defines {
+		patches = append(patches, wpConfigPatchDefinition{Name: define.Name, Value: define.PHPValue, Source: define.Source})
+	}
+	data, _ := json.Marshal(patches)
+	return fmt.Sprintf(`set -eu
+site_path=%s
+config_file="$site_path/wp-config.php"
+if [ ! -f "$config_file" ]; then
+  printf 'wp-config.php not found at %%s\n' "$config_file" >&2
+  exit 1
+fi
+export NF_WP_CONFIG_FILE="$config_file"
+php <<'PHP'
+<?php
+$configFile = getenv('NF_WP_CONFIG_FILE');
+$definitionsJson = <<<'JSON'
+%s
+JSON;
+
+$definitions = json_decode($definitionsJson, true);
+if (!is_array($definitions)) {
+    fwrite(STDERR, "Invalid nf wp-config definitions.\n");
+    exit(1);
+}
+$contents = file_get_contents($configFile);
+if ($contents === false) {
+    fwrite(STDERR, "Could not read wp-config.php.\n");
+    exit(1);
+}
+function nf_wp_config_define_matches($contents, $name) {
+    $pattern = '/define\s*\(\s*[\'\"]' . preg_quote($name, '/') . '[\'\"]\s*,(.*?)\)\s*;/s';
+    $count = preg_match_all($pattern, $contents, $matches, PREG_OFFSET_CAPTURE);
+    if ($count === false) {
+        throw new RuntimeException('Could not inspect wp-config.php define for ' . $name . '.');
+    }
+    return [$count, $matches];
+}
+foreach ($definitions as $definition) {
+    $name = (string) ($definition['name'] ?? '');
+    $value = (string) ($definition['value'] ?? '');
+    $source = (string) ($definition['source'] ?? 'configured value');
+    $status = 'missing';
+    if ($name !== '' && $value !== '') {
+        try {
+            [$matchCount, $matches] = nf_wp_config_define_matches($contents, $name);
+        } catch (RuntimeException $error) {
+            fwrite(STDERR, $error->getMessage() . "\n");
+            exit(1);
+        }
+        if ($matchCount > 1) {
+            $status = 'duplicate';
+        } elseif ($matchCount === 1) {
+            $status = trim($matches[1][0][0]) === $value ? 'matched' : 'different';
+        }
+    }
+    echo $name . "\t" . $source . "\t" . $status . "\n";
+}
+PHP
+`, shellQuoteArg(sitePath), string(data))
+}
+
+func printDefineStatusOutput(output string) {
+	rows := [][]string{{"name", "source", "status"}}
+	for _, line := range strings.Split(strings.TrimSpace(output), "\n") {
+		line = strings.TrimSpace(line)
+		if line == "" {
+			continue
+		}
+		parts := strings.Split(line, "\t")
+		for len(parts) < 3 {
+			parts = append(parts, "")
+		}
+		rows = append(rows, []string{parts[0], parts[1], parts[2]})
+	}
+	if len(rows) == 1 {
+		fmt.Println("No defines configured.")
+		return
+	}
+	fmt.Println(formatTable(rows))
+}
+
+func defineStatusExitCode(output string) int {
+	for _, line := range strings.Split(strings.TrimSpace(output), "\n") {
+		parts := strings.Split(line, "\t")
+		if len(parts) >= 3 && strings.TrimSpace(parts[2]) == "duplicate" {
+			return 1
+		}
+	}
+	return 0
+}
+
+func uniqueStringsPreserveOrder(values []string) []string {
+	seen := map[string]struct{}{}
+	out := make([]string, 0, len(values))
+	for _, value := range values {
+		value = strings.TrimSpace(value)
+		if value == "" {
+			continue
+		}
+		if _, ok := seen[value]; ok {
+			continue
+		}
+		seen[value] = struct{}{}
+		out = append(out, value)
+	}
+	return out
+}

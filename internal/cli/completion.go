@@ -123,6 +123,8 @@ func completeContextCandidates(args []string) []string {
 		return themeCompletionCandidates(args[1:])
 	case "alias":
 		return aliasCompletionCandidates(args[1:])
+	case "define":
+		return defineCompletionCandidates(args[1:])
 	default:
 		return nil
 	}
@@ -199,7 +201,7 @@ func passwordDeriveIdentityCompletionNames(scope string) []string {
 func rootCompletionCandidates() []string {
 	candidates := []string{"init", "provider", "target", "site", "refresh", "domain", "config", "password", "completion", "version", "help"}
 	if projectContextAvailable() {
-		candidates = append(candidates, "remote", "plugin", "env", "theme", "alias")
+		candidates = append(candidates, "remote", "plugin", "env", "theme", "alias", "define")
 	}
 	sort.Strings(candidates)
 	return candidates
@@ -531,6 +533,26 @@ func aliasCompletionCandidates(args []string) []string {
 	}
 }
 
+func defineCompletionCandidates(args []string) []string {
+	if len(args) == 0 {
+		return []string{"list", "ls", "status", "sync", "add", "remove", "rm", "help"}
+	}
+	args[0] = cliCommandAlias(args[0])
+	switch args[0] {
+	case "status", "sync":
+		return projectRemoteCompletionNames()
+	case "remove":
+		return append(projectDefineCompletionNames(), "--for")
+	case "add":
+		if len(args) > 1 && args[len(args)-1] == "--for" {
+			return defineSelectorCompletionNames()
+		}
+		return []string{"--env", "--for"}
+	default:
+		return nil
+	}
+}
+
 func cachedTargetCompletionNames() []string {
 	targets, err := completionCachedTargets()
 	if err != nil {
@@ -698,6 +720,36 @@ func projectThemeCompletionNames() []string {
 	for _, theme := range themes {
 		values = append(values, theme.Slug)
 	}
+	return uniqueSortedStrings(values)
+}
+
+func projectDefineCompletionNames() []string {
+	root, ok := currentNFProjectRoot()
+	if !ok {
+		return nil
+	}
+	metadata, err := loadProjectMetadataOrError(root)
+	if err != nil {
+		return nil
+	}
+	defines, _, err := configuredDefineArray(metadata, false)
+	if err != nil {
+		return nil
+	}
+	values := make([]string, 0, len(defines))
+	for _, raw := range defines {
+		item, _ := raw.(map[string]any)
+		if item == nil {
+			continue
+		}
+		values = append(values, recordValueString(item["name"]))
+	}
+	return uniqueSortedStrings(values)
+}
+
+func defineSelectorCompletionNames() []string {
+	values := []string{"local", "default", "live", "staging"}
+	values = append(values, projectRemoteCompletionNames()...)
 	return uniqueSortedStrings(values)
 }
 

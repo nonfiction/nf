@@ -8,7 +8,7 @@ Use this file for repo shortcuts and learned implementation gotchas. Put durable
 * Executable entrypoint: `cmd/nf/main.go`.
 * CLI dispatcher: `internal/cli.Run`.
 * Primary always-visible command groups: `init`, `provider`, `target`, `site`, `config`, `password`.
-* Project-only command groups: `remote`, `plugin`, `theme`, `env`, `alias`. They appear only when the current repo has `nf.json` next to `.git`.
+* Project-only command groups: `remote`, `plugin`, `theme`, `env`, `alias`, `define`. They appear only when the current repo has `nf.json` next to `.git`.
 * Remote env operations live under `site` (`site list --envs`, `site show <site:env>`, `site shell`, `site wp`, `site cache`, `site repair`, `site snapshot`, `site export`), not as a separate `site env` group.
 * Do not re-add public `nf server ...`, `nf instance ...`, or top-level local env aliases (`nf up/down/logs/reset/info/shell/wp`) unless explicitly requested.
 
@@ -36,6 +36,7 @@ go run ./cmd/nf theme help
 go run ./cmd/nf remote help
 go run ./cmd/nf env help
 go run ./cmd/nf alias help
+go run ./cmd/nf define help
 ```
 
 Provider checks call live APIs when credentials are present:
@@ -109,7 +110,7 @@ Local state is disposable. Provider truth is canonical remotely.
 * `nf site staging status/add/remove` manages optional staging env lifecycle. `rm` is a shorthand for `remove`.
 * `nf site refresh` fans out from cached targets. It must not claim to refresh providers.
 * `nf site cache [site|env]` clears a remote env cache. Site-only refs default to `:live`; Kinsta uses the Kinsta clear-site-cache API; Linode purges the env nginx FastCGI cache directory and runs `wp cache flush`.
-* `nf site repair [site|env]` repairs provider platform files. It previews with `--dry-run`; interactive execution prompts for confirmation; non-interactive execution requires `--execute --yes`. Kinsta repair removes remote `nf-mailpit.php` and restores Kinsta MU plugins when missing. Linode repair refreshes nginx cache snippets/config, the nf Linode cache MU plugin, and the internal env vhost while preserving basic-auth includes; cached external domain vhosts are not rewritten by this command.
+* `nf site repair [site|env]` repairs provider platform files. It previews with `--dry-run`; interactive execution prompts for confirmation; non-interactive execution requires `--execute --yes`. Kinsta repair removes remote `nf-mailpit.php`, restores Kinsta MU plugins when missing, and ensures `KINSTAMU_WHITELABEL` is enabled in `wp-config.php` with an atomic no-backup patch. Linode repair refreshes nginx cache snippets/config, the nf Server Cache MU plugin, and the internal env vhost while preserving basic-auth includes; cached external domain vhosts are not rewritten by this command.
 * `nf site password [site|env] [--wp|--db|--basicauth]` shows only one selected site password. `--wp` is the default. Env refs are accepted for `--db`; use a site ref for `--wp` or `--basicauth`. Linode values are derived; Kinsta DB password output uses the Kinsta SFTP password endpoint.
 * `nf site remove [site]` removes a whole Linode site and deletes its env data.
 * Remote target site discovery is not implemented yet.
@@ -123,11 +124,13 @@ Local state is disposable. Provider truth is canonical remotely.
 * `nf env logs [remote]` tails local Docker WordPress logs with no remote, or tails remote `wp-content/debug.log` over SSH for a configured repo remote.
 * `nf env password [remote] [--wp|--db|--basicauth]` prints only one selected local or remote env password. `--wp` is the default.
 * `nf env push/pull [remote]` defaults to an interactive confirmation before executing remote sync. Use `--dry-run` or `--non-interactive` without `--execute` for preflight-only output. Non-interactive execution requires `--execute --yes`.
+* `nf define list/status/sync/add/remove` manages project `wp-config.php` constants declared in `wordpress.config.defines`. `sync [remote]` patches local or remote `wp-config.php` with a temp file and atomic replace, never persistent `.bak`/dated backups. Status and list output show define names and sources only, never resolved secret values. Duplicate target constants already present in `wp-config.php` are treated as unsafe and block sync/repair until manually resolved.
+* `wordpress.config.defines` in `nf.json` is the desired project `wp-config.php` constant checklist. Entries require `name` and either top-level `value`/`env` for all envs, or `values` keyed by remote name, canonical env id, env name, `local`, or `default`. `nf define add <name> <value>` writes a shared literal; `nf define add <name> --env <VAR>` writes a shared env reference; `--for <selector>` writes selector-specific values and promotes an existing shared value to `values.default`. Never store secret values or license keys directly in `nf.json`; use `env` references and keep the real value in the shell or `~/.config/nf/.env`. Provider-owned constants such as `KINSTAMU_WHITELABEL` are rejected from `nf define`; Kinsta repair manages them.
 * `wordpress.plugins` in `nf.json` is an env bootstrap checklist, not a full lifecycle manager. String entries install from wordpress.org, activate, and enable auto-updates by default; object entries require `slug`, support `source`, `install`, `note`, and `auto_update`, and default `install`, `activate`, and `auto_update` to true. Use `install: false` for manual/documentation-only plugins that nf should check but never install. Use `source: "repo"` for project-specific plugin source directories at `plugins/<slug>/`; local envs bind mount configured repo plugins for live development, while remote installs zip/upload them on demand and clean up temporary artifacts. Use `source: "cache"` for explicit local cached zips under `$NF_DATA_HOME/plugins/<slug>/<slug>.zip`; nf does not silently fall back to cache for wordpress.org plugins.
 
 ## Project-context gotchas
 
-* `nf env ...`, `nf init`, `nf theme ...`, `nf plugin ...`, `nf alias ...`, and `nf remote ...` are repo/local commands.
+* `nf env ...`, `nf init`, `nf theme ...`, `nf plugin ...`, `nf alias ...`, `nf define ...`, and `nf remote ...` are repo/local commands.
 * Project-context commands should be hidden or rejected outside a `.git` repo when they require repo metadata.
 * `nf.json` should store project metadata, local env intent, theme tasks, artifact recipe, and repo remotes only.
 * Never store secrets, generated caches, or global provider inventory in `nf.json`.
@@ -150,7 +153,7 @@ Local state is disposable. Provider truth is canonical remotely.
 * Env-generated files stay under `NF_DATA_HOME` / `~/.local/share/nf/envs/<project-slug>/`.
 * Local snapshot files stay under `NF_DATA_HOME` / `~/.local/share/nf/snapshots/local/<project-slug>/<snapshot-name>/`.
 * Remote snapshot files stay under `NF_DATA_HOME` / `~/.local/share/nf/snapshots/remote/<env-id-slug>-YYYY-MM-DD-HHMMSS/`.
-* `nf env up` should be idempotent: ensure env exists, start Compose, configure Mailpit SMTP, install WordPress if missing, install configured themes, and activate the first configured theme. `--rebuild` rebuilds the generated WordPress image first.
+* `nf env up` should be idempotent: ensure env exists, start Compose, configure Mailpit SMTP, reconcile configured `wp-config.php` defines, install WordPress if missing, install configured themes, and activate the first configured theme. `--rebuild` rebuilds the generated WordPress image first.
 * `nf env reset --rebuild` creates the normal safety snapshot, removes Docker Compose volumes, rebuilds the generated WordPress image, and recreates the env.
 * Local env includes WordPress, MariaDB, Mailpit, and database UI containers. `nf env show` prints Mailpit and prefilled DB URLs.
 * Local env generated WordPress config enables `WP_DEBUG` and `WP_DEBUG_LOG`, disables debug display, and routes local mail through Mailpit.

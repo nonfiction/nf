@@ -37,6 +37,8 @@ Sync includes:
 
 Sync intentionally skips `wp-content/mu-plugins`. MU plugins are target-owned platform files: local Docker owns local-only helpers such as `nf-mailpit.php`, Kinsta owns `kinsta-mu-plugins.php` and its companion directory, and Linode owns nf cache integration. Use `nf site repair <site:env>` to restore provider platform files when an existing env was damaged by older sync behavior.
 
+Sync also does not reconcile `wp-config.php` defines. Use `nf define status [remote]` and `nf define sync [remote]` for configured project constants such as plugin registration keys.
+
 Theme deployment is separate. Use [Themes](themes.md) for theme releases.
 
 After the destination database is imported, `nf` updates the destination URLs, runs search-replace when needed, activates the configured theme when installed, and runs `wp rewrite flush`. This regenerates WordPress rewrite rules without `--hard`. The existing object-cache flush remains a separate later step. A rewrite failure fails the sync and prevents the cache step from being reported as complete.

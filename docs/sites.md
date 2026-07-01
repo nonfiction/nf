@@ -105,7 +105,9 @@ nf site repair client.linode1
 
 `nf site cache [site|env]` clears cache for a remote env. A site-only ref defaults to `:live`. Kinsta uses the provider clear-cache API. Linode purges the env nginx page-cache directory and flushes the WordPress object cache.
 
-`nf site repair [site|env]` repairs provider platform files for an existing env. Use `--dry-run` to preview. Interactive execution prompts for confirmation; non-interactive execution requires `--execute --yes`. It restores Kinsta's required MU plugin when missing, removes local-only `nf-mailpit.php` from remotes, and refreshes Linode cache snippets/vhost wiring plus the nf Linode cache MU plugin.
+`nf site repair [site|env]` repairs provider platform files for an existing env. Use `--dry-run` to preview. Interactive execution prompts for confirmation; non-interactive execution requires `--execute --yes`. It restores Kinsta's required MU plugin when missing, enables Kinsta's unbranded Server Cache UI define, removes local-only `nf-mailpit.php` from remotes, and refreshes Linode cache snippets/vhost wiring plus the nf Server Cache MU plugin.
+
+On Linode, the MU plugin adds a WordPress admin page named `Server Cache`, admin-bar cache controls, buttons for site cache, object cache, and all caches, and an autopurge setting that clears the page cache when published content changes.
 
 ## Handoff Export
 
