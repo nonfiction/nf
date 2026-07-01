@@ -94,6 +94,19 @@ nf env sh production
 
 Repo remotes are covered in [Remotes](remotes.md). For remote WP-CLI, use `nf site wp <site.target:env> -- <cmd>` with the explicit env ref.
 
+## Cache And Platform Repair
+
+```sh
+nf site cache client.linode1
+nf site cache client.linode1:staging
+nf site repair client.linode1 --dry-run
+nf site repair client.linode1
+```
+
+`nf site cache [site|env]` clears cache for a remote env. A site-only ref defaults to `:live`. Kinsta uses the provider clear-cache API. Linode purges the env nginx page-cache directory and flushes the WordPress object cache.
+
+`nf site repair [site|env]` repairs provider platform files for an existing env. Use `--dry-run` to preview. Interactive execution prompts for confirmation; non-interactive execution requires `--execute --yes`. It restores Kinsta's required MU plugin when missing, removes local-only `nf-mailpit.php` from remotes, and refreshes Linode cache snippets/vhost wiring plus the nf Linode cache MU plugin.
+
 ## Handoff Export
 
 ```sh

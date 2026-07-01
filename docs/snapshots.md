@@ -24,7 +24,7 @@ Each snapshot contains:
 * `database.sql.gz`
 * `wp-content.tar.gz`
 
-The `wp-content` archive includes only `uploads/`, `plugins/`, `mu-plugins/`, and `languages/`. It skips themes.
+The `wp-content` archive includes only `uploads/`, `plugins/`, and `languages/`. It skips themes and target-owned `mu-plugins/`.
 
 `nf env snapshot use` creates a safety snapshot named `YYYY-MM-DD-HHMMSS-pre-restore` before restoring the selected snapshot. Add `--yes` to skip the interactive confirmation.
 
@@ -75,6 +75,6 @@ nf env import <source> [--db path] [--source-url url] [--name name] [--dry-run] 
 
 `nf env import` imports into the current project's local env only. It accepts an `nf site export` directory, or a generic WordPress filesystem directory when paired with `--db`.
 
-The import creates an import snapshot, creates the normal pre-restore safety snapshot, restores the database plus `wp-content/uploads`, `plugins`, `mu-plugins`, and `languages`, runs URL search-replace when a source URL is known, activates the configured local theme when installed, and flushes cache.
+The import creates an import snapshot, creates the normal pre-restore safety snapshot, restores the database plus `wp-content/uploads`, `plugins`, and `languages`, runs URL search-replace when a source URL is known, activates the configured local theme when installed, and flushes cache.
 
-It does not import WordPress core or `wp-config.php` into the local env.
+It does not import WordPress core, `wp-config.php`, or target-owned `wp-content/mu-plugins` into the local env.

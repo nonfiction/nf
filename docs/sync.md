@@ -33,8 +33,9 @@ Sync includes:
 * database
 * `wp-content/uploads`
 * `wp-content/plugins`
-* `wp-content/mu-plugins`
 * `wp-content/languages`
+
+Sync intentionally skips `wp-content/mu-plugins`. MU plugins are target-owned platform files: local Docker owns local-only helpers such as `nf-mailpit.php`, Kinsta owns `kinsta-mu-plugins.php` and its companion directory, and Linode owns nf cache integration. Use `nf site repair <site:env>` to restore provider platform files when an existing env was damaged by older sync behavior.
 
 Theme deployment is separate. Use [Themes](themes.md) for theme releases.
 

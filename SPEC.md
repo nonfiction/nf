@@ -250,7 +250,7 @@ nf env ...
 nf alias ...
 ```
 
-Remote env operations stay under `nf site ...` as `nf site list --envs`, `nf site show <site:env>`, `nf site shell <site:env>`, `nf site wp <site:env>`, and `nf site snapshot ...`.
+Remote env operations stay under `nf site ...` as `nf site list --envs`, `nf site show <site:env>`, `nf site shell <site:env>`, `nf site wp <site:env>`, `nf site cache`, `nf site repair`, `nf site snapshot ...`, and `nf site export ...`.
 
 Old public routes intentionally removed:
 
@@ -675,7 +675,7 @@ Snapshots:
 * local env snapshots are stored under `NF_DATA_HOME/snapshots/local/<project-slug>/<snapshot-name>/`
 * remote site snapshots are stored under `NF_DATA_HOME/snapshots/remote/<env-id-slug>-YYYY-MM-DD-HHMMSS/`
 * local and remote snapshots contain `snapshot.json`, `database.sql.gz`, `wp-content.tar.gz`
-* `wp-content.tar.gz` includes uploads/plugins/mu-plugins/languages only
+* `wp-content.tar.gz` includes uploads/plugins/languages only; `wp-content/mu-plugins` are target-owned platform files and are skipped by env push/pull/import/snapshot restore
 * local restore creates a pre-restore safety snapshot
 * remote snapshots are imported into local snapshots before restore; direct restore from remote files is intentionally avoided
 

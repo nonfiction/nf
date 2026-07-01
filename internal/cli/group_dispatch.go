@@ -300,6 +300,13 @@ func runSite(argv []string) int {
 		return cmdSitePassword(needle, scope)
 	case "basicauth":
 		return runSiteBasicAuth(argv[1:])
+	case "repair":
+		envRef, opts, err := parseSiteRepairArgs(argv[1:])
+		if err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			return 1
+		}
+		return cmdSiteRepair(envRef, opts)
 	case "remove":
 		needle, opts, err := parseRemoveSiteArgs(argv[1:])
 		if err != nil {

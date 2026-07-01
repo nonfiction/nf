@@ -409,7 +409,7 @@ func TestGroupedHelpScreensUseIntendedOrder(t *testing.T) {
 		{
 			name:   "site",
 			render: func() string { return captureStdout(t, func() { _ = runSiteHelp() }) },
-			values: []string{"list, ls", "show [site|env]", "refresh", "cache [site|env]", "\n\n  shell, sh <env>", "wp <env> -- <args>", "password [site|env]", "\n\n  snapshot [env|list|remove|prune]", "basicauth <action> [site|env]", "\n\n  add <target> <site>", "staging <action> <site>", "remove, rm [site]", "\nOptions:\n", "--envs", "--json", "--basicauth", "\nAdd Options:\n", "--with-staging", "\nMutation Options:\n", "--dry-run"},
+			values: []string{"list, ls", "show [site|env]", "refresh", "cache [site|env]", "repair [site|env]", "\n\n  shell, sh <env>", "wp <env> -- <args>", "password [site|env]", "\n\n  snapshot [env|list|remove|prune]", "basicauth <action> [site|env]", "\n\n  add <target> <site>", "staging <action> <site>", "remove, rm [site]", "\nOptions:\n", "--envs", "--json", "--basicauth", "\nAdd Options:\n", "--with-staging", "\nMutation Options:\n", "--dry-run"},
 		},
 		{
 			name:   "config",
@@ -622,6 +622,26 @@ func TestRunCompleteSuggestsStaticAndCachedValues(t *testing.T) {
 	})
 	if !strings.Contains(siteCacheOutput, "client-app1-linode\n") || !strings.Contains(siteCacheOutput, "client-app1-linode:live\n") {
 		t.Fatalf("site cache completion = %q, want site and env ids", siteCacheOutput)
+	}
+	siteRepairOutput := captureStdout(t, func() {
+		if got := Run([]string{"__complete", "--", "site", "repair", "client"}); got != 0 {
+			t.Fatalf("Run(__complete site repair) = %d, want 0", got)
+		}
+	})
+	for _, want := range []string{"client-app1-linode\n", "client-app1-linode:live\n"} {
+		if !strings.Contains(siteRepairOutput, want) {
+			t.Fatalf("site repair completion missing %q:\n%s", want, siteRepairOutput)
+		}
+	}
+	siteRepairFlagOutput := captureStdout(t, func() {
+		if got := Run([]string{"__complete", "--", "site", "repair", "client-app1-linode", "--"}); got != 0 {
+			t.Fatalf("Run(__complete site repair --) = %d, want 0", got)
+		}
+	})
+	for _, want := range []string{"--dry-run\n", "--execute\n", "--yes\n", "--non-interactive\n"} {
+		if !strings.Contains(siteRepairFlagOutput, want) {
+			t.Fatalf("site repair flag completion missing %q:\n%s", want, siteRepairFlagOutput)
+		}
 	}
 	siteShOutput := captureStdout(t, func() {
 		if got := Run([]string{"__complete", "--", "site", "sh", "client"}); got != 0 {
@@ -10719,6 +10739,125 @@ func TestRunSiteCachePurgesLinodeCacheAndFlushesWP(t *testing.T) {
 		if !strings.Contains(stagingCommand, want) {
 			t.Fatalf("staging cache command missing %q: %#v", want, commands[1])
 		}
+	}
+}
+
+func TestRunSiteRepairKinstaPlansAndExecutesMUPluginRepair(t *testing.T) {
+	stateDir := t.TempDir()
+	t.Setenv("NF_STATE_HOME", stateDir)
+	if err := state.SaveStateRecords("sites", []map[string]any{{"provider": "kinsta", "site_id": "client-kinsta", "env": "live", "url": "https://www.example.com/", "path": "/www/client/public", "ssh": map[string]any{"host": "203.0.113.10", "port": "12345", "user": "client"}, "kinsta": map[string]any{"site_id": "ksite123", "environment_id": "kenv-live"}}}); err != nil {
+		t.Fatalf("SaveStateRecords(sites) error = %v", err)
+	}
+	var commands [][]string
+	oldRunSSHCommand := runSSHCommandFn
+	runSSHCommandFn = func(args []string) error {
+		commands = append(commands, append([]string(nil), args...))
+		return nil
+	}
+	t.Cleanup(func() { runSSHCommandFn = oldRunSSHCommand })
+
+	dryRunOutput := captureStdout(t, func() {
+		if got := Run([]string{"site", "repair", "client-kinsta", "--dry-run"}); got != 0 {
+			t.Fatalf("Run(site repair dry-run) = %d, want 0", got)
+		}
+	})
+	assertContainsInOrder(t, dryRunOutput, []string{"Site repair plan:", "env:      client-kinsta:live", "provider: kinsta", "path:     /www/client/public", "mode:     dry-run", "remove local-only wp-content/mu-plugins/nf-mailpit.php", "restore Kinsta's required MU plugin"})
+	if len(commands) != 0 {
+		t.Fatalf("dry-run executed SSH commands: %#v", commands)
+	}
+	oldConfirm := siteAddConfirmFn
+	var confirmMessage string
+	siteAddConfirmFn = func(message string, defaultYes bool) (bool, error) {
+		confirmMessage = message
+		return true, nil
+	}
+	t.Cleanup(func() { siteAddConfirmFn = oldConfirm })
+
+	executeOutput := captureStdout(t, func() {
+		if got := Run([]string{"site", "repair", "client-kinsta"}); got != 0 {
+			t.Fatalf("Run(site repair execute) = %d, want 0", got)
+		}
+	})
+	assertContainsInOrder(t, executeOutput, []string{"mode:     execute", "> ssh -p 12345 client@203.0.113.10 '<site repair script>'", "Site repaired."})
+	if confirmMessage != `Repair provider platform files for "client-kinsta:live"?` {
+		t.Fatalf("confirm message = %q", confirmMessage)
+	}
+	if len(commands) != 1 {
+		t.Fatalf("commands len = %d, want 1: %#v", len(commands), commands)
+	}
+	command := strings.Join(commands[0], " ")
+	for _, want := range []string{"ssh -p 12345 client@203.0.113.10", "site_path=/www/client/public", "rm -f \"$mailpit_file\"", kinstaMUPluginsZipURL, "kinsta-mu-plugins.php", "cp -R \"$tmp/extract/kinsta-mu-plugins\" \"$plugin_dir\""} {
+		if !strings.Contains(command, want) {
+			t.Fatalf("kinsta repair command missing %q: %#v", want, commands[0])
+		}
+	}
+}
+
+func TestRunSiteRepairLinodeRewritesInternalVhostWithCache(t *testing.T) {
+	configDir := t.TempDir()
+	stateDir := t.TempDir()
+	t.Setenv("NF_CONFIG_HOME", configDir)
+	t.Setenv("NF_STATE_HOME", stateDir)
+	if err := saveGlobalConfig(map[string]string{"linode_default_user": "nonfiction"}); err != nil {
+		t.Fatalf("saveGlobalConfig() error = %v", err)
+	}
+	if err := state.SaveStateRecords("providers", []map[string]any{{"provider": "linode", "targets": []map[string]any{{"name": "app1-linode", "provider": "linode", "hostname": "app1-linode.nonfiction.dev", "ssh": map[string]any{"user": "nonfiction", "host": "app1-linode.nonfiction.dev"}}}}}); err != nil {
+		t.Fatalf("SaveStateRecords(providers) error = %v", err)
+	}
+	if err := state.SaveStateRecords("sites", []map[string]any{{"provider": "linode", "site_id": "foobar.app1-linode", "env_id": "foobar.app1-linode:live", "name": "foobar", "env": "live", "target": "app1-linode", "hostname": "foobar.app1-linode.nonfiction.dev", "url": "https://foobar.app1-linode.nonfiction.dev", "path": "/var/www/sites/foobar/public", "php_version": "8.3", "domains": []map[string]any{{"name": "www.foobar.com", "role": "primary", "management": "external", "status": "active"}}, "ssh": map[string]any{"user": "nonfiction", "host": "app1-linode.nonfiction.dev", "port": "22"}}}); err != nil {
+		t.Fatalf("SaveStateRecords(sites) error = %v", err)
+	}
+	var commands [][]string
+	oldRunSSHCommand := runSSHCommandFn
+	runSSHCommandFn = func(args []string) error {
+		commands = append(commands, append([]string(nil), args...))
+		return nil
+	}
+	t.Cleanup(func() { runSSHCommandFn = oldRunSSHCommand })
+
+	output := captureStdout(t, func() {
+		if got := Run([]string{"site", "repair", "foobar.app1-linode", "--execute", "--yes", "--non-interactive"}); got != 0 {
+			t.Fatalf("Run(site repair linode) = %d, want 0", got)
+		}
+	})
+	assertContainsInOrder(t, output, []string{"Site repair plan:", "env:      foobar.app1-linode:live", "provider: linode", "target:   app1-linode", "mode:     execute", "install or refresh the nf Linode cache MU plugin", "warning:  cached external domain vhosts are not rewritten", "> ssh -p 22 nonfiction@app1-linode.nonfiction.dev '<sudo site repair script>'", "Site repaired."})
+	if len(commands) != 1 {
+		t.Fatalf("commands len = %d, want 1: %#v", len(commands), commands)
+	}
+	command := strings.Join(commands[0], " ")
+	for _, want := range []string{"sudo bash -c", "site_path=/var/www/sites/foobar/public", "host_name=foobar.app1-linode.nonfiction.dev", "file_slugs=(foobar.app1-linode.live foobar.app1-linode)", "nf_linode_write_cache_snippets", "cache_zone=$(nf_linode_ensure_cache_config \"$site_path\")", "nf_linode_install_cache_mu_plugin \"$site_path\"", "rm -f \"$site_path/wp-content/mu-plugins/nf-mailpit.php\"", "basic_auth_snippet=\"/etc/nginx/snippets/nf-basic-auth-$selected_file_slug.conf\"", "if [ -f \"$basic_auth_snippet\" ]; then printf", "include /etc/nginx/snippets/nf-fastcgi-cache-bypass.conf;", "fastcgi_cache $cache_zone;", "include /etc/nginx/snippets/nf-fastcgi-cache.conf;", "nginx -t", "systemctl reload nginx"} {
+		if !strings.Contains(command, want) {
+			t.Fatalf("linode repair command missing %q: %#v", want, commands[0])
+		}
+	}
+}
+
+func TestRunSiteRepairNonInteractiveRequiresRefAndExecuteYes(t *testing.T) {
+	oldInteractive := siteIsInteractiveFn
+	siteIsInteractiveFn = func() bool { return false }
+	t.Cleanup(func() { siteIsInteractiveFn = oldInteractive })
+
+	stderr := captureStderr(t, func() {
+		if got := Run([]string{"site", "repair", "--non-interactive"}); got != 1 {
+			t.Fatalf("Run(site repair non-interactive no ref) = %d, want 1", got)
+		}
+	})
+	if !strings.Contains(stderr, "site repair requires a site or env ref like site.target or site.target:staging") {
+		t.Fatalf("stderr = %q, want explicit ref error", stderr)
+	}
+
+	stateDir := t.TempDir()
+	t.Setenv("NF_STATE_HOME", stateDir)
+	if err := state.SaveStateRecords("sites", []map[string]any{{"provider": "kinsta", "site_id": "client-kinsta", "env": "live", "url": "https://www.example.com/", "path": "/www/client/public", "ssh": map[string]any{"host": "203.0.113.10", "port": "12345", "user": "client"}}}); err != nil {
+		t.Fatalf("SaveStateRecords(sites) error = %v", err)
+	}
+	stderr = captureStderr(t, func() {
+		if got := Run([]string{"site", "repair", "client-kinsta", "--execute", "--non-interactive"}); got != 1 {
+			t.Fatalf("Run(site repair non-interactive execute without yes) = %d, want 1", got)
+		}
+	})
+	if !strings.Contains(stderr, "Remote execution requires both --execute and --yes in non-interactive mode.") {
+		t.Fatalf("stderr = %q, want execute yes error", stderr)
 	}
 }
 

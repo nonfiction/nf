@@ -246,7 +246,7 @@ func targetAddFlagCandidates() []string {
 
 func siteCompletionCandidates(args []string) []string {
 	if len(args) == 0 {
-		return []string{"list", "ls", "show", "shell", "sh", "wp", "export", "snapshot", "password", "basicauth", "refresh", "cache", "add", "staging", "remove", "rm", "help"}
+		return []string{"list", "ls", "show", "shell", "sh", "wp", "export", "snapshot", "password", "basicauth", "refresh", "cache", "repair", "add", "staging", "remove", "rm", "help"}
 	}
 	args[0] = cliCommandAlias(args[0])
 	switch args[0] {
@@ -259,6 +259,8 @@ func siteCompletionCandidates(args []string) []string {
 		return []string{"--envs"}
 	case "show", "cache":
 		return cachedSiteAndEnvCompletionNames()
+	case "repair":
+		return append(cachedSiteAndEnvCompletionNames(), "--dry-run", "--execute", "--yes", "--non-interactive")
 	case "shell", "wp", "export":
 		return cachedSiteEnvCompletionNames()
 	case "snapshot":
