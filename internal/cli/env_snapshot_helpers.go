@@ -84,7 +84,7 @@ func envSnapshotComposeMount(cfg envConfig) string {
 }
 
 func envSnapshotContentPaths() []string {
-	return []string{"wp-content/uploads", "wp-content/plugins", "wp-content/mu-plugins", "wp-content/languages"}
+	return []string{"wp-content/uploads", "wp-content/plugins", "wp-content/languages"}
 }
 
 func newEnvSnapshotMetadata(cfg envConfig, name string, createdAt time.Time) envSnapshotMetadata {

@@ -1411,6 +1411,7 @@ runcmd:
   - systemctl enable --now mariadb
   - systemctl enable --now fail2ban
   - install -d -o __SSH_USER__ -g www-data -m 2775 /var/www /var/www/nf /var/www/sites /var/www/shared /var/log/nginx/sites /var/lib/nf
+  - install -d -o www-data -g www-data -m 2775 /var/cache/nginx/nf/sites
   - usermod -aG www-data __SSH_USER__
   - if [ -f /root/.ssh/authorized_keys ]; then install -d -o __SSH_USER__ -g __SSH_USER__ -m 0700 /home/__SSH_USER__/.ssh && cp /root/.ssh/authorized_keys /home/__SSH_USER__/.ssh/authorized_keys && chown __SSH_USER__:__SSH_USER__ /home/__SSH_USER__/.ssh/authorized_keys && chmod 0600 /home/__SSH_USER__/.ssh/authorized_keys; fi
   - chown -R __SSH_USER__:www-data /var/www /var/log/nginx/sites

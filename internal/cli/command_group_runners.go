@@ -85,7 +85,8 @@ func runEnvImportHelp() int {
 	fmt.Println("        mu-plugins/")
 	fmt.Println("        languages/")
 	fmt.Println("\nImported paths:")
-	fmt.Println("  database, wp-content/uploads, plugins, mu-plugins, languages")
+	fmt.Println("  database, wp-content/uploads, plugins, languages")
+	fmt.Println("  skips target-specific wp-content/mu-plugins")
 	fmt.Println("\nOptions:")
 	printHelpLines([]helpLine{
 		{"--db <path>", "database dump path when source does not contain a .sql/.sql.gz file"},

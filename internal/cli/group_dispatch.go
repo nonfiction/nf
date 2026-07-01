@@ -181,6 +181,12 @@ func runSite(argv []string) int {
 			return 1
 		}
 		return cmdSiteRefresh()
+	case "cache":
+		envRef, ok := parseSiteCacheArgs(argv[1:])
+		if !ok {
+			return 1
+		}
+		return cmdSiteCache(envRef)
 	case "list":
 		refresh := false
 		listArgs := []string{}

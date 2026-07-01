@@ -198,13 +198,13 @@ func createPreRestoreSnapshot(cfg envConfig) (string, error) {
 func envSnapshotCreateScript(cfg envConfig, name string) string {
 	containerDir := envSnapshotContainerDir(name)
 	wpContentArchive := envSnapshotContainerWpContentArchive(name)
-	excludes := envRepoPluginTarExcludeArgs(cfg)
+	excludes := envMutableWpContentTarExcludeArgs(cfg)
 	return fmt.Sprintf(`set -eu
 mkdir -p "%s"
 wp db export "%s/database.sql"
 gzip -f "%s/database.sql"
 dirs=""
-for dir in wp-content/uploads wp-content/plugins wp-content/mu-plugins wp-content/languages; do
+for dir in wp-content/uploads wp-content/plugins wp-content/languages; do
   if [ -e "/var/www/html/$dir" ]; then
     dirs="$dirs $dir"
   fi
@@ -221,11 +221,11 @@ fi
 func envSnapshotCreateWpContentTransferArchiveScript(cfg envConfig, name string) string {
 	containerDir := envSnapshotContainerDir(name)
 	archive := envSnapshotContainerWpContentTransferArchive(name)
-	excludes := envRepoPluginTarExcludeArgs(cfg)
+	excludes := envMutableWpContentTarExcludeArgs(cfg)
 	return fmt.Sprintf(`set -eu
 mkdir -p "%s"
 dirs=""
-for dir in wp-content/plugins wp-content/mu-plugins wp-content/languages; do
+for dir in wp-content/plugins wp-content/languages; do
   if [ -e "/var/www/html/$dir" ]; then
     dirs="$dirs $dir"
   fi
@@ -257,7 +257,7 @@ func envSnapshotRestoreScriptWithUploads(cfg envConfig, name string, includeUplo
 	databaseArchive := envSnapshotContainerDatabaseArchive(name)
 	wpContentArchive := envSnapshotContainerWpContentArchive(name)
 	repoPlugins := shellQuoteArg(envRepoPluginSlugList(cfg))
-	excludes := envRepoPluginTarExcludeArgs(cfg)
+	excludes := envMutableWpContentTarExcludeArgs(cfg)
 	tmpDir := path.Join(envSnapshotContainerDir(name), ".restore-tmp")
 	uploadsClear := ""
 	uploadsCopy := ""
@@ -290,7 +290,7 @@ if [ -f "%s" ]; then
     [ -d "$source" ] || return 0
     find "$source" -mindepth 1 -maxdepth 1 -exec cp -a {} "$dest"/ \;
   }
-%s  clear_dir_contents /var/www/html/wp-content/mu-plugins
+%s
   clear_dir_contents /var/www/html/wp-content/languages
   mkdir -p /var/www/html/wp-content/plugins
   repo_plugins=%s
@@ -300,7 +300,7 @@ if [ -f "%s" ]; then
     case " $repo_plugins " in *" $base "*) continue ;; esac
     rm -rf "$entry"
   done
-%s  copy_dir_contents "$extract_dir/wp-content/mu-plugins" /var/www/html/wp-content/mu-plugins
+%s
   copy_dir_contents "$extract_dir/wp-content/languages" /var/www/html/wp-content/languages
   copy_dir_contents "$extract_dir/wp-content/plugins" /var/www/html/wp-content/plugins
 fi

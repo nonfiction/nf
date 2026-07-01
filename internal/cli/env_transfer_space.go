@@ -348,7 +348,7 @@ func parseDiskBytes(output []byte) (int64, error) {
 
 func localWordPressTransferEstimateScript(includeUploads bool) string {
 	sql := shellQuoteArg("SELECT COALESCE(SUM(data_length + index_length), 0) FROM information_schema.tables WHERE table_schema = DATABASE()")
-	dirs := "wp-content/plugins wp-content/mu-plugins wp-content/languages"
+	dirs := "wp-content/plugins wp-content/languages"
 	if includeUploads {
 		dirs = "wp-content/uploads " + dirs
 	}
@@ -389,7 +389,7 @@ fi
 func remoteWordPressTransferEstimateScript(target envRemoteSyncTarget, includeUploads bool) string {
 	wpPath := shellQuoteArg(target.WordPressPath)
 	sql := shellQuoteArg("SELECT COALESCE(SUM(data_length + index_length), 0) FROM information_schema.tables WHERE table_schema = DATABASE()")
-	dirs := "wp-content/plugins wp-content/mu-plugins wp-content/languages"
+	dirs := "wp-content/plugins wp-content/languages"
 	if includeUploads {
 		dirs = "wp-content/uploads " + dirs
 	}

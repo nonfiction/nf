@@ -272,7 +272,7 @@ func remoteTransferExportScript(target envRemoteSyncTarget, remoteTmp string) st
 
 func remoteExportScriptWithUploads(target envRemoteSyncTarget, remoteTmp string, includeUploads bool) string {
 	fileOp := remoteFileOpPrefix(target)
-	dirs := "wp-content/plugins wp-content/mu-plugins wp-content/languages"
+	dirs := "wp-content/plugins wp-content/languages"
 	if includeUploads {
 		dirs = "wp-content/uploads " + dirs
 	}
@@ -296,10 +296,10 @@ if [ -n "$dirs" ]; then %star -C %s -czf %s/wp-content.tar.gz $dirs; else %star 
 func remoteImportScript(cfg envConfig, target envRemoteSyncTarget, remoteTmp string) string {
 	fileOp := remoteFileOpPrefix(target)
 	repoPlugins := shellQuoteArg(envRepoPluginSlugList(cfg))
-	excludes := envRepoPluginTarExcludeArgs(cfg)
+	excludes := envMutableWpContentTarExcludeArgs(cfg)
 	chown := ""
 	if target.SudoFileOps {
-		chown = fmt.Sprintf("sudo chown -R www-data:www-data %s/wp-content/plugins %s/wp-content/mu-plugins %s/wp-content/languages 2>/dev/null || true\n", shellQuoteArg(target.WordPressPath), shellQuoteArg(target.WordPressPath), shellQuoteArg(target.WordPressPath))
+		chown = fmt.Sprintf("sudo chown -R www-data:www-data %s/wp-content/plugins %s/wp-content/languages 2>/dev/null || true\n", shellQuoteArg(target.WordPressPath), shellQuoteArg(target.WordPressPath))
 	}
 	return fmt.Sprintf(`set -eu
 if [ -f %s/wp-content.tar.gz ]; then
@@ -317,7 +317,6 @@ if [ -f %s/wp-content.tar.gz ]; then
     %smkdir -p "$dir"
     %sfind "$dir" -mindepth 1 -maxdepth 1 -exec rm -rf {} +
   }
-  clear_dir_contents %s/wp-content/mu-plugins
   clear_dir_contents %s/wp-content/languages
   %smkdir -p %s/wp-content/plugins
   repo_plugins=%s
@@ -329,7 +328,7 @@ if [ -f %s/wp-content.tar.gz ]; then
   done
   %star %s -xzf %s/wp-content.tar.gz -C %s
 fi
-%s`, shellQuoteArg(remoteTmp), fileOp, excludes, shellQuoteArg(remoteTmp), shellQuoteArg(remoteTmp), shellQuoteArg(remoteTmp), target.WPCommand, shellQuoteArg(target.WordPressPath), shellQuoteArg(remoteTmp), fileOp, fileOp, fileOp, shellQuoteArg(target.WordPressPath), shellQuoteArg(target.WordPressPath), fileOp, shellQuoteArg(target.WordPressPath), repoPlugins, shellQuoteArg(target.WordPressPath), shellQuoteArg(target.WordPressPath), shellQuoteArg(target.WordPressPath), fileOp, fileOp, excludes, shellQuoteArg(remoteTmp), shellQuoteArg(target.WordPressPath), chown)
+%s`, shellQuoteArg(remoteTmp), fileOp, excludes, shellQuoteArg(remoteTmp), shellQuoteArg(remoteTmp), shellQuoteArg(remoteTmp), target.WPCommand, shellQuoteArg(target.WordPressPath), shellQuoteArg(remoteTmp), fileOp, fileOp, fileOp, shellQuoteArg(target.WordPressPath), fileOp, shellQuoteArg(target.WordPressPath), repoPlugins, shellQuoteArg(target.WordPressPath), shellQuoteArg(target.WordPressPath), shellQuoteArg(target.WordPressPath), fileOp, fileOp, excludes, shellQuoteArg(remoteTmp), shellQuoteArg(target.WordPressPath), chown)
 }
 
 func remoteWPSearchReplaceLine(target envRemoteSyncTarget, sourceURL, destinationURL string) string {

@@ -2507,6 +2507,7 @@ func renderLinodeDomainRefreshScript(plan siteDomainPlan, art siteDomainLinodeAr
 	b.WriteString("origin_wildcard_tls=")
 	b.WriteString(q(originWildcardTLS))
 	b.WriteByte('\n')
+	b.WriteString(linodeNginxCacheShellFunctions())
 	b.WriteString(`php_version=$(jq -r '.php_version // .php.version // ""' /var/lib/nf/target.json 2>/dev/null || true)
 if [ -z "$php_version" ]; then php_version=`)
 	b.WriteString(q(plan.PHPVersion))
@@ -2518,6 +2519,9 @@ if [ "$origin_wildcard_tls" = "1" ]; then
   cert_ready=1
 elif [ -f "$cert_dir/fullchain.pem" ] && [ -f "$cert_dir/privkey.pem" ]; then cert_ready=1; fi
 basic_auth_snippet="/etc/nginx/snippets/nf-basic-auth-$file_slug.conf"
+nf_linode_write_cache_snippets
+cache_zone=$(nf_linode_ensure_cache_config "$site_path")
+nf_linode_install_cache_mu_plugin "$site_path"
 write_wordpress_block() {
   cat <<WPBLOCK
     root $site_path;
@@ -2527,10 +2531,11 @@ WPBLOCK
   if [ -f "$basic_auth_snippet" ]; then printf '    include %s;\n' "$basic_auth_snippet"; fi
   cat <<WPBLOCK
     include /etc/nginx/snippets/nf-security-headers.conf;
+    include /etc/nginx/snippets/nf-fastcgi-cache-bypass.conf;
     location ^~ /.well-known/acme-challenge/ { default_type text/plain; root /var/www/letsencrypt; }
     include /etc/nginx/snippets/nf-wordpress.conf;
     include /etc/nginx/snippets/nf-static-assets.conf;
-    location ~ \.php$ { include /etc/nginx/snippets/nf-fastcgi-php.conf; fastcgi_pass unix:/run/php/php${php_version}-fpm.sock; }
+    location ~ \.php$ { include /etc/nginx/snippets/nf-fastcgi-php.conf; fastcgi_cache $cache_zone; include /etc/nginx/snippets/nf-fastcgi-cache.conf; fastcgi_pass unix:/run/php/php${php_version}-fpm.sock; }
 WPBLOCK
 }
 write_redirect_block() {

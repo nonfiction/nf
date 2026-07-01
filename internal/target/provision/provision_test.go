@@ -1129,6 +1129,7 @@ func TestCloudInitTemplateIsServerOnly(t *testing.T) {
 		"unattended-upgrades",
 		"fail2ban",
 		"install -d -o ubuntu -g www-data -m 2775 /var/www /var/www/nf /var/www/sites /var/www/shared /var/log/nginx/sites",
+		"install -d -o www-data -g www-data -m 2775 /var/cache/nginx/nf/sites",
 		"hostnamectl set-hostname app1.nonfiction.dev",
 		"mkdir -p /etc/nf",
 		"Managed by nf",

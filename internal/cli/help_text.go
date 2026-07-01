@@ -142,6 +142,7 @@ func runSiteHelp() int {
 		{"list, ls", "list sites or remote envs"},
 		{"show [site|env]", "show a site or remote env"},
 		{"refresh", "refresh local site cache"},
+		{"cache [site|env]", "clear cache for a remote env"},
 		{},
 		{"shell, sh <env>", "shell into a remote env"},
 		{"wp <env> -- <args>", "run wp-cli against a remote env"},

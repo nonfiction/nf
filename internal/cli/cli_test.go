@@ -409,7 +409,7 @@ func TestGroupedHelpScreensUseIntendedOrder(t *testing.T) {
 		{
 			name:   "site",
 			render: func() string { return captureStdout(t, func() { _ = runSiteHelp() }) },
-			values: []string{"list, ls", "show [site|env]", "refresh", "\n\n  shell, sh <env>", "wp <env> -- <args>", "password [site|env]", "\n\n  snapshot [env|list|remove|prune]", "basicauth <action> [site|env]", "\n\n  add <target> <site>", "staging <action> <site>", "remove, rm [site]", "\nOptions:\n", "--envs", "--json", "--basicauth", "\nAdd Options:\n", "--with-staging", "\nMutation Options:\n", "--dry-run"},
+			values: []string{"list, ls", "show [site|env]", "refresh", "cache [site|env]", "\n\n  shell, sh <env>", "wp <env> -- <args>", "password [site|env]", "\n\n  snapshot [env|list|remove|prune]", "basicauth <action> [site|env]", "\n\n  add <target> <site>", "staging <action> <site>", "remove, rm [site]", "\nOptions:\n", "--envs", "--json", "--basicauth", "\nAdd Options:\n", "--with-staging", "\nMutation Options:\n", "--dry-run"},
 		},
 		{
 			name:   "config",
@@ -614,6 +614,14 @@ func TestRunCompleteSuggestsStaticAndCachedValues(t *testing.T) {
 	})
 	if strings.TrimSpace(siteShellOutput) != "client-app1-linode:live" {
 		t.Fatalf("site shell completion = %q, want env id only", siteShellOutput)
+	}
+	siteCacheOutput := captureStdout(t, func() {
+		if got := Run([]string{"__complete", "--", "site", "cache", "client"}); got != 0 {
+			t.Fatalf("Run(__complete site cache) = %d, want 0", got)
+		}
+	})
+	if !strings.Contains(siteCacheOutput, "client-app1-linode\n") || !strings.Contains(siteCacheOutput, "client-app1-linode:live\n") {
+		t.Fatalf("site cache completion = %q, want site and env ids", siteCacheOutput)
 	}
 	siteShOutput := captureStdout(t, func() {
 		if got := Run([]string{"__complete", "--", "site", "sh", "client"}); got != 0 {
@@ -4624,7 +4632,7 @@ func TestRunSiteAddLinodeExecuteRunsSSHAndCachesEnvs(t *testing.T) {
 			t.Fatalf("ssh script missing env id command %q:\n%s", want, sshScript)
 		}
 	}
-	for _, want := range []string{"nf-site-$file_slug", "$file_slug.access.log", "$file_slug.error.log"} {
+	for _, want := range []string{"nf-site-$file_slug", "$file_slug.access.log", "$file_slug.error.log", "nf_linode_write_cache_snippets", "cache_zone=$(nf_linode_ensure_cache_config \"$site_path\")", "wp-content/mu-plugins/nf-linode-cache.php", "include /etc/nginx/snippets/nf-fastcgi-cache-bypass.conf;", "fastcgi_cache $cache_zone;", "include /etc/nginx/snippets/nf-fastcgi-cache.conf;"} {
 		if !strings.Contains(sshScript, want) {
 			t.Fatalf("ssh script missing file slug usage %q:\n%s", want, sshScript)
 		}
@@ -6835,7 +6843,7 @@ func TestRunDomainLinodePrimaryConfiguresVhostsAndCachesPrimary(t *testing.T) {
 		t.Fatalf("buildSiteDomainPlan() error = %v", err)
 	}
 	script := renderLinodeDomainBindingScript(plan)
-	for _, want := range []string{"/usr/local/bin/nf-refresh-domain-www-client-com", "/usr/local/bin/nf-refresh-domain-client-com", "/etc/nginx/sites-available/nf-site-domain-www-client-com", "/etc/nginx/sites-available/nf-site-domain-client-com", "server_name $domain;", "return 301 https://$domain\\$request_uri;", "add_header Cache-Control \"no-store\" always;", "return 302 https://$redirect_target\\$request_uri;", "getent ahosts \"$domain\"", "flock -n -E 75 /run/nf-certbot.lock", "Certbot is already running; timer will retry.", "certbot certonly --non-interactive --agree-tos --webroot", "nf-domain-www-client-com-tls.timer", "nf-domain-client-com-tls.timer", "option update home https://www.client.com", "option update siteurl https://www.client.com", "search-replace \"$old_url\" https://www.client.com --all-tables --skip-columns=guid", "del(.domain_state, .proxy_mode)", ".hostname = $canonical | .url = $url | .primary_domain = $canonical", "client.com", "www.client.com"} {
+	for _, want := range []string{"/usr/local/bin/nf-refresh-domain-www-client-com", "/usr/local/bin/nf-refresh-domain-client-com", "/etc/nginx/sites-available/nf-site-domain-www-client-com", "/etc/nginx/sites-available/nf-site-domain-client-com", "server_name $domain;", "return 301 https://$domain\\$request_uri;", "add_header Cache-Control \"no-store\" always;", "return 302 https://$redirect_target\\$request_uri;", "getent ahosts \"$domain\"", "flock -n -E 75 /run/nf-certbot.lock", "Certbot is already running; timer will retry.", "certbot certonly --non-interactive --agree-tos --webroot", "nf-domain-www-client-com-tls.timer", "nf-domain-client-com-tls.timer", "option update home https://www.client.com", "option update siteurl https://www.client.com", "search-replace \"$old_url\" https://www.client.com --all-tables --skip-columns=guid", "del(.domain_state, .proxy_mode)", ".hostname = $canonical | .url = $url | .primary_domain = $canonical", "nf_linode_write_cache_snippets", "cache_zone=$(nf_linode_ensure_cache_config \"$site_path\")", "wp-content/mu-plugins/nf-linode-cache.php", "fastcgi_cache $cache_zone;", "client.com", "www.client.com"} {
 		if !strings.Contains(script, want) {
 			t.Fatalf("linode domain script missing %q:\n%s", want, script)
 		}
@@ -10470,6 +10478,70 @@ func TestRunSiteShellAndWpRunSSHForKinsta(t *testing.T) {
 	}
 }
 
+func TestRunSiteCacheClearsKinstaSiteCache(t *testing.T) {
+	stateDir := t.TempDir()
+	t.Setenv("NF_STATE_HOME", stateDir)
+	t.Setenv("KINSTA_API_KEY", "kinsta-token")
+	if err := state.SaveStateRecords("sites", []map[string]any{
+		{"provider": "kinsta", "site_id": "client-kinsta", "env": "live", "url": "https://www.example.com/", "path": "/www/client/public", "kinsta": map[string]any{"site_id": "ksite123", "environment_id": "kenv-live"}},
+		{"provider": "kinsta", "site_id": "client-kinsta", "env": "staging", "url": "https://staging.example.com/", "path": "/www/clientstaging/public", "kinsta": map[string]any{"site_id": "ksite123", "environment_id": "kenv-staging"}},
+	}); err != nil {
+		t.Fatalf("SaveStateRecords(sites) error = %v", err)
+	}
+	var clearedEnv string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if got, want := r.Header.Get("Authorization"), "Bearer kinsta-token"; got != want {
+			t.Fatalf("Authorization = %q, want %q", got, want)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		switch {
+		case r.Method == http.MethodPost && r.URL.Path == "/sites/tools/clear-cache":
+			var payload map[string]any
+			if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
+				t.Fatalf("Decode(clear-cache) error = %v", err)
+			}
+			clearedEnv = recordValueString(payload["environment_id"])
+			if clearedEnv != "kenv-live" {
+				t.Fatalf("environment_id = %q, want kenv-live", clearedEnv)
+			}
+			w.WriteHeader(http.StatusAccepted)
+			_ = json.NewEncoder(w).Encode(map[string]any{"operation_id": "cache:clear-kenv-live", "status": 202})
+		case r.Method == http.MethodGet && strings.HasPrefix(r.URL.Path, "/operations/cache:clear-kenv-live"):
+			_ = json.NewEncoder(w).Encode(map[string]any{"operation": map[string]any{"id": "cache:clear-kenv-live", "status": "complete"}})
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	t.Cleanup(server.Close)
+	t.Setenv("KINSTA_BASE_URL", server.URL)
+
+	output := captureStdout(t, func() {
+		if got := Run([]string{"site", "cache", "client-kinsta"}); got != 0 {
+			t.Fatalf("Run(site cache) = %d, want 0", got)
+		}
+	})
+	assertContainsInOrder(t, output, []string{"Site cache preflight:", "site:     client-kinsta", "env:      live", "provider: kinsta", "kinsta env: kenv-live", "action:   clear Kinsta site cache", "Kinsta operation: cache:clear-kenv-live", "Site cache cleared."})
+	if clearedEnv != "kenv-live" {
+		t.Fatalf("cleared env = %q, want kenv-live", clearedEnv)
+	}
+}
+
+func TestRunSiteCacheKinstaMissingEnvironmentID(t *testing.T) {
+	stateDir := t.TempDir()
+	t.Setenv("NF_STATE_HOME", stateDir)
+	if err := state.SaveStateRecords("sites", []map[string]any{{"provider": "kinsta", "site_id": "client-kinsta", "env": "live", "url": "https://www.example.com/"}}); err != nil {
+		t.Fatalf("SaveStateRecords(sites) error = %v", err)
+	}
+	stderr := captureStderr(t, func() {
+		if got := Run([]string{"site", "cache", "client-kinsta"}); got != 1 {
+			t.Fatalf("Run(site cache missing env id) = %d, want 1", got)
+		}
+	})
+	if !strings.Contains(stderr, "Kinsta site env \"client-kinsta:live\" is missing environment_id. Run nf site refresh.") {
+		t.Fatalf("stderr = %q, want missing environment_id guidance", stderr)
+	}
+}
+
 func TestRunSiteShellWithoutEnvPromptsPicker(t *testing.T) {
 	stateDir := t.TempDir()
 	t.Setenv("NF_STATE_HOME", stateDir)
@@ -10591,6 +10663,61 @@ func TestRunSiteShellAndWpRunSSHForLinode(t *testing.T) {
 	for _, want := range []string{"ssh -p 22 nonfiction@app1-linode.nonfiction.dev", "cd /var/www/sites/foobar_staging/public", "sudo -u www-data wp --path=/var/www/sites/foobar_staging/public plugin list"} {
 		if !strings.Contains(wpCommand, want) {
 			t.Fatalf("wp command missing %q: %#v", want, commands[1])
+		}
+	}
+}
+
+func TestRunSiteCachePurgesLinodeCacheAndFlushesWP(t *testing.T) {
+	configDir := t.TempDir()
+	stateDir := t.TempDir()
+	t.Setenv("NF_CONFIG_HOME", configDir)
+	t.Setenv("NF_STATE_HOME", stateDir)
+	if err := saveGlobalConfig(map[string]string{"linode_default_user": "nonfiction"}); err != nil {
+		t.Fatalf("saveGlobalConfig() error = %v", err)
+	}
+	if err := state.SaveStateRecords("providers", []map[string]any{{"provider": "linode", "targets": []map[string]any{{"name": "app1-linode", "provider": "linode", "hostname": "app1-linode.nonfiction.dev", "ssh": map[string]any{"user": "nonfiction", "host": "app1-linode.nonfiction.dev"}}}}}); err != nil {
+		t.Fatalf("SaveStateRecords(providers) error = %v", err)
+	}
+	if err := state.SaveStateRecords("sites", []map[string]any{
+		{"provider": "linode", "site_id": "foobar.app1-linode", "env_id": "foobar.app1-linode:live", "name": "foobar", "env": "live", "target": "app1-linode", "hostname": "foobar.app1-linode.nonfiction.dev", "url": "https://foobar.app1-linode.nonfiction.dev", "path": "/var/www/sites/foobar/public", "ssh": map[string]any{"user": "nonfiction", "host": "app1-linode.nonfiction.dev", "port": "22"}},
+		{"provider": "linode", "site_id": "foobar.app1-linode", "env_id": "foobar.app1-linode:staging", "name": "foobar", "env": "staging", "target": "app1-linode", "hostname": "foobar-staging.app1-linode.nonfiction.dev", "url": "https://foobar-staging.app1-linode.nonfiction.dev", "path": "/var/www/sites/foobar_staging/public", "ssh": map[string]any{"user": "nonfiction", "host": "app1-linode.nonfiction.dev", "port": "22"}},
+	}); err != nil {
+		t.Fatalf("SaveStateRecords(sites) error = %v", err)
+	}
+	var commands [][]string
+	oldRunSSHCommand := runSSHCommandFn
+	runSSHCommandFn = func(args []string) error {
+		commands = append(commands, append([]string(nil), args...))
+		return nil
+	}
+	t.Cleanup(func() { runSSHCommandFn = oldRunSSHCommand })
+
+	liveOutput := captureStdout(t, func() {
+		if got := Run([]string{"site", "cache", "foobar.app1-linode"}); got != 0 {
+			t.Fatalf("Run(site cache live) = %d, want 0", got)
+		}
+	})
+	assertContainsInOrder(t, liveOutput, []string{"Site cache preflight:", "site:     foobar.app1-linode", "env:      live", "provider: linode", "target:   app1-linode", "action:   purge nginx page cache and flush WordPress object cache", "cache:    /var/cache/nginx/nf/sites/foobar", "> ssh -p 22 nonfiction@app1-linode.nonfiction.dev", "Site cache cleared."})
+
+	stagingOutput := captureStdout(t, func() {
+		if got := Run([]string{"site", "cache", "foobar.app1-linode:staging"}); got != 0 {
+			t.Fatalf("Run(site cache staging) = %d, want 0", got)
+		}
+	})
+	assertContainsInOrder(t, stagingOutput, []string{"env:      staging", "cache:    /var/cache/nginx/nf/sites/foobar_staging", "Site cache cleared."})
+	if len(commands) != 2 {
+		t.Fatalf("commands len = %d, want 2: %#v", len(commands), commands)
+	}
+	liveCommand := strings.Join(commands[0], " ")
+	for _, want := range []string{"ssh -p 22 nonfiction@app1-linode.nonfiction.dev", "cache_dir=/var/cache/nginx/nf/sites/foobar", "sudo find \"$cache_dir\" -mindepth 1 -maxdepth 1 -exec rm -rf {} +", "cd /var/www/sites/foobar/public", "sudo -u www-data wp --path=/var/www/sites/foobar/public cache flush"} {
+		if !strings.Contains(liveCommand, want) {
+			t.Fatalf("live cache command missing %q: %#v", want, commands[0])
+		}
+	}
+	stagingCommand := strings.Join(commands[1], " ")
+	for _, want := range []string{"cache_dir=/var/cache/nginx/nf/sites/foobar_staging", "cd /var/www/sites/foobar_staging/public", "sudo -u www-data wp --path=/var/www/sites/foobar_staging/public cache flush"} {
+		if !strings.Contains(stagingCommand, want) {
+			t.Fatalf("staging cache command missing %q: %#v", want, commands[1])
 		}
 	}
 }
@@ -12196,9 +12323,55 @@ func TestRunEnvImportWithoutArgsShowsHelp(t *testing.T) {
 			t.Fatalf("Run(env import) = %d, want 0", got)
 		}
 	})
-	assertContainsInOrder(t, output, []string{"env import", "\nUsage:\n", "nf env import <source>", "\nSource layout:\n", "source/", "database.sql.gz", "wp-content/", "uploads/", "plugins/", "mu-plugins/", "languages/", "\nUploads-only layout:\n", "source/", "database.sql.gz", "uploads/", "\nnf site export layout:\n", "manifest.json", "files/", "Imported paths", "database, wp-content/uploads, plugins, mu-plugins, languages", "\nOptions:\n", "--db <path>", "--source-url <url>", "--dry-run", "--yes"})
+	assertContainsInOrder(t, output, []string{"env import", "\nUsage:\n", "nf env import <source>", "\nSource layout:\n", "source/", "database.sql.gz", "wp-content/", "uploads/", "plugins/", "mu-plugins/", "languages/", "\nUploads-only layout:\n", "source/", "database.sql.gz", "uploads/", "\nnf site export layout:\n", "manifest.json", "files/", "Imported paths", "database, wp-content/uploads, plugins, languages", "skips target-specific wp-content/mu-plugins", "\nOptions:\n", "--db <path>", "--source-url <url>", "--dry-run", "--yes"})
 	if strings.Contains(output, "requires exactly one source path") {
 		t.Fatalf("env import help showed old error:\n%s", output)
+	}
+}
+
+func TestCreateWpContentImportArchiveSkipsMuPlugins(t *testing.T) {
+	source := filepath.Join(t.TempDir(), "files")
+	for _, dir := range []string{
+		filepath.Join(source, "wp-content", "uploads"),
+		filepath.Join(source, "wp-content", "plugins", "classic-editor"),
+		filepath.Join(source, "wp-content", "mu-plugins"),
+		filepath.Join(source, "wp-content", "languages"),
+	} {
+		if err := os.MkdirAll(dir, 0o755); err != nil {
+			t.Fatalf("MkdirAll(%s) error = %v", dir, err)
+		}
+	}
+	files := map[string]string{
+		filepath.Join(source, "wp-content", "uploads", "image.jpg"):                    "image",
+		filepath.Join(source, "wp-content", "plugins", "classic-editor", "plugin.php"): "<?php\n",
+		filepath.Join(source, "wp-content", "mu-plugins", "kinsta-mu-plugins.php"):     "<?php\n",
+		filepath.Join(source, "wp-content", "mu-plugins", "nf-mailpit.php"):            "<?php\n",
+		filepath.Join(source, "wp-content", "languages", "admin-en_CA.mo"):             "language",
+	}
+	for path, content := range files {
+		if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
+			t.Fatalf("WriteFile(%s) error = %v", path, err)
+		}
+	}
+	archivePath := filepath.Join(t.TempDir(), "wp-content.tar.gz")
+	if err := createWpContentImportArchive(source, archivePath); err != nil {
+		t.Fatalf("createWpContentImportArchive() error = %v", err)
+	}
+	extractDir := t.TempDir()
+	if err := extractTarGzArchive(archivePath, extractDir); err != nil {
+		t.Fatalf("extractTarGzArchive() error = %v", err)
+	}
+	for _, want := range []string{
+		filepath.Join(extractDir, "wp-content", "uploads", "image.jpg"),
+		filepath.Join(extractDir, "wp-content", "plugins", "classic-editor", "plugin.php"),
+		filepath.Join(extractDir, "wp-content", "languages", "admin-en_CA.mo"),
+	} {
+		if _, err := os.Stat(want); err != nil {
+			t.Fatalf("expected archive member %s: %v", want, err)
+		}
+	}
+	if _, err := os.Stat(filepath.Join(extractDir, "wp-content", "mu-plugins")); !os.IsNotExist(err) {
+		t.Fatalf("mu-plugins should not be included in env import archive: %v", err)
 	}
 }
 
@@ -13332,12 +13505,12 @@ func TestRemoteImportScriptPreservesRepoPluginDirs(t *testing.T) {
 	cfg := envConfig{RepoPluginMounts: []envPluginMount{{Slug: "agency-credit", Host: "/repo/plugins/agency-credit"}}}
 	target := envRemoteSyncTarget{WordPressPath: "/var/www/sites/client/public", WPCommand: "sudo -u www-data wp", SudoFileOps: true}
 	script := remoteImportScript(cfg, target, "/tmp/nf-push-client")
-	for _, want := range []string{"repo_plugins=agency-credit", "case \" $repo_plugins \" in *\" $base \"*) continue ;; esac", "sudo rm -rf \"$entry\"", "sudo tar --exclude=wp-content/plugins/agency-credit -tzf /tmp/nf-push-client/wp-content.tar.gz >/dev/null", "sudo tar --exclude=wp-content/plugins/agency-credit -xzf /tmp/nf-push-client/wp-content.tar.gz -C /var/www/sites/client/public", "clear_dir_contents /var/www/sites/client/public/wp-content/mu-plugins", "sudo chown -R www-data:www-data /var/www/sites/client/public/wp-content/plugins"} {
+	for _, want := range []string{"repo_plugins=agency-credit", "case \" $repo_plugins \" in *\" $base \"*) continue ;; esac", "sudo rm -rf \"$entry\"", "sudo tar --exclude=wp-content/plugins/agency-credit --exclude=wp-content/mu-plugins --exclude='wp-content/mu-plugins/*' -tzf /tmp/nf-push-client/wp-content.tar.gz >/dev/null", "sudo tar --exclude=wp-content/plugins/agency-credit --exclude=wp-content/mu-plugins --exclude='wp-content/mu-plugins/*' -xzf /tmp/nf-push-client/wp-content.tar.gz -C /var/www/sites/client/public", "sudo chown -R www-data:www-data /var/www/sites/client/public/wp-content/plugins /var/www/sites/client/public/wp-content/languages"} {
 		if !strings.Contains(script, want) {
 			t.Fatalf("remote import script missing %q:\n%s", want, script)
 		}
 	}
-	for _, unwanted := range []string{"wp-content-extract", "copy_dir_contents", "clear_dir_contents /var/www/sites/client/public/wp-content/uploads", "chown -R www-data:www-data /var/www/sites/client/public/wp-content/uploads", "rm -rf /var/www/sites/client/public/wp-content/uploads /var/www/sites/client/public/wp-content/plugins", "rm -rf /var/www/sites/client/public/wp-content/plugins", "tar --no-overwrite-dir"} {
+	for _, unwanted := range []string{"wp-content-extract", "copy_dir_contents", "clear_dir_contents /var/www/sites/client/public/wp-content/uploads", "clear_dir_contents /var/www/sites/client/public/wp-content/mu-plugins", "chown -R www-data:www-data /var/www/sites/client/public/wp-content/uploads", "chown -R www-data:www-data /var/www/sites/client/public/wp-content/mu-plugins", "rm -rf /var/www/sites/client/public/wp-content/uploads /var/www/sites/client/public/wp-content/plugins", "rm -rf /var/www/sites/client/public/wp-content/plugins", "tar --no-overwrite-dir"} {
 		if strings.Contains(script, unwanted) {
 			t.Fatalf("remote import script should not remove repo plugin mount point %q:\n%s", unwanted, script)
 		}
@@ -14316,7 +14489,7 @@ func TestEnvSnapshotHelpersValidateNamesAndRenderMetadata(t *testing.T) {
 	if err != nil {
 		t.Fatalf("envSnapshotMetadataJSON() error = %v", err)
 	}
-	wantJSON := "{\n  \"schema\": 1,\n  \"name\": \"2026-05-28-093012\",\n  \"project_slug\": \"client\",\n  \"created_at\": \"2026-05-28T09:30:12Z\",\n  \"env_path\": \"/data/nf/envs/client\",\n  \"compose_project\": \"nf_client_env\",\n  \"wordpress_url\": \"http://localhost:18432\",\n  \"contents\": {\n    \"database\": \"database.sql.gz\",\n    \"wp_content\": \"wp-content.tar.gz\",\n    \"wp_content_paths\": [\n      \"wp-content/uploads\",\n      \"wp-content/plugins\",\n      \"wp-content/mu-plugins\",\n      \"wp-content/languages\"\n    ]\n  }\n}\n"
+	wantJSON := "{\n  \"schema\": 1,\n  \"name\": \"2026-05-28-093012\",\n  \"project_slug\": \"client\",\n  \"created_at\": \"2026-05-28T09:30:12Z\",\n  \"env_path\": \"/data/nf/envs/client\",\n  \"compose_project\": \"nf_client_env\",\n  \"wordpress_url\": \"http://localhost:18432\",\n  \"contents\": {\n    \"database\": \"database.sql.gz\",\n    \"wp_content\": \"wp-content.tar.gz\",\n    \"wp_content_paths\": [\n      \"wp-content/uploads\",\n      \"wp-content/plugins\",\n      \"wp-content/languages\"\n    ]\n  }\n}\n"
 	if gotJSON != wantJSON {
 		t.Fatalf("envSnapshotMetadataJSON() =\n%s\nwant=\n%s", gotJSON, wantJSON)
 	}
@@ -16053,17 +16226,22 @@ func TestEnvSnapshotScriptsExcludeRepoPluginMounts(t *testing.T) {
 	if !strings.Contains(createScript, "--exclude=wp-content/plugins/client-plugin") {
 		t.Fatalf("snapshot create script missing repo plugin exclude:\n%s", createScript)
 	}
+	if !strings.Contains(createScript, "--exclude=wp-content/mu-plugins") {
+		t.Fatalf("snapshot create script missing mu-plugin exclude:\n%s", createScript)
+	}
+	if strings.Contains(createScript, "for dir in wp-content/uploads wp-content/plugins wp-content/mu-plugins") {
+		t.Fatalf("snapshot create script should not archive mu-plugins as mutable content:\n%s", createScript)
+	}
 	restoreScript := envSnapshotRestoreScript(cfg, "snapshot")
-	for _, want := range []string{"clear_dir_contents /var/www/html/wp-content/uploads", "find \"$dir\" -mindepth 1 -maxdepth 1 -exec rm -rf {} +", "repo_plugins=client-plugin", "case \" $repo_plugins \" in *\" $base \"*) continue", "tar --exclude=wp-content/plugins/client-plugin", "-C \"$extract_dir\"", "copy_dir_contents \"$extract_dir/wp-content/plugins\" /var/www/html/wp-content/plugins", "--exclude=wp-content/plugins/client-plugin"} {
+	for _, want := range []string{"clear_dir_contents /var/www/html/wp-content/uploads", "find \"$dir\" -mindepth 1 -maxdepth 1 -exec rm -rf {} +", "repo_plugins=client-plugin", "case \" $repo_plugins \" in *\" $base \"*) continue", "tar --exclude=wp-content/plugins/client-plugin", "--exclude=wp-content/mu-plugins", "-C \"$extract_dir\"", "copy_dir_contents \"$extract_dir/wp-content/plugins\" /var/www/html/wp-content/plugins", "--exclude=wp-content/plugins/client-plugin"} {
 		if !strings.Contains(restoreScript, want) {
 			t.Fatalf("snapshot restore script missing %q:\n%s", want, restoreScript)
 		}
 	}
-	if strings.Contains(restoreScript, "rm -rf /var/www/html/wp-content/uploads") {
-		t.Fatalf("snapshot restore script should not remove the uploads mount point:\n%s", restoreScript)
-	}
-	if strings.Contains(restoreScript, "rm -rf /var/www/html/wp-content/uploads /var/www/html/wp-content/plugins") {
-		t.Fatalf("snapshot restore script should not remove the whole plugins directory:\n%s", restoreScript)
+	for _, unwanted := range []string{"rm -rf /var/www/html/wp-content/uploads", "rm -rf /var/www/html/wp-content/uploads /var/www/html/wp-content/plugins", "clear_dir_contents /var/www/html/wp-content/mu-plugins", "copy_dir_contents \"$extract_dir/wp-content/mu-plugins\""} {
+		if strings.Contains(restoreScript, unwanted) {
+			t.Fatalf("snapshot restore script should not contain %q:\n%s", unwanted, restoreScript)
+		}
 	}
 	if strings.Contains(restoreScript, "tar --no-overwrite-dir") {
 		t.Fatalf("snapshot restore should extract into temp dir instead of relying on tar directory overwrite behavior:\n%s", restoreScript)

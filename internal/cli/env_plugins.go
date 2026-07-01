@@ -916,6 +916,21 @@ func envRepoPluginTarExcludeArgs(cfg envConfig) string {
 	return strings.Join(parts, " ")
 }
 
+func envTargetOwnedMuPluginTarExcludeArgs() string {
+	return "--exclude=" + shellQuoteArg("wp-content/mu-plugins") + " --exclude=" + shellQuoteArg("wp-content/mu-plugins/*")
+}
+
+func envMutableWpContentTarExcludeArgs(cfg envConfig) string {
+	parts := []string{envRepoPluginTarExcludeArgs(cfg), envTargetOwnedMuPluginTarExcludeArgs()}
+	kept := make([]string, 0, len(parts))
+	for _, part := range parts {
+		if strings.TrimSpace(part) != "" {
+			kept = append(kept, part)
+		}
+	}
+	return strings.Join(kept, " ")
+}
+
 func prepareLocalPluginInstallSources(cfg envConfig, plugins []wordpressPluginSpec) (map[string]string, func(), error) {
 	sources := map[string]string{}
 	if !hasLocalPreparedPluginSource(plugins) {

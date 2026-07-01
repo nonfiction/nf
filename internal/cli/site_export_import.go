@@ -413,7 +413,8 @@ func cmdEnvImport(cfg envConfig, opts envImportOptions) int {
 	}
 	fmt.Printf("  local url:     %s\n", envLocalWordPressURL(cfg))
 	fmt.Printf("  snapshot:      %s\n", normalized)
-	fmt.Println("  imports:       database, wp-content/uploads, plugins, mu-plugins, languages")
+	fmt.Println("  imports:       database, wp-content/uploads, plugins, languages")
+	fmt.Println("  skips:         target-specific wp-content/mu-plugins")
 	if opts.dryRun {
 		fmt.Println("  mode:          dry-run")
 		fmt.Println("No data was changed. Re-run without --dry-run to import into the local env.")
@@ -533,7 +534,7 @@ func createWpContentImportArchive(filesPath, destinationPath string) error {
 	defer gz.Close()
 	writer := tar.NewWriter(gz)
 	defer writer.Close()
-	for _, dir := range []string{"uploads", "plugins", "mu-plugins", "languages"} {
+	for _, dir := range []string{"uploads", "plugins", "languages"} {
 		sourceDir := envImportSourceDir(filesPath, dir)
 		if _, err := os.Stat(sourceDir); err != nil {
 			if os.IsNotExist(err) {
