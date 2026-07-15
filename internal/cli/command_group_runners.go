@@ -196,11 +196,13 @@ func runDefineHelp() int {
 		{"status [remote]", "show local or remote define status"},
 		{"sync [remote]", "sync local or remote wp-config defines"},
 		{},
+		{"add", "open an interactive define wizard"},
 		{"add <name> <value>", "add a literal define to nf.json"},
 		{"add <name> --env <var>", "add an env-backed define to nf.json"},
+		{"remove, rm", "choose and remove a define from nf.json"},
 		{"remove, rm <name>", "remove a define from nf.json"},
 	}, helpSection{"Options", []helpLine{
-		{"--env <name>", "store an environment variable reference instead of a literal value"},
+		{"--env <name>", "read value from a local env/config variable during sync"},
 		{"--for <selector>", "apply the value only for a remote/env selector"},
 	}})
 	return 0

@@ -67,6 +67,9 @@ var (
 	siteDomainPromptStringFn              = ui.PromptString
 	remoteSelectFn                        = ui.Select
 	remotePromptString                    = ui.PromptString
+	defineSelectFn                        = ui.Select
+	definePromptStringFn                  = ui.PromptString
+	defineConfirmFn                       = ui.Confirm
 	passwordDeriveSelectFn                = ui.Select
 	passwordDerivePromptString            = ui.PromptString
 	siteIsInteractiveFn                   = envwizard.IsInteractiveTerminal

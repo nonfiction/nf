@@ -81,17 +81,23 @@ nf define status
 nf define status production
 nf define sync
 nf define sync production
+nf define add
 nf define add SOME_PLUGIN_FEATURE_FLAG true
 nf define add SOME_PLUGIN_LICENSE_KEY --env CLIENT_PLUGIN_LICENSE_KEY
 nf define add WP_ENVIRONMENT_TYPE production --for production
+nf define remove
 nf define remove SOME_PLUGIN_FEATURE_FLAG
 ```
 
-`nf define add` writes shared top-level `value` or `env` entries by default. Add `--for <selector>` only when a value differs for a remote, canonical env id, env name, `local`, or `default`. When a shared entry already exists, adding a selector-specific value promotes the shared entry to `values.default`.
+`nf define add` with no or incomplete arguments opens an interactive wizard. `nf define remove` with no name opens a picker for configured defines. Define names are usually all caps, but nf preserves the exact PHP constant name because plugins may document a specific spelling.
 
-`nf define status` and `nf define list` show define names and sources only; they do not print resolved secret values. `nf define sync` patches `wp-config.php` with an atomic temp-file replace and does not create persistent backup files. Provider-owned constants such as `KINSTAMU_WHITELABEL` are rejected from project defines and are managed by provider repair commands instead.
+`nf define add` writes shared top-level `value` or `env` entries by default. `--env <VAR>` stores only the local env/config variable name in `nf.json`; during `nf define sync`, nf resolves that value from the shell or `~/.config/nf/.env` and writes the real PHP constant value into the target `wp-config.php`. Add `--for <selector>` only when a value differs for a remote, canonical env id, env name, `local`, or `default`. When a shared entry already exists, adding a selector-specific value promotes the shared entry to `values.default`.
 
-If `wp-config.php` already contains duplicate definitions for a configured constant, `nf define status` reports `duplicate` and `nf define sync` refuses to patch the file until the duplicate constants are resolved manually.
+The interactive selector picker intentionally shows only the shared default, `local`, and remotes configured in `nf.json`. Advanced selectors such as `default`, env names, or canonical env ids remain valid when typed explicitly with `--for`.
+
+`nf define status` and `nf define list` show define names and sources only; they do not print resolved secret values. `nf define sync` patches `wp-config.php` with an atomic temp-file replace and does not create persistent backup files. It owns only the `/* nf-managed wp-config defines: begin */` to `/* nf-managed wp-config defines: end */` project block. Removing a define from `nf.json` and running `nf define sync` removes it from that managed block, while manual constants outside the block are left alone. Older per-define `/* nf-managed wp-config defines */` markers are migrated into the block on sync. Provider-owned constants such as `KINSTAMU_WHITELABEL` are rejected from project defines and are managed by provider repair commands instead.
+
+If `wp-config.php` already contains duplicate definitions for a configured constant, or contains that constant outside the nf-managed project block, `nf define status` reports `duplicate` and `nf define sync` refuses to patch the file until the duplicate or manual constant is resolved manually.
 
 Use:
 

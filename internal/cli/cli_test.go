@@ -691,6 +691,19 @@ func TestRunCompleteSuggestsStaticAndCachedValues(t *testing.T) {
 	if strings.TrimSpace(defineRemoveOutput) != "OTGS_INSTALLER_SITE_KEY_WPML" {
 		t.Fatalf("define remove completion = %q, want configured define", defineRemoveOutput)
 	}
+	defineForOutput := captureStdout(t, func() {
+		if got := Run([]string{"__complete", "--", "define", "add", "SOME_PLUGIN_CONSTANT", "true", "--for", ""}); got != 0 {
+			t.Fatalf("Run(__complete define add --for) = %d, want 0", got)
+		}
+	})
+	if strings.TrimSpace(defineForOutput) != "local\nproduction" {
+		t.Fatalf("define --for completion = %q, want local and production", defineForOutput)
+	}
+	for _, notWant := range []string{"default\n", "live\n", "staging\n"} {
+		if strings.Contains(defineForOutput, notWant) {
+			t.Fatalf("define --for completion included generic selector %q:\n%s", notWant, defineForOutput)
+		}
+	}
 
 	sitePasswordOutput := captureStdout(t, func() {
 		if got := Run([]string{"__complete", "--", "site", "password", "client"}); got != 0 {
@@ -11181,9 +11194,15 @@ func TestRenderWPConfigDefineScriptIsAtomicAndDoesNotCreateBackups(t *testing.T)
 		kinstaWhitelabelWPConfigDefine(),
 		{Name: "OTGS_INSTALLER_SITE_KEY_WPML", PHPValue: "'wpml-secret-key'", Source: "env CLIENT_WPML_SITE_KEY", Mode: wpConfigDefineModeForce},
 	})
-	for _, want := range []string{"site_path=/www/client/public", "KINSTAMU_WHITELABEL", "replace_false", "OTGS_INSTALLER_SITE_KEY_WPML", "/* That's all, stop editing! Happy publishing. */", "wp-settings.php", "preg_match_all", "Refusing to manage duplicate wp-config define", "tempnam($dir, '.nf-wp-config-')", "rename($tmp, $configFile)", "fileperms($configFile)", "fileowner($configFile)", "filegroup($configFile)"} {
+	for _, want := range []string{"site_path=/www/client/public", "KINSTAMU_WHITELABEL", "replace_false", "OTGS_INSTALLER_SITE_KEY_WPML", wpConfigProjectBlockBegin, wpConfigProjectBlockEnd, "nf_wp_config_strip_legacy_managed_defines", "/* That's all, stop editing! Happy publishing. */", "wp-settings.php", "preg_match_all", "Refusing to manage duplicate wp-config define", "already exists outside the nf-managed block", "tempnam($dir, '.nf-wp-config-')", "rename($tmp, $configFile)", "fileperms($configFile)", "fileowner($configFile)", "filegroup($configFile)"} {
 		if !strings.Contains(script, want) {
 			t.Fatalf("wp-config script missing %q:\n%s", want, script)
+		}
+	}
+	providerScript := renderWPConfigProviderDefineScript("/www/client/public", []wpConfigDefine{kinstaWhitelabelWPConfigDefine()})
+	for _, want := range []string{wpConfigProviderBlockBegin, wpConfigProviderBlockEnd, "KINSTAMU_WHITELABEL", "provider"} {
+		if !strings.Contains(providerScript, want) {
+			t.Fatalf("wp-config provider script missing %q:\n%s", want, providerScript)
 		}
 	}
 	for _, unwanted := range []string{".bak", "backup"} {
@@ -11199,6 +11218,80 @@ func TestRenderWPConfigDefineScriptIsAtomicAndDoesNotCreateBackups(t *testing.T)
 	}
 	if got := defineStatusExitCode("OTGS_INSTALLER_SITE_KEY_WPML\tenv CLIENT_WPML_SITE_KEY\tduplicate\n"); got != 1 {
 		t.Fatalf("defineStatusExitCode(duplicate) = %d, want 1", got)
+	}
+}
+
+func TestRenderWPConfigDefineScriptMigratesManagedBlocks(t *testing.T) {
+	if _, err := exec.LookPath("php"); err != nil {
+		t.Skip("php not available")
+	}
+	sitePath := t.TempDir()
+	configPath := filepath.Join(sitePath, "wp-config.php")
+	initial := `<?php
+define('MANUAL_KEEP', 'yes');
+
+/* nf-managed wp-config defines */
+define('AGENCY_NAME', 'old agency');
+
+/* nf-managed wp-config defines */
+define('REMOVED_DEFINE', 'remove me');
+
+/* nf-managed wp-config defines: begin */
+define('OLD_BLOCK_DEFINE', 'remove me too');
+/* nf-managed wp-config defines: end */
+
+/* nf-managed provider wp-config defines: begin */
+define('KINSTAMU_WHITELABEL', true);
+/* nf-managed provider wp-config defines: end */
+
+/* That's all, stop editing! Happy publishing. */
+require_once ABSPATH . 'wp-settings.php';
+`
+	if err := os.WriteFile(configPath, []byte(initial), 0644); err != nil {
+		t.Fatalf("WriteFile(wp-config.php) error = %v", err)
+	}
+	runWPConfigScriptForTest(t, renderWPConfigDefineScript(sitePath, []wpConfigDefine{{Name: "AGENCY_NAME", PHPValue: "'new agency'", Source: "literal value", Mode: wpConfigDefineModeForce}}))
+	updatedBytes, err := os.ReadFile(configPath)
+	if err != nil {
+		t.Fatalf("ReadFile(wp-config.php) error = %v", err)
+	}
+	updated := string(updatedBytes)
+	for _, want := range []string{wpConfigProjectBlockBegin, "define('AGENCY_NAME', 'new agency');", wpConfigProjectBlockEnd, "define('MANUAL_KEEP', 'yes');", wpConfigProviderBlockBegin, "define('KINSTAMU_WHITELABEL', true);", wpConfigProviderBlockEnd, "wp-settings.php"} {
+		if !strings.Contains(updated, want) {
+			t.Fatalf("updated wp-config missing %q:\n%s", want, updated)
+		}
+	}
+	for _, notWant := range []string{"REMOVED_DEFINE", "OLD_BLOCK_DEFINE", "old agency", "/* nf-managed wp-config defines */"} {
+		if strings.Contains(updated, notWant) {
+			t.Fatalf("updated wp-config contains %q:\n%s", notWant, updated)
+		}
+	}
+
+	runWPConfigScriptForTest(t, renderWPConfigDefineScript(sitePath, nil))
+	prunedBytes, err := os.ReadFile(configPath)
+	if err != nil {
+		t.Fatalf("ReadFile(wp-config.php pruned) error = %v", err)
+	}
+	pruned := string(prunedBytes)
+	for _, notWant := range []string{wpConfigProjectBlockBegin, "AGENCY_NAME", wpConfigProjectBlockEnd} {
+		if strings.Contains(pruned, notWant) {
+			t.Fatalf("pruned wp-config contains %q:\n%s", notWant, pruned)
+		}
+	}
+	for _, want := range []string{"define('MANUAL_KEEP', 'yes');", wpConfigProviderBlockBegin, "define('KINSTAMU_WHITELABEL', true);", wpConfigProviderBlockEnd} {
+		if !strings.Contains(pruned, want) {
+			t.Fatalf("pruned wp-config missing %q:\n%s", want, pruned)
+		}
+	}
+}
+
+func runWPConfigScriptForTest(t *testing.T, script string) {
+	t.Helper()
+	cmd := exec.Command("sh", "-s")
+	cmd.Stdin = strings.NewReader(script)
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("wp-config script failed: %v\n%s\nscript:\n%s", err, output, script)
 	}
 }
 
@@ -11370,6 +11463,265 @@ func TestRunDefineAddRemoveWritesSharedAndSelectorValues(t *testing.T) {
 	}
 	if got, want := recordValueString(values["default"].(map[string]any)["env"]), "CLIENT_WPML_SITE_KEY"; got != want {
 		t.Fatalf("WPML default env after remove = %q, want %q", got, want)
+	}
+}
+
+func TestRunDefineAddInteractiveWizardWritesEnvSelector(t *testing.T) {
+	root := setupTestNFProjectWithMetadata(t, map[string]any{
+		"version": 1,
+		"project": map[string]any{"slug": "client"},
+		"remotes": map[string]any{"production": "client-kinsta:live"},
+	})
+	oldInteractive := siteIsInteractiveFn
+	oldPrompt := definePromptStringFn
+	oldSelect := defineSelectFn
+	oldConfirm := defineConfirmFn
+	t.Cleanup(func() {
+		siteIsInteractiveFn = oldInteractive
+		definePromptStringFn = oldPrompt
+		defineSelectFn = oldSelect
+		defineConfirmFn = oldConfirm
+	})
+	siteIsInteractiveFn = func() bool { return true }
+	prompts := []string{}
+	selectTitles := []string{}
+	var sourceOptions []ui.SelectOption
+	var selectorOptions []ui.SelectOption
+	confirmPrompt := ""
+	definePromptStringFn = func(prompt, defaultValue string, allowBlank bool) (string, error) {
+		prompts = append(prompts, prompt)
+		switch prompt {
+		case "Define name (usually ALL_CAPS)":
+			return "SomePluginKey", nil
+		case "Local env var name":
+			if defaultValue != "SomePluginKey" {
+				t.Fatalf("Local env var default = %q, want SomePluginKey", defaultValue)
+			}
+			return "CLIENT_PLUGIN_KEY", nil
+		default:
+			t.Fatalf("unexpected prompt %q", prompt)
+			return "", nil
+		}
+	}
+	defineSelectFn = func(title string, options []ui.SelectOption) (string, error) {
+		selectTitles = append(selectTitles, title)
+		switch title {
+		case "Choose value source":
+			sourceOptions = append([]ui.SelectOption(nil), options...)
+			return "env", nil
+		case "Choose where this define applies":
+			selectorOptions = append([]ui.SelectOption(nil), options...)
+			return "production", nil
+		default:
+			t.Fatalf("unexpected select %q", title)
+			return "", nil
+		}
+	}
+	defineConfirmFn = func(prompt string, defaultYes bool) (bool, error) {
+		confirmPrompt = prompt
+		if defaultYes {
+			t.Fatalf("define uppercase confirmation defaultYes = true, want false")
+		}
+		return true, nil
+	}
+
+	output := captureStdout(t, func() {
+		if got := Run([]string{"define", "add"}); got != 0 {
+			t.Fatalf("Run(define add wizard) = %d, want 0", got)
+		}
+	})
+	if !strings.Contains(output, "Added define SomePluginKey for production.") {
+		t.Fatalf("define add wizard output = %q", output)
+	}
+	if !slices.Equal(prompts, []string{"Define name (usually ALL_CAPS)", "Local env var name"}) {
+		t.Fatalf("prompts = %#v", prompts)
+	}
+	if !slices.Equal(selectTitles, []string{"Choose value source", "Choose where this define applies"}) {
+		t.Fatalf("select titles = %#v", selectTitles)
+	}
+	if !strings.Contains(confirmPrompt, "ALL_CAPS") || !strings.Contains(confirmPrompt, "SomePluginKey") {
+		t.Fatalf("uppercase confirmation prompt = %q", confirmPrompt)
+	}
+	if len(sourceOptions) != 2 || sourceOptions[0].Value != "literal" || sourceOptions[1].Value != "env" {
+		t.Fatalf("source options = %#v, want literal/env", sourceOptions)
+	}
+	if !slices.ContainsFunc(selectorOptions, func(option ui.SelectOption) bool { return option.Value == "__all__" && option.Default }) {
+		t.Fatalf("selector options missing shared default: %#v", selectorOptions)
+	}
+	if !slices.ContainsFunc(selectorOptions, func(option ui.SelectOption) bool { return option.Value == "local" }) {
+		t.Fatalf("selector options missing local: %#v", selectorOptions)
+	}
+	if !slices.ContainsFunc(selectorOptions, func(option ui.SelectOption) bool {
+		return option.Value == "production" && option.Label == "production (client-kinsta:live)"
+	}) {
+		t.Fatalf("selector options missing production remote: %#v", selectorOptions)
+	}
+	for _, value := range []string{"default", "live", "staging"} {
+		if slices.ContainsFunc(selectorOptions, func(option ui.SelectOption) bool { return option.Value == value }) {
+			t.Fatalf("selector options included generic selector %q: %#v", value, selectorOptions)
+		}
+	}
+	metadata, err := loadProjectMetadataOrError(root)
+	if err != nil {
+		t.Fatalf("loadProjectMetadataOrError() error = %v", err)
+	}
+	defines := mapMapAtPath(metadata, "wordpress", "config")["defines"].([]any)
+	item := defines[0].(map[string]any)
+	if got, want := recordValueString(item["name"]), "SomePluginKey"; got != want {
+		t.Fatalf("wizard define name = %q, want %q", got, want)
+	}
+	values := item["values"].(map[string]any)
+	if got, want := recordValueString(values["production"].(map[string]any)["env"]), "CLIENT_PLUGIN_KEY"; got != want {
+		t.Fatalf("wizard production env = %q, want %q", got, want)
+	}
+}
+
+func TestRunDefineAddInteractivePromptsForMissingFlagValues(t *testing.T) {
+	root := setupTestNFProjectWithMetadata(t, map[string]any{
+		"version": 1,
+		"project": map[string]any{"slug": "client"},
+		"remotes": map[string]any{"production": "client-kinsta:live"},
+	})
+	oldInteractive := siteIsInteractiveFn
+	oldPrompt := definePromptStringFn
+	oldSelect := defineSelectFn
+	oldConfirm := defineConfirmFn
+	t.Cleanup(func() {
+		siteIsInteractiveFn = oldInteractive
+		definePromptStringFn = oldPrompt
+		defineSelectFn = oldSelect
+		defineConfirmFn = oldConfirm
+	})
+	siteIsInteractiveFn = func() bool { return true }
+	definePromptStringFn = func(prompt, defaultValue string, allowBlank bool) (string, error) {
+		if prompt != "Local env var name" {
+			t.Fatalf("unexpected prompt %q", prompt)
+		}
+		return "CLIENT_SHARED_KEY", nil
+	}
+	defineSelectFn = func(title string, options []ui.SelectOption) (string, error) {
+		if title != "Choose where this define applies" {
+			t.Fatalf("unexpected select %q", title)
+		}
+		return "production", nil
+	}
+	defineConfirmFn = func(prompt string, defaultYes bool) (bool, error) {
+		t.Fatalf("unexpected confirm %q", prompt)
+		return false, nil
+	}
+
+	if got := Run([]string{"define", "add", "SHARED_KEY", "--env"}); got != 0 {
+		t.Fatalf("Run(define add --env) = %d, want 0", got)
+	}
+	if got := Run([]string{"define", "add", "SCOPED_FLAG", "true", "--for"}); got != 0 {
+		t.Fatalf("Run(define add --for) = %d, want 0", got)
+	}
+
+	metadata, err := loadProjectMetadataOrError(root)
+	if err != nil {
+		t.Fatalf("loadProjectMetadataOrError() error = %v", err)
+	}
+	defines := mapMapAtPath(metadata, "wordpress", "config")["defines"].([]any)
+	items := map[string]map[string]any{}
+	for _, raw := range defines {
+		item := raw.(map[string]any)
+		items[recordValueString(item["name"])] = item
+	}
+	if got, want := recordValueString(items["SHARED_KEY"]["env"]), "CLIENT_SHARED_KEY"; got != want {
+		t.Fatalf("SHARED_KEY env = %q, want %q", got, want)
+	}
+	values := items["SCOPED_FLAG"]["values"].(map[string]any)
+	if got, want := values["production"].(map[string]any)["value"], true; got != want {
+		t.Fatalf("SCOPED_FLAG production value = %#v, want %#v", got, want)
+	}
+}
+
+func TestRunDefineAddMissingArgsRequiresInteractiveTerminal(t *testing.T) {
+	setupTestNFProjectWithMetadata(t, map[string]any{
+		"version": 1,
+		"project": map[string]any{"slug": "client"},
+	})
+	oldInteractive := siteIsInteractiveFn
+	siteIsInteractiveFn = func() bool { return false }
+	t.Cleanup(func() { siteIsInteractiveFn = oldInteractive })
+
+	stderr := captureStderr(t, func() {
+		if got := Run([]string{"define", "add"}); got != 1 {
+			t.Fatalf("Run(define add non-interactive) = %d, want 1", got)
+		}
+	})
+	if !strings.Contains(stderr, "define add requires a name and value, or a name with --env") {
+		t.Fatalf("stderr = %q", stderr)
+	}
+}
+
+func TestRunDefineRemoveWithoutArgUsesPicker(t *testing.T) {
+	root := setupTestNFProjectWithMetadata(t, map[string]any{
+		"version": 1,
+		"project": map[string]any{"slug": "client"},
+		"wordpress": map[string]any{"config": map[string]any{"defines": []any{
+			map[string]any{"name": "AGENCY_NAME", "value": "nonfiction studios"},
+			map[string]any{"name": "OTGS_INSTALLER_SITE_KEY_WPML", "env": "CLIENT_WPML_SITE_KEY"},
+		}}},
+	})
+	oldInteractive := siteIsInteractiveFn
+	oldSelect := defineSelectFn
+	t.Cleanup(func() {
+		siteIsInteractiveFn = oldInteractive
+		defineSelectFn = oldSelect
+	})
+	siteIsInteractiveFn = func() bool { return true }
+	var selectOptions []ui.SelectOption
+	defineSelectFn = func(title string, options []ui.SelectOption) (string, error) {
+		if title != "Choose a define to remove" {
+			t.Fatalf("unexpected select %q", title)
+		}
+		selectOptions = append([]ui.SelectOption(nil), options...)
+		return "AGENCY_NAME", nil
+	}
+
+	output := captureStdout(t, func() {
+		if got := Run([]string{"define", "rm"}); got != 0 {
+			t.Fatalf("Run(define rm picker) = %d, want 0", got)
+		}
+	})
+	if !strings.Contains(output, "Removed define AGENCY_NAME.") {
+		t.Fatalf("define rm picker output = %q", output)
+	}
+	if !slices.Equal(selectOptions, []ui.SelectOption{{Value: "AGENCY_NAME", Label: "AGENCY_NAME"}, {Value: "OTGS_INSTALLER_SITE_KEY_WPML", Label: "OTGS_INSTALLER_SITE_KEY_WPML"}}) {
+		t.Fatalf("define remove picker options = %#v", selectOptions)
+	}
+	metadata, err := loadProjectMetadataOrError(root)
+	if err != nil {
+		t.Fatalf("loadProjectMetadataOrError() error = %v", err)
+	}
+	defines := mapMapAtPath(metadata, "wordpress", "config")["defines"].([]any)
+	if len(defines) != 1 {
+		t.Fatalf("defines after picker remove = %#v, want one define", defines)
+	}
+	item := defines[0].(map[string]any)
+	if got, want := recordValueString(item["name"]), "OTGS_INSTALLER_SITE_KEY_WPML"; got != want {
+		t.Fatalf("remaining define = %q, want %q", got, want)
+	}
+}
+
+func TestRunDefineRemoveWithoutArgRequiresInteractiveTerminal(t *testing.T) {
+	setupTestNFProjectWithMetadata(t, map[string]any{
+		"version":   1,
+		"project":   map[string]any{"slug": "client"},
+		"wordpress": map[string]any{"config": map[string]any{"defines": []any{map[string]any{"name": "AGENCY_NAME", "value": "nonfiction studios"}}}},
+	})
+	oldInteractive := siteIsInteractiveFn
+	siteIsInteractiveFn = func() bool { return false }
+	t.Cleanup(func() { siteIsInteractiveFn = oldInteractive })
+
+	stderr := captureStderr(t, func() {
+		if got := Run([]string{"define", "remove"}); got != 1 {
+			t.Fatalf("Run(define remove non-interactive) = %d, want 1", got)
+		}
+	})
+	if !strings.Contains(stderr, "define remove requires exactly one name") {
+		t.Fatalf("stderr = %q", stderr)
 	}
 }
 
@@ -13060,7 +13412,10 @@ func TestRunEnvHelpShowsCommandsWithoutShortcuts(t *testing.T) {
 
 func TestRunDefineHelpShowsCommands(t *testing.T) {
 	output := captureStdout(t, func() { _ = runDefineHelp() })
-	assertContainsInOrder(t, output, []string{"define", "list, ls", "status [remote]", "sync [remote]", "add <name> <value>", "add <name> --env <var>", "remove, rm <name>", "\nOptions:\n", "--env <name>", "--for <selector>"})
+	assertContainsInOrder(t, output, []string{"define", "list, ls", "status [remote]", "sync [remote]", "add", "add <name> <value>", "add <name> --env <var>", "remove, rm", "remove, rm <name>", "\nOptions:\n", "--env <name>", "--for <selector>"})
+	if !strings.Contains(output, "read value from a local env/config variable during sync") {
+		t.Fatalf("define help missing local env wording:\n%s", output)
+	}
 }
 
 func TestRunEnvImportWithoutArgsShowsHelp(t *testing.T) {

@@ -12,17 +12,37 @@ import (
 
 	"github.com/nonfiction/nf/internal/config"
 	"github.com/nonfiction/nf/internal/envwizard"
+	"github.com/nonfiction/nf/internal/ui"
 )
 
 const (
 	wpConfigDefineModeForce        = "force"
 	wpConfigDefineModeReplaceFalse = "replace_false"
+	defineAddValueSourceLiteral    = "literal"
+	defineAddValueSourceEnv        = "env"
+	defineAddSelectorAll           = "__all__"
+	defineAddSelectorCustom        = "__custom__"
+	wpConfigProjectBlockBegin      = "/* nf-managed wp-config defines: begin */"
+	wpConfigProjectBlockEnd        = "/* nf-managed wp-config defines: end */"
+	wpConfigProviderBlockBegin     = "/* nf-managed provider wp-config defines: begin */"
+	wpConfigProviderBlockEnd       = "/* nf-managed provider wp-config defines: end */"
+	wpConfigLegacyModeProject      = "project"
+	wpConfigLegacyModeProvider     = "provider"
 )
 
 var wpConfigDefineNamePattern = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*$`)
 
 var providerOwnedWPConfigDefines = map[string]string{
 	"KINSTAMU_WHITELABEL": "Kinsta whitelabel is managed by nf site repair",
+}
+
+func providerOwnedWPConfigDefineNames() []string {
+	names := make([]string, 0, len(providerOwnedWPConfigDefines))
+	for name := range providerOwnedWPConfigDefines {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	return names
 }
 
 type wpConfigDefine struct {
@@ -50,6 +70,23 @@ type defineValueSpec struct {
 	Env   string
 	Value any
 	IsEnv bool
+}
+
+type defineAddPartial struct {
+	Positionals     []string
+	EnvName         string
+	EnvSet          bool
+	EnvMissing      bool
+	Selector        string
+	SelectorSet     bool
+	SelectorMissing bool
+}
+
+type defineRemovePartial struct {
+	Positionals     []string
+	Selector        string
+	SelectorSet     bool
+	SelectorMissing bool
 }
 
 func runDefine(argv []string) int {
@@ -236,8 +273,7 @@ func cmdDefineSync(root string, metadata map[string]any, remoteName string) int 
 func cmdDefineSyncLocal(cfg envConfig, defines []wpConfigDefine) int {
 	fmt.Println("Define sync:")
 	if len(defines) == 0 {
-		fmt.Println("No defines configured for local.")
-		return 0
+		fmt.Println("No defines configured for local; syncing removes any nf-managed project define block.")
 	}
 	if err := ensureManagedEnv(cfg); err != nil {
 		fmt.Fprintln(os.Stderr, err)
@@ -263,8 +299,7 @@ func cmdDefineSyncRemote(target envRemoteSyncTarget, defines []wpConfigDefine) i
 	fmt.Println("Define sync:")
 	printDefineRemoteHeader(target)
 	if len(defines) == 0 {
-		fmt.Printf("No defines configured for %s.\n", target.RemoteName)
-		return 0
+		fmt.Printf("No defines configured for %s; syncing removes any nf-managed project define block.\n", target.RemoteName)
 	}
 	script := renderWPConfigDefineScript(target.WordPressPath, defines)
 	args := remoteDefineStdinArgs(target)
@@ -278,7 +313,7 @@ func cmdDefineSyncRemote(target envRemoteSyncTarget, defines []wpConfigDefine) i
 }
 
 func cmdDefineAdd(root string, metadata map[string]any, args []string) int {
-	name, selector, spec, err := parseDefineAddArgs(args)
+	name, selector, spec, err := resolveDefineAddArgs(metadata, args)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		return 1
@@ -300,7 +335,7 @@ func cmdDefineAdd(root string, metadata map[string]any, args []string) int {
 }
 
 func cmdDefineRemove(root string, metadata map[string]any, args []string) int {
-	name, selector, err := parseDefineRemoveArgs(args)
+	name, selector, err := resolveDefineRemoveArgs(metadata, args)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		return 1
@@ -322,89 +357,361 @@ func cmdDefineRemove(root string, metadata map[string]any, args []string) int {
 }
 
 func parseDefineAddArgs(args []string) (string, string, defineValueSpec, error) {
-	positionals := []string{}
-	selector := ""
-	envName := ""
+	partial, err := parseDefineAddPartial(args)
+	if err != nil {
+		return "", "", defineValueSpec{}, err
+	}
+	return strictDefineAddArgs(partial)
+}
+
+func resolveDefineAddArgs(metadata map[string]any, args []string) (string, string, defineValueSpec, error) {
+	partial, err := parseDefineAddPartial(args)
+	if err != nil {
+		return "", "", defineValueSpec{}, err
+	}
+	name, selector, spec, err := strictDefineAddArgs(partial)
+	if err == nil {
+		return name, selector, spec, nil
+	}
+	if !siteIsInteractiveFn() {
+		return "", "", defineValueSpec{}, err
+	}
+	return promptDefineAddArgs(metadata, partial)
+}
+
+func parseDefineAddPartial(args []string) (defineAddPartial, error) {
+	partial := defineAddPartial{Positionals: []string{}}
 	for i := 0; i < len(args); i++ {
 		arg := args[i]
 		switch arg {
 		case "--env":
-			if envName != "" {
-				return "", "", defineValueSpec{}, fmt.Errorf("define add accepts --env only once")
+			if partial.EnvSet {
+				return partial, fmt.Errorf("define add accepts --env only once")
 			}
+			partial.EnvSet = true
 			if i+1 >= len(args) || strings.HasPrefix(args[i+1], "-") {
-				return "", "", defineValueSpec{}, fmt.Errorf("define add --env requires an environment variable name")
+				partial.EnvMissing = true
+				continue
 			}
-			envName = strings.TrimSpace(args[i+1])
+			partial.EnvName = strings.TrimSpace(args[i+1])
 			i++
 		case "--for":
-			if selector != "" {
-				return "", "", defineValueSpec{}, fmt.Errorf("define add accepts --for only once")
+			if partial.SelectorSet {
+				return partial, fmt.Errorf("define add accepts --for only once")
 			}
+			partial.SelectorSet = true
 			if i+1 >= len(args) || strings.HasPrefix(args[i+1], "-") {
-				return "", "", defineValueSpec{}, fmt.Errorf("define add --for requires a selector")
+				partial.SelectorMissing = true
+				continue
 			}
-			selector = strings.TrimSpace(args[i+1])
+			partial.Selector = strings.TrimSpace(args[i+1])
 			i++
 		default:
 			if strings.HasPrefix(arg, "-") {
-				return "", "", defineValueSpec{}, fmt.Errorf("unknown define add flag: %s", arg)
+				return partial, fmt.Errorf("unknown define add flag: %s", arg)
 			}
-			positionals = append(positionals, arg)
+			partial.Positionals = append(partial.Positionals, arg)
 		}
 	}
-	if envName != "" && len(positionals) != 1 {
+	return partial, nil
+}
+
+func strictDefineAddArgs(partial defineAddPartial) (string, string, defineValueSpec, error) {
+	if partial.EnvSet && partial.EnvMissing {
+		return "", "", defineValueSpec{}, fmt.Errorf("define add --env requires an environment variable name")
+	}
+	if partial.SelectorSet && partial.SelectorMissing {
+		return "", "", defineValueSpec{}, fmt.Errorf("define add --for requires a selector")
+	}
+	if partial.EnvSet && len(partial.Positionals) != 1 {
 		return "", "", defineValueSpec{}, fmt.Errorf("define add with --env requires exactly one name")
 	}
-	if envName == "" && len(positionals) != 2 {
+	if !partial.EnvSet && len(partial.Positionals) != 2 {
 		return "", "", defineValueSpec{}, fmt.Errorf("define add requires a name and value, or a name with --env")
 	}
-	name := strings.TrimSpace(positionals[0])
+	name := strings.TrimSpace(partial.Positionals[0])
 	if err := validateProjectDefineName(name); err != nil {
 		return "", "", defineValueSpec{}, err
 	}
-	if selector != "" && strings.TrimSpace(selector) == "" {
+	selector := strings.TrimSpace(partial.Selector)
+	if partial.SelectorSet && selector == "" {
 		return "", "", defineValueSpec{}, fmt.Errorf("define add --for requires a selector")
 	}
-	if envName != "" {
+	if partial.EnvSet {
+		envName := strings.TrimSpace(partial.EnvName)
 		if err := validateDefineEnvName(envName); err != nil {
 			return "", "", defineValueSpec{}, err
 		}
 		return name, selector, defineValueSpec{Env: envName, IsEnv: true}, nil
 	}
-	return name, selector, defineValueSpec{Value: parseDefineCLIValue(positionals[1])}, nil
+	return name, selector, defineValueSpec{Value: parseDefineCLIValue(partial.Positionals[1])}, nil
+}
+
+func promptDefineAddArgs(metadata map[string]any, partial defineAddPartial) (string, string, defineValueSpec, error) {
+	if len(partial.Positionals) > 2 || (partial.EnvSet && len(partial.Positionals) > 1) {
+		return strictDefineAddArgs(partial)
+	}
+	name := ""
+	if len(partial.Positionals) > 0 {
+		name = strings.TrimSpace(partial.Positionals[0])
+	} else {
+		prompted, err := definePromptStringFn("Define name (usually ALL_CAPS)", "", false)
+		if err != nil {
+			return "", "", defineValueSpec{}, err
+		}
+		name = strings.TrimSpace(prompted)
+	}
+	if err := validateProjectDefineName(name); err != nil {
+		return "", "", defineValueSpec{}, err
+	}
+	if !isAllCapsDefineName(name) {
+		confirmed, err := defineConfirmFn(fmt.Sprintf("Define names are normally ALL_CAPS. Use %q exactly?", name), false)
+		if err != nil {
+			return "", "", defineValueSpec{}, err
+		}
+		if !confirmed {
+			return "", "", defineValueSpec{}, fmt.Errorf("define add cancelled")
+		}
+	}
+
+	source := defineAddValueSourceLiteral
+	if partial.EnvSet {
+		source = defineAddValueSourceEnv
+	} else if len(partial.Positionals) < 2 {
+		selected, err := defineSelectFn("Choose value source", defineAddValueSourceOptions())
+		if err != nil {
+			return "", "", defineValueSpec{}, err
+		}
+		source = selected
+	}
+
+	var spec defineValueSpec
+	switch source {
+	case defineAddValueSourceEnv:
+		envName := strings.TrimSpace(partial.EnvName)
+		if envName == "" {
+			prompted, err := definePromptStringFn("Local env var name", name, false)
+			if err != nil {
+				return "", "", defineValueSpec{}, err
+			}
+			envName = strings.TrimSpace(prompted)
+		}
+		if err := validateDefineEnvName(envName); err != nil {
+			return "", "", defineValueSpec{}, err
+		}
+		spec = defineValueSpec{Env: envName, IsEnv: true}
+	case defineAddValueSourceLiteral:
+		value := ""
+		if len(partial.Positionals) >= 2 {
+			value = partial.Positionals[1]
+		} else {
+			prompted, err := definePromptStringFn("Define value", "", true)
+			if err != nil {
+				return "", "", defineValueSpec{}, err
+			}
+			value = prompted
+		}
+		spec = defineValueSpec{Value: parseDefineCLIValue(value)}
+	default:
+		return "", "", defineValueSpec{}, fmt.Errorf("unsupported define value source")
+	}
+
+	selector := strings.TrimSpace(partial.Selector)
+	if partial.SelectorSet && (partial.SelectorMissing || selector == "") {
+		selected, err := promptDefineSelector(metadata)
+		if err != nil {
+			return "", "", defineValueSpec{}, err
+		}
+		selector = selected
+	} else if !partial.SelectorSet && len(partial.Positionals) < 2 && !partial.EnvSet {
+		selected, err := promptDefineSelector(metadata)
+		if err != nil {
+			return "", "", defineValueSpec{}, err
+		}
+		selector = selected
+	}
+	return name, selector, spec, nil
+}
+
+func defineAddValueSourceOptions() []ui.SelectOption {
+	return []ui.SelectOption{
+		{Value: defineAddValueSourceLiteral, Label: "Literal value stored in nf.json", Default: true},
+		{Value: defineAddValueSourceEnv, Label: "Local env var resolved by nf during sync"},
+	}
+}
+
+func promptDefineSelector(metadata map[string]any) (string, error) {
+	selected, err := defineSelectFn("Choose where this define applies", defineSelectorOptions(metadata))
+	if err != nil {
+		return "", err
+	}
+	switch selected {
+	case defineAddSelectorAll:
+		return "", nil
+	case defineAddSelectorCustom:
+		prompted, err := definePromptStringFn("Define selector", "", false)
+		if err != nil {
+			return "", err
+		}
+		selector := strings.TrimSpace(prompted)
+		if selector == "" {
+			return "", fmt.Errorf("define add --for requires a selector")
+		}
+		return selector, nil
+	default:
+		return strings.TrimSpace(selected), nil
+	}
+}
+
+func defineSelectorOptions(metadata map[string]any) []ui.SelectOption {
+	options := []ui.SelectOption{{Value: defineAddSelectorAll, Label: "All environments (shared default)", Default: true}}
+	options = append(options, ui.SelectOption{Value: "local", Label: "local"})
+	remotes, err := projectRemotes(metadata, false)
+	if err == nil {
+		names := make([]string, 0, len(remotes))
+		for name := range remotes {
+			names = append(names, name)
+		}
+		sort.Strings(names)
+		seen := map[string]bool{}
+		for _, option := range options {
+			seen[option.Value] = true
+		}
+		for _, name := range names {
+			if !seen[name] {
+				label := name
+				if remoteRef := strings.TrimSpace(recordValueString(remotes[name])); remoteRef != "" {
+					label += " (" + remoteRef + ")"
+				}
+				options = append(options, ui.SelectOption{Value: name, Label: label})
+			}
+		}
+	}
+	options = append(options, ui.SelectOption{Value: defineAddSelectorCustom, Label: "Custom selector..."})
+	return options
+}
+
+func isAllCapsDefineName(name string) bool {
+	return name == strings.ToUpper(name)
 }
 
 func parseDefineRemoveArgs(args []string) (string, string, error) {
-	positionals := []string{}
-	selector := ""
+	partial, err := parseDefineRemovePartial(args)
+	if err != nil {
+		return "", "", err
+	}
+	return strictDefineRemoveArgs(partial)
+}
+
+func resolveDefineRemoveArgs(metadata map[string]any, args []string) (string, string, error) {
+	partial, err := parseDefineRemovePartial(args)
+	if err != nil {
+		return "", "", err
+	}
+	name, selector, err := strictDefineRemoveArgs(partial)
+	if err == nil {
+		return name, selector, nil
+	}
+	if !siteIsInteractiveFn() {
+		return "", "", err
+	}
+	return promptDefineRemoveArgs(metadata, partial)
+}
+
+func parseDefineRemovePartial(args []string) (defineRemovePartial, error) {
+	partial := defineRemovePartial{Positionals: []string{}}
 	for i := 0; i < len(args); i++ {
 		arg := args[i]
 		switch arg {
 		case "--for":
-			if selector != "" {
-				return "", "", fmt.Errorf("define remove accepts --for only once")
+			if partial.SelectorSet {
+				return partial, fmt.Errorf("define remove accepts --for only once")
 			}
+			partial.SelectorSet = true
 			if i+1 >= len(args) || strings.HasPrefix(args[i+1], "-") {
-				return "", "", fmt.Errorf("define remove --for requires a selector")
+				partial.SelectorMissing = true
+				continue
 			}
-			selector = strings.TrimSpace(args[i+1])
+			partial.Selector = strings.TrimSpace(args[i+1])
 			i++
 		default:
 			if strings.HasPrefix(arg, "-") {
-				return "", "", fmt.Errorf("unknown define remove flag: %s", arg)
+				return partial, fmt.Errorf("unknown define remove flag: %s", arg)
 			}
-			positionals = append(positionals, arg)
+			partial.Positionals = append(partial.Positionals, arg)
 		}
 	}
-	if len(positionals) != 1 {
+	return partial, nil
+}
+
+func strictDefineRemoveArgs(partial defineRemovePartial) (string, string, error) {
+	if partial.SelectorSet && partial.SelectorMissing {
+		return "", "", fmt.Errorf("define remove --for requires a selector")
+	}
+	if len(partial.Positionals) != 1 {
 		return "", "", fmt.Errorf("define remove requires exactly one name")
 	}
-	name := strings.TrimSpace(positionals[0])
+	name := strings.TrimSpace(partial.Positionals[0])
 	if err := validateDefineName(name); err != nil {
 		return "", "", err
 	}
+	selector := strings.TrimSpace(partial.Selector)
+	if partial.SelectorSet && selector == "" {
+		return "", "", fmt.Errorf("define remove --for requires a selector")
+	}
 	return name, selector, nil
+}
+
+func promptDefineRemoveArgs(metadata map[string]any, partial defineRemovePartial) (string, string, error) {
+	if len(partial.Positionals) > 1 {
+		return strictDefineRemoveArgs(partial)
+	}
+	name := ""
+	if len(partial.Positionals) == 1 {
+		name = strings.TrimSpace(partial.Positionals[0])
+	} else {
+		selected, err := defineSelectFn("Choose a define to remove", configuredDefineNameOptions(metadata))
+		if err != nil {
+			return "", "", err
+		}
+		name = strings.TrimSpace(selected)
+	}
+	if err := validateDefineName(name); err != nil {
+		return "", "", err
+	}
+	selector := strings.TrimSpace(partial.Selector)
+	if partial.SelectorSet && (partial.SelectorMissing || selector == "") {
+		selected, err := promptDefineSelector(metadata)
+		if err != nil {
+			return "", "", err
+		}
+		selector = selected
+	}
+	return name, selector, nil
+}
+
+func configuredDefineNameOptions(metadata map[string]any) []ui.SelectOption {
+	defines, _, err := configuredDefineArray(metadata, false)
+	if err != nil {
+		return nil
+	}
+	names := make([]string, 0, len(defines))
+	for _, raw := range defines {
+		item, _ := raw.(map[string]any)
+		if item == nil {
+			continue
+		}
+		name := strings.TrimSpace(recordValueString(item["name"]))
+		if name != "" {
+			names = append(names, name)
+		}
+	}
+	names = uniqueSortedStrings(names)
+	options := make([]ui.SelectOption, 0, len(names))
+	for _, name := range names {
+		options = append(options, ui.SelectOption{Value: name, Label: name})
+	}
+	return options
 }
 
 func validateDefineName(name string) error {
@@ -925,12 +1232,21 @@ func kinstaWhitelabelWPConfigDefine() wpConfigDefine {
 }
 
 func renderWPConfigDefineScript(sitePath string, defines []wpConfigDefine) string {
+	return renderWPConfigDefineScriptWithBlock(sitePath, defines, wpConfigProjectBlockBegin, wpConfigProjectBlockEnd, wpConfigLegacyModeProject)
+}
+
+func renderWPConfigProviderDefineScript(sitePath string, defines []wpConfigDefine) string {
+	return renderWPConfigDefineScriptWithBlock(sitePath, defines, wpConfigProviderBlockBegin, wpConfigProviderBlockEnd, wpConfigLegacyModeProvider)
+}
+
+func renderWPConfigDefineScriptWithBlock(sitePath string, defines []wpConfigDefine, beginMarker string, endMarker string, legacyMode string) string {
 	patches := make([]wpConfigPatchDefinition, 0, len(defines))
 	for _, define := range defines {
 		mode := firstNonEmpty(define.Mode, wpConfigDefineModeForce)
 		patches = append(patches, wpConfigPatchDefinition{Name: define.Name, Value: define.PHPValue, Mode: mode, Source: define.Source})
 	}
 	data, _ := json.Marshal(patches)
+	providerNames, _ := json.Marshal(providerOwnedWPConfigDefineNames())
 	return fmt.Sprintf(`set -eu
 site_path=%s
 config_file="$site_path/wp-config.php"
@@ -945,10 +1261,19 @@ $configFile = getenv('NF_WP_CONFIG_FILE');
 $definitionsJson = <<<'JSON'
 %s
 JSON;
+$providerNamesJson = <<<'JSON'
+%s
+JSON;
+$legacyMode = %s;
 
 $definitions = json_decode($definitionsJson, true);
 if (!is_array($definitions)) {
     fwrite(STDERR, "Invalid nf wp-config definitions.\n");
+    exit(1);
+}
+$providerNames = json_decode($providerNamesJson, true);
+if (!is_array($providerNames)) {
+    fwrite(STDERR, "Invalid nf wp-config provider define list.\n");
     exit(1);
 }
 
@@ -962,8 +1287,30 @@ function nf_wp_config_define_statement($name, $value) {
     return "define('" . str_replace("'", "\\'", $name) . "', " . $value . ");";
 }
 
-function nf_wp_config_insert_statement($contents, $statement) {
-    $insert = "\n/* nf-managed wp-config defines */\n" . $statement . "\n";
+function nf_wp_config_managed_begin_marker() {
+    return %s;
+}
+
+function nf_wp_config_managed_end_marker() {
+    return %s;
+}
+
+function nf_wp_config_managed_names($definitions) {
+    $names = [];
+    foreach ($definitions as $definition) {
+        $name = (string) ($definition['name'] ?? '');
+        if ($name !== '') {
+            $names[$name] = true;
+        }
+    }
+    return $names;
+}
+
+function nf_wp_config_insert_block($contents, $block) {
+    if ($block === '') {
+        return $contents;
+    }
+    $insert = "\n" . $block . "\n";
     $marker = "/* That's all, stop editing! Happy publishing. */";
     $pos = strpos($contents, $marker);
     if ($pos !== false) {
@@ -976,6 +1323,41 @@ function nf_wp_config_insert_statement($contents, $statement) {
     throw new RuntimeException('Could not find a safe insertion point in wp-config.php.');
 }
 
+function nf_wp_config_strip_managed_blocks($contents) {
+    $begin = nf_wp_config_managed_begin_marker();
+    $end = nf_wp_config_managed_end_marker();
+    if (substr_count($contents, $begin) !== substr_count($contents, $end)) {
+        throw new RuntimeException('Refusing to manage wp-config.php with unmatched nf-managed define block markers.');
+    }
+    $pattern = '/\s*' . preg_quote($begin, '/') . '.*?' . preg_quote($end, '/') . '\s*/s';
+    $updated = preg_replace($pattern, "\n", $contents);
+    if ($updated === null) {
+        throw new RuntimeException('Could not inspect nf-managed wp-config define block.');
+    }
+    return $updated;
+}
+
+function nf_wp_config_strip_legacy_managed_defines($contents, $legacyMode, $managedNames, $providerNames) {
+    $pattern = '/\s*\/\* nf-managed wp-config defines \*\/\s*(define\s*\(\s*[\'\"]([A-Za-z_][A-Za-z0-9_]*)[\'\"]\s*,.*?\)\s*;)\s*/s';
+    $updated = preg_replace_callback($pattern, function ($match) use ($legacyMode, $managedNames, $providerNames) {
+        $name = $match[2];
+        $strip = false;
+        if ($legacyMode === 'project') {
+            $strip = !in_array($name, $providerNames, true);
+        } elseif ($legacyMode === 'provider') {
+            $strip = isset($managedNames[$name]);
+        }
+        if ($strip) {
+            return "\n";
+        }
+        return $match[0];
+    }, $contents);
+    if ($updated === null) {
+        throw new RuntimeException('Could not inspect legacy nf-managed wp-config define markers.');
+    }
+    return $updated;
+}
+
 function nf_wp_config_define_matches($contents, $name) {
     $pattern = '/define\s*\(\s*[\'\"]' . preg_quote($name, '/') . '[\'\"]\s*,(.*?)\)\s*;/s';
     $count = preg_match_all($pattern, $contents, $matches, PREG_OFFSET_CAPTURE);
@@ -985,7 +1367,17 @@ function nf_wp_config_define_matches($contents, $name) {
     return [$count, $matches];
 }
 
-$changed = false;
+$strippedContents = $contents;
+try {
+    $managedNames = nf_wp_config_managed_names($definitions);
+    $strippedContents = nf_wp_config_strip_managed_blocks($strippedContents);
+    $strippedContents = nf_wp_config_strip_legacy_managed_defines($strippedContents, $legacyMode, $managedNames, $providerNames);
+} catch (RuntimeException $error) {
+    fwrite(STDERR, $error->getMessage() . "\n");
+    exit(1);
+}
+
+$statements = [];
 foreach ($definitions as $definition) {
     $name = (string) ($definition['name'] ?? '');
     $value = (string) ($definition['value'] ?? '');
@@ -996,7 +1388,7 @@ foreach ($definitions as $definition) {
     }
     $statement = nf_wp_config_define_statement($name, $value);
     try {
-        [$matchCount, $matches] = nf_wp_config_define_matches($contents, $name);
+        [$matchCount, $matches] = nf_wp_config_define_matches($strippedContents, $name);
     } catch (RuntimeException $error) {
         fwrite(STDERR, $error->getMessage() . "\n");
         exit(1);
@@ -1010,25 +1402,29 @@ foreach ($definitions as $definition) {
         if ($mode === 'replace_false' && !preg_match('/^false$/i', $existing)) {
             continue;
         }
-        if ($existing === $value) {
-            continue;
+        if ($mode !== 'replace_false') {
+            fwrite(STDERR, 'Refusing to manage wp-config define for ' . $name . ' because it already exists outside the nf-managed block. Move it into nf.json or remove the manual definition first.' . "\n");
+            exit(1);
         }
         $start = $matches[0][0][1];
         $length = strlen($matches[0][0][0]);
-        $contents = substr($contents, 0, $start) . $statement . substr($contents, $start + $length);
-        $changed = true;
-        continue;
+        $strippedContents = substr($strippedContents, 0, $start) . substr($strippedContents, $start + $length);
     }
-    try {
-        $contents = nf_wp_config_insert_statement($contents, $statement);
-    } catch (RuntimeException $error) {
-        fwrite(STDERR, $error->getMessage() . "\n");
-        exit(1);
-    }
-    $changed = true;
+    $statements[] = $statement;
 }
 
-if (!$changed) {
+$block = '';
+if (count($statements) > 0) {
+    $block = nf_wp_config_managed_begin_marker() . "\n" . implode("\n", $statements) . "\n" . nf_wp_config_managed_end_marker();
+}
+try {
+    $contents = nf_wp_config_insert_block($strippedContents, $block);
+} catch (RuntimeException $error) {
+    fwrite(STDERR, $error->getMessage() . "\n");
+    exit(1);
+}
+
+if ($contents === file_get_contents($configFile)) {
     echo "wp-config.php already matches nf defines.\n";
     exit(0);
 }
@@ -1062,15 +1458,17 @@ if (!@rename($tmp, $configFile)) {
 @chmod($configFile, $mode);
 echo "wp-config.php updated.\n";
 PHP
-`, shellQuoteArg(sitePath), string(data))
+`, shellQuoteArg(sitePath), string(data), string(providerNames), phpConfigDefineLiteral(legacyMode), phpConfigDefineLiteral(beginMarker), phpConfigDefineLiteral(endMarker))
 }
 
 func renderWPConfigDefineStatusScript(sitePath string, defines []wpConfigDefine) string {
 	patches := make([]wpConfigPatchDefinition, 0, len(defines))
 	for _, define := range defines {
-		patches = append(patches, wpConfigPatchDefinition{Name: define.Name, Value: define.PHPValue, Source: define.Source})
+		mode := firstNonEmpty(define.Mode, wpConfigDefineModeForce)
+		patches = append(patches, wpConfigPatchDefinition{Name: define.Name, Value: define.PHPValue, Mode: mode, Source: define.Source})
 	}
 	data, _ := json.Marshal(patches)
+	providerNames, _ := json.Marshal(providerOwnedWPConfigDefineNames())
 	return fmt.Sprintf(`set -eu
 site_path=%s
 config_file="$site_path/wp-config.php"
@@ -1085,10 +1483,18 @@ $configFile = getenv('NF_WP_CONFIG_FILE');
 $definitionsJson = <<<'JSON'
 %s
 JSON;
+$providerNamesJson = <<<'JSON'
+%s
+JSON;
 
 $definitions = json_decode($definitionsJson, true);
 if (!is_array($definitions)) {
     fwrite(STDERR, "Invalid nf wp-config definitions.\n");
+    exit(1);
+}
+$providerNames = json_decode($providerNamesJson, true);
+if (!is_array($providerNames)) {
+    fwrite(STDERR, "Invalid nf wp-config provider define list.\n");
     exit(1);
 }
 $contents = file_get_contents($configFile);
@@ -1104,6 +1510,44 @@ function nf_wp_config_define_matches($contents, $name) {
     }
     return [$count, $matches];
 }
+function nf_wp_config_managed_parts($contents) {
+    $begin = %s;
+    $end = %s;
+    if (substr_count($contents, $begin) !== substr_count($contents, $end)) {
+        throw new RuntimeException('Refusing to inspect wp-config.php with unmatched nf-managed define block markers.');
+    }
+    $managed = '';
+    $blockPattern = '/\s*' . preg_quote($begin, '/') . '(.*?)' . preg_quote($end, '/') . '\s*/s';
+    $blockCount = preg_match_all($blockPattern, $contents, $blocks);
+    if ($blockCount === false) {
+        throw new RuntimeException('Could not inspect nf-managed wp-config define block.');
+    }
+    if ($blockCount > 0) {
+        $managed .= "\n" . implode("\n", $blocks[1]);
+    }
+    $outside = preg_replace($blockPattern, "\n", $contents);
+    if ($outside === null) {
+        throw new RuntimeException('Could not inspect nf-managed wp-config define block.');
+    }
+    $legacyPattern = '/\s*\/\* nf-managed wp-config defines \*\/\s*(define\s*\(\s*[\'\"]([A-Za-z_][A-Za-z0-9_]*)[\'\"]\s*,.*?\)\s*;)\s*/s';
+    $outside = preg_replace_callback($legacyPattern, function ($match) use (&$managed, $providerNames) {
+        if (in_array($match[2], $providerNames, true)) {
+            return $match[0];
+        }
+        $managed .= "\n" . $match[1];
+        return "\n";
+    }, $outside);
+    if ($outside === null) {
+        throw new RuntimeException('Could not inspect legacy nf-managed wp-config define markers.');
+    }
+    return [$managed, $outside];
+}
+try {
+    [$managedContents, $outsideContents] = nf_wp_config_managed_parts($contents);
+} catch (RuntimeException $error) {
+    fwrite(STDERR, $error->getMessage() . "\n");
+    exit(1);
+}
 foreach ($definitions as $definition) {
     $name = (string) ($definition['name'] ?? '');
     $value = (string) ($definition['value'] ?? '');
@@ -1111,21 +1555,22 @@ foreach ($definitions as $definition) {
     $status = 'missing';
     if ($name !== '' && $value !== '') {
         try {
-            [$matchCount, $matches] = nf_wp_config_define_matches($contents, $name);
+            [$managedCount, $managedMatches] = nf_wp_config_define_matches($managedContents, $name);
+            [$outsideCount, $_outsideMatches] = nf_wp_config_define_matches($outsideContents, $name);
         } catch (RuntimeException $error) {
             fwrite(STDERR, $error->getMessage() . "\n");
             exit(1);
         }
-        if ($matchCount > 1) {
+        if ($outsideCount > 0 || $managedCount > 1) {
             $status = 'duplicate';
-        } elseif ($matchCount === 1) {
-            $status = trim($matches[1][0][0]) === $value ? 'matched' : 'different';
+        } elseif ($managedCount === 1) {
+            $status = trim($managedMatches[1][0][0]) === $value ? 'matched' : 'different';
         }
     }
     echo $name . "\t" . $source . "\t" . $status . "\n";
 }
 PHP
-`, shellQuoteArg(sitePath), string(data))
+`, shellQuoteArg(sitePath), string(data), string(providerNames), phpConfigDefineLiteral(wpConfigProjectBlockBegin), phpConfigDefineLiteral(wpConfigProjectBlockEnd))
 }
 
 func printDefineStatusOutput(output string) {

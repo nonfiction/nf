@@ -748,7 +748,7 @@ func projectDefineCompletionNames() []string {
 }
 
 func defineSelectorCompletionNames() []string {
-	values := []string{"local", "default", "live", "staging"}
+	values := []string{"local"}
 	values = append(values, projectRemoteCompletionNames()...)
 	return uniqueSortedStrings(values)
 }

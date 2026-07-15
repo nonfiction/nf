@@ -235,7 +235,7 @@ if [ ! -f "$plugin_file" ] || [ ! -d "$plugin_dir" ]; then
 fi
 %s
 echo "Kinsta MU plugins repaired."
-`, q(sitePath), q(kinstaMUPluginsZipURL), renderWPConfigDefineScript(sitePath, []wpConfigDefine{kinstaWhitelabelWPConfigDefine()}))
+`, q(sitePath), q(kinstaMUPluginsZipURL), renderWPConfigProviderDefineScript(sitePath, []wpConfigDefine{kinstaWhitelabelWPConfigDefine()}))
 }
 
 func renderLinodeSiteRepairScript(sitePath, hostname, phpVersion string, fileSlugs []string) string {

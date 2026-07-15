@@ -98,8 +98,10 @@ nf remote list
 nf define list
 nf define status [remote]
 nf define sync [remote]
+nf define add
 nf define add <name> <value> [--for selector]
 nf define add <name> --env <var> [--for selector]
+nf define remove
 nf define remove <name> [--for selector]
 nf alias list
 nf alias status [remote]
@@ -152,6 +154,6 @@ nf target add linode linode1 \
 * `nf alias ...` manages root-level webroot symlinks declared in top-level `aliases` in `nf.json`. Alias targets must be `wp-content` or descendants. `nf alias status [remote]` reports configured, missing, conflicting, and stale symlinks. `nf alias sync [remote]` creates or updates configured symlinks and prunes stale root symlinks, but never overwrites or removes real files/directories.
 * `nf site shell/wp ...` validate the cache, print the SSH or wp-cli command preview, then execute the remote command.
 * `nf env logs <remote>` resolves a configured repo remote, prints the SSH command preview, ensures `wp-content/debug.log` exists, and tails it on the remote host.
-* `nf define ...` manages `wordpress.config.defines` from `nf.json`. `list` prints configured names/selectors/sources without resolving secret values. `status [remote]` compares configured constants against local or remote `wp-config.php`. `sync [remote]` patches local or remote `wp-config.php` through a temp file and atomic replace, without persistent backups. `add` writes shared values by default; `--for <selector>` writes a remote/env-specific value and promotes an existing shared value to `values.default`. Use `--env <VAR>` for secrets and license keys; never commit those raw values to `nf.json`. Provider-owned constants such as `KINSTAMU_WHITELABEL` are rejected from project defines. Duplicate constants already present in `wp-config.php` are unsafe and block sync until resolved manually.
+* `nf define ...` manages `wordpress.config.defines` from `nf.json`. `list` prints configured names/selectors/sources without resolving secret values. `status [remote]` compares configured constants against local or remote `wp-config.php`. `sync [remote]` patches local or remote `wp-config.php` through a temp file and atomic replace, without persistent backups. It replaces only the nf-managed project define block, so removed `nf.json` entries are pruned from that block while manual constants outside the block are preserved. Older per-define nf markers are migrated into the block on sync. `add` writes shared values by default and opens an interactive wizard when required arguments are omitted; `remove` opens a picker when the name is omitted. The add wizard scopes values to all environments, `local`, or configured remotes. `--for <selector>` writes a remote/env-specific value and promotes an existing shared value to `values.default`. Use `--env <VAR>` for secrets and license keys; nf stores only the local env/config variable name in `nf.json` and resolves the real value during sync. Never commit raw secret values to `nf.json`. Provider-owned constants such as `KINSTAMU_WHITELABEL` are rejected from project defines. Duplicate constants, including configured constants outside the nf-managed project block, are unsafe and block sync until resolved manually.
 * `nf env import <source>` imports external WordPress data into the local env after creating a safety snapshot. It never writes directly to a remote env.
 * `nf env push/pull [remote]` syncs database and mutable `wp-content` after an interactive confirmation. Omit `remote` to pick from configured repo remotes. Add `--dry-run` for a non-mutating plan, or use `--non-interactive` without `--execute` for preflight-only output.

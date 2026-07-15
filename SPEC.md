@@ -355,7 +355,7 @@ These commands are implemented, but intentionally guarded because they touch rem
 * [x] `nf plugin install <remote>`: validates repo remote/cache, prints a reviewable plugin plan, and asks for confirmation unless `--yes` is passed
 * [x] `nf site export <env-id>`: validates cache, exports full remote WordPress filesystem plus database dump as a portable handoff directory
 * [x] `nf env import <source>`: creates a local import snapshot, creates a pre-restore safety snapshot, and restores external WordPress data into the local env only
-* [x] `nf define sync <remote>`: validates repo remote/cache and patches configured `wp-config.php` defines through stdin with redacted command output and atomic no-backup writes; provider-owned constants are rejected from project defines, and duplicate constants already present in `wp-config.php` block sync until manually resolved
+* [x] `nf define sync <remote>`: validates repo remote/cache and patches configured `wp-config.php` defines through stdin with redacted command output and atomic no-backup writes; it owns only the nf-managed project define block, prunes removed configured entries from that block, preserves manual constants outside it, migrates legacy per-define nf markers, rejects provider-owned constants from project defines, and blocks sync when configured constants also exist outside the managed block
 * [x] `nf env push <remote>`: validates repo remote/cache, prints a reviewable plan, and syncs with execute/confirmation gates
 * [x] `nf env pull <remote>`: validates repo remote/cache, prints a reviewable plan, and syncs with execute/confirmation gates
 
