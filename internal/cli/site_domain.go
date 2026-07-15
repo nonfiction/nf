@@ -78,6 +78,7 @@ type siteDomainProviderResult struct {
 type siteDomainProviderDomain struct {
 	Name     string
 	Role     string
+	Status   string
 	DomainID string
 	Records  kinsta.DomainRecords
 }
@@ -1241,6 +1242,10 @@ func buildSiteDomainPlan(siteID, env, action string, opts siteDomainOptions) (si
 	if record == nil {
 		return siteDomainPlan{}, ProjectError{Msg: fmt.Sprintf("No cached remote env matched %q.", canonicalEnvID(siteID, env))}
 	}
+	if err := validateSiteRecord(record); err != nil {
+		return siteDomainPlan{}, err
+	}
+	provider := strings.ToLower(strings.TrimSpace(recordValueString(record["provider"])))
 	domains := append([]string{}, opts.domains...)
 	if action == "check" && len(domains) == 0 {
 		domains = cachedExternalSiteDomainNames(record)
@@ -1293,9 +1298,12 @@ func buildSiteDomainPlan(siteID, env, action string, opts siteDomainOptions) (si
 			aliases = append(aliases, domain)
 		}
 	}
-	target, err := envRemoteSyncTargetFromSiteRecord(record, canonicalEnvID(siteID, env), siteID, env)
-	if err != nil {
-		return siteDomainPlan{}, err
+	target := siteDomainPlanTargetFromSiteRecord(record, provider, canonicalEnvID(siteID, env), siteID, env)
+	if provider != "kinsta" {
+		target, err = envRemoteSyncTargetFromSiteRecord(record, canonicalEnvID(siteID, env), siteID, env)
+		if err != nil {
+			return siteDomainPlan{}, err
+		}
 	}
 	redirectTarget := existingPrimary
 	if primary {
@@ -1381,6 +1389,16 @@ func buildSiteDomainPlan(siteID, env, action string, opts siteDomainOptions) (si
 		return siteDomainPlan{}, ProjectError{Msg: fmt.Sprintf("domain is not implemented for provider %q", plan.Provider)}
 	}
 	return plan, nil
+}
+
+func siteDomainPlanTargetFromSiteRecord(record map[string]any, provider, remoteName, siteID, remoteEnv string) envRemoteSyncTarget {
+	target := envRemoteSyncTarget{Provider: provider, RemoteName: remoteName, SiteID: siteID, Env: remoteEnv, URL: firstRecordString(record, "url", "site_url", "home_url", "hostname"), TargetLabel: "target", TargetRef: siteProviderTarget(record), AccessLabel: "target record"}
+	if provider == "kinsta" {
+		target.TargetLabel = ""
+		target.TargetRef = ""
+		target.AccessLabel = "environment api"
+	}
+	return target
 }
 
 func normalizePublicDomain(input string) (string, error) {
@@ -1572,13 +1590,20 @@ func (p siteDomainPlan) allDomains() []string {
 }
 
 func (p siteDomainProviderResult) domainID(name string) string {
+	if domain, ok := p.domain(name); ok {
+		return domain.DomainID
+	}
+	return ""
+}
+
+func (p siteDomainProviderResult) domain(name string) (siteDomainProviderDomain, bool) {
 	needle := strings.ToLower(strings.TrimSuffix(strings.TrimSpace(name), "."))
 	for _, domain := range p.Domains {
 		if strings.ToLower(strings.TrimSuffix(strings.TrimSpace(domain.Name), ".")) == needle {
-			return domain.DomainID
+			return domain, true
 		}
 	}
-	return ""
+	return siteDomainProviderDomain{}, false
 }
 
 func printSiteDomainPlan(plan siteDomainPlan, mode string) {
@@ -1785,6 +1810,9 @@ func runKinstaSiteDomain(plan siteDomainPlan, primary bool) (siteDomainProviderR
 		if err != nil {
 			return siteDomainProviderResult{}, err
 		}
+		if domain.IsPrimary {
+			role = "primary"
+		}
 		if i == 0 {
 			canonicalDomain = domain
 		}
@@ -1792,7 +1820,7 @@ func runKinstaSiteDomain(plan siteDomainPlan, primary bool) (siteDomainProviderR
 		if err != nil {
 			return siteDomainProviderResult{}, err
 		}
-		result.Domains = append(result.Domains, siteDomainProviderDomain{Name: name, Role: role, DomainID: domain.ID, Records: records})
+		result.Domains = append(result.Domains, siteDomainProviderDomain{Name: name, Role: role, Status: kinstaDomainStatus(domain, kinstaInternalDomainName(name)), DomainID: domain.ID, Records: records})
 	}
 	if primary && canonicalDomain.ID != "" && !canonicalDomain.IsPrimary {
 		fmt.Printf("Changing Kinsta primary domain to %s...\n", plan.Canonical)
@@ -2038,6 +2066,14 @@ func siteDomainCacheEntries(plan siteDomainPlan, result siteDomainProviderResult
 		status := "pending"
 		if plan.Action == "primary" && role == "primary" {
 			status = "active"
+		}
+		if domain, ok := result.domain(name); ok && plan.Action == "add" {
+			if strings.TrimSpace(domain.Role) != "" {
+				role = normalizeSiteDomainRole(domain.Role)
+			}
+			if strings.TrimSpace(domain.Status) != "" {
+				status = normalizeSiteDomainStatus(domain.Status)
+			}
 		}
 		entry := map[string]any{"name": name, "role": role, "management": "external", "status": status}
 		if proxyMode := plan.proxyModeForDomain(name); proxyMode != "" {

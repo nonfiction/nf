@@ -6421,6 +6421,85 @@ func TestRunDomainKinstaAddExecutePrintsDNSAndCachesDomains(t *testing.T) {
 	}
 }
 
+func TestRunDomainKinstaAddExistingDashboardDomainDoesNotRequireCachedSSHUser(t *testing.T) {
+	stateDir := t.TempDir()
+	t.Setenv("NF_STATE_HOME", stateDir)
+	t.Setenv("KINSTA_API_KEY", "test-token")
+	if err := state.SaveStateRecords("sites", []map[string]any{{
+		"provider": "kinsta",
+		"site_id":  "client.kinsta",
+		"env_id":   "client.kinsta:live",
+		"name":     "client",
+		"env":      "live",
+		"target":   "kinsta",
+		"hostname": "client.kinsta.nonfiction.dev",
+		"url":      "https://client.kinsta.nonfiction.dev",
+		"path":     "/www/client/public",
+		"ssh":      map[string]any{"host": "203.0.113.10", "port": "12345"},
+		"kinsta":   map[string]any{"site_id": "ksite123", "environment_id": "kenv-live", "domain_id": "kdom-internal"},
+	}}); err != nil {
+		t.Fatalf("SaveStateRecords(sites) error = %v", err)
+	}
+
+	addCalls := 0
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if got, want := r.Header.Get("Authorization"), "Bearer test-token"; got != want {
+			t.Fatalf("Authorization = %q, want %q", got, want)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		switch r.Method + " " + r.URL.Path {
+		case "GET /sites/environments/kenv-live/domains":
+			verified := true
+			_ = json.NewEncoder(w).Encode(map[string]any{"environment": map[string]any{"site_domains": []map[string]any{
+				{"id": "kdom-internal", "name": "client.kinsta.nonfiction.dev", "is_primary": true},
+				{"id": "kdom-dashboard", "name": "arpisnorth.com", "is_primary": false, "status": "verified", "is_verified": verified, "is_pointing": verified},
+			}}})
+		case "POST /sites/environments/kenv-live/domains":
+			addCalls++
+			http.Error(w, "domain should already exist", http.StatusInternalServerError)
+		case "GET /sites/environments/domains/kdom-dashboard/verification-records":
+			_ = json.NewEncoder(w).Encode(map[string]any{"site_domain": map[string]any{
+				"verification_records": []map[string]any{{"name": "_cf-custom-hostname.arpisnorth.com", "type": "TXT", "content": "verify-token"}},
+				"pointing_records":     []map[string]any{{"name": "arpisnorth.com", "type": "A", "content": "203.0.113.20", "ttl": 300}},
+			}})
+		default:
+			t.Fatalf("unexpected Kinsta request: %s %s", r.Method, r.URL.Path)
+		}
+	}))
+	t.Cleanup(server.Close)
+	t.Setenv("KINSTA_BASE_URL", server.URL)
+
+	output := captureStdout(t, func() {
+		if got := Run([]string{"domain", "add", "client.kinsta:live", "arpisnorth.com", "--execute", "--yes", "--non-interactive"}); got != 0 {
+			t.Fatalf("Run(domain add existing Kinsta domain) = %d, want 0", got)
+		}
+	})
+	if addCalls != 0 {
+		t.Fatalf("Kinsta AddDomain calls = %d, want 0", addCalls)
+	}
+	for _, want := range []string{"Add domain plan:", "provider:  kinsta", "secondary: arpisnorth.com", "Kinsta DNS records for client DNS:", "A  arpisnorth.com  203.0.113.20  TTL 300", "Domain added."} {
+		if !strings.Contains(output, want) {
+			t.Fatalf("domain add existing Kinsta output missing %q:\n%s", want, output)
+		}
+	}
+	if strings.Contains(output, "Adding Kinsta domain arpisnorth.com") {
+		t.Fatalf("domain add should not try to create an already attached Kinsta domain:\n%s", output)
+	}
+
+	records, err := state.LoadStateRecords("sites")
+	if err != nil {
+		t.Fatalf("LoadStateRecords(sites) error = %v", err)
+	}
+	domains := siteDomainEntryValues(records[0]["domains"])
+	if len(domains) != 1 {
+		t.Fatalf("domains = %#v, want one cached dashboard domain", records[0]["domains"])
+	}
+	domain := siteDomainEntryMap(domains[0])
+	if recordValueString(domain["name"]) != "arpisnorth.com" || recordValueString(domain["role"]) != "secondary" || recordValueString(domain["management"]) != "external" || recordValueString(domain["status"]) != "verified" || recordValueString(domain["domain_id"]) != "kdom-dashboard" {
+		t.Fatalf("cached domain = %#v, want verified dashboard domain", domain)
+	}
+}
+
 func TestRunDomainKinstaAddWaitsBrieflyForRoutingRecords(t *testing.T) {
 	stateDir := t.TempDir()
 	t.Setenv("NF_STATE_HOME", stateDir)
