@@ -13,10 +13,10 @@ import (
 )
 
 var siteAddSlugPattern = regexp.MustCompile(`^[a-z][a-z0-9]{0,31}$`)
-var kinstaSlugPattern = regexp.MustCompile(`^[a-z](?:[a-z0-9-]{0,61}[a-z0-9])?$`)
+var kinstaSlugPattern = regexp.MustCompile(`^[a-z][a-z0-9-]{3,30}[a-z0-9]$`)
 
 const siteAddSlugRuleMessage = "must start with a lowercase ASCII letter, may contain only lowercase ASCII letters and digits, and must be 1-32 characters long. Do not use uppercase letters, hyphens, underscores, dots, spaces, punctuation, or Unicode.\nValid examples: client, nonfiction, site001\nInvalid examples: client-name, client_name, 1client, Client, client.com"
-const kinstaSlugRuleMessage = "must start with a lowercase ASCII letter, end with a lowercase ASCII letter or digit, may contain only lowercase ASCII letters, digits, and hyphens, and must be 1-63 characters long. Do not use uppercase letters, underscores, dots, spaces, punctuation other than hyphens, or Unicode."
+const kinstaSlugRuleMessage = "must start with a lowercase ASCII letter, end with a lowercase ASCII letter or digit, may contain only lowercase ASCII letters, digits, and hyphens, and must be 5-32 characters long. Do not use uppercase letters, underscores, dots, spaces, punctuation other than hyphens, or Unicode."
 
 type siteAddArgs struct {
 	target             string

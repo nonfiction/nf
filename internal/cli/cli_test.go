@@ -4453,6 +4453,28 @@ func TestValidateSiteAddSlug(t *testing.T) {
 	}
 }
 
+func TestValidateKinstaSlug(t *testing.T) {
+	for _, input := range []string{"abcde", "client", "client-1", "a1234", strings.Repeat("a", 32)} {
+		if err := validateKinstaSlug(input); err != nil {
+			t.Fatalf("validateKinstaSlug(%q) error = %v, want nil", input, err)
+		}
+	}
+
+	invalid := []string{"abcd", "Client", "client_name", "1client", "client.com", "client name", "abcde-", "", "a" + strings.Repeat("1", 32)}
+	for _, input := range invalid {
+		err := validateKinstaSlug(input)
+		if err == nil {
+			t.Fatalf("validateKinstaSlug(%q) = nil, want error", input)
+		}
+		message := err.Error()
+		for _, want := range []string{"invalid Kinsta slug", "must start with a lowercase ASCII letter", "end with a lowercase ASCII letter or digit", "5-32 characters"} {
+			if !strings.Contains(message, want) {
+				t.Fatalf("validateKinstaSlug(%q) error missing %q:\n%s", input, want, message)
+			}
+		}
+	}
+}
+
 func TestRunSiteAddRejectsInvalidSlugBeforeLookup(t *testing.T) {
 	stderr := captureStderr(t, func() {
 		if got := runSiteAdd([]string{"missing-target", "Client", "--execute", "--yes", "--non-interactive"}); got != 1 {
@@ -4467,6 +4489,30 @@ func TestRunSiteAddRejectsInvalidSlugBeforeLookup(t *testing.T) {
 	for _, notWant := range []string{"No target matched", "Expected base_domain", "Expected default_wp_email"} {
 		if strings.Contains(stderr, notWant) {
 			t.Fatalf("runSiteAdd stderr contains %q, so validation did not stop early:\n%s", notWant, stderr)
+		}
+	}
+}
+
+func TestRunSiteAddKinstaRejectsShortProviderSlugBeforeConfigLookup(t *testing.T) {
+	stateDir := t.TempDir()
+	t.Setenv("NF_STATE_HOME", stateDir)
+	if err := state.SaveStateRecords("providers", []map[string]any{{"provider": "kinsta", "targets": []map[string]any{{"name": "kinsta", "provider": "kinsta", "company_id": "company-123", "status": "active"}}}}); err != nil {
+		t.Fatalf("SaveStateRecords(providers) error = %v", err)
+	}
+
+	stderr := captureStderr(t, func() {
+		if got := runSiteAdd([]string{"kinsta", "abcd", "--dry-run", "--non-interactive"}); got != 1 {
+			t.Fatalf("runSiteAdd(short Kinsta slug) = %d, want 1", got)
+		}
+	})
+	for _, want := range []string{"invalid Kinsta slug \"abcd\"", "5-32 characters"} {
+		if !strings.Contains(stderr, want) {
+			t.Fatalf("runSiteAdd stderr missing %q:\n%s", want, stderr)
+		}
+	}
+	for _, notWant := range []string{"Expected base_domain", "Expected default_wp_email", "Expected KINSTA_API_KEY"} {
+		if strings.Contains(stderr, notWant) {
+			t.Fatalf("runSiteAdd stderr contains %q, so Kinsta slug validation did not stop early:\n%s", notWant, stderr)
 		}
 	}
 }
@@ -4786,6 +4832,31 @@ func TestBuildKinstaSiteAddPlanUsesConfiguredBaseDomain(t *testing.T) {
 		if got := env.URL; got != "https://"+wants[env.Env] {
 			t.Fatalf("%s URL = %q, want %q", env.Env, got, "https://"+wants[env.Env])
 		}
+	}
+}
+
+func TestBuildKinstaSiteAddPlanAllowsShortProjectSlugWithExplicitProviderSlug(t *testing.T) {
+	configDir := t.TempDir()
+	stateDir := t.TempDir()
+	t.Setenv("NF_CONFIG_HOME", configDir)
+	t.Setenv("NF_STATE_HOME", stateDir)
+	t.Setenv("NF_PASSWORD_SALT", "test-salt")
+	if err := saveGlobalConfig(map[string]string{"base_domain": "nonfiction.dev", "default_wp_email": "web@nonfiction.ca", "dnsimple_account_id": "14"}); err != nil {
+		t.Fatalf("saveGlobalConfig() error = %v", err)
+	}
+	if err := state.SaveStateRecords("providers", []map[string]any{{"provider": "kinsta", "targets": []map[string]any{{"name": "kinsta", "provider": "kinsta", "company_id": "company-123", "status": "active"}}}}); err != nil {
+		t.Fatalf("SaveStateRecords(providers) error = %v", err)
+	}
+
+	plan, err := buildKinstaSiteAddPlan(siteAddArgs{target: "kinsta", site: "abcd", kinstaSlug: "abcde"})
+	if err != nil {
+		t.Fatalf("buildKinstaSiteAddPlan() error = %v", err)
+	}
+	if plan.Site != "abcd" || plan.SiteID != "abcd.kinsta" || plan.KinstaSlug != "abcde" {
+		t.Fatalf("plan = %#v, want short project slug with explicit Kinsta slug", plan)
+	}
+	if len(plan.Envs) != 1 || plan.Envs[0].Domain != "abcd.kinsta.nonfiction.dev" {
+		t.Fatalf("plan.Envs = %#v, want project slug domain", plan.Envs)
 	}
 }
 
