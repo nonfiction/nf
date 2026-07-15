@@ -203,7 +203,7 @@ add_action('admin_menu', function () {
     if (!nf_linode_cache_can_manage()) {
         return;
     }
-    add_menu_page('Server Cache', 'Server Cache', 'manage_options', 'server-tools', 'nf_linode_cache_render_page', 'dashicons-cloud', 58);
+    add_menu_page('Server Cache', 'Server Cache', 'manage_options', 'server-tools', 'nf_linode_cache_render_page', 'dashicons-cloud', 3.1);
 });
 
 function nf_linode_cache_button($action, $label) {
