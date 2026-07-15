@@ -142,6 +142,9 @@ func cmdThemeDeploy(remoteName string, dryRun bool) int {
 	releaseArgs := themeRemoteScriptCommandArgs(target, "nf-theme-deploy-release")
 	fmt.Println("  remote script: extract release, switch active theme, refresh runtime mtimes, activate, record metadata, prune old releases")
 	printCommandArgs(releaseArgs)
+	rewriteArgs := remoteWPSSHArgs(syncTarget, wpRewriteFlushArgs()...)
+	fmt.Println("  post-deploy: regenerate WordPress rewrite rules")
+	printCommandArgs(rewriteArgs)
 	if !dryRun {
 		if len(dependencyUploads) > 0 {
 			if err := uploadRemoteThemeSources(syncTarget, dependencyTmp, dependencyUploads); err != nil {
@@ -170,6 +173,10 @@ func cmdThemeDeploy(remoteName string, dryRun bool) int {
 			return 1
 		}
 		if err := runSSHStdinCommandFn(releaseArgs, releaseScript); err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			return 1
+		}
+		if err := flushRemoteRewriteRules(syncTarget); err != nil {
 			fmt.Fprintln(os.Stderr, err)
 			return 1
 		}
@@ -218,6 +225,8 @@ func cmdThemeRollback(remoteName string, dryRun bool) int {
 	metadataFile := path.Join(releaseBase, "releases.json")
 	rollbackScript := themeRollbackScript(target, themeSlug, activeThemeSlug, releaseBase, metadataFile)
 	rollbackArgs := themeRemoteScriptCommandArgs(target, "nf-theme-rollback-release")
+	syncTarget := themeDeploySyncTarget(target)
+	rewriteArgs := remoteWPSSHArgs(syncTarget, wpRewriteFlushArgs()...)
 
 	fmt.Println("Theme rollback plan:")
 	fmt.Printf("  remote:      %s\n", target.RemoteName)
@@ -238,8 +247,14 @@ func cmdThemeRollback(remoteName string, dryRun bool) int {
 	}
 	fmt.Println("  remote script: select previous release, switch active theme, refresh runtime mtimes, activate, record rollback")
 	printCommandArgs(rollbackArgs)
+	fmt.Println("  post-rollback: regenerate WordPress rewrite rules")
+	printCommandArgs(rewriteArgs)
 	if !dryRun {
 		if err := runSSHStdinCommandFn(rollbackArgs, rollbackScript); err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			return 1
+		}
+		if err := flushRemoteRewriteRules(syncTarget); err != nil {
 			fmt.Fprintln(os.Stderr, err)
 			return 1
 		}
@@ -448,7 +463,7 @@ func themeRemoteScriptCommandArgs(target themeDeployTarget, label string) []stri
 }
 
 func themeDeployActivateArgs(target themeDeployTarget, themeSlug string) []string {
-	remoteCommand := target.WPCommand + " --path=" + shellQuoteArg(target.WordPressPath) + " theme activate " + shellQuoteArg(themeSlug) + " --allow-root"
+	remoteCommand := remoteWPCommand(themeDeploySyncTarget(target), "theme", "activate", themeSlug, "--allow-root")
 	return []string{"ssh", "-p", target.SSHPort, target.SSHUser + "@" + target.SSHHost, remoteCommand}
 }
 

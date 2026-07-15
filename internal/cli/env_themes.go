@@ -1390,6 +1390,9 @@ func localThemeInstallScript(themes []wordpressThemeSpec, installSources map[str
 		builder.WriteString("  wp theme activate ")
 		builder.WriteString(slug)
 		builder.WriteString("\n")
+		builder.WriteString("  ")
+		builder.WriteString(rewriteFlushShellStep(wpRewriteFlushCommand("wp"), "Failed to flush WordPress rewrite rules in the local environment"))
+		builder.WriteString("\n")
 		builder.WriteString("fi\n")
 	}
 	return builder.String()
@@ -1427,6 +1430,9 @@ func remoteThemeInstallScript(target envRemoteSyncTarget, themes []remoteThemeIn
 		builder.WriteString("; then\n")
 		builder.WriteString("  wp_cmd theme activate ")
 		builder.WriteString(slug)
+		builder.WriteString("\n")
+		builder.WriteString("  ")
+		builder.WriteString(rewriteFlushShellStep(wpRewriteFlushCommand("wp_cmd"), fmt.Sprintf("Failed to flush WordPress rewrite rules on %s", target.Env)))
 		builder.WriteString("\n")
 		builder.WriteString("fi\n")
 	}

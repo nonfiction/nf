@@ -358,10 +358,11 @@ else
 fi
 `, target.WPCommand, shellQuoteArg(target.WordPressPath), shellQuoteArg(themeSlug), target.WPCommand, shellQuoteArg(target.WordPressPath), shellQuoteArg(themeSlug), shellQuoteArg(themeSlug))
 	}
+	rewriteStep := rewriteFlushShellStep(remoteWPCommand(target, wpRewriteFlushArgs()...), fmt.Sprintf("Failed to flush WordPress rewrite rules on %s", target.Env))
 	return fmt.Sprintf(`set -eu
-%s%s%s
+%s%s%s%s
 %s --path=%s cache flush
-`, remoteWPOptionUpdateLines(target, destinationURL), remoteWPSearchReplaceLine(target, sourceURL, destinationURL), themeScript, target.WPCommand, shellQuoteArg(target.WordPressPath)), nil
+`, remoteWPOptionUpdateLines(target, destinationURL), remoteWPSearchReplaceLine(target, sourceURL, destinationURL), themeScript, rewriteStep+"\n", target.WPCommand, shellQuoteArg(target.WordPressPath)), nil
 }
 
 func remoteSSHArgs(target envRemoteSyncTarget, script string) []string {
@@ -557,7 +558,7 @@ func executeEnvPull(cfg envConfig, target envRemoteSyncTarget) int {
 		fmt.Fprintln(os.Stderr, err)
 		return 1
 	}
-	fmt.Println("Finalizing local WordPress URL, theme, and cache...")
+	fmt.Println("Finalizing local WordPress URL, theme, rewrite rules, and cache...")
 	if err := envFinalizeLocalRestore(cfg, normalizeWordPressURL(target.URL, true)); err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		return 1
@@ -683,7 +684,7 @@ func executeEnvPush(cfg envConfig, target envRemoteSyncTarget) int {
 		fmt.Fprintln(os.Stderr, err)
 		return 1
 	}
-	fmt.Println("Finalizing remote WordPress URL, theme, and cache...")
+	fmt.Println("Finalizing remote WordPress URL, theme, rewrite rules, and cache...")
 	if err := runSSHCommandFn(remoteSSHArgs(target, finalizeScript)); err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		return 1

@@ -111,7 +111,7 @@ nf theme install production --yes
 
 Local installs use the configured repo theme bind mount and cached zips when requested. Remote installs run WP-CLI on the remote host. URL sources must be reachable from that host; local zip, cache, and repo sources are uploaded to a temporary remote directory before install and cleaned up afterward.
 
-Theme install is idempotent: it installs only missing configured themes, activates the first listed theme when inactive, and enables native WordPress auto-updates for non-repo themes only when requested. It does not update, remove, pin, disable auto-updates, or manage licenses.
+Theme install is idempotent: it installs only missing configured themes, activates the first listed theme when inactive, and enables native WordPress auto-updates for non-repo themes only when requested. When installation actually changes the active theme, `nf` runs `wp rewrite flush` afterward. It does not update, remove, pin, disable auto-updates, or manage licenses.
 
 ## Run Theme Tasks
 
@@ -171,7 +171,7 @@ Deploy:
 nf theme deploy production
 ```
 
-`nf theme deploy <remote>` builds the same repo theme artifact as `nf theme package`, installs any configured non-repo themes first, uploads the repo theme release to the selected remote env, extracts it under `wp-content/themes/.nf-releases/<repo-theme-slug>/`, copies the release into `wp-content/themes/<repo-theme-slug>/`, activates the first configured theme with wp-cli, and records release metadata.
+`nf theme deploy <remote>` builds the same repo theme artifact as `nf theme package`, installs any configured non-repo themes first, uploads the repo theme release to the selected remote env, extracts it under `wp-content/themes/.nf-releases/<repo-theme-slug>/`, copies the release into `wp-content/themes/<repo-theme-slug>/`, activates the first configured theme with wp-cli, and records release metadata. After the release switch succeeds, it runs `wp rewrite flush`; a flush failure makes the deploy command fail without undoing the recorded release.
 
 Theme deploy keeps the last 5 releases and matching uploaded zips, so release storage does not grow indefinitely. It does not require manual WordPress admin zip upload and supersedes direct in-place source rsync deploys.
 
@@ -189,4 +189,4 @@ Roll back:
 nf theme rollback production
 ```
 
-`nf theme rollback <remote>` switches the repo theme directory back to the previous recorded release and activates the first configured theme again. It uses remote `releases.json`; it does not rebuild or upload artifacts.
+`nf theme rollback <remote>` switches the repo theme directory back to the previous recorded release, activates the first configured theme again, and then runs `wp rewrite flush`. It uses remote `releases.json`; it does not rebuild or upload artifacts.

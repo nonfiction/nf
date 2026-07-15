@@ -49,7 +49,10 @@ func (c envCommandRunner) ensureUpInstalledActive(envDir string) error {
 		return err
 	}
 	if err := runCommandSpecQuiet(execSpec{Dir: envDir, Args: envWpThemeIsActiveArgs(c.cfg, "")}); err != nil {
-		return runCommandSpec(execSpec{Dir: envDir, Args: envWpThemeActivateArgs(c.cfg, "")})
+		if err := runCommandSpec(execSpec{Dir: envDir, Args: envWpThemeActivateArgs(c.cfg, "")}); err != nil {
+			return err
+		}
+		return flushLocalRewriteRules(c.cfg)
 	}
 	return nil
 }
@@ -480,6 +483,9 @@ func envFinalizeLocalRestore(cfg envConfig, sourceURL string) error {
 		}
 	} else {
 		fmt.Fprintf(os.Stderr, "Warning: theme %q is not installed locally; skipping theme activation.\n", themeSlug)
+	}
+	if err := flushLocalRewriteRules(cfg); err != nil {
+		return err
 	}
 	return runCommandSpec(execSpec{Dir: localEnvDir(cfg), Args: envWpArgs(cfg, "cache", "flush")})
 }

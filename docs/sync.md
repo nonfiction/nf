@@ -39,6 +39,8 @@ Sync intentionally skips `wp-content/mu-plugins`. MU plugins are target-owned pl
 
 Theme deployment is separate. Use [Themes](themes.md) for theme releases.
 
+After the destination database is imported, `nf` updates the destination URLs, runs search-replace when needed, activates the configured theme when installed, and runs `wp rewrite flush`. This regenerates WordPress rewrite rules without `--hard`. The existing object-cache flush remains a separate later step. A rewrite failure fails the sync and prevents the cache step from being reported as complete.
+
 ## Review Before Execution
 
 Dry-run prints the local project, local env path, remote name, site, env, provider, URL, access summary, and mode:

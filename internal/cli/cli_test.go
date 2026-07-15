@@ -10890,6 +10890,11 @@ func TestRunSiteCachePurgesLinodeCacheAndFlushesWP(t *testing.T) {
 			t.Fatalf("staging cache command missing %q: %#v", want, commands[1])
 		}
 	}
+	for _, command := range commands {
+		if strings.Contains(strings.Join(command, " "), "rewrite flush") {
+			t.Fatalf("cache-only command unexpectedly flushed rewrite rules: %#v", command)
+		}
+	}
 }
 
 func TestRunSiteRepairKinstaPlansAndExecutesMUPluginRepair(t *testing.T) {
@@ -11595,7 +11600,7 @@ func TestRunThemeDeployDryRunPlansLinodePackagedRelease(t *testing.T) {
 			t.Fatalf("Run(theme deploy --dry-run) = %d, want 0", got)
 		}
 	})
-	for _, want := range []string{"provider:    linode", "artifact:    " + filepath.Join(repoRoot, "dist", "client-v2.0.0.zip"), "release dir: /var/www/sites/client_staging/public/wp-content/themes/.nf-releases/client-theme/v2.0.0-", "active dir:  /var/www/sites/client_staging/public/wp-content/themes/client-theme", "remote script: extract release, switch active theme, refresh runtime mtimes, activate, record metadata, prune old releases", "> ssh -p 22 nonfiction@app1-linode.nonfiction.dev 'sh -s -- nf-theme-deploy-release'"} {
+	for _, want := range []string{"provider:    linode", "artifact:    " + filepath.Join(repoRoot, "dist", "client-v2.0.0.zip"), "release dir: /var/www/sites/client_staging/public/wp-content/themes/.nf-releases/client-theme/v2.0.0-", "active dir:  /var/www/sites/client_staging/public/wp-content/themes/client-theme", "remote script: extract release, switch active theme, refresh runtime mtimes, activate, record metadata, prune old releases", "> ssh -p 22 nonfiction@app1-linode.nonfiction.dev 'sh -s -- nf-theme-deploy-release'", "post-deploy: regenerate WordPress rewrite rules", "> ssh -p 22 nonfiction@app1-linode.nonfiction.dev 'sudo -u www-data wp --path=/var/www/sites/client_staging/public rewrite flush'"} {
 		if !strings.Contains(stdout, want) {
 			t.Fatalf("theme deploy linode stdout missing %q:\n%s", want, stdout)
 		}
@@ -11637,8 +11642,16 @@ func TestRunThemeDeployExecuteRefreshesRuntimeMtimesBeforeActivation(t *testing.
 		t.Fatalf("Chdir() error = %v", err)
 	}
 	t.Cleanup(func() { _ = os.Chdir(oldwd) })
+	var events []string
 	oldRunSSH := runSSHCommandFn
-	runSSHCommandFn = func(args []string) error { return nil }
+	var maintenanceCommands [][]string
+	runSSHCommandFn = func(args []string) error {
+		maintenanceCommands = append(maintenanceCommands, append([]string(nil), args...))
+		if strings.Contains(args[len(args)-1], "rewrite flush") {
+			events = append(events, "rewrite")
+		}
+		return nil
+	}
 	t.Cleanup(func() { runSSHCommandFn = oldRunSSH })
 	oldRunRsync := runRsyncCommandFn
 	runRsyncCommandFn = func(args []string) error { return nil }
@@ -11649,6 +11662,7 @@ func TestRunThemeDeployExecuteRefreshesRuntimeMtimesBeforeActivation(t *testing.
 	runSSHStdinCommandFn = func(args []string, script string) error {
 		sshCommands = append(sshCommands, append([]string(nil), args...))
 		sshScripts = append(sshScripts, script)
+		events = append(events, "release")
 		return nil
 	}
 	t.Cleanup(func() { runSSHStdinCommandFn = oldRunSSHStdin })
@@ -11679,6 +11693,39 @@ func TestRunThemeDeployExecuteRefreshesRuntimeMtimesBeforeActivation(t *testing.
 	activateIdx := strings.Index(script, "sudo -u www-data wp --path=/var/www/sites/client/public theme activate client-theme --allow-root")
 	if switchIdx == -1 || touchIdx == -1 || activateIdx == -1 || !(switchIdx < touchIdx && touchIdx < activateIdx) {
 		t.Fatalf("deploy script order switch=%d touch=%d activate=%d:\n%s", switchIdx, touchIdx, activateIdx, script)
+	}
+	if got := strings.Join(events, ","); got != "release,rewrite" {
+		t.Fatalf("deploy maintenance events = %q, want release,rewrite", got)
+	}
+	if len(maintenanceCommands) != 2 || !strings.Contains(maintenanceCommands[1][len(maintenanceCommands[1])-1], "sudo -u www-data wp --path=/var/www/sites/client/public rewrite flush") {
+		t.Fatalf("deploy rewrite command = %#v", maintenanceCommands)
+	}
+	if !strings.Contains(stdout, "post-deploy: regenerate WordPress rewrite rules") || !strings.Contains(stdout, rewriteRulesRegeneratedMessage) {
+		t.Fatalf("theme deploy stdout missing rewrite maintenance output:\n%s", stdout)
+	}
+	releaseCount := len(sshScripts)
+	runSSHCommandFn = func(args []string) error {
+		if strings.Contains(args[len(args)-1], "rewrite flush") {
+			return fmt.Errorf("rewrite command failed")
+		}
+		return nil
+	}
+	var failureStdout string
+	failureStderr := captureStderr(t, func() {
+		failureStdout = captureStdout(t, func() {
+			if got := Run([]string{"theme", "deploy", "production"}); got != 1 {
+				t.Fatalf("Run(theme deploy) with rewrite failure = %d, want 1", got)
+			}
+		})
+	})
+	if len(sshScripts) != releaseCount+1 {
+		t.Fatalf("deploy release script count after rewrite failure = %d, want %d", len(sshScripts), releaseCount+1)
+	}
+	if !strings.Contains(failureStderr, "failed to flush WordPress rewrite rules on live: rewrite command failed") {
+		t.Fatalf("theme deploy rewrite failure stderr = %q", failureStderr)
+	}
+	if strings.Contains(failureStdout, "Theme release deployed.") || strings.Contains(failureStdout, rewriteRulesRegeneratedMessage) {
+		t.Fatalf("theme deploy printed success after rewrite failure:\n%s", failureStdout)
 	}
 }
 
@@ -11792,12 +11839,12 @@ func TestRunThemeRollbackDryRunPlansPreviousKinstaRelease(t *testing.T) {
 			t.Fatalf("Run(theme rollback --dry-run) = %d, want 0", got)
 		}
 	})
-	for _, want := range []string{"Theme rollback plan:", "remote:      production", "provider:    kinsta", "releases:    /www/client/public/wp-content/themes/.nf-releases/theme/releases.json", "release dir: /www/client/public/wp-content/themes/.nf-releases/theme/<previous-release>", "active dir:  /www/client/public/wp-content/themes/theme", "mode:        dry-run", "remote script: select previous release, switch active theme, refresh runtime mtimes, activate, record rollback", "> ssh -p 12345 client@203.0.113.10 'sh -s -- nf-theme-rollback-release'", "No remote files were changed."} {
+	for _, want := range []string{"Theme rollback plan:", "remote:      production", "provider:    kinsta", "releases:    /www/client/public/wp-content/themes/.nf-releases/theme/releases.json", "release dir: /www/client/public/wp-content/themes/.nf-releases/theme/<previous-release>", "active dir:  /www/client/public/wp-content/themes/theme", "mode:        dry-run", "remote script: select previous release, switch active theme, refresh runtime mtimes, activate, record rollback", "> ssh -p 12345 client@203.0.113.10 'sh -s -- nf-theme-rollback-release'", "post-rollback: regenerate WordPress rewrite rules", "> ssh -p 12345 client@203.0.113.10 'wp --path=/www/client/public rewrite flush'", "No remote files were changed."} {
 		if !strings.Contains(stdout, want) {
 			t.Fatalf("theme rollback stdout missing %q:\n%s", want, stdout)
 		}
 	}
-	for _, unwanted := range []string{"target_release=$(php -r", "wp --path=/www/client/public theme activate"} {
+	for _, unwanted := range []string{"target_release=$(php -r", "wp --path=/www/client/public theme activate", "--hard"} {
 		if strings.Contains(stdout, unwanted) {
 			t.Fatalf("theme rollback stdout should not print remote script fragment %q:\n%s", unwanted, stdout)
 		}
@@ -11839,12 +11886,22 @@ func TestRunThemeRollbackExecuteRunsLinodeRollbackScript(t *testing.T) {
 	oldRunSSHStdin := runSSHStdinCommandFn
 	var sshCommands [][]string
 	var sshScripts []string
+	var events []string
 	runSSHStdinCommandFn = func(args []string, script string) error {
 		sshCommands = append(sshCommands, append([]string(nil), args...))
 		sshScripts = append(sshScripts, script)
+		events = append(events, "rollback")
 		return nil
 	}
 	t.Cleanup(func() { runSSHStdinCommandFn = oldRunSSHStdin })
+	oldRunSSH := runSSHCommandFn
+	var maintenanceCommands [][]string
+	runSSHCommandFn = func(args []string) error {
+		maintenanceCommands = append(maintenanceCommands, append([]string(nil), args...))
+		events = append(events, "rewrite")
+		return nil
+	}
+	t.Cleanup(func() { runSSHCommandFn = oldRunSSH })
 
 	stdout := captureStdout(t, func() {
 		if got := Run([]string{"theme", "rollback", "production"}); got != 0 {
@@ -11872,6 +11929,15 @@ func TestRunThemeRollbackExecuteRunsLinodeRollbackScript(t *testing.T) {
 	activateIdx := strings.Index(script, "sudo -u www-data wp --path=/var/www/sites/client/public theme activate client-theme --allow-root")
 	if switchIdx == -1 || touchIdx == -1 || activateIdx == -1 || !(switchIdx < touchIdx && touchIdx < activateIdx) {
 		t.Fatalf("rollback script order switch=%d touch=%d activate=%d:\n%s", switchIdx, touchIdx, activateIdx, script)
+	}
+	if got := strings.Join(events, ","); got != "rollback,rewrite" {
+		t.Fatalf("rollback maintenance events = %q, want rollback,rewrite", got)
+	}
+	if len(maintenanceCommands) != 1 || !strings.Contains(maintenanceCommands[0][len(maintenanceCommands[0])-1], "sudo -u www-data wp --path=/var/www/sites/client/public rewrite flush") {
+		t.Fatalf("rollback rewrite command = %#v", maintenanceCommands)
+	}
+	if !strings.Contains(stdout, "post-rollback: regenerate WordPress rewrite rules") || !strings.Contains(stdout, rewriteRulesRegeneratedMessage) {
+		t.Fatalf("theme rollback stdout missing rewrite maintenance output:\n%s", stdout)
 	}
 }
 
@@ -13026,7 +13092,7 @@ func TestRunEnvSnapshotUseSkipsComposeUpWhenReady(t *testing.T) {
 		t.Fatalf("ReadFile(docker log) error = %v", err)
 	}
 	logText := string(logData)
-	assertContainsInOrder(t, logText, []string{"wp db export", "wp db import", "--user\nroot", "chown -R nonfiction:www-data", "chmod -R u+rwX,g+rwX,o-rwx", "wp\n--skip-themes\n--skip-plugins\noption\nupdate\nhome\nhttp://localhost:18440", "wp\n--skip-themes\n--skip-plugins\noption\nupdate\nsiteurl\nhttp://localhost:18440", "wp\nsearch-replace\nhttps://source.example.test\nhttp://localhost:18440\n--all-tables-with-prefix\n--skip-columns=guid", "wp\ntheme\nactivate\ntheme", "wp\ncache\nflush"})
+	assertContainsInOrder(t, logText, []string{"wp db export", "wp db import", "--user\nroot", "chown -R nonfiction:www-data", "chmod -R u+rwX,g+rwX,o-rwx", "wp\n--skip-themes\n--skip-plugins\noption\nupdate\nhome\nhttp://localhost:18440", "wp\n--skip-themes\n--skip-plugins\noption\nupdate\nsiteurl\nhttp://localhost:18440", "wp\nsearch-replace\nhttps://source.example.test\nhttp://localhost:18440\n--all-tables-with-prefix\n--skip-columns=guid", "wp\ntheme\nactivate\ntheme", "wp\nrewrite\nflush", "wp\ncache\nflush"})
 }
 
 func TestRunEnvSnapshotUseYesSkipsInteractiveConfirmation(t *testing.T) {
@@ -13072,7 +13138,7 @@ func TestRunEnvSnapshotUseYesSkipsInteractiveConfirmation(t *testing.T) {
 		t.Fatalf("ReadFile(docker log) error = %v", err)
 	}
 	logText := string(logData)
-	assertContainsInOrder(t, logText, []string{"wp db export", "wp db import", "--user\nroot", "chown -R nonfiction:www-data", "wp\n--skip-themes\n--skip-plugins\noption\nupdate\nhome\nhttp://localhost:18440", "wp\n--skip-themes\n--skip-plugins\noption\nupdate\nsiteurl\nhttp://localhost:18440", "wp\nsearch-replace\nhttp://localhost:18432\nhttp://localhost:18440\n--all-tables-with-prefix\n--skip-columns=guid", "wp\ntheme\nactivate\ntheme", "wp\ncache\nflush"})
+	assertContainsInOrder(t, logText, []string{"wp db export", "wp db import", "--user\nroot", "chown -R nonfiction:www-data", "wp\n--skip-themes\n--skip-plugins\noption\nupdate\nhome\nhttp://localhost:18440", "wp\n--skip-themes\n--skip-plugins\noption\nupdate\nsiteurl\nhttp://localhost:18440", "wp\nsearch-replace\nhttp://localhost:18432\nhttp://localhost:18440\n--all-tables-with-prefix\n--skip-columns=guid", "wp\ntheme\nactivate\ntheme", "wp\nrewrite\nflush", "wp\ncache\nflush"})
 }
 
 func TestRunEnvSnapshotUseRemoteImportsThenRestores(t *testing.T) {
@@ -13123,7 +13189,7 @@ func TestRunEnvSnapshotUseRemoteImportsThenRestores(t *testing.T) {
 		t.Fatalf("ReadFile(docker log) error = %v", err)
 	}
 	logText := string(logData)
-	assertContainsInOrder(t, logText, []string{"wp db export", "wp db import", "--user\nroot", "chown -R nonfiction:www-data", "wp\n--skip-themes\n--skip-plugins\noption\nupdate\nhome\nhttp://localhost:18440", "wp\n--skip-themes\n--skip-plugins\noption\nupdate\nsiteurl\nhttp://localhost:18440", "wp\nsearch-replace\nhttps://client-kinsta.live.example.test\nhttp://localhost:18440\n--all-tables-with-prefix\n--skip-columns=guid", "wp\ntheme\nactivate\ntheme", "wp\ncache\nflush"})
+	assertContainsInOrder(t, logText, []string{"wp db export", "wp db import", "--user\nroot", "chown -R nonfiction:www-data", "wp\n--skip-themes\n--skip-plugins\noption\nupdate\nhome\nhttp://localhost:18440", "wp\n--skip-themes\n--skip-plugins\noption\nupdate\nsiteurl\nhttp://localhost:18440", "wp\nsearch-replace\nhttps://client-kinsta.live.example.test\nhttp://localhost:18440\n--all-tables-with-prefix\n--skip-columns=guid", "wp\ntheme\nactivate\ntheme", "wp\nrewrite\nflush", "wp\ncache\nflush"})
 }
 
 func TestRunEnvImportRestoresSiteExportIntoLocalEnv(t *testing.T) {
@@ -13184,7 +13250,7 @@ func TestRunEnvImportRestoresSiteExportIntoLocalEnv(t *testing.T) {
 			t.Fatalf("Run(env import) = %d, want 0", got)
 		}
 	})
-	for _, want := range []string{"Env import plan:", "source type:   nf site export", "snapshot:      client-handoff", "WordPress import restored.", "Imported snapshot:", "Safety snapshot:"} {
+	for _, want := range []string{"Env import plan:", "source type:   nf site export", "snapshot:      client-handoff", rewriteRulesRegeneratedMessage, "WordPress import restored.", "Imported snapshot:", "Safety snapshot:"} {
 		if !strings.Contains(stdout, want) {
 			t.Fatalf("env import stdout missing %q:\n%s", want, stdout)
 		}
@@ -13211,9 +13277,83 @@ func TestRunEnvImportRestoresSiteExportIntoLocalEnv(t *testing.T) {
 		t.Fatalf("ReadFile(docker log) error = %v", err)
 	}
 	logText := string(logData)
-	assertContainsInOrder(t, logText, []string{"wp db export", "wp db import", "--user\nroot", "chown -R nonfiction:www-data", "wp\n--skip-themes\n--skip-plugins\noption\nupdate\nhome\nhttp://localhost:18440", "wp\n--skip-themes\n--skip-plugins\noption\nupdate\nsiteurl\nhttp://localhost:18440", "wp\nsearch-replace\nhttps://www.example.com\nhttp://localhost:18440\n--all-tables-with-prefix\n--skip-columns=guid", "wp\ntheme\nactivate\ntheme", "wp\ncache\nflush"})
+	assertContainsInOrder(t, logText, []string{"wp db export", "wp db import", "--user\nroot", "chown -R nonfiction:www-data", "wp\n--skip-themes\n--skip-plugins\noption\nupdate\nhome\nhttp://localhost:18440", "wp\n--skip-themes\n--skip-plugins\noption\nupdate\nsiteurl\nhttp://localhost:18440", "wp\nsearch-replace\nhttps://www.example.com\nhttp://localhost:18440\n--all-tables-with-prefix\n--skip-columns=guid", "wp\ntheme\nactivate\ntheme", "wp\nrewrite\nflush", "wp\ncache\nflush"})
 	if !strings.Contains(stdout, "path: "+importedDir) {
 		t.Fatalf("env import stdout missing imported path %s:\n%s", importedDir, stdout)
+	}
+}
+
+func TestEnvFinalizeLocalRestoreShortCircuitsRewriteMaintenance(t *testing.T) {
+	for _, test := range []struct {
+		name           string
+		failCommand    string
+		wantRewrite    bool
+		wantError      string
+		forbiddenAfter string
+	}{
+		{name: "search replace failure", failCommand: "search-replace", wantRewrite: false, forbiddenAfter: "rewrite flush"},
+		{name: "theme activation failure", failCommand: "theme activate", wantRewrite: false, forbiddenAfter: "rewrite flush"},
+		{name: "rewrite failure", failCommand: "rewrite flush", wantRewrite: true, wantError: "failed to flush WordPress rewrite rules in the local environment", forbiddenAfter: "cache flush"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			dockerDir := t.TempDir()
+			logPath := filepath.Join(dockerDir, "docker.log")
+			dockerScript := []byte("#!/bin/sh\nprintf '%s\\n' \"$*\" >> \"$DOCKER_LOG\"\ncase \"$*\" in *\"$FAIL_COMMAND\"*) exit 23 ;; esac\nexit 0\n")
+			if err := os.WriteFile(filepath.Join(dockerDir, "docker"), dockerScript, 0o755); err != nil {
+				t.Fatalf("WriteFile(docker) error = %v", err)
+			}
+			t.Setenv("DOCKER_LOG", logPath)
+			t.Setenv("FAIL_COMMAND", test.failCommand)
+			t.Setenv("PATH", dockerDir+string(os.PathListSeparator)+os.Getenv("PATH"))
+			cfg := envConfig{EnvDir: t.TempDir(), WordpressPort: 18432, ThemeSlug: "client"}
+			var finalizeErr error
+			stdout := captureStdout(t, func() {
+				finalizeErr = envFinalizeLocalRestore(cfg, "https://www.example.com")
+			})
+			if finalizeErr == nil {
+				t.Fatal("envFinalizeLocalRestore() error = nil, want failure")
+			}
+			if test.wantError != "" && !strings.Contains(finalizeErr.Error(), test.wantError) {
+				t.Fatalf("envFinalizeLocalRestore() error = %q, want %q", finalizeErr, test.wantError)
+			}
+			logData, err := os.ReadFile(logPath)
+			if err != nil {
+				t.Fatalf("ReadFile(docker log) error = %v", err)
+			}
+			logText := string(logData)
+			if got := strings.Contains(logText, "rewrite flush"); got != test.wantRewrite {
+				t.Fatalf("rewrite flush present = %t, want %t:\n%s", got, test.wantRewrite, logText)
+			}
+			if strings.Contains(logText, test.forbiddenAfter) {
+				t.Fatalf("command %q ran after failure:\n%s", test.forbiddenAfter, logText)
+			}
+			if strings.Contains(stdout, rewriteRulesRegeneratedMessage) {
+				t.Fatalf("rewrite success output printed after failure:\n%s", stdout)
+			}
+		})
+	}
+}
+
+func TestFlushRemoteRewriteRulesPropagatesContextualFailure(t *testing.T) {
+	oldRunSSH := runSSHCommandFn
+	var command []string
+	runSSHCommandFn = func(args []string) error {
+		command = append([]string(nil), args...)
+		return fmt.Errorf("remote command failed")
+	}
+	t.Cleanup(func() { runSSHCommandFn = oldRunSSH })
+	target := envRemoteSyncTarget{Env: "staging", SSHUser: "client", SSHHost: "203.0.113.10", SSHPort: "12345", WordPressPath: "/www/client/public", WPCommand: "wp"}
+	stdout := captureStdout(t, func() {
+		err := flushRemoteRewriteRules(target)
+		if err == nil || !strings.Contains(err.Error(), "failed to flush WordPress rewrite rules on staging: remote command failed") {
+			t.Fatalf("flushRemoteRewriteRules() error = %v", err)
+		}
+	})
+	if got := strings.Join(command, " "); !strings.Contains(got, "wp --path=/www/client/public rewrite flush") || strings.Contains(got, "--hard") {
+		t.Fatalf("remote rewrite command = %q", got)
+	}
+	if strings.Contains(stdout, rewriteRulesRegeneratedMessage) {
+		t.Fatalf("rewrite success output printed after remote failure:\n%s", stdout)
 	}
 }
 
@@ -13398,13 +13538,13 @@ func TestExecuteEnvPullFinalizesLocalDestinationThemeAndCache(t *testing.T) {
 			t.Fatalf("executeEnvPull() = %d, want 0", got)
 		}
 	})
-	assertContainsInOrder(t, stdout, []string{"Preparing local safety snapshot before remote pull...", "Checking available disk space for local snapshot workspace...", "Estimating remote database and non-upload wp-content size for pull...", "Checking available disk space for remote export workspace...", "Preparing remote database and non-upload wp-content export for pull...", "Measuring remote pull export...", "Checking available disk space for local pull snapshot...", "Preparing to rsync remote database and non-upload wp-content to local...", "Restoring pulled database and non-upload wp-content into local env...", "Preparing to rsync remote uploads to local...", "Finalizing local WordPress URL, theme, and cache...", "Recording complete pulled snapshot locally..."})
+	assertContainsInOrder(t, stdout, []string{"Preparing local safety snapshot before remote pull...", "Checking available disk space for local snapshot workspace...", "Estimating remote database and non-upload wp-content size for pull...", "Checking available disk space for remote export workspace...", "Preparing remote database and non-upload wp-content export for pull...", "Measuring remote pull export...", "Checking available disk space for local pull snapshot...", "Preparing to rsync remote database and non-upload wp-content to local...", "Restoring pulled database and non-upload wp-content into local env...", "Preparing to rsync remote uploads to local...", "Finalizing local WordPress URL, theme, rewrite rules, and cache...", "Rewrite rules regenerated.", "Recording complete pulled snapshot locally..."})
 	logData, err := os.ReadFile(logPath)
 	if err != nil {
 		t.Fatalf("ReadFile(docker log) error = %v", err)
 	}
 	logText := string(logData)
-	assertContainsInOrder(t, logText, []string{"wp db export", "wp db import", "--user\nroot", "chown -R nonfiction:www-data", "wp\n--skip-themes\n--skip-plugins\noption\nupdate\nhome\nhttp://localhost:18432", "wp\n--skip-themes\n--skip-plugins\noption\nupdate\nsiteurl\nhttp://localhost:18432", "wp\nsearch-replace\nhttps://client.app1-linode.nonfiction.dev\nhttp://localhost:18432\n--all-tables-with-prefix\n--skip-columns=guid", "wp\ntheme\nactivate\nlocal-theme", "wp\ncache\nflush"})
+	assertContainsInOrder(t, logText, []string{"wp db export", "wp db import", "--user\nroot", "chown -R nonfiction:www-data", "wp\n--skip-themes\n--skip-plugins\noption\nupdate\nhome\nhttp://localhost:18432", "wp\n--skip-themes\n--skip-plugins\noption\nupdate\nsiteurl\nhttp://localhost:18432", "wp\nsearch-replace\nhttps://client.app1-linode.nonfiction.dev\nhttp://localhost:18432\n--all-tables-with-prefix\n--skip-columns=guid", "wp\ntheme\nactivate\nlocal-theme", "wp\nrewrite\nflush", "wp\ncache\nflush"})
 	if strings.Contains(logText, "wp\ntheme\nactivate\nremote-theme") {
 		t.Fatalf("pull activated remote theme slug locally:\n%s", logText)
 	}
@@ -13459,7 +13599,7 @@ func TestExecuteEnvPullSkipsMissingLocalDestinationTheme(t *testing.T) {
 		t.Fatalf("ReadFile(docker log) error = %v", err)
 	}
 	logText := string(logData)
-	assertContainsInOrder(t, logText, []string{"wp db import", "--user\nroot", "chown -R nonfiction:www-data", "wp\n--skip-themes\n--skip-plugins\noption\nupdate\nhome\nhttp://localhost:18432", "wp\n--skip-themes\n--skip-plugins\noption\nupdate\nsiteurl\nhttp://localhost:18432", "wp\nsearch-replace\nhttps://client.app1-linode.nonfiction.dev\nhttp://localhost:18432\n--all-tables-with-prefix\n--skip-columns=guid", "wp\ntheme\nis-installed\nlocal-theme", "wp\ncache\nflush"})
+	assertContainsInOrder(t, logText, []string{"wp db import", "--user\nroot", "chown -R nonfiction:www-data", "wp\n--skip-themes\n--skip-plugins\noption\nupdate\nhome\nhttp://localhost:18432", "wp\n--skip-themes\n--skip-plugins\noption\nupdate\nsiteurl\nhttp://localhost:18432", "wp\nsearch-replace\nhttps://client.app1-linode.nonfiction.dev\nhttp://localhost:18432\n--all-tables-with-prefix\n--skip-columns=guid", "wp\ntheme\nis-installed\nlocal-theme", "wp\nrewrite\nflush", "wp\ncache\nflush"})
 	if strings.Contains(logText, "wp\ntheme\nactivate\nlocal-theme") {
 		t.Fatalf("pull activated missing local theme:\n%s", logText)
 	}
@@ -13517,7 +13657,7 @@ func TestExecuteEnvPushFinalizesRemoteDestinationThemeAndCache(t *testing.T) {
 			t.Fatalf("executeEnvPush() = %d, want 0", got)
 		}
 	})
-	assertContainsInOrder(t, stdout, []string{"Preparing local database and non-upload wp-content transfer for remote push...", "Checking available disk space for local push transfer workspace...", "Measuring local push transfer payload...", "Estimating current remote database and uploads size for backup...", "Checking available disk space for remote push backup workspace...", "Creating remote backup before push...", "Checking available disk space for remote push workspace...", "Preparing remote push workspace...", "Preparing to rsync local database archive to remote...", "Preparing to rsync local non-upload wp-content archive to remote...", "Checking available disk space for remote push import workspace...", "Importing pushed database and non-upload wp-content on remote...", "Preparing to rsync local uploads to remote...", "Finalizing remote WordPress URL, theme, and cache...", "Env pushed.", "Remote backup: cleaned up after successful push to avoid production disk growth"})
+	assertContainsInOrder(t, stdout, []string{"Preparing local database and non-upload wp-content transfer for remote push...", "Checking available disk space for local push transfer workspace...", "Measuring local push transfer payload...", "Estimating current remote database and uploads size for backup...", "Checking available disk space for remote push backup workspace...", "Creating remote backup before push...", "Checking available disk space for remote push workspace...", "Preparing remote push workspace...", "Preparing to rsync local database archive to remote...", "Preparing to rsync local non-upload wp-content archive to remote...", "Checking available disk space for remote push import workspace...", "Importing pushed database and non-upload wp-content on remote...", "Preparing to rsync local uploads to remote...", "Finalizing remote WordPress URL, theme, rewrite rules, and cache...", "Env pushed.", "Remote backup: cleaned up after successful push to avoid production disk growth"})
 	if strings.Contains(stdout, "Local snapshot:") {
 		t.Fatalf("push stdout advertised a retained local snapshot:\n%s", stdout)
 	}
@@ -13532,7 +13672,7 @@ func TestExecuteEnvPushFinalizesRemoteDestinationThemeAndCache(t *testing.T) {
 	if !strings.Contains(importScript, "db import") {
 		t.Fatalf("remote import script missing db import:\n%s", importScript)
 	}
-	assertContainsInOrder(t, finalizeScript, []string{"--skip-themes --skip-plugins option update home https://client.app1-linode.nonfiction.dev", "--skip-themes --skip-plugins option update siteurl https://client.app1-linode.nonfiction.dev", "search-replace http://localhost:18432 https://client.app1-linode.nonfiction.dev --all-tables-with-prefix --skip-columns=guid", "theme is-installed remote-theme", "theme activate remote-theme", "cache flush"})
+	assertContainsInOrder(t, finalizeScript, []string{"--skip-themes --skip-plugins option update home https://client.app1-linode.nonfiction.dev", "--skip-themes --skip-plugins option update siteurl https://client.app1-linode.nonfiction.dev", "search-replace http://localhost:18432 https://client.app1-linode.nonfiction.dev --all-tables-with-prefix --skip-columns=guid", "theme is-installed remote-theme", "theme activate remote-theme", "rewrite flush", "Rewrite rules regenerated.", "cache flush"})
 	if !strings.Contains(finalizeScript, "skipping theme activation") {
 		t.Fatalf("remote finalize script missing missing-theme warning:\n%s", finalizeScript)
 	}
@@ -13581,8 +13721,8 @@ func TestExecuteEnvPushRetainsRemoteBackupAfterRemoteChangeFailure(t *testing.T)
 	var sshCommands [][]string
 	runSSHCommandFn = func(args []string) error {
 		sshCommands = append(sshCommands, append([]string(nil), args...))
-		if strings.Contains(args[len(args)-1], "cache flush") {
-			return fmt.Errorf("finalize failed")
+		if strings.Contains(args[len(args)-1], "rewrite flush") {
+			return fmt.Errorf("rewrite flush failed")
 		}
 		return nil
 	}
@@ -13595,7 +13735,7 @@ func TestExecuteEnvPushRetainsRemoteBackupAfterRemoteChangeFailure(t *testing.T)
 			}
 		})
 	})
-	assertContainsInOrder(t, stderr, []string{"finalize failed", "Remote backup retained for recovery: /tmp/nf-backup-", "Remove it after recovery to free production disk space."})
+	assertContainsInOrder(t, stderr, []string{"rewrite flush failed", "Remote backup retained for recovery: /tmp/nf-backup-", "Remove it after recovery to free production disk space."})
 	if len(sshCommands) != 5 || !strings.Contains(sshCommands[4][len(sshCommands[4])-1], "rm -rf -- /tmp/nf-push-") {
 		t.Fatalf("ssh commands = %#v, want backup/export/import/finalize plus push cleanup", sshCommands)
 	}
@@ -15679,13 +15819,30 @@ func TestLocalThemeInstallScriptInstallsAndActivatesFirstTheme(t *testing.T) {
 		{Slug: "twentytwentyfive", Source: "wordpress.org", AutoUpdate: true},
 	}
 	script := localThemeInstallScript(themes, map[string]string{"client": localRepoThemeInstallSourceMark}, activeWordPressThemeSlug(themes))
-	for _, want := range []string{"wp theme is-installed client", "wp theme install twentytwentyfive", "wp theme auto-updates enable twentytwentyfive", "wp theme activate client"} {
+	for _, want := range []string{"wp theme is-installed client", "wp theme install twentytwentyfive", "wp theme auto-updates enable twentytwentyfive", "wp theme activate client", "wp rewrite flush", rewriteRulesRegeneratedMessage} {
 		if !strings.Contains(script, want) {
 			t.Fatalf("theme install script missing %q:\n%s", want, script)
 		}
 	}
+	assertContainsInOrder(t, script, []string{"wp theme activate client", "wp rewrite flush", rewriteRulesRegeneratedMessage})
 	if strings.Contains(script, "auto-updates enable client") {
 		t.Fatalf("repo theme should not get auto-updates enabled:\n%s", script)
+	}
+	if strings.Contains(script, "--hard") {
+		t.Fatalf("theme install rewrite flush must not use --hard:\n%s", script)
+	}
+}
+
+func TestRemoteThemeInstallScriptFlushesAfterActivation(t *testing.T) {
+	target := envRemoteSyncTarget{Env: "staging", WordPressPath: "/www/client/public", WPCommand: "wp"}
+	themes := []remoteThemeInstallSpec{{Theme: wordpressThemeSpec{Slug: "client", Source: "wordpress.org"}, InstallSource: "client"}}
+	script := remoteThemeInstallScript(target, themes, "client")
+	assertContainsInOrder(t, script, []string{"wp_cmd theme activate client", "wp_cmd rewrite flush", rewriteRulesRegeneratedMessage})
+	if !strings.Contains(script, "Failed to flush WordPress rewrite rules on staging") {
+		t.Fatalf("remote theme install script missing contextual rewrite error:\n%s", script)
+	}
+	if strings.Contains(script, "--hard") {
+		t.Fatalf("remote theme install rewrite flush must not use --hard:\n%s", script)
 	}
 }
 
@@ -17431,6 +17588,16 @@ func TestEnvCommandHelpersBuildExpectedArgs(t *testing.T) {
 	if got, want := envWpArgs(cfg, "plugin", "list"), []string{"docker", "compose", "exec", "--user", "nonfiction", "wordpress", "wp", "plugin", "list"}; !reflect.DeepEqual(got, want) {
 		t.Fatalf("envWpArgs() = %#v, want %#v", got, want)
 	}
+	if got, want := envWpRewriteFlushArgs(cfg), []string{"docker", "compose", "exec", "--user", "nonfiction", "wordpress", "wp", "rewrite", "flush"}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("envWpRewriteFlushArgs() = %#v, want %#v", got, want)
+	}
+	remoteTarget := envRemoteSyncTarget{SSHUser: "client", SSHHost: "203.0.113.10", SSHPort: "12345", WordPressPath: "/www/client/public", WPCommand: "wp"}
+	if got, want := remoteWPSSHArgs(remoteTarget, wpRewriteFlushArgs()...), []string{"ssh", "-p", "12345", "client@203.0.113.10", "wp --path=/www/client/public rewrite flush"}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("remoteWPSSHArgs(rewrite flush) = %#v, want %#v", got, want)
+	}
+	if strings.Contains(strings.Join(envWpRewriteFlushArgs(cfg), " ")+" "+strings.Join(remoteWPSSHArgs(remoteTarget, wpRewriteFlushArgs()...), " "), "--hard") {
+		t.Fatal("rewrite flush helpers unexpectedly use --hard")
+	}
 	if got, want := envShellArgs(cfg), []string{"docker", "compose", "exec", "--user", "nonfiction", "wordpress", "bash"}; !reflect.DeepEqual(got, want) {
 		t.Fatalf("envShellArgs() = %#v, want %#v", got, want)
 	}
@@ -17785,6 +17952,8 @@ func TestRunEnvUpActivatesThemeWhenAlreadyInstalled(t *testing.T) {
 		"> docker compose exec --user nonfiction wordpress '<wp theme bootstrap script>'",
 		"> docker compose exec --user nonfiction wordpress wp theme is-active theme",
 		"> docker compose exec --user nonfiction wordpress wp theme activate theme",
+		"> docker compose exec --user nonfiction wordpress wp rewrite flush",
+		rewriteRulesRegeneratedMessage,
 	} {
 		if !strings.Contains(output, want) {
 			t.Fatalf("Run() output = %q, want %q", output, want)

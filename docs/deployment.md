@@ -9,11 +9,11 @@ nf theme deploy <remote> [--dry-run]
 nf theme rollback <remote> [--dry-run]
 ```
 
-`nf theme deploy <remote>` is a one-command packaged release deploy. It builds the same theme artifact as `nf theme package`, uploads it to the selected remote env, extracts it under `wp-content/themes/.nf-releases/<theme-slug>/`, copies the release into the active theme directory, activates the configured theme slug with wp-cli, and records release metadata.
+`nf theme deploy <remote>` is a one-command packaged release deploy. It builds the same theme artifact as `nf theme package`, uploads it to the selected remote env, extracts it under `wp-content/themes/.nf-releases/<theme-slug>/`, copies the release into the active theme directory, activates the configured theme slug with wp-cli, records release metadata, and then regenerates WordPress rewrite rules with `wp rewrite flush`.
 
 Theme deploy keeps the last 5 releases and matching uploaded zips, so release storage does not grow indefinitely. It does not require manual WordPress admin zip upload and supersedes direct in-place source rsync deploys.
 
-`nf theme rollback <remote>` switches the active theme directory back to the previous recorded release and activates the configured theme slug again. It uses remote `releases.json`; it does not rebuild or upload artifacts. See [Themes](themes.md).
+`nf theme rollback <remote>` switches the active theme directory back to the previous recorded release, activates the configured theme slug again, and then regenerates WordPress rewrite rules. It uses remote `releases.json`; it does not rebuild or upload artifacts. See [Themes](themes.md).
 
 ## Root Aliases
 
@@ -44,4 +44,4 @@ Public DNS remains the client's responsibility; `nf` attaches domains, prints DN
 
 Database and uploads sync are high risk. Sync commands must print a reviewable plan, preserve production credentials where possible, and require confirmation before destructive changes.
 
-`nf env push/pull [remote]` syncs database and mutable `wp-content` after an interactive confirmation. Omit `remote` to pick from configured repo remotes. Add `--dry-run` for a non-mutating plan, or use `--non-interactive` without `--execute` for preflight-only output. See [Sync](sync.md).
+`nf env push/pull [remote]` syncs database and mutable `wp-content` after an interactive confirmation. After destination URL and theme finalization, sync regenerates WordPress rewrite rules before separately flushing object cache. Omit `remote` to pick from configured repo remotes. Add `--dry-run` for a non-mutating plan, or use `--non-interactive` without `--execute` for preflight-only output. See [Sync](sync.md).
