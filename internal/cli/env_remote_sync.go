@@ -65,12 +65,12 @@ func envRemoteSyncTargetFromSiteRecord(record map[string]any, remoteName, siteID
 		if target.SSHHost == "" {
 			return envRemoteSyncTarget{}, ProjectError{Msg: fmt.Sprintf("Kinsta env %q is missing SSH host in the site cache. Run nf site refresh.", siteSummary(record))}
 		}
-		target.SSHUser = firstNonEmpty(mapStringAtPath(record, "ssh", "user"), mapStringAtPath(record, "kinsta", "ssh", "user"), firstRecordString(record, "ssh_user", "ssh_username"))
+		target.WordPressPath = normalizeKinstaCachedPath(firstRecordString(record, "path"))
+		target.SSHUser = kinstaSSHUserFromRecord(record, siteID)
 		if target.SSHUser == "" {
 			return envRemoteSyncTarget{}, ProjectError{Msg: fmt.Sprintf("Kinsta env %q is missing SSH user in the site cache. Run nf site refresh.", siteSummary(record))}
 		}
 		target.SSHPort = firstNonEmpty(mapStringAtPath(record, "ssh", "port"), mapStringAtPath(record, "kinsta", "ssh", "port"), firstRecordString(record, "ssh_port"), "22")
-		target.WordPressPath = normalizeKinstaCachedPath(firstRecordString(record, "path"))
 		if target.WordPressPath == "" {
 			return envRemoteSyncTarget{}, ProjectError{Msg: fmt.Sprintf("Kinsta env %q is missing path in the site cache. Run nf site refresh.", siteSummary(record))}
 		}
@@ -766,16 +766,15 @@ func kinstaSiteEnvSSHArgs(record map[string]any, action string, wpArgs []string)
 	if host == "" {
 		return nil, ProjectError{Msg: fmt.Sprintf("Kinsta site env %q is missing SSH host. Run nf site refresh.", siteSummary(record))}
 	}
-	user := firstNonEmpty(mapStringAtPath(record, "ssh", "user"), mapStringAtPath(record, "kinsta", "ssh", "user"), firstRecordString(record, "ssh_user", "ssh_username"))
+	path := normalizeKinstaCachedPath(firstRecordString(record, "path"))
+	if path == "" {
+		return nil, ProjectError{Msg: fmt.Sprintf("Kinsta site env %q is missing path. Run nf site refresh.", siteSummary(record))}
+	}
+	user := kinstaSSHUserFromRecord(record, siteRecordID(record))
 	if user == "" {
 		return nil, ProjectError{Msg: fmt.Sprintf("Kinsta site env %q is missing SSH user. Run nf site refresh.", siteSummary(record))}
 	}
 	port := firstNonEmpty(mapStringAtPath(record, "ssh", "port"), mapStringAtPath(record, "kinsta", "ssh", "port"), firstRecordString(record, "ssh_port"), "22")
-	path := firstRecordString(record, "path")
-	if path == "" {
-		return nil, ProjectError{Msg: fmt.Sprintf("Kinsta site env %q is missing path. Run nf site refresh.", siteSummary(record))}
-	}
-	path = normalizeKinstaCachedPath(path)
 	destination := user + "@" + host
 	switch action {
 	case "shell":
@@ -806,6 +805,60 @@ func normalizeKinstaCachedPath(value string) string {
 		return path.Clean("/www/" + value[index+len(duplicatedPublicRoot):])
 	}
 	return path.Clean(value)
+}
+
+func kinstaSSHUserFromRecord(record map[string]any, siteID string) string {
+	if user := firstNonEmpty(
+		mapStringAtPath(record, "ssh", "user"),
+		mapStringAtPath(record, "kinsta", "ssh", "user"),
+		firstRecordString(record, "ssh_user", "ssh_username"),
+	); user != "" {
+		return user
+	}
+	if user := kinstaSSHUserFromCommand(firstNonEmpty(
+		mapStringAtPath(record, "ssh", "command"),
+		mapStringAtPath(record, "kinsta", "ssh", "command"),
+		firstRecordString(record, "ssh_command"),
+	)); user != "" {
+		return user
+	}
+	if user := firstNonEmpty(
+		mapStringAtPath(record, "kinsta", "slug"),
+		firstRecordString(record, "project_slug", "name"),
+		kinstaSSHUserFromSiteID(siteID),
+		firstRecordString(record, "database"),
+	); user != "" {
+		return user
+	}
+	return ""
+}
+
+func kinstaSSHUserFromSiteID(siteID string) string {
+	siteID = strings.TrimSpace(siteID)
+	if siteID == "" {
+		return ""
+	}
+	if before, _, ok := strings.Cut(siteID, ".kinsta"); ok {
+		return strings.TrimSpace(before)
+	}
+	if before, ok := strings.CutSuffix(siteID, "-kinsta"); ok {
+		return strings.TrimSpace(before)
+	}
+	return ""
+}
+
+func kinstaSSHUserFromCommand(command string) string {
+	for _, field := range strings.Fields(command) {
+		if !strings.Contains(field, "@") {
+			continue
+		}
+		parts := strings.SplitN(field, "@", 2)
+		user := strings.Trim(parts[0], "'\"")
+		if user != "" && user != "ssh" {
+			return user
+		}
+	}
+	return ""
 }
 
 func linodeSiteEnvSSHArgs(record map[string]any, action string, wpArgs []string) ([]string, error) {

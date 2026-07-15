@@ -385,13 +385,14 @@ func discoverKinstaTargetSites(target map[string]any) ([]map[string]any, error) 
 			domains := item.Domains
 			domain := item.Primary
 			cfg, _ := client.SFTPConfig(ctx, site.ID, env.ID)
-			pathValue := kinstaEnvPath(firstNonEmpty(cfg.User, kinstaSlug), env.WebRoot)
-			database := firstNonEmpty(cfg.User, kinstaSlug)
+			user := firstNonEmpty(cfg.User, kinstaSlug)
+			pathValue := kinstaEnvPath(user, env.WebRoot)
+			database := firstNonEmpty(user, kinstaSlug)
 			host := firstNonEmpty(cfg.Host, env.SSHConnection.SSHIP.ExternalIP)
 			port := firstNonEmpty(cfg.Port, env.SSHConnection.SSHPort, "22")
-			user := cfg.User
 			domainValue := domainName(domain)
 			internalDomain := kinstaInternalDomain(domains)
+			sshCmd := firstNonEmpty(cfg.SSHCommand, sshCommand(user, host, port))
 			record := map[string]any{
 				"provider":     "kinsta",
 				"env_id":       canonicalEnvID(siteID, envName),
@@ -406,7 +407,7 @@ func discoverKinstaTargetSites(target map[string]any) ([]map[string]any, error) 
 				"database":     database,
 				"php_version":  phpVersion,
 				"status":       "active",
-				"ssh":          sshRecord(user, host, port, cfg.SSHCommand),
+				"ssh":          sshRecord(user, host, port, sshCmd),
 				"kinsta": map[string]any{
 					"site_id":        site.ID,
 					"slug":           kinstaSlug,

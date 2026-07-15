@@ -753,6 +753,9 @@ type sftpConfigResponse struct {
 	Name       string `json:"name"`
 	Host       string `json:"host"`
 	User       string `json:"user"`
+	Username   string `json:"username"`
+	SSHUser    string `json:"ssh_user"`
+	SFTPUser   string `json:"sftp_user"`
 	SSHCommand string `json:"ssh_command"`
 	Site       struct {
 		Name        string `json:"name"`
@@ -781,7 +784,7 @@ func (r sftpPasswordResponse) Password() SFTPPassword {
 }
 
 func (r sftpConfigResponse) Config() SFTPConfig {
-	cfg := SFTPConfig{Host: strings.TrimSpace(r.Host), Port: strings.TrimSpace(r.Port), User: strings.TrimSpace(r.User), Name: strings.TrimSpace(r.Name), SSHCommand: strings.TrimSpace(r.SSHCommand)}
+	cfg := SFTPConfig{Host: strings.TrimSpace(r.Host), Port: strings.TrimSpace(r.Port), User: firstTrimmed(r.User, r.Username, r.SSHUser, r.SFTPUser), Name: strings.TrimSpace(r.Name), SSHCommand: strings.TrimSpace(r.SSHCommand)}
 	if cfg.Host == "" {
 		cfg.Host = strings.TrimSpace(r.Site.Environment.ActiveContainer.LoadBalancer.ExtIP)
 	}
@@ -789,12 +792,36 @@ func (r sftpConfigResponse) Config() SFTPConfig {
 		cfg.Port = strings.TrimSpace(r.Site.Environment.ActiveContainer.LXDSshPort)
 	}
 	if cfg.User == "" {
-		cfg.User = strings.TrimSpace(r.Site.User)
+		cfg.User = firstTrimmed(r.Site.User, sftpUserFromSSHCommand(cfg.SSHCommand))
 	}
 	if cfg.Name == "" {
 		cfg.Name = strings.TrimSpace(r.Site.Name)
 	}
 	return cfg
+}
+
+func firstTrimmed(values ...string) string {
+	for _, value := range values {
+		value = strings.TrimSpace(value)
+		if value != "" {
+			return value
+		}
+	}
+	return ""
+}
+
+func sftpUserFromSSHCommand(command string) string {
+	for _, field := range strings.Fields(command) {
+		if !strings.Contains(field, "@") {
+			continue
+		}
+		parts := strings.SplitN(field, "@", 2)
+		user := strings.Trim(parts[0], "'\"")
+		if user != "" && user != "ssh" {
+			return user
+		}
+	}
+	return ""
 }
 
 func (r domainsResponse) Domains() []Domain {

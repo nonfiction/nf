@@ -181,6 +181,26 @@ func TestClientSiteEnvironmentDomainFlow(t *testing.T) {
 	}
 }
 
+func TestSFTPConfigResponseUserFallbacks(t *testing.T) {
+	cases := []struct {
+		name string
+		resp sftpConfigResponse
+		want string
+	}{
+		{name: "username", resp: sftpConfigResponse{Username: "client_123"}, want: "client_123"},
+		{name: "ssh user", resp: sftpConfigResponse{SSHUser: "client_ssh"}, want: "client_ssh"},
+		{name: "sftp user", resp: sftpConfigResponse{SFTPUser: "client_sftp"}, want: "client_sftp"},
+		{name: "ssh command", resp: sftpConfigResponse{SSHCommand: "ssh client_cmd@203.0.113.10 -p 12345"}, want: "client_cmd"},
+	}
+	for _, tt := range cases {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := tt.resp.Config().User; got != tt.want {
+				t.Fatalf("Config().User = %q, want %q", got, tt.want)
+			}
+		})
+	}
+}
+
 func TestWaitOperationHandlesKinstaNumericStatus(t *testing.T) {
 	calls := 0
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

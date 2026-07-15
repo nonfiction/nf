@@ -3849,7 +3849,7 @@ func TestRunSiteRefreshDiscoversKinstaRemoteSites(t *testing.T) {
 				{"id": "kdom-stage-public", "name": "staging.client.com", "is_primary": true, "status": "pending_dns"},
 			}}})
 		case "GET /sites/ksite123/environments/kenv-live/ssh/config":
-			_ = json.NewEncoder(w).Encode(map[string]any{"host": "203.0.113.10", "port": "12345", "user": "client_123", "ssh_command": "ssh client_123@203.0.113.10 -p 12345"})
+			_ = json.NewEncoder(w).Encode(map[string]any{"host": "203.0.113.10", "port": "12345"})
 		case "GET /sites/ksite123/environments/kenv-staging/ssh/config":
 			_ = json.NewEncoder(w).Encode(map[string]any{"host": "203.0.113.11", "port": "12346", "user": "clientstaging_456", "ssh_command": "ssh clientstaging_456@203.0.113.11 -p 12346"})
 		default:
@@ -3881,7 +3881,7 @@ func TestRunSiteRefreshDiscoversKinstaRemoteSites(t *testing.T) {
 		externalDomains                                         map[string]string
 		internalDomains                                         []string
 	}{
-		{"live", "/www/client_123/public", "client_123", "203.0.113.10", "12345", "client_123", "www.client.com", map[string]string{"www.client.com": "verified", "client.com": "pending"}, []string{"client.kinsta.nonfiction.dev", "client.kinsta.cloud"}},
+		{"live", "/www/client_123/public", "clienthost", "203.0.113.10", "12345", "clienthost", "www.client.com", map[string]string{"www.client.com": "verified", "client.com": "pending"}, []string{"client.kinsta.nonfiction.dev", "client.kinsta.cloud"}},
 		{"staging", "/www/clientstaging_456/public", "clientstaging_456", "203.0.113.11", "12346", "clientstaging_456", "staging.client.com", map[string]string{"staging.client.com": "pending"}, []string{"client-staging.kinsta.nonfiction.dev", "client-staging.kinsta.cloud"}},
 	} {
 		var record map[string]any
@@ -10994,6 +10994,37 @@ func TestRunSiteRepairKinstaPlansAndExecutesMUPluginRepair(t *testing.T) {
 		if strings.Contains(command, unwanted) {
 			t.Fatalf("kinsta repair command contains persistent backup marker %q: %#v", unwanted, commands[0])
 		}
+	}
+}
+
+func TestKinstaRemoteResolutionFallsBackToSiteSlugNotPath(t *testing.T) {
+	record := map[string]any{
+		"provider": "kinsta",
+		"site_id":  "arpisnorth.kinsta",
+		"env":      "live",
+		"url":      "https://www.example.com/",
+		"path":     "/www/arpisnorth_433/public",
+		"database": "arpisnorth_433",
+		"ssh":      map[string]any{"host": "203.0.113.10", "port": "12345"},
+		"kinsta":   map[string]any{"slug": "arpisnorth"},
+	}
+	target, err := envRemoteSyncTargetFromSiteRecord(record, "repair", "arpisnorth.kinsta", "live")
+	if err != nil {
+		t.Fatalf("envRemoteSyncTargetFromSiteRecord() error = %v", err)
+	}
+	if got, want := target.SSHUser, "arpisnorth"; got != want {
+		t.Fatalf("target SSHUser = %q, want %q", got, want)
+	}
+	args, err := kinstaSiteEnvSSHArgs(record, "wp", []string{"cache", "flush"})
+	if err != nil {
+		t.Fatalf("kinstaSiteEnvSSHArgs() error = %v", err)
+	}
+	joined := strings.Join(args, " ")
+	if !strings.Contains(joined, "arpisnorth@203.0.113.10") {
+		t.Fatalf("ssh args = %q, want Kinsta slug user", joined)
+	}
+	if strings.Contains(joined, "arpisnorth_433@") {
+		t.Fatalf("ssh args = %q, must not derive user from webroot path", joined)
 	}
 }
 
