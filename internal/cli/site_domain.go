@@ -277,14 +277,31 @@ func siteDomainListDomains(record map[string]any) []siteDomainListDomain {
 		domains = append(domains, entry)
 	}
 	publicStatus := firstRecordString(record, "domain_state")
+	explicitPrimary := normalizeDomainName(hostnameFromURLish(firstRecordString(record, "primary_domain")))
+	listedDomainRole := func(entry any) string {
+		role := ""
+		if typed, ok := entry.(map[string]any); ok {
+			role = firstRecordString(typed, "role", "type")
+		}
+		if explicitPrimary == "" {
+			return role
+		}
+		if normalizeDomainName(siteDomainEntryName(entry)) == explicitPrimary {
+			return "primary"
+		}
+		return "secondary"
+	}
 	hasExternalPrimary := false
+	hasListedPrimary := false
 	for _, entry := range domainEntries {
 		if typed, ok := entry.(map[string]any); ok {
-			role := normalizeSiteDomainRole(firstRecordString(typed, "role", "type"))
+			role := normalizeSiteDomainRole(listedDomainRole(entry))
 			management := firstNonEmpty(normalizeSiteDomainManagement(firstRecordString(typed, "management")), "external")
-			if management == "external" && role == "primary" {
-				hasExternalPrimary = true
-				break
+			if role == "primary" {
+				hasListedPrimary = true
+				if management == "external" {
+					hasExternalPrimary = true
+				}
 			}
 		}
 	}
@@ -299,30 +316,41 @@ func siteDomainListDomains(record map[string]any) []siteDomainListDomain {
 	}
 	if defaultHost := siteDomainDefaultHostname(record); defaultHost != "" {
 		role := "primary"
-		if hasExternalPrimary {
+		if hasListedPrimary || hasExternalPrimary {
 			role = "secondary"
 		}
 		addDomain(defaultHost, role, "internal", "active", "")
 	}
 	for _, entry := range domainEntries {
-		role := ""
+		role := listedDomainRole(entry)
 		management := ""
 		status := publicStatus
 		proxyMode := ""
 		if typed, ok := entry.(map[string]any); ok {
-			role = firstRecordString(typed, "role", "type")
 			management = firstRecordString(typed, "management")
 			status = firstNonEmpty(firstRecordString(typed, "status"), status)
 			proxyMode = firstRecordString(typed, "proxy_mode")
 		}
 		addDomain(siteDomainEntryName(entry), role, management, status, proxyMode)
 	}
-	addDomain(firstRecordString(record, "primary_domain"), "primary", "external", firstNonEmpty(publicStatus, "active"), envProxyMode)
+	legacyRole := "primary"
+	if explicitPrimary == "" && hasListedPrimary {
+		legacyRole = "secondary"
+	}
+	addDomain(firstRecordString(record, "primary_domain"), legacyRole, "external", firstNonEmpty(publicStatus, "active"), envProxyMode)
 	if host := hostnameFromURLish(firstRecordString(record, "hostname")); !looksLikeInternalSiteHostname(record, host) {
-		addDomain(host, "primary", "external", firstNonEmpty(publicStatus, "active"), envProxyMode)
+		role := legacyRole
+		if explicitPrimary != "" && normalizeDomainName(host) != explicitPrimary {
+			role = "secondary"
+		}
+		addDomain(host, role, "external", firstNonEmpty(publicStatus, "active"), envProxyMode)
 	}
 	if host := hostnameFromURLish(firstRecordString(record, "url", "site_url", "home_url")); !looksLikeInternalSiteHostname(record, host) {
-		addDomain(host, "primary", "external", firstNonEmpty(publicStatus, "active"), envProxyMode)
+		role := legacyRole
+		if explicitPrimary != "" && normalizeDomainName(host) != explicitPrimary {
+			role = "secondary"
+		}
+		addDomain(host, role, "external", firstNonEmpty(publicStatus, "active"), envProxyMode)
 	}
 	return domains
 }
@@ -602,7 +630,7 @@ func cmdSiteDomain(envRef, action string, opts siteDomainOptions) int {
 	}
 	printSiteDomainPlan(plan, mode)
 	if !willExecute {
-		fmt.Println("No data was changed. Re-run with --execute to apply public-domain changes.")
+		fmt.Println("No data was changed. Re-run with --execute to apply domain changes.")
 		return 0
 	}
 	if opts.nonInteractive && !opts.yes {
@@ -691,6 +719,7 @@ func cmdSiteDomain(envRef, action string, opts siteDomainOptions) int {
 }
 
 func waitForSiteDomainPrimaryReadiness(plan siteDomainPlan, opts siteDomainOptions) (bool, error) {
+	readinessPlan := siteDomainPrimaryReadinessPlan(plan)
 	timeout := opts.waitTimeout
 	if timeout == 0 {
 		timeout = 30 * time.Minute
@@ -707,11 +736,11 @@ func waitForSiteDomainPrimaryReadiness(plan siteDomainPlan, opts siteDomainOptio
 			fmt.Println()
 			fmt.Println("Rechecking public domain readiness...")
 		}
-		result, err := printSiteDomainReadinessCheck(plan)
+		result, err := printSiteDomainReadinessCheck(readinessPlan)
 		if err != nil {
 			return false, err
 		}
-		printSiteDomainCheckNextStep(plan, result)
+		printSiteDomainCheckNextStep(readinessPlan, result)
 		if result.Ready {
 			fmt.Println("Overall: ready")
 			if result.Primary {
@@ -733,6 +762,12 @@ func waitForSiteDomainPrimaryReadiness(plan siteDomainPlan, opts siteDomainOptio
 		fmt.Printf("Next check in %s. Timeout in %s.\n", formatSiteDomainWaitDuration(sleepFor), formatSiteDomainWaitDuration(remaining))
 		time.Sleep(sleepFor)
 	}
+}
+
+func siteDomainPrimaryReadinessPlan(plan siteDomainPlan) siteDomainPlan {
+	plan.Aliases = nil
+	plan.Domains = nil
+	return plan
 }
 
 func formatSiteDomainWaitDuration(duration time.Duration) string {
@@ -894,7 +929,7 @@ func resolveSiteDomainActionOptions(action string, opts siteDomainOptions, recor
 	if err != nil {
 		return opts, err
 	}
-	if action == "primary" && len(opts.domains) == 1 && !recordHasCachedExternalSiteDomain(record, opts.domains[0]) {
+	if action == "primary" && len(opts.domains) == 1 && !recordHasCachedPrimarySiteDomain(record, opts.domains[0]) {
 		return opts, uncachedPrimaryDomainError(siteRecordEnvID(record), opts.domains[0])
 	}
 	provider := strings.ToLower(strings.TrimSpace(recordValueString(record["provider"])))
@@ -994,7 +1029,13 @@ func splitSiteDomainPromptDomains(value string) []string {
 
 func promptSiteDomainSingleDomain(record map[string]any, action string) (string, error) {
 	options := siteDomainCachedExternalOptions(record, true)
+	if action == "make primary" {
+		options = siteDomainCachedPrimaryOptions(record)
+	}
 	if len(options) == 0 {
+		if action == "make primary" {
+			return "", ProjectError{Msg: "No cached domains are eligible to become primary."}
+		}
 		return "", ProjectError{Msg: "No cached external domains found. Add a domain first or pass one explicitly."}
 	}
 	return siteDomainSelectFn("Choose a domain to "+action, options)
@@ -1040,6 +1081,23 @@ func siteDomainCachedExternalOptions(record map[string]any, defaultPrimary bool)
 			label += " (" + domain.role + ")"
 		}
 		options = append(options, ui.SelectOption{Value: domain.name, Label: label, Default: defaultPrimary && domain.role == "primary"})
+	}
+	return options
+}
+
+func siteDomainCachedPrimaryOptions(record map[string]any) []ui.SelectOption {
+	provider := strings.ToLower(strings.TrimSpace(firstRecordString(record, "provider")))
+	identity := normalizeDomainName(firstRecordString(record, "internal_hostname"))
+	options := []ui.SelectOption{}
+	for _, domain := range siteDomainListDomains(record) {
+		if domain.name == "" || (domain.management != "external" && !(provider == "kinsta" && domain.name == identity)) {
+			continue
+		}
+		label := domain.name
+		if domain.role != "" {
+			label += " (" + domain.role + ")"
+		}
+		options = append(options, ui.SelectOption{Value: domain.name, Label: label, Default: domain.role == "primary"})
 	}
 	return options
 }
@@ -1282,7 +1340,7 @@ func buildSiteDomainPlan(siteID, env, action string, opts siteDomainOptions) (si
 	existingPrimary := cachedExternalPrimaryDomain(record)
 	primary := action == "primary"
 	canonical := domains[0]
-	if primary && !recordHasCachedExternalSiteDomain(record, canonical) {
+	if primary && !recordHasCachedPrimarySiteDomain(record, canonical) {
 		return siteDomainPlan{}, uncachedPrimaryDomainError(canonicalEnvID(siteID, env), canonical)
 	}
 	if primary {
@@ -2016,9 +2074,7 @@ func applySiteDomainCacheFields(record map[string]any, plan siteDomainPlan, resu
 	}
 	if plan.Primary {
 		for _, entry := range existing {
-			if firstRecordString(entry, "management") == "external" {
-				entry["role"] = "secondary"
-			}
+			entry["role"] = "secondary"
 		}
 	}
 	for _, entry := range siteDomainCacheEntries(plan, result) {
@@ -2259,6 +2315,17 @@ func recordHasCachedExternalSiteDomain(record map[string]any, domain string) boo
 		}
 	}
 	return false
+}
+
+func recordHasCachedPrimarySiteDomain(record map[string]any, domain string) bool {
+	if recordHasCachedExternalSiteDomain(record, domain) {
+		return true
+	}
+	if !strings.EqualFold(firstRecordString(record, "provider"), "kinsta") {
+		return false
+	}
+	identity := normalizeDomainName(firstRecordString(record, "internal_hostname"))
+	return identity != "" && normalizeDomainName(domain) == identity && recordHasSiteDomain(record, identity)
 }
 
 func recordHasCachedExternalSecondarySiteDomain(record map[string]any, domain string) bool {

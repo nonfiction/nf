@@ -157,7 +157,7 @@ func runSiteHelp() int {
 		{"show [site|env]", "show a site or remote env"},
 		{"refresh", "refresh local site cache"},
 		{"cache [site|env]", "clear cache for a remote env"},
-		{"repair [site|env]", "repair provider platform files"},
+		{"repair [site|env]", "repair provider platform state"},
 		{},
 		{"shell, sh [env]", "shell into a remote env"},
 		{"wp <env> -- <args>", "run WP-CLI against a remote env"},
@@ -192,6 +192,7 @@ func runSiteHelp() int {
 		{"--region <region>", "provider region"},
 		{"--php <version>", "Kinsta PHP version"},
 	}}, helpSection{"Mutation Options", []helpLine{
+		{"--project-slug <slug>", "canonical project slug for Kinsta identity repair"},
 		{"--dry-run", "show the plan without making changes"},
 		{"--execute", "apply the plan"},
 		{"--yes", "skip confirmation"},

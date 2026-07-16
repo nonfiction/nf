@@ -264,7 +264,7 @@ func siteCompletionCandidates(args []string) []string {
 	case "show", "cache":
 		return cachedSiteAndEnvCompletionNames()
 	case "repair":
-		return append(cachedSiteAndEnvCompletionNames(), "--dry-run", "--execute", "--yes", "--non-interactive")
+		return append(cachedSiteAndEnvCompletionNames(), "--project-slug", "--dry-run", "--execute", "--yes", "--non-interactive")
 	case "shell", "wp":
 		return cachedSiteEnvCompletionNames()
 	case "export":

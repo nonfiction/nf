@@ -708,7 +708,7 @@ func TestRunCompleteSuggestsStaticAndCachedValues(t *testing.T) {
 			t.Fatalf("Run(__complete site repair --) = %d, want 0", got)
 		}
 	})
-	for _, want := range []string{"--dry-run\n", "--execute\n", "--yes\n", "--non-interactive\n"} {
+	for _, want := range []string{"--project-slug\n", "--dry-run\n", "--execute\n", "--yes\n", "--non-interactive\n"} {
 		if !strings.Contains(siteRepairFlagOutput, want) {
 			t.Fatalf("site repair flag completion missing %q:\n%s", want, siteRepairFlagOutput)
 		}
@@ -7059,6 +7059,31 @@ func TestRunSiteDomainListShowsCachedDomainsAndFilters(t *testing.T) {
 	}
 }
 
+func TestSiteDomainListDomainsPrefersExplicitPrimaryDomain(t *testing.T) {
+	record := map[string]any{
+		"provider":          "kinsta",
+		"hostname":          "www.example.com",
+		"url":               "https://www.example.com",
+		"primary_domain":    "www.example.com",
+		"internal_hostname": "client.kinsta.nonfiction.dev",
+		"domains": []map[string]any{
+			{"name": "client.kinsta.nonfiction.dev", "role": "primary", "management": "internal", "status": "active"},
+			{"name": "www.example.com", "role": "secondary", "management": "external", "status": "pending"},
+		},
+	}
+
+	domains := siteDomainListDomains(record)
+	primary := []string{}
+	for _, domain := range domains {
+		if domain.role == "primary" {
+			primary = append(primary, domain.name)
+		}
+	}
+	if len(primary) != 1 || primary[0] != "www.example.com" {
+		t.Fatalf("primary domains = %v, want only www.example.com", primary)
+	}
+}
+
 func TestBuildSiteDomainPlanPreservesCachedProxyModesDuringPrimaryPromotion(t *testing.T) {
 	configDir := t.TempDir()
 	stateDir := t.TempDir()
@@ -7366,6 +7391,23 @@ func TestRunSiteDomainLinodePrimaryLaunchesAfterChecksPass(t *testing.T) {
 	}
 	if got := recordValueString(records[0]["hostname"]); got != "www.client.com" {
 		t.Fatalf("hostname = %q, want www.client.com", got)
+	}
+}
+
+func TestSiteDomainPrimaryReadinessPlanChecksOnlyRequestedPrimary(t *testing.T) {
+	plan := siteDomainPlan{
+		Primary:   true,
+		Canonical: "client.kinsta.nonfiction.dev",
+		Aliases:   []string{"client.com", "www.client.com"},
+		Domains:   []string{"client.kinsta.nonfiction.dev", "client.com", "www.client.com"},
+	}
+
+	readinessPlan := siteDomainPrimaryReadinessPlan(plan)
+	if got := readinessPlan.allDomains(); !reflect.DeepEqual(got, []string{"client.kinsta.nonfiction.dev"}) {
+		t.Fatalf("readiness domains = %#v, want requested primary only", got)
+	}
+	if !reflect.DeepEqual(plan.Aliases, []string{"client.com", "www.client.com"}) {
+		t.Fatalf("original plan aliases changed = %#v", plan.Aliases)
 	}
 }
 
@@ -8533,6 +8575,65 @@ func TestRunSiteDomainPrimaryWithoutArgsPromptsEnvDomainProxyAndSearch(t *testin
 	for _, want := range []string{"Primary domain plan:", "primary:   www.client.com", "proxy:     none", "search-replace: true", "mode:      dry-run"} {
 		if !strings.Contains(output, want) {
 			t.Fatalf("domain primary picker output missing %q:\n%s", want, output)
+		}
+	}
+}
+
+func TestRunSiteDomainPrimaryKinstaPickerIncludesIdentity(t *testing.T) {
+	stateDir := t.TempDir()
+	t.Setenv("NF_STATE_HOME", stateDir)
+	if err := state.SaveStateRecords("sites", []map[string]any{{
+		"provider":          "kinsta",
+		"site_id":           "client.kinsta",
+		"env_id":            "client.kinsta:live",
+		"name":              "client",
+		"env":               "live",
+		"target":            "kinsta",
+		"hostname":          "www.example.com",
+		"url":               "https://www.example.com",
+		"primary_domain":    "www.example.com",
+		"internal_hostname": "client.kinsta.nonfiction.dev",
+		"internal_url":      "https://client.kinsta.nonfiction.dev",
+		"domains": []map[string]any{
+			{"name": "client.kinsta.nonfiction.dev", "role": "secondary", "management": "internal", "status": "active"},
+			{"name": "www.example.com", "role": "primary", "management": "external", "status": "active"},
+			{"name": "client.kinsta.cloud", "role": "secondary", "management": "internal", "status": "active"},
+		},
+		"kinsta": map[string]any{"site_id": "ksite123", "environment_id": "kenv-live", "domain_id": "public-domain"},
+	}}); err != nil {
+		t.Fatalf("SaveStateRecords(sites) error = %v", err)
+	}
+	t.Cleanup(withInteractiveDomainPrompts(t))
+
+	var primaryOptions []ui.SelectOption
+	siteDomainSelectFn = func(title string, options []ui.SelectOption) (string, error) {
+		switch title {
+		case "Choose a domain to make primary":
+			primaryOptions = append([]ui.SelectOption(nil), options...)
+			return "client.kinsta.nonfiction.dev", nil
+		case "Database search-replace":
+			return "no", nil
+		default:
+			t.Fatalf("unexpected select %q", title)
+			return "", nil
+		}
+	}
+
+	output := captureStdout(t, func() {
+		if got := Run([]string{"domain", "primary", "client.kinsta:live", "--dry-run"}); got != 0 {
+			t.Fatalf("Run(domain primary Kinsta identity picker) = %d, want 0", got)
+		}
+	})
+	values := []string{}
+	for _, option := range primaryOptions {
+		values = append(values, option.Value)
+	}
+	if !reflect.DeepEqual(values, []string{"client.kinsta.nonfiction.dev", "www.example.com"}) {
+		t.Fatalf("primary picker values = %#v", values)
+	}
+	for _, want := range []string{"Primary domain plan:", "primary:   client.kinsta.nonfiction.dev", "provider:  kinsta", "mode:      dry-run"} {
+		if !strings.Contains(output, want) {
+			t.Fatalf("domain primary Kinsta identity output missing %q:\n%s", want, output)
 		}
 	}
 }
@@ -11041,9 +11142,14 @@ func TestRunSiteCachePurgesLinodeCacheAndFlushesWP(t *testing.T) {
 }
 
 func TestRunSiteRepairKinstaPlansAndExecutesMUPluginRepair(t *testing.T) {
+	configDir := t.TempDir()
 	stateDir := t.TempDir()
+	t.Setenv("NF_CONFIG_HOME", configDir)
 	t.Setenv("NF_STATE_HOME", stateDir)
-	if err := state.SaveStateRecords("sites", []map[string]any{{"provider": "kinsta", "site_id": "client-kinsta", "env": "live", "url": "https://www.example.com/", "path": "/www/client/public", "ssh": map[string]any{"host": "203.0.113.10", "port": "12345", "user": "client"}, "kinsta": map[string]any{"site_id": "ksite123", "environment_id": "kenv-live"}}}); err != nil {
+	if err := saveGlobalConfig(map[string]string{"base_domain": "nonfiction.dev"}); err != nil {
+		t.Fatalf("saveGlobalConfig() error = %v", err)
+	}
+	if err := state.SaveStateRecords("sites", []map[string]any{{"provider": "kinsta", "site_id": "client-kinsta", "env": "live", "url": "https://www.example.com/", "path": "/www/client/public", "domains": []map[string]any{{"name": "www.example.com", "role": "primary", "management": "external", "status": "active"}, {"name": "client.kinsta.nonfiction.dev", "role": "secondary", "management": "internal", "status": "active"}}, "ssh": map[string]any{"host": "203.0.113.10", "port": "12345", "user": "client"}, "kinsta": map[string]any{"site_id": "ksite123", "slug": "client", "environment_id": "kenv-live", "domain_id": "public-domain"}}}); err != nil {
 		t.Fatalf("SaveStateRecords(sites) error = %v", err)
 	}
 	var commands [][]string
@@ -11077,7 +11183,7 @@ func TestRunSiteRepairKinstaPlansAndExecutesMUPluginRepair(t *testing.T) {
 		}
 	})
 	assertContainsInOrder(t, executeOutput, []string{"mode:     execute", "> ssh -p 12345 client@203.0.113.10 '<site repair script>'", "Site repaired."})
-	if confirmMessage != `Repair provider platform files for "client-kinsta:live"?` {
+	if confirmMessage != `Repair provider platform state for "client-kinsta:live"?` {
 		t.Fatalf("confirm message = %q", confirmMessage)
 	}
 	if len(commands) != 1 {
@@ -11093,6 +11199,190 @@ func TestRunSiteRepairKinstaPlansAndExecutesMUPluginRepair(t *testing.T) {
 		if strings.Contains(command, unwanted) {
 			t.Fatalf("kinsta repair command contains persistent backup marker %q: %#v", unwanted, commands[0])
 		}
+	}
+}
+
+func TestRunSiteRepairKinstaMissingIdentityPromptsWithoutExecuting(t *testing.T) {
+	configDir := t.TempDir()
+	stateDir := t.TempDir()
+	t.Setenv("NF_CONFIG_HOME", configDir)
+	t.Setenv("NF_STATE_HOME", stateDir)
+	if err := saveGlobalConfig(map[string]string{"base_domain": "nonfiction.dev", "dnsimple_account_id": "acct123"}); err != nil {
+		t.Fatalf("saveGlobalConfig() error = %v", err)
+	}
+	if err := state.SaveStateRecords("sites", []map[string]any{{"provider": "kinsta", "site_id": "provider-site.kinsta", "name": "provider-site", "project_slug": "provider-site", "env": "live", "hostname": "www.example.com", "url": "https://www.example.com/", "path": "/www/provider/public", "domains": []map[string]any{{"name": "www.example.com", "role": "primary", "management": "external", "status": "active"}, {"name": "provider-site.kinsta.cloud", "role": "secondary", "management": "internal", "status": "active"}}, "ssh": map[string]any{"host": "203.0.113.10", "port": "12345", "user": "provider"}, "kinsta": map[string]any{"site_id": "ksite123", "slug": "provider-site", "environment_id": "kenv-live", "domain_id": "public-domain"}}}); err != nil {
+		t.Fatalf("SaveStateRecords(sites) error = %v", err)
+	}
+	oldInteractive := siteIsInteractiveFn
+	oldPrompt := siteAddPromptStringFn
+	oldRepair := kinstaRepairIdentityFn
+	siteIsInteractiveFn = func() bool { return true }
+	var prompt, promptDefault string
+	siteAddPromptStringFn = func(label, defaultValue string, allowBlank bool) (string, error) {
+		prompt, promptDefault = label, defaultValue
+		return "client", nil
+	}
+	kinstaRepairIdentityFn = func(siteRepairPlan) (kinstaSiteAddEnvPlan, error) {
+		t.Fatal("dry-run called Kinsta identity repair")
+		return kinstaSiteAddEnvPlan{}, nil
+	}
+	t.Cleanup(func() {
+		siteIsInteractiveFn = oldInteractive
+		siteAddPromptStringFn = oldPrompt
+		kinstaRepairIdentityFn = oldRepair
+	})
+
+	output := captureStdout(t, func() {
+		if got := Run([]string{"site", "repair", "provider-site.kinsta", "--dry-run"}); got != 0 {
+			t.Fatalf("Run(site repair dry-run) = %d, want 0", got)
+		}
+	})
+	if prompt != "Project slug" || promptDefault != "provider-site" {
+		t.Fatalf("project prompt = %q default %q", prompt, promptDefault)
+	}
+	assertContainsInOrder(t, output, []string{"project:  client", "Kinsta slug: provider-site", "identity: client.kinsta.nonfiction.dev", "mode:     dry-run", "add or verify Kinsta identity domain client.kinsta.nonfiction.dev"})
+}
+
+func TestRunSiteRepairKinstaReconcilesIdentityAndRekeysCache(t *testing.T) {
+	configDir := t.TempDir()
+	stateDir := t.TempDir()
+	t.Setenv("NF_CONFIG_HOME", configDir)
+	t.Setenv("NF_STATE_HOME", stateDir)
+	if err := saveGlobalConfig(map[string]string{"base_domain": "nonfiction.dev", "dnsimple_account_id": "acct123"}); err != nil {
+		t.Fatalf("saveGlobalConfig() error = %v", err)
+	}
+	if err := state.SaveStateRecords("sites", []map[string]any{
+		{"provider": "kinsta", "site_id": "provider-site.kinsta", "env_id": "provider-site.kinsta:live", "name": "provider-site", "project_slug": "provider-site", "env": "live", "hostname": "www.example.com", "url": "https://www.example.com/", "primary_domain": "www.example.com", "path": "/www/provider/public", "domains": []map[string]any{{"name": "www.example.com", "role": "primary", "management": "external", "status": "active"}, {"name": "provider-site.kinsta.cloud", "role": "secondary", "management": "internal", "status": "active"}}, "ssh": map[string]any{"host": "203.0.113.10", "port": "12345", "user": "provider"}, "kinsta": map[string]any{"site_id": "ksite123", "slug": "provider-site", "environment_id": "kenv-live", "domain_id": "public-domain"}},
+		{"provider": "kinsta", "site_id": "provider-site.kinsta", "env_id": "provider-site.kinsta:staging", "name": "provider-site", "project_slug": "provider-site", "env": "staging", "hostname": "provider-site-staging.kinsta.cloud", "url": "https://provider-site-staging.kinsta.cloud/", "path": "/www/provider_staging/public", "domains": []map[string]any{{"name": "provider-site-staging.kinsta.cloud", "role": "primary", "management": "internal", "status": "active"}, {"name": "client-staging.kinsta.nonfiction.dev", "role": "secondary", "management": "internal", "status": "active"}}, "ssh": map[string]any{"host": "203.0.113.11", "port": "12346", "user": "provider"}, "kinsta": map[string]any{"site_id": "ksite123", "slug": "provider-site", "environment_id": "kenv-staging", "domain_id": "staging-primary"}},
+	}); err != nil {
+		t.Fatalf("SaveStateRecords(sites) error = %v", err)
+	}
+	oldRepair := kinstaRepairIdentityFn
+	oldSSH := runSSHCommandFn
+	var repairPlan siteRepairPlan
+	kinstaRepairIdentityFn = func(plan siteRepairPlan) (kinstaSiteAddEnvPlan, error) {
+		repairPlan = plan
+		return kinstaSiteAddEnvPlan{DomainID: "identity-domain", DomainEntries: []map[string]any{{"name": "www.example.com", "role": "primary", "management": "external", "status": "active", "domain_id": "public-domain"}, {"name": "client.kinsta.nonfiction.dev", "role": "secondary", "management": "internal", "status": "active", "domain_id": "identity-domain"}}}, nil
+	}
+	sshCalls := 0
+	runSSHCommandFn = func([]string) error { sshCalls++; return nil }
+	t.Cleanup(func() {
+		kinstaRepairIdentityFn = oldRepair
+		runSSHCommandFn = oldSSH
+	})
+
+	output := captureStdout(t, func() {
+		if got := Run([]string{"site", "repair", "provider-site.kinsta", "--execute", "--yes", "--non-interactive"}); got != 0 {
+			t.Fatalf("Run(site repair execute) = %d, want 0", got)
+		}
+	})
+	assertContainsInOrder(t, output, []string{"Kinsta slug: provider-site", "identity: client.kinsta.nonfiction.dev", "mode:     execute", "re-key local Kinsta cache as client.kinsta:live", "Site repaired."})
+	if repairPlan.ProjectSlug != "client" || repairPlan.KinstaSiteID != "ksite123" || repairPlan.KinstaEnvID != "kenv-live" || !repairPlan.ReconcileIdentity {
+		t.Fatalf("repair plan = %#v", repairPlan)
+	}
+	if sshCalls != 1 {
+		t.Fatalf("SSH calls = %d, want 1", sshCalls)
+	}
+	records, err := state.LoadStateRecords("sites")
+	if err != nil {
+		t.Fatalf("LoadStateRecords(sites) error = %v", err)
+	}
+	if len(records) != 2 {
+		t.Fatalf("site records = %#v", records)
+	}
+	for _, record := range records {
+		env := siteEnvName(record)
+		if got := firstRecordString(record, "site_id"); got != "client.kinsta" {
+			t.Fatalf("%s site_id = %q", env, got)
+		}
+		if got := firstRecordString(record, "project_slug"); got != "client" {
+			t.Fatalf("%s project_slug = %q", env, got)
+		}
+		if got, want := firstRecordString(record, "env_id"), canonicalEnvID("client.kinsta", env); got != want {
+			t.Fatalf("%s env_id = %q, want %q", env, got, want)
+		}
+		if env == "live" {
+			if got := firstRecordString(record, "hostname"); got != "www.example.com" {
+				t.Fatalf("live hostname = %q", got)
+			}
+			if got := firstRecordString(record, "internal_hostname"); got != "client.kinsta.nonfiction.dev" {
+				t.Fatalf("live internal hostname = %q", got)
+			}
+			if got := siteKinstaID(record, "domain_id"); got != "public-domain" {
+				t.Fatalf("live primary domain id = %q, want preserved public-domain", got)
+			}
+		}
+	}
+}
+
+func TestRepairKinstaIdentityPreservesExternalPrimary(t *testing.T) {
+	domainListCalls := 0
+	primaryCalls := 0
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		switch r.Method + " " + r.URL.Path {
+		case "GET /sites/ksite123/environments":
+			_ = json.NewEncoder(w).Encode(map[string]any{"site": map[string]any{"environments": []map[string]any{{"id": "kenv-live", "name": "live", "primaryDomain": map[string]any{"id": "public-domain", "name": "www.example.com"}}}}})
+		case "GET /sites/environments/kenv-live/domains":
+			domainListCalls++
+			_ = json.NewEncoder(w).Encode(map[string]any{"environment": map[string]any{"site_domains": []map[string]any{{"id": "generated-domain", "name": "provider-site.kinsta.cloud", "is_primary": false}, {"id": "public-domain", "name": "www.example.com", "is_primary": false}, {"id": "identity-domain", "name": "client.kinsta.nonfiction.dev", "is_primary": false}}}})
+		case "GET /sites/environments/domains/identity-domain/verification-records":
+			_ = json.NewEncoder(w).Encode(map[string]any{"site_domain": map[string]any{"pointing_records": []map[string]any{{"name": "client.kinsta.nonfiction.dev", "type": "A", "content": "203.0.113.10", "ttl": 300}}}})
+		case "PUT /sites/environments/kenv-live/change-primary-domain":
+			primaryCalls++
+			http.Error(w, "must not change external primary", http.StatusInternalServerError)
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	t.Cleanup(server.Close)
+	t.Setenv("KINSTA_API_KEY", "kinsta-token")
+	t.Setenv("DNSIMPLE_TOKEN", "dns-token")
+	t.Setenv("KINSTA_BASE_URL", server.URL)
+	oldUpsert := upsertDNSRecordFn
+	upsertDNSRecordFn = func(token, accountID, zone, name, recordType, content string, ttl int) error { return nil }
+	t.Cleanup(func() { upsertDNSRecordFn = oldUpsert })
+	stubDNSTypedDeletes(t)
+
+	result, err := repairKinstaIdentity(siteRepairPlan{ProjectSlug: "client", CanonicalSiteID: "client.kinsta", Env: "live", KinstaSiteID: "ksite123", KinstaSlug: "provider-site", KinstaEnvID: "kenv-live", IdentityDomain: "client.kinsta.nonfiction.dev", BaseDomain: "nonfiction.dev", DNSZone: "nonfiction.dev", DNSAccountID: "acct123"})
+	if err != nil {
+		t.Fatalf("repairKinstaIdentity() error = %v", err)
+	}
+	if domainListCalls < 3 {
+		t.Fatalf("domain list calls = %d, want at least 3", domainListCalls)
+	}
+	if primaryCalls != 0 {
+		t.Fatalf("primary domain calls = %d, want 0", primaryCalls)
+	}
+	if result.DomainID != "identity-domain" {
+		t.Fatalf("identity domain id = %q", result.DomainID)
+	}
+	if len(result.DomainEntries) != 3 || firstRecordString(result.DomainEntries[0], "role") != "secondary" || firstRecordString(result.DomainEntries[1], "name") != "www.example.com" || firstRecordString(result.DomainEntries[1], "role") != "primary" || firstRecordString(result.DomainEntries[2], "role") != "secondary" {
+		t.Fatalf("domain entries = %#v", result.DomainEntries)
+	}
+}
+
+func TestRunSiteRepairKinstaRejectsConflictingCanonicalCacheClaim(t *testing.T) {
+	configDir := t.TempDir()
+	stateDir := t.TempDir()
+	t.Setenv("NF_CONFIG_HOME", configDir)
+	t.Setenv("NF_STATE_HOME", stateDir)
+	if err := saveGlobalConfig(map[string]string{"base_domain": "nonfiction.dev", "dnsimple_account_id": "acct123"}); err != nil {
+		t.Fatalf("saveGlobalConfig() error = %v", err)
+	}
+	if err := state.SaveStateRecords("sites", []map[string]any{
+		{"provider": "kinsta", "site_id": "provider-site.kinsta", "env": "live", "url": "https://www.example.com", "path": "/www/provider/public", "ssh": map[string]any{"host": "203.0.113.10", "user": "provider"}, "kinsta": map[string]any{"site_id": "ksite123", "slug": "provider-site", "environment_id": "kenv-live"}},
+		{"provider": "kinsta", "site_id": "client.kinsta", "project_slug": "client", "env": "live", "kinsta": map[string]any{"site_id": "other-site", "environment_id": "other-live"}},
+	}); err != nil {
+		t.Fatalf("SaveStateRecords(sites) error = %v", err)
+	}
+	stderr := captureStderr(t, func() {
+		if got := Run([]string{"site", "repair", "provider-site.kinsta", "--project-slug", "client", "--dry-run", "--non-interactive"}); got != 1 {
+			t.Fatalf("Run(site repair conflict) = %d, want 1", got)
+		}
+	})
+	if !strings.Contains(stderr, `another Kinsta site (other-site) already claims canonical site "client.kinsta"`) {
+		t.Fatalf("stderr = %q", stderr)
 	}
 }
 
@@ -11166,6 +11456,14 @@ func TestRunSiteRepairLinodeRewritesInternalVhostWithCache(t *testing.T) {
 	}
 	if strings.Contains(command, "systemctl reload \"php${php_version}-fpm\" || systemctl restart \"php${php_version}-fpm\" || true") {
 		t.Fatalf("linode repair command masks php-fpm restart failures: %#v", commands[0])
+	}
+	stderr := captureStderr(t, func() {
+		if got := Run([]string{"site", "repair", "foobar.app1-linode", "--project-slug", "foobar", "--dry-run"}); got != 1 {
+			t.Fatalf("Run(site repair linode project slug) = %d, want 1", got)
+		}
+	})
+	if !strings.Contains(stderr, "--project-slug is only valid when repairing a Kinsta env") {
+		t.Fatalf("stderr = %q", stderr)
 	}
 }
 
@@ -11819,9 +12117,14 @@ func TestRunSiteRepairNonInteractiveRequiresRefAndExecuteYes(t *testing.T) {
 		t.Fatalf("stderr = %q, want explicit ref error", stderr)
 	}
 
+	configDir := t.TempDir()
 	stateDir := t.TempDir()
+	t.Setenv("NF_CONFIG_HOME", configDir)
 	t.Setenv("NF_STATE_HOME", stateDir)
-	if err := state.SaveStateRecords("sites", []map[string]any{{"provider": "kinsta", "site_id": "client-kinsta", "env": "live", "url": "https://www.example.com/", "path": "/www/client/public", "ssh": map[string]any{"host": "203.0.113.10", "port": "12345", "user": "client"}}}); err != nil {
+	if err := saveGlobalConfig(map[string]string{"base_domain": "nonfiction.dev", "dnsimple_account_id": "acct123"}); err != nil {
+		t.Fatalf("saveGlobalConfig() error = %v", err)
+	}
+	if err := state.SaveStateRecords("sites", []map[string]any{{"provider": "kinsta", "site_id": "client-kinsta", "env": "live", "url": "https://www.example.com/", "path": "/www/client/public", "ssh": map[string]any{"host": "203.0.113.10", "port": "12345", "user": "client"}, "kinsta": map[string]any{"site_id": "ksite123", "slug": "client", "environment_id": "kenv-live"}}}); err != nil {
 		t.Fatalf("SaveStateRecords(sites) error = %v", err)
 	}
 	stderr = captureStderr(t, func() {
@@ -11831,6 +12134,15 @@ func TestRunSiteRepairNonInteractiveRequiresRefAndExecuteYes(t *testing.T) {
 	})
 	if !strings.Contains(stderr, "Remote execution requires both --execute and --yes in non-interactive mode.") {
 		t.Fatalf("stderr = %q, want execute yes error", stderr)
+	}
+
+	stderr = captureStderr(t, func() {
+		if got := Run([]string{"site", "repair", "client-kinsta", "--dry-run", "--non-interactive"}); got != 1 {
+			t.Fatalf("Run(site repair non-interactive missing project slug) = %d, want 1", got)
+		}
+	})
+	if !strings.Contains(stderr, "has no nf identity domain; pass --project-slug <slug> in non-interactive mode") {
+		t.Fatalf("stderr = %q, want project slug error", stderr)
 	}
 }
 

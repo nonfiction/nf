@@ -29,6 +29,7 @@ var (
 	providerCheckLinodeFn                 = checkLinodeProvider
 	kinstaProvisionSiteFn                 = provisionKinstaSite
 	kinstaProvisionStagingFn              = provisionKinstaStaging
+	kinstaRepairIdentityFn                = repairKinstaIdentity
 	kinstaRemoveSiteFn                    = removeKinstaSite
 	kinstaPrepareDomainFn                 = prepareKinstaSiteDomain
 	kinstaPrimaryDomainFn                 = primaryKinstaSiteDomain

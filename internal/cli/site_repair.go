@@ -1,26 +1,51 @@
 package cli
 
 import (
+	"context"
 	"fmt"
 	"os"
 	"strings"
+
+	"github.com/nonfiction/nf/internal/config"
+	"github.com/nonfiction/nf/internal/envwizard"
+	"github.com/nonfiction/nf/internal/kinsta"
+	"github.com/nonfiction/nf/internal/state"
 )
 
 const kinstaMUPluginsZipURL = "https://kinsta.com/kinsta-tools/kinsta-mu-plugins.zip"
 
 type siteRepairPlan struct {
-	EnvID    string
-	SiteID   string
-	Env      string
-	Provider string
-	Target   envRemoteSyncTarget
-	Actions  []string
-	Warnings []string
-	Script   string
+	EnvID             string
+	SiteID            string
+	CanonicalSiteID   string
+	CanonicalEnvID    string
+	Env               string
+	Provider          string
+	ProjectSlug       string
+	KinstaSiteID      string
+	KinstaSlug        string
+	KinstaEnvID       string
+	IdentityDomain    string
+	ReconcileIdentity bool
+	BaseDomain        string
+	DNSZone           string
+	DNSAccountID      string
+	Target            envRemoteSyncTarget
+	Actions           []string
+	Warnings          []string
+	Script            string
 }
 
-func parseSiteRepairArgs(argv []string) (string, deleteServerOptions, error) {
-	var opts deleteServerOptions
+type siteRepairOptions struct {
+	dryRun         bool
+	execute        bool
+	yes            bool
+	nonInteractive bool
+	projectSlug    string
+}
+
+func parseSiteRepairArgs(argv []string) (string, siteRepairOptions, error) {
+	var opts siteRepairOptions
 	positionals := make([]string, 0, 1)
 	for i := 0; i < len(argv); i++ {
 		arg := argv[i]
@@ -36,7 +61,20 @@ func parseSiteRepairArgs(argv []string) (string, deleteServerOptions, error) {
 			opts.yes = true
 		case "--non-interactive":
 			opts.nonInteractive = true
+		case "--project-slug":
+			i++
+			if i >= len(argv) || strings.TrimSpace(argv[i]) == "" {
+				return "", opts, fmt.Errorf("--project-slug requires a value")
+			}
+			opts.projectSlug = strings.TrimSpace(argv[i])
 		default:
+			if strings.HasPrefix(arg, "--project-slug=") {
+				opts.projectSlug = strings.TrimSpace(strings.TrimPrefix(arg, "--project-slug="))
+				if opts.projectSlug == "" {
+					return "", opts, fmt.Errorf("--project-slug requires a value")
+				}
+				continue
+			}
 			if strings.HasPrefix(arg, "-") {
 				return "", opts, fmt.Errorf("unknown site repair flag: %s", arg)
 			}
@@ -45,6 +83,11 @@ func parseSiteRepairArgs(argv []string) (string, deleteServerOptions, error) {
 	}
 	if len(positionals) > 1 {
 		return "", opts, fmt.Errorf("site repair takes at most one site or env ref")
+	}
+	if opts.projectSlug != "" {
+		if err := validateSiteAddSlug(opts.projectSlug); err != nil {
+			return "", opts, err
+		}
 	}
 	if len(positionals) == 0 {
 		if opts.nonInteractive || !siteIsInteractiveFn() {
@@ -63,7 +106,7 @@ func parseSiteRepairArgs(argv []string) (string, deleteServerOptions, error) {
 	return canonicalEnvID(ref, "live"), opts, nil
 }
 
-func siteRepairMode(opts deleteServerOptions) (bool, string, error) {
+func siteRepairMode(opts siteRepairOptions) (bool, string, error) {
 	if opts.execute && opts.dryRun {
 		return false, "", fmt.Errorf("Choose either --execute or --dry-run, not both.")
 	}
@@ -80,13 +123,13 @@ func siteRepairMode(opts deleteServerOptions) (bool, string, error) {
 	return false, "dry-run", nil
 }
 
-func cmdSiteRepair(envRef string, opts deleteServerOptions) int {
+func cmdSiteRepair(envRef string, opts siteRepairOptions) int {
 	willExecute, mode, err := siteRepairMode(opts)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		return 1
 	}
-	plan, err := buildSiteRepairPlan(envRef)
+	plan, err := buildSiteRepairPlan(envRef, opts)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		return 1
@@ -96,13 +139,27 @@ func cmdSiteRepair(envRef string, opts deleteServerOptions) int {
 		return 0
 	}
 	if !opts.yes {
-		confirmed, err := siteAddConfirmFn(fmt.Sprintf("Repair provider platform files for %q?", plan.EnvID), false)
+		confirmed, err := siteAddConfirmFn(fmt.Sprintf("Repair provider platform state for %q?", plan.EnvID), false)
 		if err != nil {
 			fmt.Fprintln(os.Stderr, err)
 			return 1
 		}
 		if !confirmed {
 			fmt.Fprintln(os.Stderr, "Aborted.")
+			return 1
+		}
+	}
+	if plan.Provider == "kinsta" {
+		var repaired kinstaSiteAddEnvPlan
+		if plan.ReconcileIdentity {
+			repaired, err = kinstaRepairIdentityFn(plan)
+			if err != nil {
+				fmt.Fprintln(os.Stderr, err)
+				return 1
+			}
+		}
+		if err := updateKinstaRepairCache(plan, repaired); err != nil {
+			fmt.Fprintln(os.Stderr, err)
 			return 1
 		}
 	}
@@ -116,7 +173,7 @@ func cmdSiteRepair(envRef string, opts deleteServerOptions) int {
 	return 0
 }
 
-func buildSiteRepairPlan(envRef string) (siteRepairPlan, error) {
+func buildSiteRepairPlan(envRef string, opts siteRepairOptions) (siteRepairPlan, error) {
 	siteID, env, ok := splitSiteEnvRef(envRef)
 	if !ok {
 		return siteRepairPlan{}, ProjectError{Msg: "site repair requires a site or env ref like site.target or site.target:staging"}
@@ -139,13 +196,23 @@ func buildSiteRepairPlan(envRef string) (siteRepairPlan, error) {
 	plan := siteRepairPlan{EnvID: canonicalEnvID(siteID, env), SiteID: siteID, Env: env, Provider: provider, Target: target}
 	switch provider {
 	case "kinsta":
-		plan.Actions = []string{
+		if err := populateKinstaSiteRepairPlan(&plan, record, opts); err != nil {
+			return siteRepairPlan{}, err
+		}
+		plan.Actions = []string{kinstaIdentityRepairAction(plan)}
+		if plan.EnvID != plan.CanonicalEnvID {
+			plan.Actions = append(plan.Actions, fmt.Sprintf("re-key local Kinsta cache as %s", plan.CanonicalEnvID))
+		}
+		plan.Actions = append(plan.Actions,
 			"remove local-only wp-content/mu-plugins/nf-mailpit.php if present",
 			"restore Kinsta's required MU plugin when kinsta-mu-plugins.php or kinsta-mu-plugins/ is missing",
 			"ensure KINSTAMU_WHITELABEL is enabled in wp-config.php",
-		}
+		)
 		plan.Script = renderKinstaSiteRepairScript(target.WordPressPath)
 	case "linode":
+		if opts.projectSlug != "" {
+			return siteRepairPlan{}, ProjectError{Msg: "--project-slug is only valid when repairing a Kinsta env"}
+		}
 		hostname := linodeRepairInternalHostname(siteID, env, record, target)
 		if hostname == "" {
 			return siteRepairPlan{}, ProjectError{Msg: fmt.Sprintf("Linode site env %q is missing an internal hostname. Run nf site refresh.", plan.EnvID)}
@@ -170,10 +237,287 @@ func buildSiteRepairPlan(envRef string) (siteRepairPlan, error) {
 	return plan, nil
 }
 
+func populateKinstaSiteRepairPlan(plan *siteRepairPlan, record map[string]any, opts siteRepairOptions) error {
+	values, err := loadGlobalConfig()
+	if err != nil {
+		return err
+	}
+	baseDomain := normalizeDomainName(values["base_domain"])
+	if baseDomain == "" {
+		return ProjectError{Msg: fmt.Sprintf("Expected base_domain in %s. Set it with nf config set-base-domain <domain>.", config.ConfigFile())}
+	}
+	records, err := state.LoadStateRecords("sites")
+	if err != nil {
+		return err
+	}
+	remoteSiteID := siteKinstaID(record, "site_id")
+	remoteEnvID := siteKinstaID(record, "environment_id")
+	if remoteSiteID == "" || remoteEnvID == "" {
+		return ProjectError{Msg: fmt.Sprintf("Kinsta env %q is missing provider site or environment IDs. Run nf site refresh.", plan.EnvID)}
+	}
+	authoritativeSlug, err := kinstaRepairProjectSlug(records, remoteSiteID, baseDomain)
+	if err != nil {
+		return err
+	}
+	projectSlug := strings.TrimSpace(opts.projectSlug)
+	if authoritativeSlug != "" {
+		if projectSlug != "" && projectSlug != authoritativeSlug {
+			return ProjectError{Msg: fmt.Sprintf("--project-slug %q conflicts with existing Kinsta identity domains for project %q", projectSlug, authoritativeSlug)}
+		}
+		projectSlug = authoritativeSlug
+	}
+	if projectSlug == "" {
+		if opts.nonInteractive || !siteIsInteractiveFn() {
+			return ProjectError{Msg: fmt.Sprintf("Kinsta env %q has no nf identity domain; pass --project-slug <slug> in non-interactive mode", plan.EnvID)}
+		}
+		defaultSlug := firstNonEmpty(siteKinstaID(record, "slug"), firstRecordString(record, "project_slug", "name"), strings.TrimSuffix(plan.SiteID, ".kinsta"))
+		prompted, err := siteAddPromptStringFn("Project slug", defaultSlug, false)
+		if err != nil {
+			return err
+		}
+		projectSlug = strings.TrimSpace(prompted)
+		if projectSlug == "" {
+			projectSlug = defaultSlug
+		}
+		if err := validateSiteAddSlug(projectSlug); err != nil {
+			return err
+		}
+	}
+	canonicalSiteID := kinstaSiteID(projectSlug)
+	if err := validateKinstaRepairCacheClaim(records, remoteSiteID, canonicalSiteID, projectSlug); err != nil {
+		return err
+	}
+	identityDomain := kinstaSiteDomain(projectSlug, baseDomain, plan.Env)
+	reconcileIdentity := !kinstaRepairRecordHasDomain(record, identityDomain)
+	dnsAccountID := firstNonEmpty(values["dnsimple_account_id"], dnsimpleAccountIDValue())
+	if reconcileIdentity && dnsAccountID == "" {
+		return ProjectError{Msg: fmt.Sprintf("Expected dnsimple_account_id in %s. Run nf provider check dnsimple.", config.ConfigFile())}
+	}
+	plan.ProjectSlug = projectSlug
+	plan.CanonicalSiteID = canonicalSiteID
+	plan.CanonicalEnvID = canonicalEnvID(canonicalSiteID, plan.Env)
+	plan.KinstaSiteID = remoteSiteID
+	plan.KinstaSlug = firstNonEmpty(siteKinstaID(record, "slug"), strings.TrimSuffix(plan.SiteID, ".kinsta"))
+	plan.KinstaEnvID = remoteEnvID
+	plan.IdentityDomain = identityDomain
+	plan.ReconcileIdentity = reconcileIdentity
+	plan.BaseDomain = baseDomain
+	plan.DNSZone = baseDomain
+	plan.DNSAccountID = dnsAccountID
+	return nil
+}
+
+func kinstaRepairProjectSlug(records []map[string]any, remoteSiteID, baseDomain string) (string, error) {
+	projectSlug := ""
+	for _, record := range records {
+		if siteKinstaID(record, "site_id") != remoteSiteID {
+			continue
+		}
+		domains := make([]kinsta.Domain, 0)
+		for _, entry := range siteDomainListDomains(record) {
+			domains = append(domains, kinsta.Domain{Name: entry.name})
+		}
+		slug, err := kinstaProjectSlugFromDomains(domains, baseDomain)
+		if err != nil {
+			return "", err
+		}
+		if slug != "" && projectSlug != "" && slug != projectSlug {
+			return "", ProjectError{Msg: fmt.Sprintf("Kinsta site %s has conflicting nf project slugs %q and %q in cached identity domains", remoteSiteID, projectSlug, slug)}
+		}
+		if slug != "" {
+			projectSlug = slug
+		}
+	}
+	return projectSlug, nil
+}
+
+func validateKinstaRepairCacheClaim(records []map[string]any, remoteSiteID, canonicalSiteID, projectSlug string) error {
+	for _, record := range records {
+		if !strings.EqualFold(firstRecordString(record, "provider"), "kinsta") || siteKinstaID(record, "site_id") == remoteSiteID {
+			continue
+		}
+		if normalizedRecordString(siteEnvSiteID(record)) == normalizedRecordString(canonicalSiteID) || normalizedRecordString(firstRecordString(record, "project_slug")) == normalizedRecordString(projectSlug) {
+			return ProjectError{Msg: fmt.Sprintf("another Kinsta site (%s) already claims canonical site %q in the local cache", siteKinstaID(record, "site_id"), canonicalSiteID)}
+		}
+	}
+	return nil
+}
+
+func kinstaRepairRecordHasDomain(record map[string]any, expected string) bool {
+	expected = normalizeDomainName(expected)
+	for _, domain := range siteDomainListDomains(record) {
+		if domain.name == expected {
+			return true
+		}
+	}
+	return false
+}
+
+func kinstaIdentityRepairAction(plan siteRepairPlan) string {
+	if plan.ReconcileIdentity {
+		return fmt.Sprintf("add or verify Kinsta identity domain %s and its DNS records", plan.IdentityDomain)
+	}
+	return fmt.Sprintf("keep existing Kinsta identity domain %s", plan.IdentityDomain)
+}
+
+func repairKinstaIdentity(plan siteRepairPlan) (kinstaSiteAddEnvPlan, error) {
+	token := envwizard.Value("KINSTA_API_KEY")
+	if token == "" {
+		return kinstaSiteAddEnvPlan{}, fmt.Errorf("Expected KINSTA_API_KEY in the environment or %s.", config.EnvFile())
+	}
+	dnsToken := envwizard.Value("DNSIMPLE_TOKEN")
+	if dnsToken == "" {
+		return kinstaSiteAddEnvPlan{}, fmt.Errorf("Expected DNSIMPLE_TOKEN in the environment or %s.", config.EnvFile())
+	}
+	client := newKinstaClient(token)
+	ctx := context.Background()
+	environments, err := client.ListEnvironments(ctx, plan.KinstaSiteID)
+	if err != nil {
+		return kinstaSiteAddEnvPlan{}, err
+	}
+	remoteEnv := kinsta.Environment{}
+	for _, candidate := range environments {
+		if candidate.ID == plan.KinstaEnvID {
+			remoteEnv = candidate
+			break
+		}
+	}
+	if remoteEnv.ID == "" {
+		return kinstaSiteAddEnvPlan{}, fmt.Errorf("Kinsta site %s no longer has environment %s. Run nf site refresh.", plan.KinstaSiteID, plan.KinstaEnvID)
+	}
+	domains, err := client.ListDomains(ctx, plan.KinstaEnvID)
+	if err != nil {
+		return kinstaSiteAddEnvPlan{}, err
+	}
+	remoteEnv.Domains = domains
+	if remoteEnv.PrimaryDomain.ID == "" && domainName(remoteEnv.PrimaryDomain) == "" {
+		for _, candidate := range domains {
+			if candidate.IsPrimary {
+				remoteEnv.PrimaryDomain = candidate
+				break
+			}
+		}
+	}
+	promoteIdentity := shouldMakeKinstaInternalDomainPrimary(remoteEnv, domains)
+	domain, err := ensureKinstaDomain(ctx, client, remoteEnv, plan.IdentityDomain)
+	if err != nil {
+		return kinstaSiteAddEnvPlan{}, err
+	}
+	addPlan := kinstaSiteAddPlan{
+		Site:         plan.ProjectSlug,
+		SiteID:       plan.CanonicalSiteID,
+		KinstaSiteID: plan.KinstaSiteID,
+		KinstaSlug:   plan.KinstaSlug,
+		BaseDomain:   plan.BaseDomain,
+		DNSZone:      plan.DNSZone,
+		DNSAccountID: plan.DNSAccountID,
+	}
+	envPlan := kinstaSiteAddEnvPlan{Env: plan.Env, EnvID: plan.KinstaEnvID, Domain: plan.IdentityDomain, URL: kinstaURL(plan.IdentityDomain)}
+	dnsResult, err := ensureKinstaDomainDNSRecords(ctx, client, dnsToken, addPlan, envPlan, remoteEnv, domain)
+	if err != nil {
+		return kinstaSiteAddEnvPlan{}, err
+	}
+	if dnsResult.UsedFallback {
+		domain, domains, err = waitKinstaDomainReadyAfterFallback(ctx, client, remoteEnv, plan.IdentityDomain, domain)
+		if err != nil {
+			return kinstaSiteAddEnvPlan{}, fmt.Errorf("%w: %v", kinstaDomainFallbackManualVerificationError(plan.IdentityDomain), err)
+		}
+	} else {
+		domains, err = client.ListDomains(ctx, plan.KinstaEnvID)
+		if err != nil {
+			return kinstaSiteAddEnvPlan{}, err
+		}
+		if current, ok := kinsta.FindDomain(domains, plan.IdentityDomain); ok {
+			domain = markKinstaDomainPrimary(current, remoteEnv)
+		}
+	}
+	if !domain.IsPrimary && shouldMakeKinstaInternalDomainPrimary(remoteEnv, domains) {
+		fmt.Printf("Changing Kinsta primary domain to %s...\n", plan.IdentityDomain)
+		opID, err := client.ChangePrimaryDomain(ctx, plan.KinstaEnvID, domain.ID, false)
+		if err != nil {
+			return kinstaSiteAddEnvPlan{}, err
+		}
+		if err := waitKinstaOperation(ctx, client, opID); err != nil {
+			return kinstaSiteAddEnvPlan{}, err
+		}
+		domain.IsPrimary = true
+		remoteEnv.PrimaryDomain = domain
+		domains, err = client.ListDomains(ctx, plan.KinstaEnvID)
+		if err != nil {
+			return kinstaSiteAddEnvPlan{}, err
+		}
+	}
+	if domain.IsPrimary && (promoteIdentity || sameKinstaDomain(remoteEnv.PrimaryDomain, domain)) {
+		remoteEnv.PrimaryDomain = domain
+	}
+	if remoteEnv.PrimaryDomain.ID != "" || domainName(remoteEnv.PrimaryDomain) != "" {
+		domains = markKinstaDomainPrimaryInList(domains, remoteEnv.PrimaryDomain)
+	}
+	envPlan.DomainID = domain.ID
+	envPlan.DomainEntries = kinstaDomainCacheEntries(domains, remoteEnv.PrimaryDomain)
+	return envPlan, nil
+}
+
+func sameKinstaDomain(a, b kinsta.Domain) bool {
+	if a.ID != "" && b.ID != "" {
+		return a.ID == b.ID
+	}
+	aName := normalizeDomainName(domainName(a))
+	bName := normalizeDomainName(domainName(b))
+	return aName != "" && aName == bName
+}
+
+func updateKinstaRepairCache(plan siteRepairPlan, repaired kinstaSiteAddEnvPlan) error {
+	records, err := state.LoadStateRecords("sites")
+	if err != nil {
+		return err
+	}
+	if err := validateKinstaRepairCacheClaim(records, plan.KinstaSiteID, plan.CanonicalSiteID, plan.ProjectSlug); err != nil {
+		return err
+	}
+	updated := false
+	for i, record := range records {
+		if siteKinstaID(record, "site_id") != plan.KinstaSiteID {
+			continue
+		}
+		next := cloneRecord(record)
+		delete(next, "_state_key")
+		env := siteEnvName(record)
+		next["project_slug"] = plan.ProjectSlug
+		next["name"] = plan.ProjectSlug
+		next["site_id"] = plan.CanonicalSiteID
+		next["env_id"] = canonicalEnvID(plan.CanonicalSiteID, env)
+		kinstaState := cloneRecord(mapMapAtPath(record, "kinsta"))
+		if len(kinstaState) > 0 {
+			next["kinsta"] = kinstaState
+		}
+		if siteKinstaID(record, "environment_id") == plan.KinstaEnvID {
+			next["internal_hostname"] = plan.IdentityDomain
+			next["internal_url"] = kinstaURL(plan.IdentityDomain)
+			if len(repaired.DomainEntries) > 0 {
+				next["domains"] = repaired.DomainEntries
+			}
+		}
+		records[i] = next
+		updated = true
+	}
+	if !updated {
+		return ProjectError{Msg: fmt.Sprintf("No cached Kinsta records matched provider site %s. Run nf site refresh.", plan.KinstaSiteID)}
+	}
+	return state.SaveStateRecords("sites", records)
+}
+
 func printSiteRepairPlan(plan siteRepairPlan, mode string) {
 	fmt.Println("Site repair plan:")
 	fmt.Printf("  env:      %s\n", plan.EnvID)
 	fmt.Printf("  provider: %s\n", plan.Provider)
+	if plan.Provider == "kinsta" {
+		fmt.Printf("  project:  %s\n", plan.ProjectSlug)
+		if plan.KinstaSlug != "" && plan.KinstaSlug != plan.ProjectSlug {
+			fmt.Printf("  Kinsta slug: %s\n", plan.KinstaSlug)
+		}
+		fmt.Printf("  identity: %s\n", plan.IdentityDomain)
+	}
 	if plan.Target.TargetRef != "" {
 		fmt.Printf("  target:   %s\n", plan.Target.TargetRef)
 	}
