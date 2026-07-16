@@ -429,7 +429,7 @@ func runTheme(argv []string) int {
 		}
 		cfg, ok := loadEnvConfig(root, metadata)
 		if !ok {
-			fmt.Fprintln(os.Stderr, "Missing env metadata in nf.json. Run nf env up first.")
+			fmt.Fprintln(os.Stderr, "Invalid local project metadata in nf.json.")
 			return 1
 		}
 		return cmdEnvThemesCache(cfg, cacheOpts)
@@ -736,7 +736,7 @@ func runEnv(argv []string) int {
 	}
 	cfg, ok := loadEnvConfig(root, metadata)
 	if !ok {
-		fmt.Fprintln(os.Stderr, "Missing env metadata in nf.json. Run nf env up first.")
+		fmt.Fprintln(os.Stderr, "Invalid local project metadata in nf.json.")
 		return 1
 	}
 	if name == "show" {
@@ -938,7 +938,7 @@ func runPlugin(argv []string) int {
 		}
 		cfg, ok := loadEnvConfig(root, metadata)
 		if !ok {
-			fmt.Fprintln(os.Stderr, "Missing env metadata in nf.json. Run nf env up first.")
+			fmt.Fprintln(os.Stderr, "Invalid local project metadata in nf.json.")
 			return 1
 		}
 		return cmdEnvPluginsCache(cfg, cacheOpts)
@@ -1288,7 +1288,7 @@ func runEnvSnapshot(argv []string) int {
 	}
 	cfg, ok := loadEnvConfig(root, metadata)
 	if !ok {
-		fmt.Fprintln(os.Stderr, "Missing env metadata in nf.json. Run nf env up first.")
+		fmt.Fprintln(os.Stderr, "Invalid local project metadata in nf.json.")
 		return 1
 	}
 	switch cmd {

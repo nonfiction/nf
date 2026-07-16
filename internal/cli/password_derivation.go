@@ -116,8 +116,11 @@ func deriveProjectPassword(slug, purpose, version string) (string, error) {
 	return passwords.DerivePassword(slug, purpose, salt), nil
 }
 
-func projectPasswordVersion(metadata map[string]any) string {
-	return normalizedPasswordVersion(mapStringAtPath(metadata, "project", "password_version"))
+func projectPasswordVersion(metadata *projectMetadata) string {
+	if metadata == nil || metadata.Project.PasswordVersion == 0 {
+		return ""
+	}
+	return strconv.FormatUint(metadata.Project.PasswordVersion, 10)
 }
 
 func currentProjectPasswordVersionForSite(siteSlug string) string {
@@ -129,7 +132,7 @@ func currentProjectPasswordVersionForSite(siteSlug string) string {
 	if err != nil {
 		return ""
 	}
-	if normalizedRecordString(mapStringAtPath(metadata, "project", "slug")) != normalizedRecordString(siteSlug) {
+	if normalizedRecordString(metadata.Project.Slug) != normalizedRecordString(siteSlug) {
 		return ""
 	}
 	return projectPasswordVersion(metadata)

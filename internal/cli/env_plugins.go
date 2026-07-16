@@ -20,6 +20,7 @@ import (
 	"time"
 
 	"github.com/nonfiction/nf/internal/config"
+	"github.com/nonfiction/nf/internal/project"
 )
 
 const (
@@ -37,19 +38,8 @@ type wordpressPluginSpec struct {
 	Note       string
 }
 
-func loadWordPressPluginSpecs(metadata map[string]any) ([]wordpressPluginSpec, error) {
-	wordpress := mapMapAtPath(metadata, "wordpress")
-	if wordpress == nil {
-		return nil, nil
-	}
-	value, ok := wordpress["plugins"]
-	if !ok {
-		return nil, nil
-	}
-	raw, ok := value.([]any)
-	if !ok {
-		return nil, ProjectError{Msg: "nf.json wordpress.plugins must be an array"}
-	}
+func loadWordPressPluginSpecs(metadata *projectMetadata) ([]wordpressPluginSpec, error) {
+	raw := metadata.WordPress.Plugins
 	plugins := make([]wordpressPluginSpec, 0, len(raw))
 	seen := map[string]struct{}{}
 	for i, item := range raw {
@@ -73,11 +63,21 @@ func parseWordPressPluginSpec(index int, value any) (wordpressPluginSpec, error)
 		if slug == "" {
 			return wordpressPluginSpec{}, ProjectError{Msg: fmt.Sprintf("nf.json wordpress.plugins[%d] must not be empty", index)}
 		}
+		if err := validatePluginSlug(slug); err != nil {
+			return wordpressPluginSpec{}, err
+		}
 		return wordpressPluginSpec{Slug: slug, Source: "wordpress.org", Install: true, Activate: true, AutoUpdate: true}, nil
 	case map[string]any:
-		slug := strings.TrimSpace(recordValueString(typed["slug"]))
-		if slug == "" {
-			return wordpressPluginSpec{}, ProjectError{Msg: fmt.Sprintf("nf.json wordpress.plugins[%d].slug is required", index)}
+		location := fmt.Sprintf("nf.json wordpress.plugins[%d]", index)
+		if err := validateProjectObjectFields(location, typed, "slug", "source", "install", "activate", "auto_update", "note"); err != nil {
+			return wordpressPluginSpec{}, err
+		}
+		slug, err := projectObjectStringField(location, typed, "slug", true)
+		if err != nil {
+			return wordpressPluginSpec{}, err
+		}
+		if err := validatePluginSlug(slug); err != nil {
+			return wordpressPluginSpec{}, err
 		}
 		activate := true
 		install := true
@@ -103,18 +103,24 @@ func parseWordPressPluginSpec(index int, value any) (wordpressPluginSpec, error)
 			}
 			autoUpdate = boolValue
 		}
-		source := strings.TrimSpace(recordValueString(typed["source"]))
+		source, err := projectObjectStringField(location, typed, "source", false)
+		if err != nil {
+			return wordpressPluginSpec{}, err
+		}
 		if source == "" && install {
 			source = "wordpress.org"
 		}
-		note := strings.TrimSpace(recordValueString(typed["note"]))
+		note, err := projectObjectStringField(location, typed, "note", false)
+		if err != nil {
+			return wordpressPluginSpec{}, err
+		}
 		return wordpressPluginSpec{Slug: slug, Source: source, Install: install, Activate: activate, AutoUpdate: autoUpdate, Note: note}, nil
 	default:
 		return wordpressPluginSpec{}, ProjectError{Msg: fmt.Sprintf("nf.json wordpress.plugins[%d] must be a string or object", index)}
 	}
 }
 
-func cmdEnvPluginsList(metadata map[string]any) int {
+func cmdEnvPluginsList(metadata *projectMetadata) int {
 	plugins, err := loadWordPressPluginSpecs(metadata)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, err)
@@ -140,7 +146,11 @@ type envPluginAddOptions struct {
 	HasAutoUpdate bool
 }
 
-func cmdEnvPluginsAdd(root string, metadata map[string]any, opts envPluginAddOptions) int {
+func cmdEnvPluginsAdd(root string, metadata *projectMetadata, opts envPluginAddOptions) int {
+	if err := validatePluginSlug(opts.Slug); err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		return 1
+	}
 	if _, err := loadWordPressPluginSpecs(metadata); err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		return 1
@@ -168,8 +178,7 @@ func cmdEnvPluginsAdd(root string, metadata map[string]any, opts envPluginAddOpt
 		}
 	}
 	plugins = append(plugins, wordpressPluginAddValue(opts))
-	wordpress := metadata["wordpress"].(map[string]any)
-	wordpress["plugins"] = plugins
+	metadata.WordPress.Plugins = plugins
 	if err := saveProjectMetadata(root, metadata); err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		return 1
@@ -178,7 +187,7 @@ func cmdEnvPluginsAdd(root string, metadata map[string]any, opts envPluginAddOpt
 	return 0
 }
 
-func cmdEnvPluginsRemove(root string, metadata map[string]any, slug string) int {
+func cmdEnvPluginsRemove(root string, metadata *projectMetadata, slug string) int {
 	if _, err := loadWordPressPluginSpecs(metadata); err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		return 1
@@ -210,8 +219,7 @@ func cmdEnvPluginsRemove(root string, metadata map[string]any, slug string) int 
 		fmt.Fprintf(os.Stderr, "nf.json wordpress.plugins does not contain %q\n", slug)
 		return 1
 	}
-	wordpress := metadata["wordpress"].(map[string]any)
-	wordpress["plugins"] = kept
+	metadata.WordPress.Plugins = kept
 	if err := saveProjectMetadata(root, metadata); err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		return 1
@@ -418,29 +426,11 @@ func cmdEnvPluginsCacheRemove(slug string) int {
 	return 0
 }
 
-func projectWordPressPlugins(metadata map[string]any, create bool) ([]any, error) {
-	wordpress, ok := metadata["wordpress"].(map[string]any)
-	if !ok || wordpress == nil {
-		if !create {
-			return nil, nil
-		}
-		wordpress = map[string]any{}
-		metadata["wordpress"] = wordpress
+func projectWordPressPlugins(metadata *projectMetadata, create bool) ([]any, error) {
+	if metadata.WordPress.Plugins == nil && create {
+		metadata.WordPress.Plugins = []any{}
 	}
-	value, ok := wordpress["plugins"]
-	if !ok {
-		if !create {
-			return nil, nil
-		}
-		plugins := []any{}
-		wordpress["plugins"] = plugins
-		return plugins, nil
-	}
-	plugins, ok := value.([]any)
-	if !ok {
-		return nil, ProjectError{Msg: "nf.json wordpress.plugins must be an array"}
-	}
-	return plugins, nil
+	return metadata.WordPress.Plugins, nil
 }
 
 func wordpressPluginAddValue(opts envPluginAddOptions) any {
@@ -466,11 +456,11 @@ func wordpressPluginAddValue(opts envPluginAddOptions) any {
 	return orderedObject{Pairs: pairs}
 }
 
-func cmdEnvPluginsStatusWithOptions(root string, metadata map[string]any, remoteName string) int {
+func cmdEnvPluginsStatusWithOptions(root string, metadata *projectMetadata, remoteName string) int {
 	if strings.TrimSpace(remoteName) == "" {
 		cfg, ok := loadEnvConfig(root, metadata)
 		if !ok {
-			fmt.Fprintln(os.Stderr, "Missing env metadata in nf.json. Run nf env up first.")
+			fmt.Fprintln(os.Stderr, "Invalid local project metadata in nf.json.")
 			return 1
 		}
 		return cmdEnvPluginsStatusLocal(cfg, metadata)
@@ -478,11 +468,11 @@ func cmdEnvPluginsStatusWithOptions(root string, metadata map[string]any, remote
 	return cmdEnvPluginsStatusRemote(metadata, remoteName)
 }
 
-func cmdEnvPluginsDiffWithOptions(root string, metadata map[string]any, remoteName string) int {
+func cmdEnvPluginsDiffWithOptions(root string, metadata *projectMetadata, remoteName string) int {
 	if strings.TrimSpace(remoteName) == "" {
 		cfg, ok := loadEnvConfig(root, metadata)
 		if !ok {
-			fmt.Fprintln(os.Stderr, "Missing env metadata in nf.json. Run nf env up first.")
+			fmt.Fprintln(os.Stderr, "Invalid local project metadata in nf.json.")
 			return 1
 		}
 		return cmdEnvPluginsDiffLocal(cfg, metadata)
@@ -490,7 +480,7 @@ func cmdEnvPluginsDiffWithOptions(root string, metadata map[string]any, remoteNa
 	return cmdEnvPluginsDiffRemote(root, metadata, remoteName)
 }
 
-func cmdEnvPluginsStatusLocal(cfg envConfig, metadata map[string]any) int {
+func cmdEnvPluginsStatusLocal(cfg envConfig, metadata *projectMetadata) int {
 	plugins, err := loadWordPressPluginSpecs(metadata)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, err)
@@ -514,7 +504,7 @@ func cmdEnvPluginsStatusLocal(cfg envConfig, metadata map[string]any) int {
 	return 0
 }
 
-func cmdEnvPluginsDiffLocal(cfg envConfig, metadata map[string]any) int {
+func cmdEnvPluginsDiffLocal(cfg envConfig, metadata *projectMetadata) int {
 	plugins, err := loadWordPressPluginSpecs(metadata)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, err)
@@ -537,7 +527,7 @@ func cmdEnvPluginsDiffLocal(cfg envConfig, metadata map[string]any) int {
 	return printWordPressPluginDiff("Plugin diff:", nil, statuses, cfg.RepoRoot)
 }
 
-func cmdEnvPluginsStatusRemote(metadata map[string]any, remoteName string) int {
+func cmdEnvPluginsStatusRemote(metadata *projectMetadata, remoteName string) int {
 	plugins, err := loadWordPressPluginSpecs(metadata)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, err)
@@ -568,7 +558,7 @@ func cmdEnvPluginsStatusRemote(metadata map[string]any, remoteName string) int {
 	return 0
 }
 
-func cmdEnvPluginsDiffRemote(root string, metadata map[string]any, remoteName string) int {
+func cmdEnvPluginsDiffRemote(root string, metadata *projectMetadata, remoteName string) int {
 	plugins, err := loadWordPressPluginSpecs(metadata)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, err)
@@ -592,7 +582,7 @@ func cmdEnvPluginsDiffRemote(root string, metadata map[string]any, remoteName st
 	return printWordPressPluginDiff("Plugin diff:", &target, statuses, root)
 }
 
-func cmdEnvPluginsInstall(cfg envConfig, metadata map[string]any) int {
+func cmdEnvPluginsInstall(cfg envConfig, metadata *projectMetadata) int {
 	plugins, err := loadWordPressPluginSpecs(metadata)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, err)
@@ -629,7 +619,7 @@ type envPluginInstallOptions struct {
 	Yes        bool
 }
 
-func cmdEnvPluginsInstallWithOptions(root string, metadata map[string]any, opts envPluginInstallOptions) int {
+func cmdEnvPluginsInstallWithOptions(root string, metadata *projectMetadata, opts envPluginInstallOptions) int {
 	if strings.TrimSpace(opts.RemoteName) == "" {
 		if opts.DryRun {
 			fmt.Fprintln(os.Stderr, "plugin install --dry-run requires a remote")
@@ -637,7 +627,7 @@ func cmdEnvPluginsInstallWithOptions(root string, metadata map[string]any, opts 
 		}
 		cfg, ok := loadEnvConfig(root, metadata)
 		if !ok {
-			fmt.Fprintln(os.Stderr, "Missing env metadata in nf.json. Run nf env up first.")
+			fmt.Fprintln(os.Stderr, "Invalid local project metadata in nf.json.")
 			return 1
 		}
 		return cmdEnvPluginsInstall(cfg, metadata)
@@ -645,7 +635,7 @@ func cmdEnvPluginsInstallWithOptions(root string, metadata map[string]any, opts 
 	return cmdEnvPluginsInstallRemote(root, metadata, opts)
 }
 
-func cmdEnvPluginsInstallRemote(root string, metadata map[string]any, opts envPluginInstallOptions) int {
+func cmdEnvPluginsInstallRemote(root string, metadata *projectMetadata, opts envPluginInstallOptions) int {
 	plugins, err := loadWordPressPluginSpecs(metadata)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, err)
@@ -857,7 +847,7 @@ func pluginSourceIsCache(plugin wordpressPluginSpec) bool {
 
 func validatePluginSlug(slug string) error {
 	slug = strings.TrimSpace(slug)
-	if slug == "" || filepath.IsAbs(slug) || strings.ContainsAny(slug, `/\`) || strings.Contains(slug, "..") {
+	if err := project.ValidateName(slug); err != nil {
 		return ProjectError{Msg: fmt.Sprintf("plugin slug %q must be one safe directory name", slug)}
 	}
 	return nil
@@ -871,7 +861,7 @@ func repoPluginSourceDir(root string, plugin wordpressPluginSpec) (string, error
 	return filepath.Join(root, "plugins", slug), nil
 }
 
-func repoPluginMountsFromMetadata(root string, metadata map[string]any) []envPluginMount {
+func repoPluginMountsFromMetadata(root string, metadata *projectMetadata) []envPluginMount {
 	plugins, err := loadWordPressPluginSpecs(metadata)
 	if err != nil {
 		return nil
@@ -1102,7 +1092,7 @@ func packagePluginSource(sourceDir, outputPath, archiveRoot string) (int, error)
 	if err != nil || !info.IsDir() {
 		return 0, ProjectError{Msg: fmt.Sprintf("repo plugin source directory does not exist: %s", sourceDir)}
 	}
-	if archiveRoot == "" || filepath.IsAbs(archiveRoot) || strings.ContainsAny(archiveRoot, `/\`) || strings.Contains(archiveRoot, "..") {
+	if err := project.ValidateName(archiveRoot); err != nil {
 		return 0, ProjectError{Msg: fmt.Sprintf("plugin archive root %q must be one safe directory name", archiveRoot)}
 	}
 	files := []string{}

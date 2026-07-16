@@ -187,7 +187,7 @@ func passwordDeriveIdentityCompletionNames(scope string) []string {
 		values := cachedSitePasswordSlugCompletionNames()
 		if root, ok := currentNFProjectRoot(); ok {
 			if metadata, err := loadProjectMetadataOrError(root); err == nil {
-				values = append(values, mapStringAtPath(metadata, "project", "slug"))
+				values = append(values, metadata.Project.Slug)
 			}
 		}
 		return uniqueSortedStrings(values)

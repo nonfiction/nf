@@ -19,6 +19,26 @@ nf env show
 
 `nf env up` is idempotent. It starts Docker Compose, configures Mailpit SMTP, reconciles configured `wp-config.php` defines, installs WordPress if needed, and ensures the mounted theme is active.
 
+Local env commands use built-in defaults when `local` is absent from `nf.json`. Add `local` only for non-default overrides:
+
+```json
+{
+  "local": {
+    "compose": "docker compose -f docker-compose.local.yml",
+    "wordpress_service": "cms",
+    "uploads_path": ".nf-uploads",
+    "admin_user": "client-admin",
+    "ports": {
+      "wordpress": 9080,
+      "mailpit": 9025,
+      "db": 9081
+    }
+  }
+}
+```
+
+All fields within `local` are optional. Missing or zero port values use ports derived from the project slug.
+
 Rebuild the generated WordPress image when needed:
 
 ```sh
@@ -54,7 +74,7 @@ nf config set-docker-user <user>
 
 ## Reconcile Defines
 
-Project-required `wp-config.php` constants can be declared in `nf.json` under `wordpress.config.defines`. `nf env up` applies local configured defines automatically. You can inspect or apply them explicitly with:
+Project-required `wp-config.php` constants can be declared in `nf.json` under `wordpress.defines`. `nf env up` applies local configured defines automatically. You can inspect or apply them explicitly with:
 
 ```sh
 nf define status

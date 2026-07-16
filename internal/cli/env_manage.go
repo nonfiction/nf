@@ -206,7 +206,7 @@ func envPortCollisionMessage(cfg envConfig, occupied []int) string {
 	ports := append([]int(nil), occupied...)
 	sort.Ints(ports)
 	projectLabel := firstNonEmpty(cfg.ProjectSlug, "project")
-	block := fmt.Sprintf("The %s env wants:\n  WordPress: http://localhost:%d\n  Mailpit:   http://localhost:%d\n  Database:  http://localhost:%d\n\nSet env.ports.wordpress, env.ports.mailpit, and env.ports.db in nf.json to override.", projectLabel, cfg.WordpressPort, cfg.MailpitPort, cfg.AdminerPort)
+	block := fmt.Sprintf("The %s env wants:\n  WordPress: http://localhost:%d\n  Mailpit:   http://localhost:%d\n  Database:  http://localhost:%d\n\nSet local.ports.wordpress, local.ports.mailpit, and local.ports.db in nf.json to override.", projectLabel, cfg.WordpressPort, cfg.MailpitPort, cfg.AdminerPort)
 	if len(ports) == 1 {
 		return fmt.Sprintf("Port %d is already in use.\n\n%s", ports[0], block)
 	}

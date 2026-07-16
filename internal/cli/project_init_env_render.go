@@ -3,6 +3,7 @@ package cli
 // Project initialization plus generated local env file renderers.
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
 	"net/url"
@@ -15,6 +16,7 @@ import (
 	"github.com/nonfiction/nf/internal/config"
 	"github.com/nonfiction/nf/internal/envwizard"
 	"github.com/nonfiction/nf/internal/passwords"
+	"github.com/nonfiction/nf/internal/project"
 	"github.com/nonfiction/nf/internal/theme"
 	"github.com/nonfiction/nf/internal/ui"
 )
@@ -41,6 +43,9 @@ func projectInitRoot() string {
 
 func writeProjectInit(root string, args projectInitArgs) error {
 	metadata := projectInitMetadata(args)
+	if err := validateProjectMetadata(metadata); err != nil {
+		return err
+	}
 	projectPath := config.ProjectFile(root)
 	if !args.force {
 		if _, err := os.Stat(projectPath); err == nil {
@@ -49,10 +54,7 @@ func writeProjectInit(root string, args projectInitArgs) error {
 			return err
 		}
 	}
-	if err := os.MkdirAll(filepath.Dir(projectPath), 0o755); err != nil {
-		return err
-	}
-	if err := os.WriteFile(projectPath, []byte(projectInitJSON(metadata)), 0o644); err != nil {
+	if err := project.Save(root, metadata); err != nil {
 		return err
 	}
 	fmt.Printf("Wrote %s\n", projectPath)
@@ -77,42 +79,29 @@ func ensureEnvProjectMetadata() error {
 	return writeProjectInit(root, projectInitArgs{projectSlug: slug, projectType: "wordpress-theme"})
 }
 
-func projectInitMetadata(args projectInitArgs) map[string]any {
+func projectInitMetadata(args projectInitArgs) *projectMetadata {
 	themePath := firstNonEmpty(args.themeSource, "theme")
 	projectSlug := args.projectSlug
 	themeSlug := firstNonEmpty(args.themeSlug, projectSlug, "theme")
-	metadata := map[string]any{
-		"version": 1,
-		"project": map[string]any{
-			"slug":             projectSlug,
-			"type":             firstNonEmpty(args.projectType, "wordpress-theme"),
-			"password_version": 0,
+	return &projectMetadata{
+		Version: project.ManifestVersion,
+		Project: project.Project{Slug: projectSlug},
+		WordPress: project.WordPress{
+			Themes: projectInitThemeList(projectSlug, themeSlug, themePath),
 		},
-		"wordpress": map[string]any{
-			"deploy_unit": "theme",
-			"themes":      projectInitThemeList(themeSlug, themePath),
-			"plugins":     []any{},
-		},
-		"env": map[string]any{
-			"compose":           "docker compose",
-			"wordpress_service": "wordpress",
-			"uploads_path":      "uploads",
-		},
-		"artifact": map[string]any{
-			"path": filepath.ToSlash(filepath.Join("dist", projectSlug+"-v{version}.zip")),
-		},
-		"remotes": map[string]any{},
-		"tasks":   defaultProjectTasks(),
 	}
-	return metadata
 }
 
-func projectInitThemeList(themeSlug, themePath string) []any {
+func projectInitThemeList(projectSlug, themeSlug, themePath string) []any {
 	themes := []any{
 		orderedObject{Pairs: []orderedPair{
 			{Key: "slug", Value: themeSlug},
 			{Key: "source", Value: wordpressThemeRepoSource},
 			{Key: "path", Value: themePath},
+			{Key: "package", Value: orderedObject{Pairs: []orderedPair{
+				{Key: "output", Value: filepath.ToSlash(filepath.Join("dist", projectSlug+"-v{version}.zip"))},
+			}}},
+			{Key: "tasks", Value: defaultProjectTasks(themePath)},
 		}},
 	}
 	seen := map[string]struct{}{themeSlug: {}}
@@ -138,34 +127,6 @@ type projectInitArgs struct {
 	force       bool
 }
 
-func projectInitJSON(metadata map[string]any) string {
-	data, _ := json.MarshalIndent(orderedProjectMetadata(metadata), "", "  ")
-	return string(append(data, '\n'))
-}
-
-func orderedProjectMetadata(metadata map[string]any) orderedObject {
-	order := []string{"version", "project", "wordpress", "env", "aliases", "artifact", "remotes", "tasks"}
-	seen := map[string]struct{}{}
-	pairs := make([]orderedPair, 0, len(metadata))
-	for _, key := range order {
-		if value, ok := metadata[key]; ok {
-			pairs = append(pairs, orderedPair{Key: key, Value: value})
-			seen[key] = struct{}{}
-		}
-	}
-	keys := make([]string, 0, len(metadata))
-	for key := range metadata {
-		if _, ok := seen[key]; !ok {
-			keys = append(keys, key)
-		}
-	}
-	sort.Strings(keys)
-	for _, key := range keys {
-		pairs = append(pairs, orderedPair{Key: key, Value: metadata[key]})
-	}
-	return orderedObject{Pairs: pairs}
-}
-
 type orderedObject struct {
 	Pairs []orderedPair
 }
@@ -175,6 +136,18 @@ type orderedPair struct {
 	Value any
 }
 
+func orderedObjectMap(object orderedObject) map[string]any {
+	result := make(map[string]any, len(object.Pairs))
+	for _, pair := range object.Pairs {
+		value := pair.Value
+		if nested, ok := value.(orderedObject); ok {
+			value = orderedObjectMap(nested)
+		}
+		result[pair.Key] = value
+	}
+	return result
+}
+
 func (o orderedObject) MarshalJSON() ([]byte, error) {
 	var b strings.Builder
 	b.WriteByte('{')
@@ -182,11 +155,11 @@ func (o orderedObject) MarshalJSON() ([]byte, error) {
 		if i > 0 {
 			b.WriteByte(',')
 		}
-		key, err := json.Marshal(pair.Key)
+		key, err := marshalProjectJSONValue(pair.Key)
 		if err != nil {
 			return nil, err
 		}
-		value, err := json.Marshal(pair.Value)
+		value, err := marshalProjectJSONValue(pair.Value)
 		if err != nil {
 			return nil, err
 		}
@@ -196,6 +169,16 @@ func (o orderedObject) MarshalJSON() ([]byte, error) {
 	}
 	b.WriteByte('}')
 	return []byte(b.String()), nil
+}
+
+func marshalProjectJSONValue(value any) ([]byte, error) {
+	var output bytes.Buffer
+	encoder := json.NewEncoder(&output)
+	encoder.SetEscapeHTML(false)
+	if err := encoder.Encode(value); err != nil {
+		return nil, err
+	}
+	return bytes.TrimSuffix(output.Bytes(), []byte{'\n'}), nil
 }
 
 func renderEnvCompose(cfg envConfig) string {
@@ -420,7 +403,7 @@ func renderEnvInfo(cfg envConfig, includeURLs bool, remoteRows ...detailRow) str
 	return strings.Join(lines, "\n")
 }
 
-func envRemoteURLRows(metadata map[string]any) ([]detailRow, error) {
+func envRemoteURLRows(metadata *projectMetadata) ([]detailRow, error) {
 	remotes, err := projectRemotes(metadata, false)
 	if err != nil {
 		return nil, err
@@ -639,7 +622,7 @@ func projectRemoteSelectOptions(action string) ([]ui.SelectOption, error) {
 		if _, _, ok, err := projectRemoteAlias(metadata, name); err != nil {
 			return nil, err
 		} else if ok {
-			label += " (" + strings.TrimSpace(recordValueString(remotes[name])) + ")"
+			label += " (" + strings.TrimSpace(remotes[name]) + ")"
 		}
 		options = append(options, ui.SelectOption{Value: name, Label: label})
 	}
@@ -651,7 +634,7 @@ func validateThemeDeploySlug(slug string) error {
 	if slug == "" {
 		return ProjectError{Msg: "theme slug cannot be empty"}
 	}
-	if filepath.IsAbs(slug) || strings.ContainsAny(slug, "/\\") || strings.Contains(slug, "..") {
+	if err := project.ValidateName(slug); err != nil {
 		return ProjectError{Msg: fmt.Sprintf("theme slug %q must be one safe directory name", slug)}
 	}
 	return nil
@@ -662,7 +645,7 @@ func cmdPackage(commandName, source, output string, dryRun bool) int {
 	if root == "" {
 		root = "."
 	}
-	metadata, err := theme.LoadProjectMetadata(root)
+	metadata, err := loadProjectMetadataOrError(root)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		return 1
@@ -684,10 +667,15 @@ func cmdPackage(commandName, source, output string, dryRun bool) int {
 		fmt.Fprintln(os.Stderr, err)
 		return 1
 	}
-	projectSlug := firstNonEmpty(mapStringAtPath(metadata, "project", "slug"), "project")
+	projectSlug := firstNonEmpty(metadata.Project.Slug, "project")
 	versionedOutput := output
 	if versionedOutput == "" {
-		versionedOutput = firstNonEmpty(mapStringAtPath(metadata, "artifact", "path"), filepath.ToSlash(filepath.Join("dist", projectSlug+"-v{version}.zip")))
+		versionedOutput, err = repoThemePackageOutput(metadata)
+		if err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			return 1
+		}
+		versionedOutput = firstNonEmpty(versionedOutput, filepath.ToSlash(filepath.Join("dist", projectSlug+"-v{version}.zip")))
 	}
 	versionedOutput, err = resolveVersionedArtifactPath(sourceDir, versionedOutput)
 	if err != nil {

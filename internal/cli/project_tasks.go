@@ -15,90 +15,181 @@ import (
 	"strings"
 
 	"github.com/nonfiction/nf/internal/config"
-	"github.com/nonfiction/nf/internal/theme"
+	"github.com/nonfiction/nf/internal/project"
 )
 
-func defaultProjectTasks() map[string]map[string]any {
-	return map[string]map[string]any{
-		"composer": map[string]any{"description": "Update theme Composer dependencies", "run": "composer --working-dir=theme update && composer --working-dir=theme dump-autoload -o"},
-		"npm":      map[string]any{"description": "Refresh theme development dependencies", "run": "npm --prefix theme update --save-dev"},
-		"build":    map[string]any{"description": "Build the theme assets", "run": "npm --prefix theme run build"},
-		"watch":    map[string]any{"description": "Watch theme assets during development", "run": "npm --prefix theme start"},
-		"test":     map[string]any{"description": "Run the theme test suite", "run": "composer --working-dir=theme test"},
+type projectMetadata = project.Manifest
+
+func defaultProjectTasks(themePath string) map[string]any {
+	themePath = firstNonEmpty(strings.TrimSpace(themePath), "theme")
+	composerPath := shellQuoteArg(themePath)
+	npmPath := shellQuoteArg(themePath)
+	return map[string]any{
+		"composer": map[string]any{"description": "Update theme Composer dependencies", "run": "composer --working-dir=" + composerPath + " update && composer --working-dir=" + composerPath + " dump-autoload -o"},
+		"npm":      map[string]any{"description": "Refresh theme development dependencies", "run": "npm --prefix " + npmPath + " update --save-dev"},
+		"build":    map[string]any{"description": "Build the theme assets", "run": "npm --prefix " + npmPath + " run build"},
+		"watch":    map[string]any{"description": "Watch theme assets during development", "run": "npm --prefix " + npmPath + " start"},
+		"test":     map[string]any{"description": "Run the theme test suite", "run": "composer --working-dir=" + composerPath + " test"},
 	}
 }
 
-func parseProjectTask(name string, value any) (string, string, repoCommandRunner, error) {
+func parseProjectTask(location, name string, value any) (string, string, repoCommandRunner, error) {
+	taskLocation := location + "." + name
 	switch typed := value.(type) {
 	case string:
+		if strings.TrimSpace(typed) == "" {
+			return "", "", nil, ProjectError{Msg: taskLocation + " must not be empty"}
+		}
 		return name, typed, shellCommandRunner(typed), nil
 	case []any:
+		if len(typed) == 0 {
+			return "", "", nil, ProjectError{Msg: taskLocation + " must not be an empty array"}
+		}
 		parts := make([]string, 0, len(typed))
 		for _, item := range typed {
 			s, ok := item.(string)
 			if !ok {
-				return "", "", nil, ProjectError{Msg: fmt.Sprintf("nf.json tasks.%s.run must be a string or array of strings", name)}
+				return "", "", nil, ProjectError{Msg: taskLocation + " must be an array of strings"}
 			}
 			parts = append(parts, s)
 		}
 		return name, strings.Join(parts, " "), argvCommandRunner(parts), nil
 	case map[string]any:
-		desc, _ := typed["description"].(string)
-		if strings.TrimSpace(desc) == "" {
-			return "", "", nil, ProjectError{Msg: fmt.Sprintf("nf.json tasks.%s must include a description string", name)}
+		if err := validateProjectObjectFields(taskLocation, typed, "description", "run"); err != nil {
+			return "", "", nil, err
+		}
+		desc := ""
+		if rawDescription, ok := typed["description"]; ok {
+			var descriptionOK bool
+			desc, descriptionOK = rawDescription.(string)
+			if !descriptionOK || strings.TrimSpace(desc) == "" {
+				return "", "", nil, ProjectError{Msg: taskLocation + ".description must be a non-empty string"}
+			}
 		}
 		run := typed["run"]
 		switch rr := run.(type) {
 		case string:
+			if strings.TrimSpace(rr) == "" {
+				return "", "", nil, ProjectError{Msg: taskLocation + ".run must not be empty"}
+			}
+			if desc == "" {
+				desc = rr
+			}
 			return name, desc, shellCommandRunner(rr), nil
 		case []any:
+			if len(rr) == 0 {
+				return "", "", nil, ProjectError{Msg: taskLocation + ".run must not be an empty array"}
+			}
 			parts := make([]string, 0, len(rr))
 			for _, item := range rr {
 				s, ok := item.(string)
 				if !ok {
-					return "", "", nil, ProjectError{Msg: fmt.Sprintf("nf.json tasks.%s.run must be a string or array of strings", name)}
+					return "", "", nil, ProjectError{Msg: taskLocation + ".run must be a string or array of strings"}
 				}
 				parts = append(parts, s)
 			}
+			if desc == "" {
+				desc = strings.Join(parts, " ")
+			}
 			return name, desc, argvCommandRunner(parts), nil
 		default:
-			return "", "", nil, ProjectError{Msg: fmt.Sprintf("nf.json tasks.%s.run must be a string or array of strings", name)}
+			return "", "", nil, ProjectError{Msg: taskLocation + ".run must be a string or array of strings"}
 		}
 	default:
-		return "", "", nil, ProjectError{Msg: fmt.Sprintf("nf.json tasks.%s must be a string, array, or object", name)}
+		return "", "", nil, ProjectError{Msg: taskLocation + " must be a string, array, or object"}
 	}
 }
 
-func loadProjectMetadataOrError(root string) (map[string]any, error) {
+func validateProjectObjectFields(location string, object map[string]any, allowed ...string) error {
+	allowedFields := make(map[string]struct{}, len(allowed))
+	for _, field := range allowed {
+		allowedFields[field] = struct{}{}
+	}
+	unknown := make([]string, 0)
+	for field := range object {
+		if _, ok := allowedFields[field]; !ok {
+			unknown = append(unknown, field)
+		}
+	}
+	if len(unknown) == 0 {
+		return nil
+	}
+	sort.Strings(unknown)
+	return ProjectError{Msg: fmt.Sprintf("%s contains unknown field %q", location, unknown[0])}
+}
+
+func projectObjectStringField(location string, object map[string]any, field string, required bool) (string, error) {
+	raw, exists := object[field]
+	if !exists {
+		if required {
+			return "", ProjectError{Msg: location + "." + field + " is required"}
+		}
+		return "", nil
+	}
+	value, ok := raw.(string)
+	if !ok {
+		return "", ProjectError{Msg: location + "." + field + " must be a string"}
+	}
+	value = strings.TrimSpace(value)
+	if required && value == "" {
+		return "", ProjectError{Msg: location + "." + field + " is required"}
+	}
+	return value, nil
+}
+
+func loadProjectMetadataOrError(root string) (*projectMetadata, error) {
 	if root == "" {
-		return map[string]any{}, nil
+		return &projectMetadata{}, nil
 	}
-	return theme.LoadProjectMetadata(root)
+	metadata, err := project.Load(root)
+	if err != nil {
+		return nil, err
+	}
+	if err := validateProjectMetadata(metadata); err != nil {
+		return nil, err
+	}
+	return metadata, nil
 }
 
-func saveProjectMetadata(root string, metadata map[string]any) error {
-	projectPath := config.ProjectFile(root)
-	if err := os.MkdirAll(filepath.Dir(projectPath), 0o755); err != nil {
+func validateProjectMetadata(metadata *projectMetadata) error {
+	if _, err := loadWordPressThemeSpecs(metadata); err != nil {
 		return err
 	}
-	return os.WriteFile(projectPath, []byte(projectInitJSON(metadata)), 0o644)
+	if _, err := loadWordPressPluginSpecs(metadata); err != nil {
+		return err
+	}
+	if err := validateConfiguredDefineMetadata(metadata); err != nil {
+		return err
+	}
+	if _, err := loadAliasSpecs(metadata); err != nil {
+		return err
+	}
+	if _, err := loadProjectTasksFromMetadata(metadata); err != nil {
+		return err
+	}
+	if _, err := repoThemePackageOutput(metadata); err != nil {
+		return err
+	}
+	for name := range metadata.Remotes {
+		if _, _, _, err := projectRemoteAlias(metadata, name); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
-func projectRemotes(metadata map[string]any, create bool) (map[string]any, error) {
-	value, ok := metadata["remotes"]
-	if !ok {
+func saveProjectMetadata(root string, metadata *projectMetadata) error {
+	return project.Save(root, metadata)
+}
+
+func projectRemotes(metadata *projectMetadata, create bool) (project.RemoteRefs, error) {
+	if metadata.Remotes == nil {
 		if !create {
 			return nil, nil
 		}
-		remotes := map[string]any{}
-		metadata["remotes"] = remotes
-		return remotes, nil
+		metadata.Remotes = project.RemoteRefs{}
 	}
-	remotes, ok := value.(map[string]any)
-	if !ok || remotes == nil {
-		return nil, ProjectError{Msg: "nf.json remotes must be an object"}
-	}
-	return remotes, nil
+	return metadata.Remotes, nil
 }
 
 type projectCommand struct {
@@ -111,19 +202,94 @@ func loadProjectTasks(root string) (map[string]projectCommand, error) {
 	if err != nil {
 		return nil, err
 	}
+	return loadProjectTasksFromMetadata(metadata)
+}
+
+func loadProjectTasksFromMetadata(metadata *projectMetadata) (map[string]projectCommand, error) {
 	parsed := map[string]projectCommand{}
-	tasks, ok := metadata["tasks"].(map[string]any)
-	if !ok || tasks == nil {
+	tasks, themeIndex, err := projectRepoThemeTasks(metadata)
+	if err != nil {
+		return nil, err
+	}
+	if tasks == nil {
 		return parsed, nil
 	}
 	for name, value := range tasks {
-		_, desc, run, err := parseProjectTask(name, value)
+		location := fmt.Sprintf("nf.json wordpress.themes[%d].tasks", themeIndex)
+		_, desc, run, err := parseProjectTask(location, name, value)
 		if err != nil {
 			return nil, err
 		}
 		parsed[name] = projectCommand{Description: desc, Run: run}
 	}
 	return parsed, nil
+}
+
+func projectRepoThemeTasks(metadata *projectMetadata) (map[string]any, int, error) {
+	themeObject, themeIndex, err := projectRepoThemeObject(metadata)
+	if err != nil || themeObject == nil {
+		return nil, themeIndex, err
+	}
+	value, ok := themeObject["tasks"]
+	if !ok {
+		return nil, themeIndex, nil
+	}
+	tasks, ok := value.(map[string]any)
+	if !ok || tasks == nil {
+		return nil, 0, ProjectError{Msg: fmt.Sprintf("nf.json wordpress.themes[%d].tasks must be an object", themeIndex)}
+	}
+	return tasks, themeIndex, nil
+}
+
+func projectRepoThemeObject(metadata *projectMetadata) (map[string]any, int, error) {
+	for i, raw := range metadata.WordPress.Themes {
+		themeSpec, err := parseWordPressThemeSpec(i, raw)
+		if err != nil {
+			return nil, 0, err
+		}
+		if !themeSourceIsRepo(themeSpec) {
+			continue
+		}
+		var themeObject map[string]any
+		switch typed := raw.(type) {
+		case map[string]any:
+			themeObject = typed
+		case orderedObject:
+			themeObject = orderedObjectMap(typed)
+		default:
+			return nil, 0, ProjectError{Msg: fmt.Sprintf("nf.json wordpress.themes[%d] repo theme must be an object", i)}
+		}
+		return themeObject, i, nil
+	}
+	return nil, 0, nil
+}
+
+func repoThemePackageOutput(metadata *projectMetadata) (string, error) {
+	themeObject, themeIndex, err := projectRepoThemeObject(metadata)
+	if err != nil || themeObject == nil {
+		return "", err
+	}
+	raw, ok := themeObject["package"]
+	if !ok {
+		return "", nil
+	}
+	packageConfig, ok := raw.(map[string]any)
+	if !ok || packageConfig == nil {
+		return "", ProjectError{Msg: fmt.Sprintf("nf.json wordpress.themes[%d].package must be an object", themeIndex)}
+	}
+	location := fmt.Sprintf("nf.json wordpress.themes[%d].package", themeIndex)
+	if err := validateProjectObjectFields(location, packageConfig, "output"); err != nil {
+		return "", err
+	}
+	rawOutput, exists := packageConfig["output"]
+	if !exists {
+		return "", nil
+	}
+	output, ok := rawOutput.(string)
+	if !ok || strings.TrimSpace(output) == "" {
+		return "", ProjectError{Msg: fmt.Sprintf("nf.json wordpress.themes[%d].package.output must be a non-empty string", themeIndex)}
+	}
+	return strings.TrimSpace(output), nil
 }
 
 func bootstrapThemeForEnv(root string, cfg envConfig) error {
@@ -238,39 +404,28 @@ func formatProjectTaskLines(tasks map[string]projectCommand) []string {
 	return lines
 }
 
-func loadEnvConfig(root string, metadata map[string]any) (envConfig, bool) {
-	raw, ok := metadata["env"].(map[string]any)
-	if !ok || raw == nil {
-		return envConfig{}, false
-	}
-	projectSlug := firstNonEmpty(mapStringAtPath(metadata, "project", "slug"), "project")
-	wordpress := mapMapAtPath(metadata, "wordpress")
-	_, themeListConfigured := wordpress["themes"]
+func loadEnvConfig(root string, metadata *projectMetadata) (envConfig, bool) {
+	projectSlug := firstNonEmpty(metadata.Project.Slug, "project")
 	themes, err := loadWordPressThemeSpecs(metadata)
 	if err != nil {
 		return envConfig{}, false
 	}
 	activeThemeSlug := activeWordPressThemeSlug(themes)
-	legacyThemePath := firstNonEmpty(mapStringAtPath(metadata, "wordpress", "theme_path"), "theme")
 	themePath := ""
 	if repoTheme, ok := repoWordPressThemeSpec(themes); ok {
 		if sourceDir, err := repoThemeSourceDir(root, repoTheme); err == nil {
 			themePath = sourceDir
 		}
 	}
-	if themePath == "" && !themeListConfigured {
-		themePath = legacyThemePath
-		if !filepath.IsAbs(themePath) {
-			themePath = filepath.Join(root, themePath)
-		}
-	}
 	themeMountSlug := activeThemeSlug
-	if themeMountSlug == "" && !themeListConfigured {
-		themeMountSlug = firstNonEmpty(mapStringAtPath(raw, "theme_mount_slug"), "theme")
-	}
 	themeSlug := activeThemeSlug
-	if themeSlug == "" && !themeListConfigured {
-		themeSlug = firstNonEmpty(recordValueString(wordpress["theme_slug"]), projectSlug, "theme")
+	local := project.Local{}
+	if metadata.Local != nil {
+		local = *metadata.Local
+	}
+	ports := project.Ports{}
+	if local.Ports != nil {
+		ports = *local.Ports
 	}
 	return envConfig{
 		ProjectSlug:      projectSlug,
@@ -278,23 +433,22 @@ func loadEnvConfig(root string, metadata map[string]any) (envConfig, bool) {
 		RepoRoot:         root,
 		ThemePath:        themePath,
 		EnvDir:           config.EnvDir(projectSlug),
-		WordpressPort:    firstEnvPort(raw, "wordpress", projectSlug),
-		MailpitPort:      firstEnvPort(raw, "mailpit", projectSlug),
-		AdminerPort:      firstEnvPort(raw, "db", projectSlug),
-		Compose:          firstNonEmpty(mapStringAtPath(raw, "compose"), "docker compose"),
-		WordpressService: firstNonEmpty(mapStringAtPath(raw, "wordpress_service"), "wordpress"),
-		CliService:       firstNonEmpty(mapStringAtPath(raw, "cli_service"), "cli"),
+		WordpressPort:    firstEnvPort(ports.WordPress, "wordpress", projectSlug),
+		MailpitPort:      firstEnvPort(ports.Mailpit, "mailpit", projectSlug),
+		AdminerPort:      firstEnvPort(ports.DB, "db", projectSlug),
+		Compose:          firstNonEmpty(local.Compose, "docker compose"),
+		WordpressService: firstNonEmpty(local.WordPressService, "wordpress"),
 		ThemeMountSlug:   themeMountSlug,
-		UploadsPath:      firstNonEmpty(mapStringAtPath(raw, "uploads_path"), "uploads"),
+		UploadsPath:      firstNonEmpty(local.UploadsPath, "uploads"),
 		ThemeSlug:        themeSlug,
-		AdminUser:        recordValueString(raw["admin_user"]),
+		AdminUser:        local.AdminUser,
 		Themes:           themes,
 		RepoThemeMounts:  repoThemeMountsFromMetadata(root, metadata),
 		RepoPluginMounts: repoPluginMountsFromMetadata(root, metadata),
 	}, true
 }
 
-func firstEnvPort(raw map[string]any, name, projectSlug string) int {
+func firstEnvPort(port int, name, projectSlug string) int {
 	derivedWordpress, derivedMailpit, derivedDB := envDerivedPorts(projectSlug)
 	derived := derivedWordpress
 	switch name {
@@ -303,19 +457,7 @@ func firstEnvPort(raw map[string]any, name, projectSlug string) int {
 	case "db":
 		derived = derivedDB
 	}
-	ports := mapMapAtPath(raw, "ports")
-	if ports == nil {
-		return derived
-	}
-	value, ok := ports[name]
-	if !ok && name == "db" {
-		value, ok = ports["adminer"]
-	}
-	if !ok {
-		return derived
-	}
-	port, parsed := parseEnvPort(value)
-	if !parsed || port == 0 {
+	if port == 0 {
 		return derived
 	}
 	return port
@@ -383,7 +525,7 @@ func discoverProjectRootOrError() (string, error) {
 	if root, ok := config.DiscoverProjectRoot(""); ok {
 		return root, nil
 	}
-	return "", ProjectError{Msg: "No project metadata found above the current directory. Add nf.json with env metadata or tasks.<name>."}
+	return "", ProjectError{Msg: "No project metadata found above the current directory. Add a version 2 nf.json next to .git."}
 }
 
 func cmdThemeTasks() int {
@@ -402,7 +544,7 @@ func cmdThemeTasks() int {
 		return 1
 	}
 	if len(tasks) == 0 {
-		fmt.Fprintln(os.Stderr, "No local theme tasks configured. Add nf.json tasks.<name>.")
+		fmt.Fprintln(os.Stderr, "No local theme tasks configured. Add tasks to the repo theme in nf.json wordpress.themes.")
 		return 1
 	}
 	fmt.Println("Theme tasks:")

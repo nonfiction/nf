@@ -23,7 +23,6 @@ type envConfig struct {
 	AdminerPort      int
 	Compose          string
 	WordpressService string
-	CliService       string
 	DockerDBImage    string
 	DockerWPImage    string
 	DockerUser       string

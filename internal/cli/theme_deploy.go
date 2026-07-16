@@ -267,7 +267,7 @@ func cmdThemeRollback(remoteName string, dryRun bool) int {
 	return 0
 }
 
-func resolveThemeDeployTarget(remoteName, themeSlug string, metadata map[string]any) (themeDeployTarget, error) {
+func resolveThemeDeployTarget(remoteName, themeSlug string, metadata *projectMetadata) (themeDeployTarget, error) {
 	siteID, remoteEnv, ok, err := projectRemoteAlias(metadata, remoteName)
 	if err != nil {
 		return themeDeployTarget{}, err
@@ -359,9 +359,13 @@ func linodeThemeDeploySSHInfo(record map[string]any) (user, host, port, wpPath s
 	return user, host, port, wpPath, nil
 }
 
-func prepareThemeDeployArtifact(root string, metadata map[string]any, sourceDir, themeSlug string, dryRun bool) (themeDeployArtifact, error) {
-	projectSlug := firstNonEmpty(mapStringAtPath(metadata, "project", "slug"), "project")
-	output := firstNonEmpty(mapStringAtPath(metadata, "artifact", "path"), filepath.ToSlash(filepath.Join("dist", projectSlug+"-v{version}.zip")))
+func prepareThemeDeployArtifact(root string, metadata *projectMetadata, sourceDir, themeSlug string, dryRun bool) (themeDeployArtifact, error) {
+	projectSlug := firstNonEmpty(metadata.Project.Slug, "project")
+	output, err := repoThemePackageOutput(metadata)
+	if err != nil {
+		return themeDeployArtifact{}, err
+	}
+	output = firstNonEmpty(output, filepath.ToSlash(filepath.Join("dist", projectSlug+"-v{version}.zip")))
 	version, versionErr := readThemeVersion(sourceDir)
 	if strings.Contains(output, "{version}") {
 		if versionErr != nil {

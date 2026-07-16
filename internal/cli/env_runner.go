@@ -19,7 +19,7 @@ import (
 type envCommandRunner struct {
 	name     string
 	cfg      envConfig
-	metadata map[string]any
+	metadata *projectMetadata
 	rebuild  bool
 }
 
@@ -41,7 +41,7 @@ func (c envCommandRunner) ensureUpInstalledActive(envDir string) error {
 	if err := runCommandSpecWithPreview(execSpec{Dir: envDir, Args: envWpMailpitSMTPArgs(c.cfg)}, envWpBootstrapPreviewArgs(c.cfg, "configure Mailpit SMTP")); err != nil {
 		return err
 	}
-	if len(c.metadata) > 0 {
+	if c.metadata != nil {
 		if err := ensureLocalWPConfigDefines(c.cfg, c.metadata); err != nil {
 			return err
 		}

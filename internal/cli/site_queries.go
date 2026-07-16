@@ -163,7 +163,7 @@ func cmdEnvPassword(cfg envConfig, scope passwordScope) int {
 	return 0
 }
 
-func cmdEnvRemotePassword(metadata map[string]any, remoteName string, scope passwordScope) int {
+func cmdEnvRemotePassword(metadata *projectMetadata, remoteName string, scope passwordScope) int {
 	remoteName = strings.TrimSpace(remoteName)
 	if remoteName == "" {
 		fmt.Fprintln(os.Stderr, "env password requires a non-empty remote")

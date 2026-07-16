@@ -16,16 +16,15 @@ import (
 	"github.com/nonfiction/nf/internal/state"
 )
 
-func projectRemoteAlias(metadata map[string]any, name string) (string, string, bool, error) {
-	remotes := mapMapAtPath(metadata, "remotes")
-	if remotes == nil {
+func projectRemoteAlias(metadata *projectMetadata, name string) (string, string, bool, error) {
+	if metadata == nil || metadata.Remotes == nil {
 		return "", "", false, nil
 	}
-	value, ok := remotes[name]
+	value, ok := metadata.Remotes[name]
 	if !ok {
 		return "", "", false, nil
 	}
-	remoteRef := strings.TrimSpace(recordValueString(value))
+	remoteRef := strings.TrimSpace(value)
 	siteID, env, ok := splitSiteEnvRef(remoteRef)
 	if !ok || siteID == "" || env == "" {
 		return "", "", false, ProjectError{Msg: fmt.Sprintf("nf.json remotes.%s must be an env ref like site.target:env", name)}
@@ -33,7 +32,7 @@ func projectRemoteAlias(metadata map[string]any, name string) (string, string, b
 	return siteID, env, true, nil
 }
 
-func resolveSiteTarget(requested string) (string, map[string]any, bool, bool, error) {
+func resolveSiteTarget(requested string) (string, *projectMetadata, bool, bool, error) {
 	resolved := strings.TrimSpace(requested)
 	if resolved == "" {
 		return "", nil, false, false, ProjectError{Msg: "site show requires a target or target alias"}
@@ -43,9 +42,11 @@ func resolveSiteTarget(requested string) (string, map[string]any, bool, bool, er
 		return resolved, nil, false, false, nil
 	}
 	projectFile := config.ProjectFile(root)
-	projectFileExists := false
-	if _, err := os.Stat(projectFile); err == nil {
-		projectFileExists = true
+	if _, err := os.Stat(projectFile); err != nil {
+		if os.IsNotExist(err) {
+			return resolved, nil, false, false, nil
+		}
+		return "", nil, false, false, err
 	}
 	metadata, err := loadProjectMetadataOrError(root)
 	if err != nil {
@@ -54,9 +55,9 @@ func resolveSiteTarget(requested string) (string, map[string]any, bool, bool, er
 	if remoteSiteID, remoteEnv, remoteFound, err := projectRemoteAlias(metadata, resolved); err != nil {
 		return "", nil, false, false, err
 	} else if remoteFound {
-		return canonicalEnvID(remoteSiteID, remoteEnv), metadata, projectFileExists, true, nil
+		return canonicalEnvID(remoteSiteID, remoteEnv), metadata, true, true, nil
 	}
-	return resolved, metadata, projectFileExists, false, nil
+	return resolved, metadata, true, false, nil
 }
 
 func validateServerRecord(server map[string]any) error {

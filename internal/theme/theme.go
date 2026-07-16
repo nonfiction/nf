@@ -11,33 +11,11 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
-
-	"github.com/nonfiction/nf/internal/config"
 )
 
 type ThemeError struct{ Msg string }
 
 func (e ThemeError) Error() string { return e.Msg }
-
-func LoadProjectMetadata(root string) (map[string]any, error) {
-	path := config.ProjectFile(root)
-	data, err := os.ReadFile(path)
-	if err != nil {
-		if os.IsNotExist(err) {
-			return map[string]any{}, nil
-		}
-		return nil, err
-	}
-	var payload any
-	if err := json.Unmarshal(data, &payload); err != nil {
-		return nil, err
-	}
-	obj, ok := payload.(map[string]any)
-	if !ok {
-		return nil, ThemeError{Msg: fmt.Sprintf("%s must contain a JSON object", path)}
-	}
-	return obj, nil
-}
 
 var excludedNames = map[string]struct{}{
 	".git": {}, ".github": {}, ".DS_Store": {}, ".cache": {}, ".idea": {}, ".vscode": {}, "node_modules": {},

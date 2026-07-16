@@ -42,33 +42,31 @@ Project `wp-config.php` constants belong in `nf.json` only when their values are
 ```json
 {
   "wordpress": {
-    "config": {
-      "defines": [
-        {
-          "name": "SOME_PLUGIN_FEATURE_FLAG",
-          "value": true
-        },
-        {
-          "name": "SOME_PLUGIN_LICENSE_KEY",
-          "env": "CLIENT_PLUGIN_LICENSE_KEY"
-        },
-        {
-          "name": "WP_ENVIRONMENT_TYPE",
-          "values": {
-            "local": { "value": "local" },
-            "production": { "value": "production" },
-            "default": { "value": "staging" }
-          }
-        },
-        {
-          "name": "OTGS_INSTALLER_SITE_KEY_WPML",
-          "values": {
-            "production": { "env": "CLIENT_WPML_SITE_KEY" },
-            "default": { "env": "CLIENT_WPML_STAGING_SITE_KEY" }
-          }
+    "defines": [
+      {
+        "name": "SOME_PLUGIN_FEATURE_FLAG",
+        "value": true
+      },
+      {
+        "name": "SOME_PLUGIN_LICENSE_KEY",
+        "env": "CLIENT_PLUGIN_LICENSE_KEY"
+      },
+      {
+        "name": "WP_ENVIRONMENT_TYPE",
+        "values": {
+          "local": { "value": "local" },
+          "production": { "value": "production" },
+          "default": { "value": "staging" }
         }
-      ]
-    }
+      },
+      {
+        "name": "OTGS_INSTALLER_SITE_KEY_WPML",
+        "values": {
+          "production": { "env": "CLIENT_WPML_SITE_KEY" },
+          "default": { "env": "CLIENT_WPML_STAGING_SITE_KEY" }
+        }
+      }
+    ]
   }
 }
 ```

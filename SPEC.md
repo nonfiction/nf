@@ -297,7 +297,7 @@ Do not add old compatibility routes unless explicitly requested.
 * [x] `nf alias list/status/sync/add/remove`
 * [x] `nf theme tasks`
 * [x] `nf theme package`
-* [x] direct theme tasks from `nf.json`
+* [x] direct repo-theme tasks from `nf.json`
 * [x] `nf env up [--rebuild]`
 * [x] `nf env down`
 * [x] `nf env password [remote] [--wp|--db|--basicauth]`
@@ -445,32 +445,41 @@ nf.json
 Tracked fields include:
 
 * manifest version
-* project slug/name/type
-* WordPress/theme structure
+* project slug and password version
+* non-empty WordPress theme checklist
 * WordPress plugin bootstrap intent
 * WordPress `wp-config.php` define intent, with secrets referenced by env var instead of stored in the repo
-* local env intent
-* artifact recipe
-* root-level alias map for paths under `wp-content`
+* optional local env overrides
+* optional repo-theme package recipe and task map
+* optional root-level alias map for paths under `wp-content`
 * repo remotes
-* theme tasks
 
 Example shape:
 
 ```json
 {
-  "version": 1,
+  "version": 2,
   "project": {
     "slug": "client",
-    "type": "wordpress-theme"
+    "password_version": 0
   },
   "wordpress": {
-    "deploy_unit": "theme",
     "themes": [
       {
         "slug": "client",
         "source": "repo",
-        "path": "theme"
+        "path": "theme",
+        "package": {
+          "output": "dist/client-v{version}.zip"
+        },
+        "tasks": {
+          "build": "npm run build",
+          "lint": ["npm", "run", "lint"],
+          "dev": {
+            "description": "Start the theme development server",
+            "run": ["npm", "run", "dev"]
+          }
+        }
       },
       "twentytwentyfive",
       "twentytwentyfour",
@@ -491,49 +500,51 @@ Example shape:
         "auto_update": true
       }
     ],
-    "config": {
-      "defines": [
-        {
-          "name": "SOME_PLUGIN_LICENSE_KEY",
-          "env": "CLIENT_PLUGIN_LICENSE_KEY"
-        },
-        {
-          "name": "OTGS_INSTALLER_SITE_KEY_WPML",
-          "values": {
-            "production": { "env": "CLIENT_WPML_SITE_KEY" },
-            "default": { "env": "CLIENT_WPML_STAGING_SITE_KEY" }
-          }
+    "defines": [
+      {
+        "name": "SOME_PLUGIN_LICENSE_KEY",
+        "env": "CLIENT_PLUGIN_LICENSE_KEY"
+      },
+      {
+        "name": "OTGS_INSTALLER_SITE_KEY_WPML",
+        "values": {
+          "production": { "env": "CLIENT_WPML_SITE_KEY" },
+          "default": { "env": "CLIENT_WPML_STAGING_SITE_KEY" }
         }
-      ]
+      }
+    ],
+    "aliases": {
+      "files": "wp-content/uploads/public/files",
+      "annual-report-2026": "wp-content/uploads/public/annual-report-2026"
     }
   },
-  "env": {
-    "compose": "docker compose",
-    "wordpress_service": "wordpress",
-    "cli_service": "cli",
-    "uploads_path": "uploads"
-  },
-  "aliases": {
-    "files": "wp-content/uploads/public/files",
-    "annual-report-2026": "wp-content/uploads/public/annual-report-2026"
-  },
-  "artifact": {
-    "path": "dist/client-v{version}.zip"
+  "local": {
+    "compose": "docker compose -f docker-compose.local.yml",
+    "wordpress_service": "cms",
+    "uploads_path": ".nf-uploads",
+    "admin_user": "client-admin",
+    "ports": {
+      "wordpress": 9080,
+      "mailpit": 9025,
+      "db": 9081
+    }
   },
   "remotes": {
     "production": "client.linode1:live"
-  },
-  "tasks": {}
+  }
 }
 ```
+
+The root `version` must be exactly `2`. `project` contains only `slug` and `password_version`. `wordpress.themes` is required and non-empty; `wordpress.plugins`, `wordpress.defines`, and `wordpress.aliases` are optional. `local` and `remotes` are optional.
 
 ## Theme workflow
 
 Theme task rules:
 
-* tasks come from `nf.json` `tasks`
+* tasks come from the `tasks` map on the one `wordpress.themes` entry with `source: "repo"`
 * string tasks run through `sh -lc`
-* array tasks execute directly
+* argv array tasks execute directly
+* object tasks contain an optional `description` and a `run` value in string or argv array form
 * passthrough args follow `--`
 * print the command preview before execution
 
@@ -547,7 +558,8 @@ Packaging rules:
 * package archives exclude obvious development-only files such as `node_modules`, editor config, formatter/linter/static-analysis config, npm manifests and lockfiles, common frontend tooling config, and Composer manifest files after staging
 * package archives use the configured repo theme slug as the zip root directory, even when source files live in a differently named repo theme path
 * deploy artifacts must include built files when needed, such as `vendor/autoload.php`, `dist/`, or `assets/dist/`
-* `artifact.path` may contain `{version}`
+* the repo theme's optional `package.output` may contain `{version}`
+* when `package.output` is omitted, it defaults to `dist/<project-slug>-v{version}.zip`
 * `{version}` resolves from the repo theme `style.css` `Version:` first, then the repo theme `package.json` `version`
 * fail clearly if neither version source exists
 
@@ -576,9 +588,11 @@ Config:
 
 ```json
 {
-  "aliases": {
-    "files": "wp-content/uploads/public/files",
-    "annual-report-2026": "wp-content/uploads/public/annual-report-2026"
+  "wordpress": {
+    "aliases": {
+      "files": "wp-content/uploads/public/files",
+      "annual-report-2026": "wp-content/uploads/public/annual-report-2026"
+    }
   }
 }
 ```
@@ -596,7 +610,7 @@ Rules:
 
 ## Local env model
 
-Built-in env commands come from `env` metadata in `nf.json`.
+Built-in env commands work with built-in defaults when `local` is absent from `nf.json`. Use `local` only for non-default overrides.
 
 Current built-ins:
 
@@ -631,10 +645,11 @@ Current built-ins:
 
 Rules:
 
-* env ports are derived deterministically from project slug
-* `env.ports.wordpress` and `env.ports.mailpit` may override individually
-* `env.ports.db` may override the local database UI port
+* local ports are derived deterministically from project slug
+* `local.ports.wordpress` and `local.ports.mailpit` may override individually
+* `local.ports.db` may override the local database UI port
 * zero or missing ports fall back to derived ports
+* `local.compose`, `local.wordpress_service`, `local.uploads_path`, and `local.admin_user` override their built-in defaults only when needed
 * `nf env up` should be idempotent
 * `nf env up --rebuild` rebuilds the generated WordPress image before starting Compose
 * `nf env reset --rebuild` recreates the env after rebuilding the generated WordPress image
@@ -644,7 +659,7 @@ Rules:
 * generated local env includes WordPress, MariaDB, Mailpit, and database UI containers
 * generated local WordPress image includes useful CLI tools and wp-cli
 * generated local WordPress image runs Apache/PHP as `docker_user` so bind-mounted uploads stay manageable by the host developer user
-* `env.uploads_path` is the managed local WordPress media bind mounted at `wp-content/uploads`
+* `local.uploads_path` is the managed local WordPress media bind mounted at `wp-content/uploads`
 * `nf env up` creates a project-root `uploads` symlink to the managed local uploads directory; `nf env down` removes only that managed symlink
 * internal local zip handoffs use generated `.nf-transfer` storage mounted at `/env/uploads`; that path is not the WordPress media library
 * Docker DB and WordPress image defaults can be overridden by `docker_db_image` and `docker_wordpress_image` in global config
@@ -815,7 +830,7 @@ Goal: expose existing WordPress content under root-level URL paths through manag
 
 Status:
 
-* [x] repo `aliases` metadata
+* [x] repo `wordpress.aliases` metadata
 * [x] `nf alias list/status/sync/add/remove`
 * [x] local and remote status/sync through project remotes
 * [x] alias and target safety checks for traversal, reserved WordPress names, and targets escaping `wp-content`

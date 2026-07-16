@@ -14,14 +14,16 @@ Examples:
 
 ## Configure Aliases
 
-Aliases live in top-level `aliases` in `nf.json`:
+Aliases live in `wordpress.aliases` in `nf.json`:
 
 ```json
 {
-  "aliases": {
-    "files": "wp-content/uploads/public/files",
-    "esg-report-2025": "wp-content/uploads/public/esg-report-2025",
-    "annual-report.pdf": "wp-content/uploads/2026/annual-report.pdf"
+  "wordpress": {
+    "aliases": {
+      "files": "wp-content/uploads/public/files",
+      "esg-report-2025": "wp-content/uploads/public/esg-report-2025",
+      "annual-report.pdf": "wp-content/uploads/2026/annual-report.pdf"
+    }
   }
 }
 ```

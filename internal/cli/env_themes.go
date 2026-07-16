@@ -17,6 +17,7 @@ import (
 	"time"
 
 	"github.com/nonfiction/nf/internal/config"
+	"github.com/nonfiction/nf/internal/project"
 )
 
 const (
@@ -86,27 +87,16 @@ type envThemeStatusChecker struct {
 	cfg envConfig
 }
 
-func loadWordPressThemeSpecs(metadata map[string]any) ([]wordpressThemeSpec, error) {
+func loadWordPressThemeSpecs(metadata *projectMetadata) ([]wordpressThemeSpec, error) {
 	return loadWordPressThemeSpecsWithOptions(metadata, false)
 }
 
-func loadWordPressThemeSpecsAllowEmpty(metadata map[string]any) ([]wordpressThemeSpec, error) {
+func loadWordPressThemeSpecsAllowEmpty(metadata *projectMetadata) ([]wordpressThemeSpec, error) {
 	return loadWordPressThemeSpecsWithOptions(metadata, true)
 }
 
-func loadWordPressThemeSpecsWithOptions(metadata map[string]any, allowEmpty bool) ([]wordpressThemeSpec, error) {
-	wordpress := mapMapAtPath(metadata, "wordpress")
-	if wordpress == nil {
-		return nil, nil
-	}
-	value, ok := wordpress["themes"]
-	if !ok {
-		return legacyWordPressThemeSpecs(metadata), nil
-	}
-	raw, ok := value.([]any)
-	if !ok {
-		return nil, ProjectError{Msg: "nf.json wordpress.themes must be an array"}
-	}
+func loadWordPressThemeSpecsWithOptions(metadata *projectMetadata, allowEmpty bool) ([]wordpressThemeSpec, error) {
+	raw := metadata.WordPress.Themes
 	if len(raw) == 0 && !allowEmpty {
 		return nil, ProjectError{Msg: "nf.json wordpress.themes must include at least one theme"}
 	}
@@ -133,23 +123,10 @@ func loadWordPressThemeSpecsWithOptions(metadata map[string]any, allowEmpty bool
 	return themes, nil
 }
 
-func legacyWordPressThemeSpecs(metadata map[string]any) []wordpressThemeSpec {
-	slug := strings.TrimSpace(mapStringAtPath(metadata, "wordpress", "theme_slug"))
-	sourcePath := strings.TrimSpace(mapStringAtPath(metadata, "wordpress", "theme_path"))
-	if slug == "" && sourcePath == "" {
-		return nil
-	}
-	if slug == "" {
-		slug = firstNonEmpty(mapStringAtPath(metadata, "project", "slug"), filepath.Base(filepath.Clean(sourcePath)), "theme")
-	}
-	if sourcePath == "" {
-		sourcePath = "theme"
-	}
-	return []wordpressThemeSpec{{Slug: slug, Source: wordpressThemeRepoSource, Path: sourcePath}}
-}
-
 func parseWordPressThemeSpec(index int, value any) (wordpressThemeSpec, error) {
 	switch typed := value.(type) {
+	case orderedObject:
+		return parseWordPressThemeSpec(index, orderedObjectMap(typed))
 	case string:
 		slug := strings.TrimSpace(typed)
 		if slug == "" {
@@ -160,19 +137,29 @@ func parseWordPressThemeSpec(index int, value any) (wordpressThemeSpec, error) {
 		}
 		return wordpressThemeSpec{Slug: slug, Source: "wordpress.org"}, nil
 	case map[string]any:
-		slug := strings.TrimSpace(recordValueString(typed["slug"]))
-		if slug == "" {
-			return wordpressThemeSpec{}, ProjectError{Msg: fmt.Sprintf("nf.json wordpress.themes[%d].slug is required", index)}
+		location := fmt.Sprintf("nf.json wordpress.themes[%d]", index)
+		if err := validateProjectObjectFields(location, typed, "slug", "source", "path", "auto_update", "note", "package", "tasks"); err != nil {
+			return wordpressThemeSpec{}, err
+		}
+		slug, err := projectObjectStringField(location, typed, "slug", true)
+		if err != nil {
+			return wordpressThemeSpec{}, err
 		}
 		if err := validateThemeSlug(slug); err != nil {
 			return wordpressThemeSpec{}, err
 		}
-		source := strings.TrimSpace(recordValueString(typed["source"]))
+		source, err := projectObjectStringField(location, typed, "source", false)
+		if err != nil {
+			return wordpressThemeSpec{}, err
+		}
 		if source == "" {
 			source = "wordpress.org"
 		}
 		source = normalizeThemeSource(source)
-		sourcePath := strings.TrimSpace(recordValueString(typed["path"]))
+		sourcePath, err := projectObjectStringField(location, typed, "path", false)
+		if err != nil {
+			return wordpressThemeSpec{}, err
+		}
 		autoUpdate := false
 		if value, ok := typed["auto_update"]; ok {
 			boolValue, ok := value.(bool)
@@ -181,15 +168,29 @@ func parseWordPressThemeSpec(index int, value any) (wordpressThemeSpec, error) {
 			}
 			autoUpdate = boolValue
 		}
-		note := strings.TrimSpace(recordValueString(typed["note"]))
+		note, err := projectObjectStringField(location, typed, "note", false)
+		if err != nil {
+			return wordpressThemeSpec{}, err
+		}
 		theme := wordpressThemeSpec{Slug: slug, Source: source, Path: sourcePath, AutoUpdate: autoUpdate, Note: note}
 		if themeSourceIsRepo(theme) {
 			if theme.Path == "" {
 				theme.Path = "theme"
 			}
+			if err := project.ValidateRelativePath(theme.Path); err != nil {
+				return wordpressThemeSpec{}, ProjectError{Msg: fmt.Sprintf("nf.json wordpress.themes[%d].path: %s", index, err)}
+			}
 			theme.AutoUpdate = false
-		} else if theme.Path != "" {
-			return wordpressThemeSpec{}, ProjectError{Msg: fmt.Sprintf("nf.json wordpress.themes[%d].path is only supported for repo themes", index)}
+		} else {
+			if theme.Path != "" {
+				return wordpressThemeSpec{}, ProjectError{Msg: fmt.Sprintf("nf.json wordpress.themes[%d].path is only supported for repo themes", index)}
+			}
+			if _, ok := typed["package"]; ok {
+				return wordpressThemeSpec{}, ProjectError{Msg: fmt.Sprintf("nf.json wordpress.themes[%d].package is only supported for repo themes", index)}
+			}
+			if _, ok := typed["tasks"]; ok {
+				return wordpressThemeSpec{}, ProjectError{Msg: fmt.Sprintf("nf.json wordpress.themes[%d].tasks is only supported for repo themes", index)}
+			}
 		}
 		return theme, nil
 	default:
@@ -210,7 +211,7 @@ func normalizeThemeSource(source string) string {
 	}
 }
 
-func cmdEnvThemesList(metadata map[string]any) int {
+func cmdEnvThemesList(metadata *projectMetadata) int {
 	themes, err := loadWordPressThemeSpecs(metadata)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, err)
@@ -224,7 +225,7 @@ func cmdEnvThemesList(metadata map[string]any) int {
 	return 0
 }
 
-func cmdEnvThemesAdd(root string, metadata map[string]any, opts envThemeAddOptions) int {
+func cmdEnvThemesAdd(root string, metadata *projectMetadata, opts envThemeAddOptions) int {
 	if err := validateThemeSlug(opts.Slug); err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		return 1
@@ -272,9 +273,7 @@ func cmdEnvThemesAdd(root string, metadata map[string]any, opts envThemeAddOptio
 		return 1
 	}
 	themes = append(themes, wordpressThemeAddValue(newTheme))
-	wordpress := metadata["wordpress"].(map[string]any)
-	wordpress["themes"] = themes
-	dropLegacyThemeMetadata(metadata)
+	metadata.WordPress.Themes = themes
 	if err := saveProjectMetadata(root, metadata); err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		return 1
@@ -283,7 +282,7 @@ func cmdEnvThemesAdd(root string, metadata map[string]any, opts envThemeAddOptio
 	return 0
 }
 
-func cmdEnvThemesRemove(root string, metadata map[string]any, slug string) int {
+func cmdEnvThemesRemove(root string, metadata *projectMetadata, slug string) int {
 	if _, err := loadWordPressThemeSpecs(metadata); err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		return 1
@@ -319,9 +318,7 @@ func cmdEnvThemesRemove(root string, metadata map[string]any, slug string) int {
 		fmt.Fprintln(os.Stderr, "cannot remove the last configured WordPress theme; nf.json wordpress.themes must include at least one theme")
 		return 1
 	}
-	wordpress := metadata["wordpress"].(map[string]any)
-	wordpress["themes"] = kept
-	dropLegacyThemeMetadata(metadata)
+	metadata.WordPress.Themes = kept
 	if err := saveProjectMetadata(root, metadata); err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		return 1
@@ -330,7 +327,7 @@ func cmdEnvThemesRemove(root string, metadata map[string]any, slug string) int {
 	return 0
 }
 
-func cmdEnvThemesActivate(root string, metadata map[string]any, slug string) int {
+func cmdEnvThemesActivate(root string, metadata *projectMetadata, slug string) int {
 	if err := validateThemeSlug(slug); err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		return 1
@@ -367,9 +364,7 @@ func cmdEnvThemesActivate(root string, metadata map[string]any, slug string) int
 		return 1
 	}
 	reordered := append([]any{activated}, kept...)
-	wordpress := metadata["wordpress"].(map[string]any)
-	wordpress["themes"] = reordered
-	dropLegacyThemeMetadata(metadata)
+	metadata.WordPress.Themes = reordered
 	if err := saveProjectMetadata(root, metadata); err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		return 1
@@ -515,43 +510,11 @@ func cmdEnvThemesCacheShow(slug string) int {
 	return 0
 }
 
-func projectWordPressThemes(metadata map[string]any, create bool) ([]any, error) {
-	wordpress, ok := metadata["wordpress"].(map[string]any)
-	if !ok || wordpress == nil {
-		if !create {
-			return nil, nil
-		}
-		wordpress = map[string]any{}
-		metadata["wordpress"] = wordpress
+func projectWordPressThemes(metadata *projectMetadata, create bool) ([]any, error) {
+	if metadata.WordPress.Themes == nil && create {
+		metadata.WordPress.Themes = []any{}
 	}
-	value, ok := wordpress["themes"]
-	if !ok {
-		if !create {
-			return nil, nil
-		}
-		legacyThemes := legacyWordPressThemeSpecs(metadata)
-		themes := make([]any, 0, len(legacyThemes))
-		for _, theme := range legacyThemes {
-			themes = append(themes, wordpressThemeAddValue(theme))
-		}
-		wordpress["themes"] = themes
-		return themes, nil
-	}
-	themes, ok := value.([]any)
-	if !ok {
-		return nil, ProjectError{Msg: "nf.json wordpress.themes must be an array"}
-	}
-	return themes, nil
-}
-
-func dropLegacyThemeMetadata(metadata map[string]any) {
-	if wordpress, ok := metadata["wordpress"].(map[string]any); ok && wordpress != nil {
-		delete(wordpress, "theme_slug")
-		delete(wordpress, "theme_path")
-	}
-	if env, ok := metadata["env"].(map[string]any); ok && env != nil {
-		delete(env, "theme_mount_slug")
-	}
+	return metadata.WordPress.Themes, nil
 }
 
 func wordpressThemeAddValue(theme wordpressThemeSpec) any {
@@ -574,11 +537,11 @@ func wordpressThemeAddValue(theme wordpressThemeSpec) any {
 	return orderedObject{Pairs: pairs}
 }
 
-func cmdEnvThemesStatusWithOptions(root string, metadata map[string]any, remoteName string) int {
+func cmdEnvThemesStatusWithOptions(root string, metadata *projectMetadata, remoteName string) int {
 	if strings.TrimSpace(remoteName) == "" {
 		cfg, ok := loadEnvConfig(root, metadata)
 		if !ok {
-			fmt.Fprintln(os.Stderr, "Missing env metadata in nf.json. Run nf env up first.")
+			fmt.Fprintln(os.Stderr, "Invalid local project metadata in nf.json.")
 			return 1
 		}
 		return cmdEnvThemesStatusLocal(cfg, metadata)
@@ -586,11 +549,11 @@ func cmdEnvThemesStatusWithOptions(root string, metadata map[string]any, remoteN
 	return cmdEnvThemesStatusRemote(metadata, remoteName)
 }
 
-func cmdEnvThemesDiffWithOptions(root string, metadata map[string]any, remoteName string) int {
+func cmdEnvThemesDiffWithOptions(root string, metadata *projectMetadata, remoteName string) int {
 	if strings.TrimSpace(remoteName) == "" {
 		cfg, ok := loadEnvConfig(root, metadata)
 		if !ok {
-			fmt.Fprintln(os.Stderr, "Missing env metadata in nf.json. Run nf env up first.")
+			fmt.Fprintln(os.Stderr, "Invalid local project metadata in nf.json.")
 			return 1
 		}
 		return cmdEnvThemesDiffLocal(cfg, metadata)
@@ -598,7 +561,7 @@ func cmdEnvThemesDiffWithOptions(root string, metadata map[string]any, remoteNam
 	return cmdEnvThemesDiffRemote(root, metadata, remoteName)
 }
 
-func cmdEnvThemesStatusLocal(cfg envConfig, metadata map[string]any) int {
+func cmdEnvThemesStatusLocal(cfg envConfig, metadata *projectMetadata) int {
 	themes, err := loadWordPressThemeSpecs(metadata)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, err)
@@ -622,7 +585,7 @@ func cmdEnvThemesStatusLocal(cfg envConfig, metadata map[string]any) int {
 	return 0
 }
 
-func cmdEnvThemesDiffLocal(cfg envConfig, metadata map[string]any) int {
+func cmdEnvThemesDiffLocal(cfg envConfig, metadata *projectMetadata) int {
 	themes, err := loadWordPressThemeSpecs(metadata)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, err)
@@ -645,7 +608,7 @@ func cmdEnvThemesDiffLocal(cfg envConfig, metadata map[string]any) int {
 	return printWordPressThemeDiff("Theme diff:", nil, statuses, cfg.RepoRoot)
 }
 
-func cmdEnvThemesStatusRemote(metadata map[string]any, remoteName string) int {
+func cmdEnvThemesStatusRemote(metadata *projectMetadata, remoteName string) int {
 	themes, err := loadWordPressThemeSpecs(metadata)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, err)
@@ -676,7 +639,7 @@ func cmdEnvThemesStatusRemote(metadata map[string]any, remoteName string) int {
 	return 0
 }
 
-func cmdEnvThemesDiffRemote(root string, metadata map[string]any, remoteName string) int {
+func cmdEnvThemesDiffRemote(root string, metadata *projectMetadata, remoteName string) int {
 	themes, err := loadWordPressThemeSpecs(metadata)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, err)
@@ -700,7 +663,7 @@ func cmdEnvThemesDiffRemote(root string, metadata map[string]any, remoteName str
 	return printWordPressThemeDiff("Theme diff:", &target, statuses, root)
 }
 
-func cmdEnvThemesInstallWithOptions(root string, metadata map[string]any, opts envThemeInstallOptions) int {
+func cmdEnvThemesInstallWithOptions(root string, metadata *projectMetadata, opts envThemeInstallOptions) int {
 	if strings.TrimSpace(opts.RemoteName) == "" {
 		if opts.DryRun {
 			fmt.Fprintln(os.Stderr, "theme install --dry-run requires a remote")
@@ -708,7 +671,7 @@ func cmdEnvThemesInstallWithOptions(root string, metadata map[string]any, opts e
 		}
 		cfg, ok := loadEnvConfig(root, metadata)
 		if !ok {
-			fmt.Fprintln(os.Stderr, "Missing env metadata in nf.json. Run nf env up first.")
+			fmt.Fprintln(os.Stderr, "Invalid local project metadata in nf.json.")
 			return 1
 		}
 		return cmdEnvThemesInstall(cfg, metadata)
@@ -716,7 +679,7 @@ func cmdEnvThemesInstallWithOptions(root string, metadata map[string]any, opts e
 	return cmdEnvThemesInstallRemote(root, metadata, opts)
 }
 
-func cmdEnvThemesInstall(cfg envConfig, metadata map[string]any) int {
+func cmdEnvThemesInstall(cfg envConfig, metadata *projectMetadata) int {
 	themes, err := loadWordPressThemeSpecs(metadata)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, err)
@@ -739,7 +702,7 @@ func cmdEnvThemesInstall(cfg envConfig, metadata map[string]any) int {
 	return 0
 }
 
-func cmdEnvThemesInstallRemote(root string, metadata map[string]any, opts envThemeInstallOptions) int {
+func cmdEnvThemesInstallRemote(root string, metadata *projectMetadata, opts envThemeInstallOptions) int {
 	themes, err := loadWordPressThemeSpecs(metadata)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, err)
@@ -890,7 +853,7 @@ func repoWordPressThemeSpec(themes []wordpressThemeSpec) (wordpressThemeSpec, bo
 	return wordpressThemeSpec{}, false
 }
 
-func projectRepoTheme(root string, metadata map[string]any, commandName string, requireSource bool) (wordpressThemeSpec, string, []wordpressThemeSpec, error) {
+func projectRepoTheme(root string, metadata *projectMetadata, commandName string, requireSource bool) (wordpressThemeSpec, string, []wordpressThemeSpec, error) {
 	themes, err := loadWordPressThemeSpecs(metadata)
 	if err != nil {
 		return wordpressThemeSpec{}, "", nil, err
@@ -939,7 +902,7 @@ func themeAutoUpdateManaged(theme wordpressThemeSpec) bool {
 
 func validateThemeSlug(slug string) error {
 	slug = strings.TrimSpace(slug)
-	if slug == "" || filepath.IsAbs(slug) || strings.ContainsAny(slug, `/\`) || strings.Contains(slug, "..") {
+	if err := project.ValidateName(slug); err != nil {
 		return ProjectError{Msg: fmt.Sprintf("theme slug %q must be one safe directory name", slug)}
 	}
 	return nil
@@ -950,13 +913,16 @@ func repoThemeSourceDir(root string, theme wordpressThemeSpec) (string, error) {
 		return "", err
 	}
 	sourcePath := firstNonEmpty(theme.Path, "theme")
-	if filepath.IsAbs(sourcePath) || strings.TrimSpace(root) == "" {
-		return filepath.Clean(sourcePath), nil
+	if err := project.ValidateRelativePath(sourcePath); err != nil {
+		return "", ProjectError{Msg: fmt.Sprintf("repo theme path %q: %s", sourcePath, err)}
+	}
+	if strings.TrimSpace(root) == "" {
+		return "", ProjectError{Msg: "repo theme path requires a project root"}
 	}
 	return filepath.Join(root, sourcePath), nil
 }
 
-func repoThemeMountsFromMetadata(root string, metadata map[string]any) []envThemeMount {
+func repoThemeMountsFromMetadata(root string, metadata *projectMetadata) []envThemeMount {
 	themes, err := loadWordPressThemeSpecs(metadata)
 	if err != nil {
 		return nil
@@ -1637,7 +1603,7 @@ func packageThemeCacheSource(sourceDir, outputPath, archiveRoot string) (int, er
 	if err != nil || !info.IsDir() {
 		return 0, ProjectError{Msg: fmt.Sprintf("theme source directory does not exist: %s", sourceDir)}
 	}
-	if archiveRoot == "" || filepath.IsAbs(archiveRoot) || strings.ContainsAny(archiveRoot, `/\`) || strings.Contains(archiveRoot, "..") {
+	if err := project.ValidateName(archiveRoot); err != nil {
 		return 0, ProjectError{Msg: fmt.Sprintf("theme archive root %q must be one safe directory name", archiveRoot)}
 	}
 	files := []string{}

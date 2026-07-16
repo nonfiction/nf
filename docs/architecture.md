@@ -21,6 +21,8 @@ nf.json
 
 This file is safe to commit. It must not contain API tokens, SSH keys, live database passwords, provider secrets, or mutable provider inventory.
 
+The manifest root `version` must be exactly `2`. It contains `project` with `slug` and `password_version`, `wordpress` with a required non-empty `themes` list and optional direct `plugins`, `defines`, and `aliases`, plus optional `local` overrides and `remotes`. Package settings and tasks belong to the one theme entry with `source: "repo"`.
+
 Generated project metadata includes `project.password_version: 0`. Leave it at `0` for stable derived passwords; increment it to rotate derived passwords for that project/site without changing the shared `NF_PASSWORD_SALT`.
 
 Default WordPress theme convention is `theme/`. By default, `nf init` derives the project slug from the current git root folder and assumes the WordPress theme lives in `theme/`.

@@ -157,7 +157,7 @@ func parseDefineRemoteArg(action string, args []string) (string, bool) {
 	return "", true
 }
 
-func cmdDefineList(metadata map[string]any) int {
+func cmdDefineList(metadata *projectMetadata) int {
 	entries, err := configuredDefineEntries(metadata)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, err)
@@ -176,11 +176,11 @@ func cmdDefineList(metadata map[string]any) int {
 	return 0
 }
 
-func cmdDefineStatus(root string, metadata map[string]any, remoteName string) int {
+func cmdDefineStatus(root string, metadata *projectMetadata, remoteName string) int {
 	if strings.TrimSpace(remoteName) == "" {
 		cfg, ok := loadEnvConfig(root, metadata)
 		if !ok {
-			fmt.Fprintln(os.Stderr, "Missing env metadata in nf.json. Run nf env up first.")
+			fmt.Fprintln(os.Stderr, "Invalid local project metadata in nf.json.")
 			return 1
 		}
 		defines, err := loadWordPressConfigDefines(metadata, wpConfigDefineSelector{Local: true})
@@ -242,11 +242,11 @@ func cmdDefineStatusRemote(target envRemoteSyncTarget, defines []wpConfigDefine)
 	return defineStatusExitCode(string(output))
 }
 
-func cmdDefineSync(root string, metadata map[string]any, remoteName string) int {
+func cmdDefineSync(root string, metadata *projectMetadata, remoteName string) int {
 	if strings.TrimSpace(remoteName) == "" {
 		cfg, ok := loadEnvConfig(root, metadata)
 		if !ok {
-			fmt.Fprintln(os.Stderr, "Missing env metadata in nf.json. Run nf env up first.")
+			fmt.Fprintln(os.Stderr, "Invalid local project metadata in nf.json.")
 			return 1
 		}
 		defines, err := loadWordPressConfigDefines(metadata, wpConfigDefineSelector{Local: true})
@@ -312,7 +312,7 @@ func cmdDefineSyncRemote(target envRemoteSyncTarget, defines []wpConfigDefine) i
 	return 0
 }
 
-func cmdDefineAdd(root string, metadata map[string]any, args []string) int {
+func cmdDefineAdd(root string, metadata *projectMetadata, args []string) int {
 	name, selector, spec, err := resolveDefineAddArgs(metadata, args)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, err)
@@ -334,7 +334,7 @@ func cmdDefineAdd(root string, metadata map[string]any, args []string) int {
 	return 0
 }
 
-func cmdDefineRemove(root string, metadata map[string]any, args []string) int {
+func cmdDefineRemove(root string, metadata *projectMetadata, args []string) int {
 	name, selector, err := resolveDefineRemoveArgs(metadata, args)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, err)
@@ -364,7 +364,7 @@ func parseDefineAddArgs(args []string) (string, string, defineValueSpec, error) 
 	return strictDefineAddArgs(partial)
 }
 
-func resolveDefineAddArgs(metadata map[string]any, args []string) (string, string, defineValueSpec, error) {
+func resolveDefineAddArgs(metadata *projectMetadata, args []string) (string, string, defineValueSpec, error) {
 	partial, err := parseDefineAddPartial(args)
 	if err != nil {
 		return "", "", defineValueSpec{}, err
@@ -447,7 +447,7 @@ func strictDefineAddArgs(partial defineAddPartial) (string, string, defineValueS
 	return name, selector, defineValueSpec{Value: parseDefineCLIValue(partial.Positionals[1])}, nil
 }
 
-func promptDefineAddArgs(metadata map[string]any, partial defineAddPartial) (string, string, defineValueSpec, error) {
+func promptDefineAddArgs(metadata *projectMetadata, partial defineAddPartial) (string, string, defineValueSpec, error) {
 	if len(partial.Positionals) > 2 || (partial.EnvSet && len(partial.Positionals) > 1) {
 		return strictDefineAddArgs(partial)
 	}
@@ -540,7 +540,7 @@ func defineAddValueSourceOptions() []ui.SelectOption {
 	}
 }
 
-func promptDefineSelector(metadata map[string]any) (string, error) {
+func promptDefineSelector(metadata *projectMetadata) (string, error) {
 	selected, err := defineSelectFn("Choose where this define applies", defineSelectorOptions(metadata))
 	if err != nil {
 		return "", err
@@ -563,7 +563,7 @@ func promptDefineSelector(metadata map[string]any) (string, error) {
 	}
 }
 
-func defineSelectorOptions(metadata map[string]any) []ui.SelectOption {
+func defineSelectorOptions(metadata *projectMetadata) []ui.SelectOption {
 	options := []ui.SelectOption{{Value: defineAddSelectorAll, Label: "All environments (shared default)", Default: true}}
 	options = append(options, ui.SelectOption{Value: "local", Label: "local"})
 	remotes, err := projectRemotes(metadata, false)
@@ -580,7 +580,7 @@ func defineSelectorOptions(metadata map[string]any) []ui.SelectOption {
 		for _, name := range names {
 			if !seen[name] {
 				label := name
-				if remoteRef := strings.TrimSpace(recordValueString(remotes[name])); remoteRef != "" {
+				if remoteRef := strings.TrimSpace(remotes[name]); remoteRef != "" {
 					label += " (" + remoteRef + ")"
 				}
 				options = append(options, ui.SelectOption{Value: name, Label: label})
@@ -603,7 +603,7 @@ func parseDefineRemoveArgs(args []string) (string, string, error) {
 	return strictDefineRemoveArgs(partial)
 }
 
-func resolveDefineRemoveArgs(metadata map[string]any, args []string) (string, string, error) {
+func resolveDefineRemoveArgs(metadata *projectMetadata, args []string) (string, string, error) {
 	partial, err := parseDefineRemovePartial(args)
 	if err != nil {
 		return "", "", err
@@ -662,7 +662,7 @@ func strictDefineRemoveArgs(partial defineRemovePartial) (string, string, error)
 	return name, selector, nil
 }
 
-func promptDefineRemoveArgs(metadata map[string]any, partial defineRemovePartial) (string, string, error) {
+func promptDefineRemoveArgs(metadata *projectMetadata, partial defineRemovePartial) (string, string, error) {
 	if len(partial.Positionals) > 1 {
 		return strictDefineRemoveArgs(partial)
 	}
@@ -690,7 +690,7 @@ func promptDefineRemoveArgs(metadata map[string]any, partial defineRemovePartial
 	return name, selector, nil
 }
 
-func configuredDefineNameOptions(metadata map[string]any) []ui.SelectOption {
+func configuredDefineNameOptions(metadata *projectMetadata) []ui.SelectOption {
 	defines, _, err := configuredDefineArray(metadata, false)
 	if err != nil {
 		return nil
@@ -735,8 +735,11 @@ func validateProjectDefineName(name string) error {
 }
 
 func validateConfiguredProjectDefineName(index int, name string) error {
+	if err := validateDefineName(name); err != nil {
+		return ProjectError{Msg: fmt.Sprintf("nf.json wordpress.defines[%d].name: %s", index, err)}
+	}
 	if reason, ok := providerOwnedWPConfigDefines[name]; ok {
-		return ProjectError{Msg: fmt.Sprintf("nf.json wordpress.config.defines[%d].name %s is provider-owned; %s. Remove it from nf.json and run nf site repair for Kinsta platform repair.", index, name, reason)}
+		return ProjectError{Msg: fmt.Sprintf("nf.json wordpress.defines[%d].name %s is provider-owned; %s. Remove it from nf.json and run nf site repair for Kinsta platform repair.", index, name, reason)}
 	}
 	return nil
 }
@@ -762,51 +765,18 @@ func parseDefineCLIValue(value string) any {
 	}
 }
 
-func ensureWordPressConfigMap(metadata map[string]any) map[string]any {
-	wordpress, _ := metadata["wordpress"].(map[string]any)
-	if wordpress == nil {
-		wordpress = map[string]any{}
-		metadata["wordpress"] = wordpress
+func configuredDefineArray(metadata *projectMetadata, create bool) ([]any, *[]any, error) {
+	if metadata.WordPress.Defines == nil && create {
+		metadata.WordPress.Defines = []any{}
 	}
-	configMap, _ := wordpress["config"].(map[string]any)
-	if configMap == nil {
-		configMap = map[string]any{}
-		wordpress["config"] = configMap
-	}
-	return configMap
+	return metadata.WordPress.Defines, &metadata.WordPress.Defines, nil
 }
 
-func configuredDefineArray(metadata map[string]any, create bool) ([]any, map[string]any, error) {
-	var configMap map[string]any
-	if create {
-		configMap = ensureWordPressConfigMap(metadata)
-	} else {
-		configMap = mapMapAtPath(metadata, "wordpress", "config")
-		if configMap == nil {
-			return nil, nil, nil
-		}
-	}
-	raw, ok := configMap["defines"]
-	if !ok {
-		if create {
-			defines := []any{}
-			configMap["defines"] = defines
-			return defines, configMap, nil
-		}
-		return nil, configMap, nil
-	}
-	defines, ok := raw.([]any)
-	if !ok {
-		return nil, configMap, ProjectError{Msg: "nf.json wordpress.config.defines must be an array"}
-	}
-	return defines, configMap, nil
-}
-
-func upsertConfiguredDefine(metadata map[string]any, name, selector string, spec defineValueSpec) error {
+func upsertConfiguredDefine(metadata *projectMetadata, name, selector string, spec defineValueSpec) error {
 	if err := validateProjectDefineName(name); err != nil {
 		return err
 	}
-	defines, configMap, err := configuredDefineArray(metadata, true)
+	defines, definesTarget, err := configuredDefineArray(metadata, true)
 	if err != nil {
 		return err
 	}
@@ -815,7 +785,7 @@ func upsertConfiguredDefine(metadata map[string]any, name, selector string, spec
 	for i, raw := range defines {
 		candidate, ok := raw.(map[string]any)
 		if !ok || candidate == nil {
-			return ProjectError{Msg: fmt.Sprintf("nf.json wordpress.config.defines[%d] must be an object", i)}
+			return ProjectError{Msg: fmt.Sprintf("nf.json wordpress.defines[%d] must be an object", i)}
 		}
 		if recordValueString(candidate["name"]) == name {
 			idx = i
@@ -861,12 +831,12 @@ func upsertConfiguredDefine(metadata map[string]any, name, selector string, spec
 		right, _ := defines[j].(map[string]any)
 		return recordValueString(left["name"]) < recordValueString(right["name"])
 	})
-	configMap["defines"] = defines
+	*definesTarget = defines
 	return nil
 }
 
-func removeConfiguredDefine(metadata map[string]any, name, selector string) error {
-	defines, configMap, err := configuredDefineArray(metadata, false)
+func removeConfiguredDefine(metadata *projectMetadata, name, selector string) error {
+	defines, definesTarget, err := configuredDefineArray(metadata, false)
 	if err != nil {
 		return err
 	}
@@ -878,7 +848,7 @@ func removeConfiguredDefine(metadata map[string]any, name, selector string) erro
 	for i, raw := range defines {
 		candidate, ok := raw.(map[string]any)
 		if !ok || candidate == nil {
-			return ProjectError{Msg: fmt.Sprintf("nf.json wordpress.config.defines[%d] must be an object", i)}
+			return ProjectError{Msg: fmt.Sprintf("nf.json wordpress.defines[%d] must be an object", i)}
 		}
 		if recordValueString(candidate["name"]) == name {
 			idx = i
@@ -891,7 +861,7 @@ func removeConfiguredDefine(metadata map[string]any, name, selector string) erro
 	}
 	if selector == "" {
 		defines = append(defines[:idx], defines[idx+1:]...)
-		configMap["defines"] = defines
+		*definesTarget = defines
 		return nil
 	}
 	values, err := defineValuesMap(item)
@@ -911,7 +881,7 @@ func removeConfiguredDefine(metadata map[string]any, name, selector string) erro
 		item["values"] = values
 		defines[idx] = item
 	}
-	configMap["defines"] = defines
+	*definesTarget = defines
 	return nil
 }
 
@@ -952,7 +922,7 @@ func defineValuesMap(item map[string]any) (map[string]any, error) {
 func normalizeDefineValuesMap(raw any) (map[string]any, error) {
 	values, ok := raw.(map[string]any)
 	if !ok || values == nil {
-		return nil, ProjectError{Msg: "nf.json wordpress.config.defines values must be an object"}
+		return nil, ProjectError{Msg: "nf.json wordpress.defines values must be an object"}
 	}
 	return values, nil
 }
@@ -963,7 +933,7 @@ type configuredDefineEntry struct {
 	Source   string
 }
 
-func configuredDefineEntries(metadata map[string]any) ([]configuredDefineEntry, error) {
+func configuredDefineEntries(metadata *projectMetadata) ([]configuredDefineEntry, error) {
 	defines, _, err := configuredDefineArray(metadata, false)
 	if err != nil {
 		return nil, err
@@ -972,11 +942,11 @@ func configuredDefineEntries(metadata map[string]any) ([]configuredDefineEntry, 
 	for i, raw := range defines {
 		item, ok := raw.(map[string]any)
 		if !ok || item == nil {
-			return nil, ProjectError{Msg: fmt.Sprintf("nf.json wordpress.config.defines[%d] must be an object", i)}
+			return nil, ProjectError{Msg: fmt.Sprintf("nf.json wordpress.defines[%d] must be an object", i)}
 		}
 		name := strings.TrimSpace(recordValueString(item["name"]))
 		if name == "" {
-			return nil, ProjectError{Msg: fmt.Sprintf("nf.json wordpress.config.defines[%d].name is required", i)}
+			return nil, ProjectError{Msg: fmt.Sprintf("nf.json wordpress.defines[%d].name is required", i)}
 		}
 		if err := validateConfiguredProjectDefineName(i, name); err != nil {
 			return nil, err
@@ -990,7 +960,7 @@ func configuredDefineEntries(metadata map[string]any) ([]configuredDefineEntry, 
 		if rawValues, ok := item["values"]; ok {
 			values, ok := rawValues.(map[string]any)
 			if !ok || values == nil {
-				return nil, ProjectError{Msg: fmt.Sprintf("nf.json wordpress.config.defines[%d].values must be an object", i)}
+				return nil, ProjectError{Msg: fmt.Sprintf("nf.json wordpress.defines[%d].values must be an object", i)}
 			}
 			keys := make([]string, 0, len(values))
 			for key := range values {
@@ -1000,7 +970,7 @@ func configuredDefineEntries(metadata map[string]any) ([]configuredDefineEntry, 
 			for _, key := range keys {
 				spec, ok := values[key].(map[string]any)
 				if !ok || spec == nil {
-					return nil, ProjectError{Msg: fmt.Sprintf("nf.json wordpress.config.defines[%d].values.%s for %s must be an object", i, key, name)}
+					return nil, ProjectError{Msg: fmt.Sprintf("nf.json wordpress.defines[%d].values.%s for %s must be an object", i, key, name)}
 				}
 				entries = append(entries, configuredDefineEntry{Name: name, Selector: key, Source: defineSpecSource(spec)})
 			}
@@ -1013,6 +983,99 @@ func configuredDefineEntries(metadata map[string]any) ([]configuredDefineEntry, 
 		return entries[i].Name < entries[j].Name
 	})
 	return entries, nil
+}
+
+func validateConfiguredDefineMetadata(metadata *projectMetadata) error {
+	seen := map[string]struct{}{}
+	for i, raw := range metadata.WordPress.Defines {
+		item, ok := raw.(map[string]any)
+		if !ok || item == nil {
+			return ProjectError{Msg: fmt.Sprintf("nf.json wordpress.defines[%d] must be an object", i)}
+		}
+		location := fmt.Sprintf("nf.json wordpress.defines[%d]", i)
+		if err := validateProjectObjectFields(location, item, "name", "value", "env", "values"); err != nil {
+			return err
+		}
+		name, err := projectObjectStringField(location, item, "name", true)
+		if err != nil {
+			return err
+		}
+		if err := validateConfiguredProjectDefineName(i, name); err != nil {
+			return err
+		}
+		if _, exists := seen[name]; exists {
+			return ProjectError{Msg: fmt.Sprintf("nf.json wordpress.defines contains duplicate name %q", name)}
+		}
+		seen[name] = struct{}{}
+		shared := map[string]any{}
+		if value, ok := item["value"]; ok {
+			shared["value"] = value
+		}
+		if envName, ok := item["env"]; ok {
+			shared["env"] = envName
+		}
+		if len(shared) > 0 {
+			if err := validateDefineValueSpecShape(i, name, "", shared); err != nil {
+				return err
+			}
+		}
+		if rawValues, ok := item["values"]; ok {
+			if len(shared) > 0 {
+				return ProjectError{Msg: fmt.Sprintf("nf.json wordpress.defines[%d] for %s must use either a shared value/env or selector values, not both", i, name)}
+			}
+			values, ok := rawValues.(map[string]any)
+			if !ok || values == nil {
+				return ProjectError{Msg: fmt.Sprintf("nf.json wordpress.defines[%d].values must be an object", i)}
+			}
+			if len(values) == 0 {
+				return ProjectError{Msg: fmt.Sprintf("nf.json wordpress.defines[%d].values for %s must not be empty", i, name)}
+			}
+			for selector, rawSpec := range values {
+				if strings.TrimSpace(selector) == "" {
+					return ProjectError{Msg: fmt.Sprintf("nf.json wordpress.defines[%d].values for %s contains an empty selector", i, name)}
+				}
+				spec, ok := rawSpec.(map[string]any)
+				if !ok || spec == nil {
+					return ProjectError{Msg: fmt.Sprintf("nf.json wordpress.defines[%d].values.%s for %s must be an object", i, selector, name)}
+				}
+				if err := validateDefineValueSpecShape(i, name, selector, spec); err != nil {
+					return err
+				}
+			}
+		}
+		if len(shared) == 0 {
+			if _, ok := item["values"]; !ok {
+				return ProjectError{Msg: fmt.Sprintf("nf.json wordpress.defines[%d] for %s requires value, env, or values", i, name)}
+			}
+		}
+	}
+	return nil
+}
+
+func validateDefineValueSpecShape(index int, name, selector string, spec map[string]any) error {
+	value, hasValue := spec["value"]
+	envValue, hasEnv := spec["env"]
+	location := fmt.Sprintf("nf.json wordpress.defines[%d]", index)
+	if selector != "" {
+		location += ".values." + selector
+	}
+	if err := validateProjectObjectFields(location, spec, "value", "env"); err != nil {
+		return err
+	}
+	if hasValue == hasEnv {
+		return ProjectError{Msg: fmt.Sprintf("%s for %s must use exactly one of value or env", location, name)}
+	}
+	if hasEnv {
+		envName, ok := envValue.(string)
+		if !ok || validateDefineEnvName(strings.TrimSpace(envName)) != nil {
+			return ProjectError{Msg: fmt.Sprintf("%s.env for %s must be an environment variable name", location, name)}
+		}
+		return nil
+	}
+	if _, err := phpConfigDefineValueLiteral(value); err != nil {
+		return ProjectError{Msg: fmt.Sprintf("%s.value for %s: %s", location, name, err)}
+	}
+	return nil
 }
 
 func defineSpecSource(spec map[string]any) string {
@@ -1047,7 +1110,7 @@ func remoteDefineStdinArgs(target envRemoteSyncTarget) []string {
 	return remoteSSHArgs(target, "bash -s")
 }
 
-func ensureLocalWPConfigDefines(cfg envConfig, metadata map[string]any) error {
+func ensureLocalWPConfigDefines(cfg envConfig, metadata *projectMetadata) error {
 	defines, err := loadWordPressConfigDefines(metadata, wpConfigDefineSelector{Local: true})
 	if err != nil {
 		return err
@@ -1062,19 +1125,8 @@ func ensureLocalWPConfigDefines(cfg envConfig, metadata map[string]any) error {
 	return runCommandSpecStdinWithPreview(execSpec{Dir: localEnvDir(cfg), Args: args}, preview, script)
 }
 
-func loadWordPressConfigDefines(metadata map[string]any, selector wpConfigDefineSelector) ([]wpConfigDefine, error) {
-	configMap := mapMapAtPath(metadata, "wordpress", "config")
-	if configMap == nil {
-		return nil, nil
-	}
-	value, ok := configMap["defines"]
-	if !ok {
-		return nil, nil
-	}
-	raw, ok := value.([]any)
-	if !ok {
-		return nil, ProjectError{Msg: "nf.json wordpress.config.defines must be an array"}
-	}
+func loadWordPressConfigDefines(metadata *projectMetadata, selector wpConfigDefineSelector) ([]wpConfigDefine, error) {
+	raw := metadata.WordPress.Defines
 	defines := make([]wpConfigDefine, 0, len(raw))
 	seen := map[string]struct{}{}
 	for i, item := range raw {
@@ -1086,7 +1138,7 @@ func loadWordPressConfigDefines(metadata map[string]any, selector wpConfigDefine
 			continue
 		}
 		if _, exists := seen[define.Name]; exists {
-			return nil, ProjectError{Msg: fmt.Sprintf("nf.json wordpress.config.defines contains duplicate name %q", define.Name)}
+			return nil, ProjectError{Msg: fmt.Sprintf("nf.json wordpress.defines contains duplicate name %q", define.Name)}
 		}
 		seen[define.Name] = struct{}{}
 		defines = append(defines, define)
@@ -1098,14 +1150,14 @@ func loadWordPressConfigDefines(metadata map[string]any, selector wpConfigDefine
 func parseWordPressConfigDefine(index int, value any, selector wpConfigDefineSelector) (wpConfigDefine, bool, error) {
 	item, ok := value.(map[string]any)
 	if !ok || item == nil {
-		return wpConfigDefine{}, false, ProjectError{Msg: fmt.Sprintf("nf.json wordpress.config.defines[%d] must be an object", index)}
+		return wpConfigDefine{}, false, ProjectError{Msg: fmt.Sprintf("nf.json wordpress.defines[%d] must be an object", index)}
 	}
 	name := strings.TrimSpace(recordValueString(item["name"]))
 	if name == "" {
-		return wpConfigDefine{}, false, ProjectError{Msg: fmt.Sprintf("nf.json wordpress.config.defines[%d].name is required", index)}
+		return wpConfigDefine{}, false, ProjectError{Msg: fmt.Sprintf("nf.json wordpress.defines[%d].name is required", index)}
 	}
 	if !wpConfigDefineNamePattern.MatchString(name) {
-		return wpConfigDefine{}, false, ProjectError{Msg: fmt.Sprintf("nf.json wordpress.config.defines[%d].name must be a PHP constant name", index)}
+		return wpConfigDefine{}, false, ProjectError{Msg: fmt.Sprintf("nf.json wordpress.defines[%d].name must be a PHP constant name", index)}
 	}
 	if err := validateConfiguredProjectDefineName(index, name); err != nil {
 		return wpConfigDefine{}, false, err
@@ -1132,13 +1184,13 @@ func parseWordPressConfigDefine(index int, value any, selector wpConfigDefineSel
 func selectWordPressConfigDefineValue(index int, name string, values any, selector wpConfigDefineSelector) (map[string]any, bool, error) {
 	valueMap, ok := values.(map[string]any)
 	if !ok || valueMap == nil {
-		return nil, false, ProjectError{Msg: fmt.Sprintf("nf.json wordpress.config.defines[%d].values must be an object", index)}
+		return nil, false, ProjectError{Msg: fmt.Sprintf("nf.json wordpress.defines[%d].values must be an object", index)}
 	}
 	for _, key := range selector.wpConfigValueKeys() {
 		if raw, ok := valueMap[key]; ok {
 			selected, ok := raw.(map[string]any)
 			if !ok || selected == nil {
-				return nil, false, ProjectError{Msg: fmt.Sprintf("nf.json wordpress.config.defines[%d].values.%s for %s must be an object", index, key, name)}
+				return nil, false, ProjectError{Msg: fmt.Sprintf("nf.json wordpress.defines[%d].values.%s for %s must be an object", index, key, name)}
 			}
 			return selected, true, nil
 		}
@@ -1169,30 +1221,30 @@ func parseWordPressConfigDefineValue(index int, name string, spec map[string]any
 	_, hasEnv := spec["env"]
 	value, hasValue := spec["value"]
 	if hasEnv && hasValue {
-		return "", "", ProjectError{Msg: fmt.Sprintf("nf.json wordpress.config.defines[%d] for %s must use either env or value, not both", index, name)}
+		return "", "", ProjectError{Msg: fmt.Sprintf("nf.json wordpress.defines[%d] for %s must use either env or value, not both", index, name)}
 	}
 	if hasEnv {
 		envName := strings.TrimSpace(recordValueString(spec["env"]))
 		if envName == "" {
-			return "", "", ProjectError{Msg: fmt.Sprintf("nf.json wordpress.config.defines[%d].env for %s must not be empty", index, name)}
+			return "", "", ProjectError{Msg: fmt.Sprintf("nf.json wordpress.defines[%d].env for %s must not be empty", index, name)}
 		}
 		if !wpConfigDefineNamePattern.MatchString(envName) {
-			return "", "", ProjectError{Msg: fmt.Sprintf("nf.json wordpress.config.defines[%d].env for %s must be an environment variable name", index, name)}
+			return "", "", ProjectError{Msg: fmt.Sprintf("nf.json wordpress.defines[%d].env for %s must be an environment variable name", index, name)}
 		}
 		resolved := envwizard.Value(envName)
 		if resolved == "" {
-			return "", "", ProjectError{Msg: fmt.Sprintf("Expected %s in the environment or %s for nf.json wordpress.config.defines[%d] %s.", envName, config.EnvFile(), index, name)}
+			return "", "", ProjectError{Msg: fmt.Sprintf("Expected %s in the environment or %s for nf.json wordpress.defines[%d] %s.", envName, config.EnvFile(), index, name)}
 		}
 		return phpConfigDefineLiteral(resolved), "env " + envName, nil
 	}
 	if hasValue {
 		literal, err := phpConfigDefineValueLiteral(value)
 		if err != nil {
-			return "", "", ProjectError{Msg: fmt.Sprintf("nf.json wordpress.config.defines[%d].value for %s: %s", index, name, err)}
+			return "", "", ProjectError{Msg: fmt.Sprintf("nf.json wordpress.defines[%d].value for %s: %s", index, name, err)}
 		}
 		return literal, "literal value", nil
 	}
-	return "", "", ProjectError{Msg: fmt.Sprintf("nf.json wordpress.config.defines[%d] for %s requires env or value", index, name)}
+	return "", "", ProjectError{Msg: fmt.Sprintf("nf.json wordpress.defines[%d] for %s requires env or value", index, name)}
 }
 
 func phpConfigDefineValueLiteral(value any) (string, error) {

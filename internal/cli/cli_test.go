@@ -24,11 +24,30 @@ import (
 	"github.com/nonfiction/nf/internal/config"
 	"github.com/nonfiction/nf/internal/kinsta"
 	"github.com/nonfiction/nf/internal/passwords"
+	"github.com/nonfiction/nf/internal/project"
 	"github.com/nonfiction/nf/internal/state"
 	"github.com/nonfiction/nf/internal/target/provision"
 	"github.com/nonfiction/nf/internal/ui"
 	"github.com/nonfiction/nf/internal/version"
 )
+
+func TestMain(m *testing.M) {
+	root, err := os.MkdirTemp("", "nf-cli-test-project-")
+	if err != nil {
+		panic(err)
+	}
+	defer os.RemoveAll(root)
+	oldwd, err := os.Getwd()
+	if err != nil {
+		panic(err)
+	}
+	if err := os.Chdir(root); err != nil {
+		panic(err)
+	}
+	code := m.Run()
+	_ = os.Chdir(oldwd)
+	os.Exit(code)
+}
 
 func TestSlugToTitle(t *testing.T) {
 	tests := map[string]string{
@@ -295,7 +314,7 @@ func TestRunHelpShowsProjectCommandsInsideNFProject(t *testing.T) {
 			t.Fatalf("Mkdir(%s) error = %v", dir, err)
 		}
 	}
-	if err := os.WriteFile(filepath.Join(workdir, "nf.json"), []byte("{\n  \"version\": 1\n}\n"), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(workdir, "nf.json"), []byte("{\n  \"version\": 2,\n  \"project\": {\"slug\": \"client\", \"password_version\": 0},\n  \"wordpress\": {\"themes\": [\"twentytwentyfive\"]}\n}\n"), 0o644); err != nil {
 		t.Fatalf("WriteFile(nf.json) error = %v", err)
 	}
 	oldwd, err := os.Getwd()
@@ -652,10 +671,10 @@ func TestRunCompleteSuggestsStaticAndCachedValues(t *testing.T) {
 		t.Fatalf("site sh completion = %q, want env id only", siteShOutput)
 	}
 	setupTestNFProjectWithMetadata(t, map[string]any{
-		"version":   1,
-		"project":   map[string]any{"slug": "client"},
+		"version":   2,
+		"project":   map[string]any{"slug": "client", "password_version": 0},
 		"remotes":   map[string]any{"production": "client-app1-linode:live"},
-		"wordpress": map[string]any{"config": map[string]any{"defines": []any{map[string]any{"name": "OTGS_INSTALLER_SITE_KEY_WPML", "env": "CLIENT_WPML_SITE_KEY"}}}},
+		"wordpress": map[string]any{"themes": []any{"twentytwentyfive"}, "defines": []any{map[string]any{"name": "OTGS_INSTALLER_SITE_KEY_WPML", "env": "CLIENT_WPML_SITE_KEY"}}},
 	})
 	defineRootOutput := captureStdout(t, func() {
 		if got := Run([]string{"__complete", "--", "de"}); got != 0 {
@@ -1104,12 +1123,19 @@ func TestRunCompleteSuggestsProjectValues(t *testing.T) {
 		}
 	}
 	project := map[string]any{
-		"version":   1,
-		"project":   map[string]any{"slug": "client"},
-		"wordpress": map[string]any{"plugins": []any{"stream"}},
-		"aliases":   map[string]any{"files": "wp-content/uploads/public/files"},
-		"remotes":   map[string]any{"production": "client-app1-linode:live"},
-		"tasks":     map[string]any{"build": map[string]any{"description": "Build assets", "run": "npm run build"}},
+		"version": 2,
+		"project": map[string]any{"slug": "client", "password_version": 0},
+		"wordpress": map[string]any{
+			"themes": []any{map[string]any{
+				"slug":   "client",
+				"source": "repo",
+				"path":   "theme",
+				"tasks":  map[string]any{"build": map[string]any{"description": "Build assets", "run": "npm run build"}},
+			}},
+			"plugins": []any{"stream"},
+			"aliases": map[string]any{"files": "wp-content/uploads/public/files"},
+		},
+		"remotes": map[string]any{"production": "client-app1-linode:live"},
 	}
 	projectData, err := json.MarshalIndent(project, "", "  ")
 	if err != nil {
@@ -1354,9 +1380,13 @@ func TestRunPasswordDeriveUsesMatchingProjectPasswordVersion(t *testing.T) {
 	if err := os.Mkdir(filepath.Join(repoRoot, ".git"), 0o755); err != nil {
 		t.Fatalf("Mkdir(.git) error = %v", err)
 	}
-	project := map[string]any{"version": 1, "project": map[string]any{"slug": "client", "password_version": 3}}
-	if err := os.WriteFile(config.ProjectFile(repoRoot), []byte(projectInitJSON(project)), 0o644); err != nil {
-		t.Fatalf("WriteFile(nf.json) error = %v", err)
+	metadata := &project.Manifest{
+		Version:   project.ManifestVersion,
+		Project:   project.Project{Slug: "client", PasswordVersion: 3},
+		WordPress: project.WordPress{Themes: []any{"twentytwentyfive"}},
+	}
+	if err := project.Save(repoRoot, metadata); err != nil {
+		t.Fatalf("project.Save() error = %v", err)
 	}
 	oldwd, err := os.Getwd()
 	if err != nil {
@@ -4354,7 +4384,7 @@ func TestBuildSiteAddPlanUsesMatchingProjectPasswordVersion(t *testing.T) {
 	if err := os.Mkdir(filepath.Join(repoRoot, ".git"), 0o755); err != nil {
 		t.Fatalf("Mkdir(.git) error = %v", err)
 	}
-	project := map[string]any{"version": 1, "project": map[string]any{"slug": "foobar", "password_version": 5}}
+	project := map[string]any{"version": 2, "project": map[string]any{"slug": "foobar", "password_version": 5}, "wordpress": map[string]any{"themes": []any{"twentytwentyfive"}}}
 	data, err := json.MarshalIndent(project, "", "  ")
 	if err != nil {
 		t.Fatalf("MarshalIndent() error = %v", err)
@@ -4444,7 +4474,7 @@ func TestBuildSiteAddPlanExplicitPasswordVersionOverridesProject(t *testing.T) {
 	if err := os.Mkdir(filepath.Join(repoRoot, ".git"), 0o755); err != nil {
 		t.Fatalf("Mkdir(.git) error = %v", err)
 	}
-	project := map[string]any{"version": 1, "project": map[string]any{"slug": "foobar", "password_version": 5}}
+	project := map[string]any{"version": 2, "project": map[string]any{"slug": "foobar", "password_version": 5}, "wordpress": map[string]any{"themes": []any{"twentytwentyfive"}}}
 	data, err := json.MarshalIndent(project, "", "  ")
 	if err != nil {
 		t.Fatalf("MarshalIndent() error = %v", err)
@@ -8355,7 +8385,12 @@ func setupLinodeDomainPromptFixture(t *testing.T, extra map[string]any) {
 
 func setupTestNFProject(t *testing.T, remotes map[string]any) string {
 	t.Helper()
-	return setupTestNFProjectWithMetadata(t, map[string]any{"version": 1, "project": map[string]any{"slug": "client"}, "remotes": remotes})
+	return setupTestNFProjectWithMetadata(t, map[string]any{
+		"version":   2,
+		"project":   map[string]any{"slug": "client", "password_version": 0},
+		"wordpress": map[string]any{"themes": []any{"twentytwentyfive"}},
+		"remotes":   remotes,
+	})
 }
 
 func setupTestNFProjectWithMetadata(t *testing.T, project map[string]any) string {
@@ -10233,7 +10268,7 @@ func TestRunSitePasswordUsesMatchingProjectPasswordVersion(t *testing.T) {
 	if err := os.Mkdir(filepath.Join(repoRoot, ".git"), 0o755); err != nil {
 		t.Fatalf("Mkdir(.git) error = %v", err)
 	}
-	project := map[string]any{"version": 1, "project": map[string]any{"slug": "happytents", "password_version": 4}}
+	project := map[string]any{"version": 2, "project": map[string]any{"slug": "happytents", "password_version": 4}, "wordpress": map[string]any{"themes": []any{"twentytwentyfive"}}}
 	data, err := json.MarshalIndent(project, "", "  ")
 	if err != nil {
 		t.Fatalf("MarshalIndent() error = %v", err)
@@ -10320,7 +10355,7 @@ func TestRunSiteBasicAuthPasswordUsesMatchingProjectPasswordVersion(t *testing.T
 	if err := os.Mkdir(filepath.Join(repoRoot, ".git"), 0o755); err != nil {
 		t.Fatalf("Mkdir(.git) error = %v", err)
 	}
-	project := map[string]any{"version": 1, "project": map[string]any{"slug": "happytents", "password_version": 4}}
+	project := map[string]any{"version": 2, "project": map[string]any{"slug": "happytents", "password_version": 4}, "wordpress": map[string]any{"themes": []any{"twentytwentyfive"}}}
 	data, err := json.MarshalIndent(project, "", "  ")
 	if err != nil {
 		t.Fatalf("MarshalIndent() error = %v", err)
@@ -10367,7 +10402,7 @@ func TestRunSiteBasicAuthLinodeEnableRunsSSHWithDerivedHash(t *testing.T) {
 	if err := os.Mkdir(filepath.Join(repoRoot, ".git"), 0o755); err != nil {
 		t.Fatalf("Mkdir(.git) error = %v", err)
 	}
-	project := map[string]any{"version": 1, "project": map[string]any{"slug": "foobar", "password_version": 5}}
+	project := map[string]any{"version": 2, "project": map[string]any{"slug": "foobar", "password_version": 5}, "wordpress": map[string]any{"themes": []any{"twentytwentyfive"}}}
 	data, err := json.MarshalIndent(project, "", "  ")
 	if err != nil {
 		t.Fatalf("MarshalIndent() error = %v", err)
@@ -11086,35 +11121,33 @@ func TestRunSiteRepairLinodeRewritesInternalVhostWithCache(t *testing.T) {
 func TestLoadWordPressConfigDefinesResolvesValuesWithoutLeakingSecrets(t *testing.T) {
 	t.Setenv("CLIENT_WPML_SITE_KEY", "wpml-secret-key")
 	t.Setenv("CLIENT_SHARED_LICENSE", "shared-secret")
-	metadata := map[string]any{
-		"wordpress": map[string]any{
-			"config": map[string]any{
-				"defines": []any{
-					map[string]any{
-						"name": "SHARED_LICENSE_KEY",
-						"env":  "CLIENT_SHARED_LICENSE",
+	metadata := &project.Manifest{
+		WordPress: project.WordPress{
+			Defines: []any{
+				map[string]any{
+					"name": "SHARED_LICENSE_KEY",
+					"env":  "CLIENT_SHARED_LICENSE",
+				},
+				map[string]any{
+					"name":  "TOP_LEVEL_FALLBACK",
+					"value": "shared-value",
+					"values": map[string]any{
+						"production": map[string]any{"value": "production-value"},
 					},
-					map[string]any{
-						"name":  "TOP_LEVEL_FALLBACK",
-						"value": "shared-value",
-						"values": map[string]any{
-							"production": map[string]any{"value": "production-value"},
-						},
+				},
+				map[string]any{
+					"name": "WP_ENVIRONMENT_TYPE",
+					"values": map[string]any{
+						"local":      map[string]any{"value": "local"},
+						"production": map[string]any{"value": "production"},
+						"default":    map[string]any{"value": "staging"},
 					},
-					map[string]any{
-						"name": "WP_ENVIRONMENT_TYPE",
-						"values": map[string]any{
-							"local":      map[string]any{"value": "local"},
-							"production": map[string]any{"value": "production"},
-							"default":    map[string]any{"value": "staging"},
-						},
-					},
-					map[string]any{
-						"name": "OTGS_INSTALLER_SITE_KEY_WPML",
-						"values": map[string]any{
-							"production": map[string]any{"env": "CLIENT_WPML_SITE_KEY"},
-							"default":    map[string]any{"value": "fallback-key"},
-						},
+				},
+				map[string]any{
+					"name": "OTGS_INSTALLER_SITE_KEY_WPML",
+					"values": map[string]any{
+						"production": map[string]any{"env": "CLIENT_WPML_SITE_KEY"},
+						"default":    map[string]any{"value": "fallback-key"},
 					},
 				},
 			},
@@ -11177,12 +11210,12 @@ func TestLoadWordPressConfigDefinesResolvesValuesWithoutLeakingSecrets(t *testin
 		t.Fatalf("local WP_ENVIRONMENT_TYPE PHPValue = %q, want %q", got, want)
 	}
 
-	missingEnvMetadata := map[string]any{"wordpress": map[string]any{"config": map[string]any{"defines": []any{map[string]any{"name": "OTGS_INSTALLER_SITE_KEY_WPML", "env": "MISSING_WPML_SITE_KEY"}}}}}
+	missingEnvMetadata := &project.Manifest{WordPress: project.WordPress{Defines: []any{map[string]any{"name": "OTGS_INSTALLER_SITE_KEY_WPML", "env": "MISSING_WPML_SITE_KEY"}}}}
 	_, err = loadWordPressConfigDefines(missingEnvMetadata, wpConfigDefineSelector{Local: true})
 	if err == nil || !strings.Contains(err.Error(), "Expected MISSING_WPML_SITE_KEY") {
 		t.Fatalf("missing env error = %v, want Expected MISSING_WPML_SITE_KEY", err)
 	}
-	reservedMetadata := map[string]any{"wordpress": map[string]any{"config": map[string]any{"defines": []any{map[string]any{"name": "KINSTAMU_WHITELABEL", "value": true}}}}}
+	reservedMetadata := &project.Manifest{WordPress: project.WordPress{Defines: []any{map[string]any{"name": "KINSTAMU_WHITELABEL", "value": true}}}}
 	_, err = loadWordPressConfigDefines(reservedMetadata, wpConfigDefineSelector{Local: true})
 	if err == nil || !strings.Contains(err.Error(), "KINSTAMU_WHITELABEL is provider-owned") {
 		t.Fatalf("reserved define load error = %v, want provider-owned error", err)
@@ -11302,16 +11335,12 @@ func TestRunDefineStatusRemoteHidesSecret(t *testing.T) {
 		t.Fatalf("SaveStateRecords(sites) error = %v", err)
 	}
 	setupTestNFProjectWithMetadata(t, map[string]any{
-		"version": 1,
-		"project": map[string]any{"slug": "client", "name": "Client"},
+		"version": 2,
+		"project": map[string]any{"slug": "client", "password_version": 0},
 		"wordpress": map[string]any{
-			"theme_path": "theme",
-			"theme_slug": "theme",
-			"config": map[string]any{
-				"defines": []any{map[string]any{"name": "OTGS_INSTALLER_SITE_KEY_WPML", "env": "CLIENT_WPML_SITE_KEY"}},
-			},
+			"themes":  []any{map[string]any{"slug": "theme", "source": "repo", "path": "theme"}},
+			"defines": []any{map[string]any{"name": "OTGS_INSTALLER_SITE_KEY_WPML", "env": "CLIENT_WPML_SITE_KEY"}},
 		},
-		"env":     map[string]any{"compose": "docker compose", "wordpress_service": "wordpress", "cli_service": "cli", "theme_mount_slug": "theme", "uploads_path": "uploads"},
 		"remotes": map[string]any{"production": "client-kinsta:live"},
 	})
 	var capturedArgs []string
@@ -11350,16 +11379,12 @@ func TestRunDefineSyncRemoteUsesStdinScript(t *testing.T) {
 		t.Fatalf("SaveStateRecords(sites) error = %v", err)
 	}
 	setupTestNFProjectWithMetadata(t, map[string]any{
-		"version": 1,
-		"project": map[string]any{"slug": "client", "name": "Client"},
+		"version": 2,
+		"project": map[string]any{"slug": "client", "password_version": 0},
 		"wordpress": map[string]any{
-			"theme_path": "theme",
-			"theme_slug": "theme",
-			"config": map[string]any{
-				"defines": []any{map[string]any{"name": "OTGS_INSTALLER_SITE_KEY_WPML", "env": "CLIENT_WPML_SITE_KEY"}},
-			},
+			"themes":  []any{map[string]any{"slug": "theme", "source": "repo", "path": "theme"}},
+			"defines": []any{map[string]any{"name": "OTGS_INSTALLER_SITE_KEY_WPML", "env": "CLIENT_WPML_SITE_KEY"}},
 		},
-		"env":     map[string]any{"compose": "docker compose", "wordpress_service": "wordpress", "cli_service": "cli", "theme_mount_slug": "theme", "uploads_path": "uploads"},
 		"remotes": map[string]any{"production": "client-kinsta:live"},
 	})
 	var capturedArgs []string
@@ -11393,8 +11418,9 @@ func TestRunDefineSyncRemoteUsesStdinScript(t *testing.T) {
 
 func TestRunDefineAddRemoveWritesSharedAndSelectorValues(t *testing.T) {
 	root := setupTestNFProjectWithMetadata(t, map[string]any{
-		"version": 1,
-		"project": map[string]any{"slug": "client"},
+		"version":   2,
+		"project":   map[string]any{"slug": "client", "password_version": 0},
+		"wordpress": map[string]any{"themes": []any{"twentytwentyfive"}},
 	})
 	stderr := captureStderr(t, func() {
 		if got := Run([]string{"define", "add", "KINSTAMU_WHITELABEL", "true"}); got != 1 {
@@ -11423,7 +11449,7 @@ func TestRunDefineAddRemoveWritesSharedAndSelectorValues(t *testing.T) {
 	if err != nil {
 		t.Fatalf("loadProjectMetadataOrError() error = %v", err)
 	}
-	defines := mapMapAtPath(metadata, "wordpress", "config")["defines"].([]any)
+	defines := metadata.WordPress.Defines
 	items := map[string]map[string]any{}
 	for _, raw := range defines {
 		item := raw.(map[string]any)
@@ -11451,7 +11477,7 @@ func TestRunDefineAddRemoveWritesSharedAndSelectorValues(t *testing.T) {
 	if err != nil {
 		t.Fatalf("loadProjectMetadataOrError() after rm error = %v", err)
 	}
-	defines = mapMapAtPath(metadata, "wordpress", "config")["defines"].([]any)
+	defines = metadata.WordPress.Defines
 	items = map[string]map[string]any{}
 	for _, raw := range defines {
 		item := raw.(map[string]any)
@@ -11468,9 +11494,10 @@ func TestRunDefineAddRemoveWritesSharedAndSelectorValues(t *testing.T) {
 
 func TestRunDefineAddInteractiveWizardWritesEnvSelector(t *testing.T) {
 	root := setupTestNFProjectWithMetadata(t, map[string]any{
-		"version": 1,
-		"project": map[string]any{"slug": "client"},
-		"remotes": map[string]any{"production": "client-kinsta:live"},
+		"version":   2,
+		"project":   map[string]any{"slug": "client", "password_version": 0},
+		"wordpress": map[string]any{"themes": []any{"twentytwentyfive"}},
+		"remotes":   map[string]any{"production": "client-kinsta:live"},
 	})
 	oldInteractive := siteIsInteractiveFn
 	oldPrompt := definePromptStringFn
@@ -11565,7 +11592,7 @@ func TestRunDefineAddInteractiveWizardWritesEnvSelector(t *testing.T) {
 	if err != nil {
 		t.Fatalf("loadProjectMetadataOrError() error = %v", err)
 	}
-	defines := mapMapAtPath(metadata, "wordpress", "config")["defines"].([]any)
+	defines := metadata.WordPress.Defines
 	item := defines[0].(map[string]any)
 	if got, want := recordValueString(item["name"]), "SomePluginKey"; got != want {
 		t.Fatalf("wizard define name = %q, want %q", got, want)
@@ -11578,9 +11605,10 @@ func TestRunDefineAddInteractiveWizardWritesEnvSelector(t *testing.T) {
 
 func TestRunDefineAddInteractivePromptsForMissingFlagValues(t *testing.T) {
 	root := setupTestNFProjectWithMetadata(t, map[string]any{
-		"version": 1,
-		"project": map[string]any{"slug": "client"},
-		"remotes": map[string]any{"production": "client-kinsta:live"},
+		"version":   2,
+		"project":   map[string]any{"slug": "client", "password_version": 0},
+		"wordpress": map[string]any{"themes": []any{"twentytwentyfive"}},
+		"remotes":   map[string]any{"production": "client-kinsta:live"},
 	})
 	oldInteractive := siteIsInteractiveFn
 	oldPrompt := definePromptStringFn
@@ -11621,7 +11649,7 @@ func TestRunDefineAddInteractivePromptsForMissingFlagValues(t *testing.T) {
 	if err != nil {
 		t.Fatalf("loadProjectMetadataOrError() error = %v", err)
 	}
-	defines := mapMapAtPath(metadata, "wordpress", "config")["defines"].([]any)
+	defines := metadata.WordPress.Defines
 	items := map[string]map[string]any{}
 	for _, raw := range defines {
 		item := raw.(map[string]any)
@@ -11638,8 +11666,9 @@ func TestRunDefineAddInteractivePromptsForMissingFlagValues(t *testing.T) {
 
 func TestRunDefineAddMissingArgsRequiresInteractiveTerminal(t *testing.T) {
 	setupTestNFProjectWithMetadata(t, map[string]any{
-		"version": 1,
-		"project": map[string]any{"slug": "client"},
+		"version":   2,
+		"project":   map[string]any{"slug": "client", "password_version": 0},
+		"wordpress": map[string]any{"themes": []any{"twentytwentyfive"}},
 	})
 	oldInteractive := siteIsInteractiveFn
 	siteIsInteractiveFn = func() bool { return false }
@@ -11657,12 +11686,12 @@ func TestRunDefineAddMissingArgsRequiresInteractiveTerminal(t *testing.T) {
 
 func TestRunDefineRemoveWithoutArgUsesPicker(t *testing.T) {
 	root := setupTestNFProjectWithMetadata(t, map[string]any{
-		"version": 1,
-		"project": map[string]any{"slug": "client"},
-		"wordpress": map[string]any{"config": map[string]any{"defines": []any{
+		"version": 2,
+		"project": map[string]any{"slug": "client", "password_version": 0},
+		"wordpress": map[string]any{"themes": []any{"twentytwentyfive"}, "defines": []any{
 			map[string]any{"name": "AGENCY_NAME", "value": "nonfiction studios"},
 			map[string]any{"name": "OTGS_INSTALLER_SITE_KEY_WPML", "env": "CLIENT_WPML_SITE_KEY"},
-		}}},
+		}},
 	})
 	oldInteractive := siteIsInteractiveFn
 	oldSelect := defineSelectFn
@@ -11695,7 +11724,7 @@ func TestRunDefineRemoveWithoutArgUsesPicker(t *testing.T) {
 	if err != nil {
 		t.Fatalf("loadProjectMetadataOrError() error = %v", err)
 	}
-	defines := mapMapAtPath(metadata, "wordpress", "config")["defines"].([]any)
+	defines := metadata.WordPress.Defines
 	if len(defines) != 1 {
 		t.Fatalf("defines after picker remove = %#v, want one define", defines)
 	}
@@ -11707,9 +11736,9 @@ func TestRunDefineRemoveWithoutArgUsesPicker(t *testing.T) {
 
 func TestRunDefineRemoveWithoutArgRequiresInteractiveTerminal(t *testing.T) {
 	setupTestNFProjectWithMetadata(t, map[string]any{
-		"version":   1,
-		"project":   map[string]any{"slug": "client"},
-		"wordpress": map[string]any{"config": map[string]any{"defines": []any{map[string]any{"name": "AGENCY_NAME", "value": "nonfiction studios"}}}},
+		"version":   2,
+		"project":   map[string]any{"slug": "client", "password_version": 0},
+		"wordpress": map[string]any{"themes": []any{"twentytwentyfive"}, "defines": []any{map[string]any{"name": "AGENCY_NAME", "value": "nonfiction studios"}}},
 	})
 	oldInteractive := siteIsInteractiveFn
 	siteIsInteractiveFn = func() bool { return false }
@@ -11771,14 +11800,10 @@ func TestRunEnvPushPreflightsRepoRemoteWithoutSyncing(t *testing.T) {
 	if err := os.Mkdir(filepath.Join(repoRoot, ".git"), 0o755); err != nil {
 		t.Fatalf("Mkdir(.git) error = %v", err)
 	}
-	if err := os.WriteFile(filepath.Join(repoRoot, "nf.json"), []byte("{\n  \"version\": 1\n}\n"), 0o644); err != nil {
-		t.Fatalf("WriteFile(nf.json) error = %v", err)
-	}
 	project := map[string]any{
-		"version":   1,
-		"project":   map[string]any{"slug": "client", "name": "Client"},
-		"wordpress": map[string]any{"theme_path": "theme", "theme_slug": "theme"},
-		"env":       map[string]any{"compose": "docker compose", "wordpress_service": "wordpress", "cli_service": "cli", "theme_mount_slug": "theme", "uploads_path": "uploads"},
+		"version":   2,
+		"project":   map[string]any{"slug": "client", "password_version": 0},
+		"wordpress": map[string]any{"themes": []any{map[string]any{"slug": "theme", "source": "repo", "path": "theme"}}},
 		"remotes":   map[string]any{"production": "client-kinsta:live"},
 	}
 	projectData, err := json.MarshalIndent(project, "", "  ")
@@ -11853,10 +11878,9 @@ func TestRunEnvPullPreflightResolvesLinodeTargetFromProvidersCache(t *testing.T)
 		}
 	}
 	project := map[string]any{
-		"version":   1,
-		"project":   map[string]any{"slug": "foobar", "name": "FooBar"},
-		"wordpress": map[string]any{"theme_path": "theme", "theme_slug": "theme"},
-		"env":       map[string]any{"compose": "docker compose", "wordpress_service": "wordpress", "cli_service": "cli", "theme_mount_slug": "theme", "uploads_path": "uploads"},
+		"version":   2,
+		"project":   map[string]any{"slug": "foobar", "password_version": 0},
+		"wordpress": map[string]any{"themes": []any{map[string]any{"slug": "theme", "source": "repo", "path": "theme"}}},
 		"remotes":   map[string]any{"live": "foobar.app4-linode:live"},
 	}
 	projectData, err := json.MarshalIndent(project, "", "  ")
@@ -11940,9 +11964,9 @@ func TestRunThemeDeployDryRunPlansPackagedReleaseToConfiguredRemote(t *testing.T
 		t.Fatalf("WriteFile(style.css) error = %v", err)
 	}
 	project := map[string]any{
-		"version":   1,
-		"project":   map[string]any{"slug": "client", "name": "Client"},
-		"wordpress": map[string]any{"theme_path": "build/theme", "theme_slug": "theme"},
+		"version":   2,
+		"project":   map[string]any{"slug": "client", "password_version": 0},
+		"wordpress": map[string]any{"themes": []any{map[string]any{"slug": "theme", "source": "repo", "path": "build/theme"}}},
 		"remotes":   map[string]any{"production": "client-kinsta:live"},
 	}
 	projectData, err := json.MarshalIndent(project, "", "  ")
@@ -11992,11 +12016,11 @@ func TestRunThemeDeployDryRunPlansPackagedReleaseToConfiguredRemote(t *testing.T
 }
 
 func TestAliasSpecsLoadShortFormTargets(t *testing.T) {
-	metadata := map[string]any{"aliases": map[string]any{
+	metadata := &project.Manifest{WordPress: project.WordPress{Aliases: map[string]string{
 		"content":           "wp-content",
 		"files":             "wp-content/uploads/public/files",
 		"annual-report.pdf": "wp-content/uploads/2026/annual-report.pdf",
-	}}
+	}}}
 	specs, err := loadAliasSpecs(metadata)
 	if err != nil {
 		t.Fatalf("loadAliasSpecs() error = %v", err)
@@ -12015,7 +12039,7 @@ func TestRunAliasAddRemoveUpdatesProjectMetadata(t *testing.T) {
 		t.Fatalf("Mkdir(.git) error = %v", err)
 	}
 	projectPath := filepath.Join(repoRoot, "nf.json")
-	if err := os.WriteFile(projectPath, []byte("{\n  \"version\": 1,\n  \"project\": {\n    \"slug\": \"client\"\n  }\n}\n"), 0o644); err != nil {
+	if err := os.WriteFile(projectPath, []byte("{\n  \"version\": 2,\n  \"project\": {\n    \"slug\": \"client\",\n    \"password_version\": 0\n  },\n  \"wordpress\": {\n    \"themes\": [\"twentytwentyfive\"]\n  }\n}\n"), 0o644); err != nil {
 		t.Fatalf("WriteFile(nf.json) error = %v", err)
 	}
 	oldwd, err := os.Getwd()
@@ -12055,7 +12079,7 @@ func TestRunAliasAddRemoveUpdatesProjectMetadata(t *testing.T) {
 	if err != nil {
 		t.Fatalf("loadProjectMetadataOrError() error = %v", err)
 	}
-	aliases := metadata["aliases"].(map[string]any)
+	aliases := metadata.WordPress.Aliases
 	if len(aliases) != 0 {
 		t.Fatalf("aliases = %#v, want empty object", aliases)
 	}
@@ -12211,7 +12235,7 @@ func TestRunAliasRemoteStatusAndSyncUseFinalRemoteArg(t *testing.T) {
 	if err := os.Mkdir(filepath.Join(repoRoot, ".git"), 0o755); err != nil {
 		t.Fatalf("Mkdir(.git) error = %v", err)
 	}
-	project := map[string]any{"version": 1, "project": map[string]any{"slug": "client"}, "aliases": map[string]any{"files": "wp-content/uploads/public/files"}, "remotes": map[string]any{"production": "client-kinsta:live"}}
+	project := map[string]any{"version": 2, "project": map[string]any{"slug": "client", "password_version": 0}, "wordpress": map[string]any{"themes": []any{"twentytwentyfive"}, "aliases": map[string]any{"files": "wp-content/uploads/public/files"}}, "remotes": map[string]any{"production": "client-kinsta:live"}}
 	projectData, err := json.MarshalIndent(project, "", "  ")
 	if err != nil {
 		t.Fatalf("MarshalIndent(project) error = %v", err)
@@ -12309,7 +12333,7 @@ func TestRunThemeDeployDryRunPlansLinodePackagedRelease(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(repoRoot, "theme", "style.css"), []byte("/*\nTheme Name: Theme\nVersion: 2.0.0\n*/\n"), 0o644); err != nil {
 		t.Fatalf("WriteFile(style.css) error = %v", err)
 	}
-	project := map[string]any{"version": 1, "project": map[string]any{"slug": "client"}, "wordpress": map[string]any{"theme_path": "theme", "theme_slug": "client-theme"}, "remotes": map[string]any{"staging": "client.app1-linode:staging"}}
+	project := map[string]any{"version": 2, "project": map[string]any{"slug": "client", "password_version": 0}, "wordpress": map[string]any{"themes": []any{map[string]any{"slug": "client-theme", "source": "repo", "path": "theme"}}}, "remotes": map[string]any{"staging": "client.app1-linode:staging"}}
 	projectData, err := json.MarshalIndent(project, "", "  ")
 	if err != nil {
 		t.Fatalf("MarshalIndent(project) error = %v", err)
@@ -12364,7 +12388,7 @@ func TestRunThemeDeployExecuteRefreshesRuntimeMtimesBeforeActivation(t *testing.
 	if err := os.WriteFile(filepath.Join(repoRoot, "theme", "style.css"), []byte("/*\nTheme Name: Theme\nVersion: 2.0.0\n*/\n"), 0o644); err != nil {
 		t.Fatalf("WriteFile(style.css) error = %v", err)
 	}
-	project := map[string]any{"version": 1, "project": map[string]any{"slug": "client"}, "wordpress": map[string]any{"theme_path": "theme", "theme_slug": "client-theme"}, "remotes": map[string]any{"production": "client.app1-linode:live"}}
+	project := map[string]any{"version": 2, "project": map[string]any{"slug": "client", "password_version": 0}, "wordpress": map[string]any{"themes": []any{map[string]any{"slug": "client-theme", "source": "repo", "path": "theme"}}}, "remotes": map[string]any{"production": "client.app1-linode:live"}}
 	projectData, err := json.MarshalIndent(project, "", "  ")
 	if err != nil {
 		t.Fatalf("MarshalIndent(project) error = %v", err)
@@ -12484,9 +12508,9 @@ func TestRunThemeDeployWithoutRemotePromptsPicker(t *testing.T) {
 		t.Fatalf("WriteFile(style.css) error = %v", err)
 	}
 	project := map[string]any{
-		"version":   1,
-		"project":   map[string]any{"slug": "client"},
-		"wordpress": map[string]any{"theme_path": "theme", "theme_slug": "theme"},
+		"version":   2,
+		"project":   map[string]any{"slug": "client", "password_version": 0},
+		"wordpress": map[string]any{"themes": []any{map[string]any{"slug": "theme", "source": "repo", "path": "theme"}}},
 		"remotes":   map[string]any{"production": "client-kinsta:live"},
 	}
 	projectData, err := json.MarshalIndent(project, "", "  ")
@@ -12552,7 +12576,7 @@ func TestRunThemeRollbackDryRunPlansPreviousKinstaRelease(t *testing.T) {
 			t.Fatalf("MkdirAll(%s) error = %v", dir, err)
 		}
 	}
-	project := map[string]any{"version": 1, "project": map[string]any{"slug": "client"}, "wordpress": map[string]any{"theme_path": "theme", "theme_slug": "theme"}, "remotes": map[string]any{"production": "client-kinsta:live"}}
+	project := map[string]any{"version": 2, "project": map[string]any{"slug": "client", "password_version": 0}, "wordpress": map[string]any{"themes": []any{map[string]any{"slug": "theme", "source": "repo", "path": "theme"}}}, "remotes": map[string]any{"production": "client-kinsta:live"}}
 	projectData, err := json.MarshalIndent(project, "", "  ")
 	if err != nil {
 		t.Fatalf("MarshalIndent(project) error = %v", err)
@@ -12605,7 +12629,7 @@ func TestRunThemeRollbackExecuteRunsLinodeRollbackScript(t *testing.T) {
 			t.Fatalf("MkdirAll(%s) error = %v", dir, err)
 		}
 	}
-	project := map[string]any{"version": 1, "project": map[string]any{"slug": "client"}, "wordpress": map[string]any{"theme_path": "theme", "theme_slug": "client-theme"}, "remotes": map[string]any{"production": "client.app1-linode:live"}}
+	project := map[string]any{"version": 2, "project": map[string]any{"slug": "client", "password_version": 0}, "wordpress": map[string]any{"themes": []any{map[string]any{"slug": "client-theme", "source": "repo", "path": "theme"}}}, "remotes": map[string]any{"production": "client.app1-linode:live"}}
 	projectData, err := json.MarshalIndent(project, "", "  ")
 	if err != nil {
 		t.Fatalf("MarshalIndent(project) error = %v", err)
@@ -13057,7 +13081,7 @@ func TestRunRemoteAddListRemoveWritesProjectMetadata(t *testing.T) {
 	if err := os.Mkdir(filepath.Join(repoRoot, ".git"), 0o755); err != nil {
 		t.Fatalf("Mkdir(.git) error = %v", err)
 	}
-	project := map[string]any{"version": 1, "project": map[string]any{"slug": "client"}, "remotes": map[string]any{}}
+	project := map[string]any{"version": 2, "project": map[string]any{"slug": "client", "password_version": 0}, "wordpress": map[string]any{"themes": []any{"twentytwentyfive"}}, "remotes": map[string]any{}}
 	data, err := json.MarshalIndent(project, "", "  ")
 	if err != nil {
 		t.Fatalf("MarshalIndent() error = %v", err)
@@ -13193,7 +13217,7 @@ func TestRunRemoteAddRequiresCachedSiteEnv(t *testing.T) {
 	if err := os.Mkdir(filepath.Join(repoRoot, ".git"), 0o755); err != nil {
 		t.Fatalf("Mkdir(.git) error = %v", err)
 	}
-	project := map[string]any{"version": 1, "project": map[string]any{"slug": "client"}, "remotes": map[string]any{}}
+	project := map[string]any{"version": 2, "project": map[string]any{"slug": "client", "password_version": 0}, "wordpress": map[string]any{"themes": []any{"twentytwentyfive"}}, "remotes": map[string]any{}}
 	data, err := json.MarshalIndent(project, "", "  ")
 	if err != nil {
 		t.Fatalf("MarshalIndent(project) error = %v", err)
@@ -13237,7 +13261,7 @@ func TestRunRemoteAddRequiresEnvRef(t *testing.T) {
 	if err := os.Mkdir(filepath.Join(repoRoot, ".git"), 0o755); err != nil {
 		t.Fatalf("Mkdir(.git) error = %v", err)
 	}
-	project := map[string]any{"version": 1, "project": map[string]any{"slug": "client"}, "remotes": map[string]any{}}
+	project := map[string]any{"version": 2, "project": map[string]any{"slug": "client", "password_version": 0}, "wordpress": map[string]any{"themes": []any{"twentytwentyfive"}}, "remotes": map[string]any{}}
 	data, err := json.MarshalIndent(project, "", "  ")
 	if err != nil {
 		t.Fatalf("MarshalIndent(project) error = %v", err)
@@ -13367,7 +13391,7 @@ func writeTestProject(t *testing.T) (string, string) {
 	if err := os.Mkdir(filepath.Join(repoRoot, ".git"), 0o755); err != nil {
 		t.Fatalf("Mkdir(.git) error = %v", err)
 	}
-	project := map[string]any{"version": 1, "project": map[string]any{"slug": "client"}, "remotes": map[string]any{}}
+	project := map[string]any{"version": 2, "project": map[string]any{"slug": "client", "password_version": 0}, "wordpress": map[string]any{"themes": []any{"twentytwentyfive"}}, "remotes": map[string]any{}}
 	data, err := json.MarshalIndent(project, "", "  ")
 	if err != nil {
 		t.Fatalf("MarshalIndent(project) error = %v", err)
@@ -13481,7 +13505,7 @@ func TestRunEnvPluginIsRemoved(t *testing.T) {
 	if err := os.Mkdir(filepath.Join(repoRoot, ".git"), 0o755); err != nil {
 		t.Fatalf("Mkdir(.git) error = %v", err)
 	}
-	if err := os.WriteFile(filepath.Join(repoRoot, "nf.json"), []byte("{\n  \"version\": 1\n}\n"), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(repoRoot, "nf.json"), []byte("{\n  \"version\": 2,\n  \"project\": {\"slug\": \"client\", \"password_version\": 0},\n  \"wordpress\": {\"themes\": [\"twentytwentyfive\"]}\n}\n"), 0o644); err != nil {
 		t.Fatalf("WriteFile(nf.json) error = %v", err)
 	}
 	oldwd, err := os.Getwd()
@@ -13530,7 +13554,11 @@ func TestRunEnvSnapshotAddSkipsComposeUpWhenReady(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(repoRoot, "theme", "style.css"), []byte("/* demo */\n"), 0o644); err != nil {
 		t.Fatalf("WriteFile(style.css) error = %v", err)
 	}
-	project := map[string]any{"version": 1, "project": map[string]any{"slug": "client", "name": "Client"}, "wordpress": map[string]any{"theme_path": "theme", "theme_slug": "theme"}, "env": map[string]any{"compose": "docker compose", "wordpress_service": "wordpress", "cli_service": "cli", "theme_mount_slug": "theme", "uploads_path": "uploads"}}
+	project := map[string]any{
+		"version":   2,
+		"project":   map[string]any{"slug": "client", "password_version": 0},
+		"wordpress": map[string]any{"themes": []any{map[string]any{"slug": "theme", "source": "repo", "path": "theme"}}},
+	}
 	data, err := json.MarshalIndent(project, "", "  ")
 	if err != nil {
 		t.Fatalf("MarshalIndent() error = %v", err)
@@ -13585,7 +13613,7 @@ func TestRunEnvSnapshotListShowsSnapshots(t *testing.T) {
 	if err := os.Mkdir(filepath.Join(repoRoot, ".git"), 0o755); err != nil {
 		t.Fatalf("Mkdir() error = %v", err)
 	}
-	project := map[string]any{"version": 1, "project": map[string]any{"slug": "client", "name": "Client"}, "wordpress": map[string]any{"theme_path": "theme", "theme_slug": "theme"}, "env": map[string]any{"compose": "docker compose", "wordpress_service": "wordpress", "cli_service": "cli", "theme_mount_slug": "theme", "uploads_path": "uploads"}}
+	project := map[string]any{"version": 2, "project": map[string]any{"slug": "client", "password_version": 0}, "wordpress": map[string]any{"themes": []any{map[string]any{"slug": "theme", "source": "repo", "path": "theme"}}}}
 	data, err := json.MarshalIndent(project, "", "  ")
 	if err != nil {
 		t.Fatalf("MarshalIndent() error = %v", err)
@@ -13755,7 +13783,7 @@ func TestRunEnvSnapshotUseSkipsComposeUpWhenReady(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(repoRoot, "theme", "style.css"), []byte("/* demo */\n"), 0o644); err != nil {
 		t.Fatalf("WriteFile(style.css) error = %v", err)
 	}
-	project := map[string]any{"version": 1, "project": map[string]any{"slug": "client", "name": "Client"}, "wordpress": map[string]any{"theme_path": "theme", "theme_slug": "theme"}, "env": map[string]any{"compose": "docker compose", "wordpress_service": "wordpress", "cli_service": "cli", "theme_mount_slug": "theme", "uploads_path": "uploads"}}
+	project := map[string]any{"version": 2, "project": map[string]any{"slug": "client", "password_version": 0}, "wordpress": map[string]any{"themes": []any{map[string]any{"slug": "theme", "source": "repo", "path": "theme"}}}}
 	projectData, err := json.MarshalIndent(project, "", "  ")
 	if err != nil {
 		t.Fatalf("MarshalIndent() error = %v", err)
@@ -14730,7 +14758,7 @@ func TestRunEnvSnapshotRemoveRemovesSnapshotAfterConfirmation(t *testing.T) {
 	if err := os.Mkdir(filepath.Join(repoRoot, ".git"), 0o755); err != nil {
 		t.Fatalf("Mkdir() error = %v", err)
 	}
-	project := map[string]any{"version": 1, "project": map[string]any{"slug": "client", "name": "Client"}, "wordpress": map[string]any{"theme_path": "theme", "theme_slug": "theme"}, "env": map[string]any{"compose": "docker compose", "wordpress_service": "wordpress", "cli_service": "cli", "theme_mount_slug": "theme", "uploads_path": "uploads"}}
+	project := map[string]any{"version": 2, "project": map[string]any{"slug": "client", "password_version": 0}, "wordpress": map[string]any{"themes": []any{map[string]any{"slug": "theme", "source": "repo", "path": "theme"}}}}
 	projectData, err := json.MarshalIndent(project, "", "  ")
 	if err != nil {
 		t.Fatalf("MarshalIndent() error = %v", err)
@@ -14890,7 +14918,11 @@ func writeTestEnvProject(t *testing.T) (string, envConfig) {
 	if err := os.MkdirAll(filepath.Join(repoRoot, "theme"), 0o755); err != nil {
 		t.Fatalf("MkdirAll(theme) error = %v", err)
 	}
-	project := map[string]any{"version": 1, "project": map[string]any{"slug": "client", "name": "Client"}, "wordpress": map[string]any{"theme_path": "theme", "theme_slug": "theme"}, "env": map[string]any{"compose": "docker compose", "wordpress_service": "wordpress", "cli_service": "cli", "theme_mount_slug": "theme", "uploads_path": "uploads"}}
+	project := map[string]any{
+		"version":   2,
+		"project":   map[string]any{"slug": "client", "password_version": 0},
+		"wordpress": map[string]any{"themes": []any{map[string]any{"slug": "theme", "source": "repo", "path": "theme"}}},
+	}
 	data, err := json.MarshalIndent(project, "", "  ")
 	if err != nil {
 		t.Fatalf("MarshalIndent(project) error = %v", err)
@@ -14898,7 +14930,7 @@ func writeTestEnvProject(t *testing.T) (string, envConfig) {
 	if err := os.WriteFile(filepath.Join(repoRoot, "nf.json"), append(data, '\n'), 0o644); err != nil {
 		t.Fatalf("WriteFile(nf.json) error = %v", err)
 	}
-	cfg := envConfig{ProjectSlug: "client", RepoRoot: repoRoot, ThemePath: "theme", EnvDir: config.EnvDir("client"), WordpressPort: 18432, MailpitPort: 18433, Compose: "docker compose", WordpressService: "wordpress", CliService: "cli", ThemeMountSlug: "theme", UploadsPath: "uploads", ThemeSlug: "theme"}
+	cfg := envConfig{ProjectSlug: "client", RepoRoot: repoRoot, ThemePath: "theme", EnvDir: config.EnvDir("client"), WordpressPort: 18432, MailpitPort: 18433, Compose: "docker compose", WordpressService: "wordpress", ThemeMountSlug: "theme", UploadsPath: "uploads", ThemeSlug: "theme"}
 	return repoRoot, cfg
 }
 
@@ -14929,7 +14961,16 @@ func TestRunThemeHelpShowsThemeCommandsInsideGit(t *testing.T) {
 	if err := os.Mkdir(filepath.Join(workdir, ".git"), 0o755); err != nil {
 		t.Fatalf("Mkdir() error = %v", err)
 	}
-	project := map[string]any{"version": 1, "project": map[string]any{"slug": "client"}, "tasks": map[string]any{"build": map[string]any{"description": "Build the theme assets", "run": "npm run build"}}}
+	project := map[string]any{
+		"version": 2,
+		"project": map[string]any{"slug": "client", "password_version": 0},
+		"wordpress": map[string]any{"themes": []any{map[string]any{
+			"slug":   "client",
+			"source": "repo",
+			"path":   "theme",
+			"tasks":  map[string]any{"build": map[string]any{"description": "Build the theme assets", "run": "npm run build"}},
+		}}},
+	}
 	projectData, err := json.MarshalIndent(project, "", "  ")
 	if err != nil {
 		t.Fatalf("MarshalIndent() error = %v", err)
@@ -15016,10 +15057,9 @@ func TestRunSiteShowResolvesAliasAndIncludesServerSummary(t *testing.T) {
 		t.Fatalf("Mkdir() error = %v", err)
 	}
 	project := map[string]any{
-		"version":   1,
-		"project":   map[string]any{"slug": "client", "name": "Client", "type": "wordpress-theme"},
-		"wordpress": map[string]any{"deploy_unit": "theme", "theme_slug": "theme", "theme_path": "theme"},
-		"artifact":  map[string]any{"path": "dist/client-v{version}.zip"},
+		"version":   2,
+		"project":   map[string]any{"slug": "client", "password_version": 0},
+		"wordpress": map[string]any{"themes": []any{map[string]any{"slug": "theme", "source": "repo", "path": "theme", "package": map[string]any{"output": "dist/client-v{version}.zip"}}}},
 		"remotes":   map[string]any{},
 	}
 	projectData, err := json.MarshalIndent(project, "", "  ")
@@ -15090,7 +15130,7 @@ func TestRunSiteShowUsesDirectTargetWithoutAlias(t *testing.T) {
 	if err := os.Mkdir(filepath.Join(workdir, ".git"), 0o755); err != nil {
 		t.Fatalf("Mkdir() error = %v", err)
 	}
-	project := map[string]any{"version": 1, "project": map[string]any{"slug": "client"}, "remotes": map[string]any{}}
+	project := map[string]any{"version": 2, "project": map[string]any{"slug": "client", "password_version": 0}, "wordpress": map[string]any{"themes": []any{"twentytwentyfive"}}, "remotes": map[string]any{}}
 	projectData, err := json.MarshalIndent(project, "", "  ")
 	if err != nil {
 		t.Fatalf("MarshalIndent() error = %v", err)
@@ -15211,7 +15251,7 @@ func TestRunSiteShowResolvesRepoRemoteAlias(t *testing.T) {
 	if err := os.Mkdir(filepath.Join(repoRoot, ".git"), 0o755); err != nil {
 		t.Fatalf("Mkdir(.git) error = %v", err)
 	}
-	project := map[string]any{"version": 1, "project": map[string]any{"slug": "client"}, "remotes": map[string]any{"production": "client-kinsta:live"}}
+	project := map[string]any{"version": 2, "project": map[string]any{"slug": "client", "password_version": 0}, "wordpress": map[string]any{"themes": []any{"twentytwentyfive"}}, "remotes": map[string]any{"production": "client-kinsta:live"}}
 	projectData, err := json.MarshalIndent(project, "", "  ")
 	if err != nil {
 		t.Fatalf("MarshalIndent(project) error = %v", err)
@@ -15262,8 +15302,8 @@ func TestRunInitWritesPortableMetadataShape(t *testing.T) {
 	if err := json.Unmarshal(data, &metadata); err != nil {
 		t.Fatalf("Unmarshal() error = %v", err)
 	}
-	if metadata["version"] != float64(1) {
-		t.Fatalf("version = %v, want 1", metadata["version"])
+	if metadata["version"] != float64(2) {
+		t.Fatalf("version = %v, want 2", metadata["version"])
 	}
 	if got := strings.Index(string(data), "\"version\""); got < 0 || got > strings.Index(string(data), "\"project\"") {
 		t.Fatalf("nf.json top-level order = %s, want version before project", data)
@@ -15287,35 +15327,21 @@ func TestRunInitWritesPortableMetadataShape(t *testing.T) {
 		t.Fatalf("wordpress.theme_path unexpectedly present: %#v", wordpress)
 	} else if _, exists := wordpress["theme_slug"]; exists {
 		t.Fatalf("wordpress.theme_slug unexpectedly present: %#v", wordpress)
-	} else if plugins, ok := wordpress["plugins"].([]any); !ok || len(plugins) != 0 {
-		t.Fatalf("wordpress.plugins = %#v, want empty list", wordpress["plugins"])
+	} else if _, exists := wordpress["plugins"]; exists {
+		t.Fatalf("wordpress.plugins unexpectedly present: %#v", wordpress["plugins"])
 	}
-	if env, ok := metadata["env"].(map[string]any); !ok {
-		t.Fatalf("env block = %#v, want env config", metadata["env"])
-	} else {
-		for key, want := range map[string]string{"compose": "docker compose", "wordpress_service": "wordpress", "uploads_path": "uploads"} {
-			if got := env[key]; got != want {
-				t.Fatalf("env.%s = %#v, want %q", key, got, want)
-			}
-		}
-		if _, exists := env["theme_mount_slug"]; exists {
-			t.Fatalf("env.theme_mount_slug unexpectedly present: %#v", env)
-		}
-		if _, exists := env["ports"]; exists {
-			t.Fatalf("env.ports unexpectedly present: %#v", env["ports"])
-		}
-		if _, exists := env["path"]; exists {
-			t.Fatalf("env.path unexpectedly present: %#v", env)
-		}
+	if _, exists := metadata["local"]; exists {
+		t.Fatalf("local unexpectedly present: %#v", metadata["local"])
 	}
-	if artifact, ok := metadata["artifact"].(map[string]any); !ok || artifact["path"] != "dist/client-v{version}.zip" {
-		t.Fatalf("artifact block = %#v, want dist/client-v{version}.zip", metadata["artifact"])
+	theme := metadata["wordpress"].(map[string]any)["themes"].([]any)[0].(map[string]any)
+	if packageConfig, ok := theme["package"].(map[string]any); !ok || packageConfig["output"] != "dist/client-v{version}.zip" {
+		t.Fatalf("repo theme package = %#v, want dist/client-v{version}.zip", theme["package"])
 	}
-	if remotes, ok := metadata["remotes"].(map[string]any); !ok || len(remotes) != 0 {
-		t.Fatalf("remotes = %#v, want empty map", metadata["remotes"])
+	if _, exists := metadata["remotes"]; exists {
+		t.Fatalf("remotes unexpectedly present: %#v", metadata["remotes"])
 	}
-	if tasks, ok := metadata["tasks"].(map[string]any); !ok {
-		t.Fatalf("tasks block = %#v, want task map", metadata["tasks"])
+	if tasks, ok := theme["tasks"].(map[string]any); !ok {
+		t.Fatalf("repo theme tasks = %#v, want task map", theme["tasks"])
 	} else {
 		for _, want := range []string{"composer", "npm", "build", "watch", "test"} {
 			if tasks[want] == nil {
@@ -15331,13 +15357,7 @@ func TestRunInitWritesPortableMetadataShape(t *testing.T) {
 			t.Fatalf("legacy field %q unexpectedly present: %#v", legacy, metadata[legacy])
 		}
 	}
-	if project, ok := metadata["project"].(map[string]any); !ok || project["type"] != "wordpress-theme" {
-		t.Fatalf("project block = %#v, want type wordpress-theme", metadata["project"])
-	}
-	if wordpress, ok := metadata["wordpress"].(map[string]any); !ok || wordpress["deploy_unit"] != "theme" {
-		t.Fatalf("wordpress block = %#v, want deploy_unit theme", metadata["wordpress"])
-	}
-	for _, dropped := range []string{"build", "deploy"} {
+	for _, dropped := range []string{"artifact", "tasks", "aliases", "env", "build", "deploy"} {
 		if _, exists := metadata[dropped]; exists {
 			t.Fatalf("%s unexpectedly present: %#v", dropped, metadata[dropped])
 		}
@@ -15419,7 +15439,7 @@ func TestRunInitHonorsExplicitThemeSlug(t *testing.T) {
 	}
 	t.Cleanup(func() { _ = os.Chdir(oldwd) })
 
-	if got := Run([]string{"init", "--project-slug", "client", "--theme-slug", "custom-theme", "--force"}); got != 0 {
+	if got := Run([]string{"init", "--project-slug", "client", "--theme-slug", "custom-theme", "--theme-source", "custom/theme", "--force"}); got != 0 {
 		t.Fatalf("Run() = %d, want 0", got)
 	}
 	data, err := os.ReadFile(filepath.Join(workdir, "nf.json"))
@@ -15434,19 +15454,21 @@ func TestRunInitHonorsExplicitThemeSlug(t *testing.T) {
 		t.Fatalf("wordpress block = %#v, want wordpress config", metadata["wordpress"])
 	} else if themes, ok := wordpress["themes"].([]any); !ok || len(themes) != 4 {
 		t.Fatalf("wordpress.themes = %#v, want repo theme plus bundled WordPress themes", wordpress["themes"])
-	} else if theme, ok := themes[0].(map[string]any); !ok || theme["slug"] != "custom-theme" || theme["source"] != "repo" || theme["path"] != "theme" {
-		t.Fatalf("wordpress.themes[0] = %#v, want explicit custom-theme repo theme", themes[0])
+	} else if theme, ok := themes[0].(map[string]any); !ok || theme["slug"] != "custom-theme" || theme["source"] != "repo" || theme["path"] != "custom/theme" {
+		t.Fatalf("wordpress.themes[0] = %#v, want explicit custom-theme repo theme at custom/theme", themes[0])
+	} else if tasks, ok := theme["tasks"].(map[string]any); !ok || !strings.Contains(recordValueString(tasks["build"].(map[string]any)["run"]), "npm --prefix custom/theme run build") || !strings.Contains(recordValueString(tasks["composer"].(map[string]any)["run"]), "composer --working-dir=custom/theme") {
+		t.Fatalf("wordpress.themes[0].tasks = %#v, want custom/theme command paths", theme["tasks"])
 	} else if themes[1] != "twentytwentyfive" || themes[2] != "twentytwentyfour" || themes[3] != "twentytwentythree" {
 		t.Fatalf("wordpress.themes bundled defaults = %#v, want WordPress default themes", themes[1:])
 	}
 }
 
 func TestProjectInitThemeListSkipsBundledThemeDuplicate(t *testing.T) {
-	themes := projectInitThemeList("twentytwentyfive", "theme")
+	themes := projectInitThemeList("client", "twentytwentyfive", "theme")
 	if len(themes) != 3 {
 		t.Fatalf("len(projectInitThemeList) = %d, want 3", len(themes))
 	}
-	if theme, ok := themes[0].(orderedObject); !ok || len(theme.Pairs) != 3 || theme.Pairs[0].Value != "twentytwentyfive" || theme.Pairs[1].Value != wordpressThemeRepoSource || theme.Pairs[2].Value != "theme" {
+	if theme, ok := themes[0].(orderedObject); !ok || len(theme.Pairs) != 5 || theme.Pairs[0].Value != "twentytwentyfive" || theme.Pairs[1].Value != wordpressThemeRepoSource || theme.Pairs[2].Value != "theme" {
 		t.Fatalf("projectInitThemeList()[0] = %#v, want repo twentytwentyfive", themes[0])
 	}
 	if themes[1] != "twentytwentyfour" || themes[2] != "twentytwentythree" {
@@ -15513,12 +15535,12 @@ func TestRenderEnvComposeUsesMetadataDefaults(t *testing.T) {
 	if err := os.MkdirAll(filepath.Join(root, "theme-src"), 0o755); err != nil {
 		t.Fatalf("MkdirAll(theme-src) error = %v", err)
 	}
-	metadata := map[string]any{
-		"project": map[string]any{"slug": "client"},
-		"wordpress": map[string]any{"themes": []any{
+	metadata := &project.Manifest{
+		Project: project.Project{Slug: "client"},
+		WordPress: project.WordPress{Themes: []any{
 			map[string]any{"slug": "client-theme", "source": "repo", "path": "theme-src"},
 		}},
-		"env": map[string]any{"compose": "docker compose", "wordpress_service": "wp-app", "uploads_path": "uploads"},
+		Local: &project.Local{Compose: "docker compose", WordPressService: "wp-app", UploadsPath: "uploads"},
 	}
 	cfg, ok := loadEnvConfig(root, metadata)
 	if !ok {
@@ -15542,15 +15564,15 @@ func TestRenderEnvComposeMountsConfiguredRepoPlugins(t *testing.T) {
 			t.Fatalf("MkdirAll(plugin) error = %v", err)
 		}
 	}
-	metadata := map[string]any{
-		"project": map[string]any{"slug": "client"},
-		"wordpress": map[string]any{"theme_path": "theme", "plugins": []any{
+	metadata := &project.Manifest{
+		Project: project.Project{Slug: "client"},
+		WordPress: project.WordPress{Themes: []any{"twentytwentyfive"}, Plugins: []any{
 			map[string]any{"slug": "client-plugin", "source": "repo"},
 			map[string]any{"slug": "client-tools", "source": "repo"},
 			map[string]any{"slug": "missing-plugin", "source": "repo"},
 			"stream",
 		}},
-		"env": map[string]any{"compose": "docker compose", "wordpress_service": "wp-app", "theme_mount_slug": "theme-slot", "uploads_path": "uploads"},
+		Local: &project.Local{Compose: "docker compose", WordPressService: "wp-app", UploadsPath: "uploads"},
 	}
 	cfg, ok := loadEnvConfig(root, metadata)
 	if !ok {
@@ -15583,10 +15605,10 @@ func TestEnsureManagedEnvUsesConfiguredDockerImages(t *testing.T) {
 	}
 
 	root := t.TempDir()
-	metadata := map[string]any{
-		"project":   map[string]any{"slug": "client"},
-		"wordpress": map[string]any{"theme_path": "theme", "theme_slug": "theme"},
-		"env":       map[string]any{"compose": "docker compose", "wordpress_service": "wordpress", "cli_service": "cli", "theme_mount_slug": "theme", "uploads_path": "uploads"},
+	metadata := &project.Manifest{
+		Project:   project.Project{Slug: "client"},
+		WordPress: project.WordPress{Themes: []any{map[string]any{"slug": "theme", "source": "repo", "path": "theme"}}},
+		Local:     &project.Local{Compose: "docker compose", WordPressService: "wordpress", UploadsPath: "uploads"},
 	}
 	cfg, ok := loadEnvConfig(root, metadata)
 	if !ok {
@@ -15739,12 +15761,12 @@ func TestLoadEnvConfigUsesEnvBlock(t *testing.T) {
 	if err := os.MkdirAll(filepath.Join(root, "theme-src"), 0o755); err != nil {
 		t.Fatalf("MkdirAll(theme-src) error = %v", err)
 	}
-	metadata := map[string]any{
-		"project": map[string]any{"slug": "client", "name": "Client"},
-		"wordpress": map[string]any{"themes": []any{
+	metadata := &project.Manifest{
+		Project: project.Project{Slug: "client"},
+		WordPress: project.WordPress{Themes: []any{
 			map[string]any{"slug": "theme", "source": "repo", "path": "theme-src"},
 		}},
-		"env": map[string]any{"compose": "env compose", "wordpress_service": "env-wp", "cli_service": "env-cli", "theme_mount_slug": "env-theme", "uploads_path": "env-uploads"},
+		Local: &project.Local{Compose: "env compose", WordPressService: "env-wp", UploadsPath: "env-uploads"},
 	}
 	cfg, ok := loadEnvConfig(root, metadata)
 	if !ok {
@@ -15755,9 +15777,6 @@ func TestLoadEnvConfigUsesEnvBlock(t *testing.T) {
 	}
 	if got, want := cfg.WordpressService, "env-wp"; got != want {
 		t.Fatalf("WordpressService = %q, want %q", got, want)
-	}
-	if got, want := cfg.CliService, "env-cli"; got != want {
-		t.Fatalf("CliService = %q, want %q", got, want)
 	}
 	if got, want := cfg.ThemeMountSlug, "theme"; got != want {
 		t.Fatalf("ThemeMountSlug = %q, want %q", got, want)
@@ -15816,13 +15835,16 @@ func TestRunThemeTaskPreservesPassthroughSeparator(t *testing.T) {
 		t.Fatalf("MkdirAll(theme) error = %v", err)
 	}
 	project := map[string]any{
-		"version":   1,
-		"project":   map[string]any{"slug": "client", "name": "Client", "type": "wordpress-theme"},
-		"wordpress": map[string]any{"deploy_unit": "theme", "theme_slug": "theme", "theme_path": "theme"},
-		"env":       map[string]any{"compose": "docker compose", "wordpress_service": "wordpress", "cli_service": "cli", "theme_mount_slug": "theme", "uploads_path": "uploads"},
-		"tasks": map[string]any{
-			"capture": map[string]any{"description": "Capture passthrough args", "run": []any{"sh", "-c", "printf '%s\n' \"$@\" > \"$CAPTURE_FILE\"", "sh"}},
-		},
+		"version": 2,
+		"project": map[string]any{"slug": "client", "password_version": 0},
+		"wordpress": map[string]any{"themes": []any{map[string]any{
+			"slug":   "theme",
+			"source": "repo",
+			"path":   "theme",
+			"tasks": map[string]any{
+				"capture": map[string]any{"description": "Capture passthrough args", "run": []any{"sh", "-c", "printf '%s\n' \"$@\" > \"$CAPTURE_FILE\"", "sh"}},
+			},
+		}}},
 	}
 	projectData, err := json.MarshalIndent(project, "", "  ")
 	if err != nil {
@@ -15959,10 +15981,9 @@ func TestRunEnvPasswordPrintsCurrentProjectAdminPassword(t *testing.T) {
 		t.Fatalf("Mkdir(.git) error = %v", err)
 	}
 	project := map[string]any{
-		"version":   1,
-		"project":   map[string]any{"slug": "foobar", "name": "FooBar"},
-		"wordpress": map[string]any{"theme_path": "theme", "theme_slug": "theme"},
-		"env":       map[string]any{"compose": "docker compose", "wordpress_service": "wordpress", "cli_service": "cli", "theme_mount_slug": "theme", "uploads_path": "uploads"},
+		"version":   2,
+		"project":   map[string]any{"slug": "foobar", "password_version": 0},
+		"wordpress": map[string]any{"themes": []any{map[string]any{"slug": "theme", "source": "repo", "path": "theme"}}},
 	}
 	data, err := json.MarshalIndent(project, "", "  ")
 	if err != nil {
@@ -16000,10 +16021,9 @@ func TestRunEnvPasswordUsesProjectPasswordVersion(t *testing.T) {
 		t.Fatalf("Mkdir(.git) error = %v", err)
 	}
 	project := map[string]any{
-		"version":   1,
+		"version":   2,
 		"project":   map[string]any{"slug": "foobar", "password_version": 3},
-		"wordpress": map[string]any{"theme_path": "theme", "theme_slug": "theme"},
-		"env":       map[string]any{"compose": "docker compose", "wordpress_service": "wordpress", "cli_service": "cli", "theme_mount_slug": "theme", "uploads_path": "uploads"},
+		"wordpress": map[string]any{"themes": []any{map[string]any{"slug": "theme", "source": "repo", "path": "theme"}}},
 	}
 	data, err := json.MarshalIndent(project, "", "  ")
 	if err != nil {
@@ -16041,10 +16061,9 @@ func TestRunEnvPasswordPrintsRequestedPassword(t *testing.T) {
 		t.Fatalf("Mkdir(.git) error = %v", err)
 	}
 	project := map[string]any{
-		"version":   1,
+		"version":   2,
 		"project":   map[string]any{"slug": "foobar", "password_version": 3},
-		"wordpress": map[string]any{"theme_path": "theme", "theme_slug": "theme"},
-		"env":       map[string]any{"compose": "docker compose", "wordpress_service": "wordpress", "cli_service": "cli", "theme_mount_slug": "theme", "uploads_path": "uploads"},
+		"wordpress": map[string]any{"themes": []any{map[string]any{"slug": "theme", "source": "repo", "path": "theme"}}},
 	}
 	data, err := json.MarshalIndent(project, "", "  ")
 	if err != nil {
@@ -16094,10 +16113,9 @@ func TestRunEnvPasswordPrintsRequestedRemotePassword(t *testing.T) {
 		t.Fatalf("Mkdir(.git) error = %v", err)
 	}
 	project := map[string]any{
-		"version":   1,
+		"version":   2,
 		"project":   map[string]any{"slug": "local", "password_version": 9},
-		"wordpress": map[string]any{"theme_path": "theme", "theme_slug": "theme"},
-		"env":       map[string]any{"compose": "docker compose", "wordpress_service": "wordpress", "cli_service": "cli", "theme_mount_slug": "theme", "uploads_path": "uploads"},
+		"wordpress": map[string]any{"themes": []any{map[string]any{"slug": "theme", "source": "repo", "path": "theme"}}},
 		"remotes":   map[string]any{"production": "client-app1-linode:staging"},
 	}
 	data, err := json.MarshalIndent(project, "", "  ")
@@ -16148,7 +16166,7 @@ func TestRunEnvPasswordRejectsMultipleRemotes(t *testing.T) {
 	if err := os.Mkdir(filepath.Join(repoRoot, ".git"), 0o755); err != nil {
 		t.Fatalf("Mkdir(.git) error = %v", err)
 	}
-	if err := os.WriteFile(filepath.Join(repoRoot, "nf.json"), []byte("{\n  \"version\": 1,\n  \"env\": {\"compose\": \"docker compose\", \"wordpress_service\": \"wordpress\", \"cli_service\": \"cli\", \"theme_mount_slug\": \"theme\", \"uploads_path\": \"uploads\"}\n}\n"), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(repoRoot, "nf.json"), []byte("{\n  \"version\": 2,\n  \"project\": {\"slug\": \"client\", \"password_version\": 0},\n  \"wordpress\": {\"themes\": [\"twentytwentyfive\"]}\n}\n"), 0o644); err != nil {
 		t.Fatalf("WriteFile(nf.json) error = %v", err)
 	}
 	oldwd, err := os.Getwd()
@@ -16176,8 +16194,8 @@ func TestRunEnvThemesListReadsWordPressThemes(t *testing.T) {
 		t.Fatalf("Mkdir(.git) error = %v", err)
 	}
 	project := map[string]any{
-		"version": 1,
-		"project": map[string]any{"slug": "client", "name": "Client"},
+		"version": 2,
+		"project": map[string]any{"slug": "client", "password_version": 0},
 		"wordpress": map[string]any{"themes": []any{
 			"twentytwentyfive",
 			map[string]any{"slug": "acf-theme", "source": "cache", "auto_update": true, "note": "Paid theme"},
@@ -16213,8 +16231,8 @@ func TestRunEnvThemesListReadsWordPressThemes(t *testing.T) {
 }
 
 func TestLoadWordPressThemeSpecsAllowsNoRepoTheme(t *testing.T) {
-	themes, err := loadWordPressThemeSpecs(map[string]any{
-		"wordpress": map[string]any{"themes": []any{
+	themes, err := loadWordPressThemeSpecs(&project.Manifest{
+		WordPress: project.WordPress{Themes: []any{
 			"twentytwentyfive",
 			map[string]any{"slug": "paid-parent", "source": "cache", "auto_update": true},
 		}},
@@ -16239,8 +16257,8 @@ func TestRunEnvThemesListRejectsEmptyThemes(t *testing.T) {
 		t.Fatalf("Mkdir(.git) error = %v", err)
 	}
 	project := map[string]any{
-		"version":   1,
-		"project":   map[string]any{"slug": "client", "name": "Client"},
+		"version":   2,
+		"project":   map[string]any{"slug": "client", "password_version": 0},
 		"wordpress": map[string]any{"themes": []any{}},
 	}
 	data, err := json.MarshalIndent(project, "", "  ")
@@ -16278,8 +16296,8 @@ func TestRunEnvThemesAddUpdatesProjectMetadata(t *testing.T) {
 		t.Fatalf("Mkdir(theme) error = %v", err)
 	}
 	project := map[string]any{
-		"version":   1,
-		"project":   map[string]any{"slug": "client", "name": "Client"},
+		"version":   2,
+		"project":   map[string]any{"slug": "client", "password_version": 0},
 		"wordpress": map[string]any{"themes": []any{"twentytwentyfive"}},
 	}
 	data, err := json.MarshalIndent(project, "", "  ")
@@ -16322,93 +16340,25 @@ func TestRunEnvThemesAddUpdatesProjectMetadata(t *testing.T) {
 	}
 }
 
-func TestRunEnvThemesAddRepairsEmptyThemeList(t *testing.T) {
-	repoRoot := t.TempDir()
-	if err := os.Mkdir(filepath.Join(repoRoot, ".git"), 0o755); err != nil {
-		t.Fatalf("Mkdir(.git) error = %v", err)
+func TestProjectManifestRejectsOldAndInvalidSchemas(t *testing.T) {
+	tests := map[string]string{
+		"v1":                   `{"version":1,"project":{"slug":"client","password_version":0},"wordpress":{"themes":["twentytwentyfive"]}}`,
+		"missing version":      `{"project":{"slug":"client","password_version":0},"wordpress":{"themes":["twentytwentyfive"]}}`,
+		"non-2 version":        `{"version":3,"project":{"slug":"client","password_version":0},"wordpress":{"themes":["twentytwentyfive"]}}`,
+		"legacy top-level env": `{"version":2,"project":{"slug":"client","password_version":0},"wordpress":{"themes":["twentytwentyfive"]},"env":{}}`,
+		"legacy theme fields":  `{"version":2,"project":{"slug":"client","password_version":0},"wordpress":{"themes":["twentytwentyfive"],"theme_slug":"client"}}`,
+		"empty themes":         `{"version":2,"project":{"slug":"client","password_version":0},"wordpress":{"themes":[]}}`,
 	}
-	project := map[string]any{
-		"version":   1,
-		"project":   map[string]any{"slug": "client", "name": "Client"},
-		"wordpress": map[string]any{"themes": []any{}},
-	}
-	data, err := json.MarshalIndent(project, "", "  ")
-	if err != nil {
-		t.Fatalf("MarshalIndent(project) error = %v", err)
-	}
-	projectPath := filepath.Join(repoRoot, "nf.json")
-	if err := os.WriteFile(projectPath, append(data, '\n'), 0o644); err != nil {
-		t.Fatalf("WriteFile(nf.json) error = %v", err)
-	}
-	oldwd, err := os.Getwd()
-	if err != nil {
-		t.Fatalf("Getwd() error = %v", err)
-	}
-	if err := os.Chdir(repoRoot); err != nil {
-		t.Fatalf("Chdir() error = %v", err)
-	}
-	t.Cleanup(func() { _ = os.Chdir(oldwd) })
-
-	if got := Run([]string{"theme", "add", "twentytwentyfive"}); got != 0 {
-		t.Fatalf("Run(theme add) = %d, want 0", got)
-	}
-	updated, err := os.ReadFile(projectPath)
-	if err != nil {
-		t.Fatalf("ReadFile(nf.json) error = %v", err)
-	}
-	if text := string(updated); !strings.Contains(text, `"twentytwentyfive"`) {
-		t.Fatalf("nf.json missing added theme:\n%s", text)
-	}
-}
-
-func TestRunEnvThemesAddMigratesLegacyThemeMetadata(t *testing.T) {
-	repoRoot := t.TempDir()
-	if err := os.Mkdir(filepath.Join(repoRoot, ".git"), 0o755); err != nil {
-		t.Fatalf("Mkdir(.git) error = %v", err)
-	}
-	if err := os.Mkdir(filepath.Join(repoRoot, "theme"), 0o755); err != nil {
-		t.Fatalf("Mkdir(theme) error = %v", err)
-	}
-	project := map[string]any{
-		"version":   1,
-		"project":   map[string]any{"slug": "client", "name": "Client"},
-		"wordpress": map[string]any{"theme_slug": "client", "theme_path": "theme"},
-		"env":       map[string]any{"theme_mount_slug": "theme", "uploads_path": "uploads"},
-	}
-	data, err := json.MarshalIndent(project, "", "  ")
-	if err != nil {
-		t.Fatalf("MarshalIndent(project) error = %v", err)
-	}
-	projectPath := filepath.Join(repoRoot, "nf.json")
-	if err := os.WriteFile(projectPath, append(data, '\n'), 0o644); err != nil {
-		t.Fatalf("WriteFile(nf.json) error = %v", err)
-	}
-	oldwd, err := os.Getwd()
-	if err != nil {
-		t.Fatalf("Getwd() error = %v", err)
-	}
-	if err := os.Chdir(repoRoot); err != nil {
-		t.Fatalf("Chdir() error = %v", err)
-	}
-	t.Cleanup(func() { _ = os.Chdir(oldwd) })
-
-	if got := Run([]string{"theme", "add", "twentytwentyfive"}); got != 0 {
-		t.Fatalf("Run(theme add) = %d, want 0", got)
-	}
-	updated, err := os.ReadFile(projectPath)
-	if err != nil {
-		t.Fatalf("ReadFile(nf.json) error = %v", err)
-	}
-	text := string(updated)
-	for _, want := range []string{`"themes": [`, `"slug": "client"`, `"source": "repo"`, `"path": "theme"`, `"twentytwentyfive"`} {
-		if !strings.Contains(text, want) {
-			t.Fatalf("nf.json missing %q:\n%s", want, text)
-		}
-	}
-	for _, stale := range []string{`"theme_slug"`, `"theme_path"`, `"theme_mount_slug"`} {
-		if strings.Contains(text, stale) {
-			t.Fatalf("nf.json still contains legacy %s:\n%s", stale, text)
-		}
+	for name, fixture := range tests {
+		t.Run(name, func(t *testing.T) {
+			root := t.TempDir()
+			if err := os.WriteFile(config.ProjectFile(root), []byte(fixture+"\n"), 0o644); err != nil {
+				t.Fatalf("WriteFile(nf.json) error = %v", err)
+			}
+			if _, err := project.Load(root); err == nil {
+				t.Fatal("project.Load() error = nil, want schema rejection")
+			}
+		})
 	}
 }
 
@@ -16421,8 +16371,8 @@ func TestRunEnvThemesAddRejectsSecondRepoTheme(t *testing.T) {
 		t.Fatalf("Mkdir(other-theme) error = %v", err)
 	}
 	project := map[string]any{
-		"version": 1,
-		"project": map[string]any{"slug": "client", "name": "Client"},
+		"version": 2,
+		"project": map[string]any{"slug": "client", "password_version": 0},
 		"wordpress": map[string]any{"themes": []any{
 			map[string]any{"slug": "client", "source": "repo", "path": "theme"},
 		}},
@@ -16459,8 +16409,8 @@ func TestRunEnvThemesActivateMovesThemeToTop(t *testing.T) {
 		t.Fatalf("Mkdir(.git) error = %v", err)
 	}
 	project := map[string]any{
-		"version": 1,
-		"project": map[string]any{"slug": "client", "name": "Client"},
+		"version": 2,
+		"project": map[string]any{"slug": "client", "password_version": 0},
 		"wordpress": map[string]any{"themes": []any{
 			map[string]any{"slug": "client", "source": "repo", "path": "theme"},
 			"twentytwentyfive",
@@ -16521,8 +16471,8 @@ func TestRunEnvThemesRemoveRejectsLastTheme(t *testing.T) {
 		t.Fatalf("Mkdir(.git) error = %v", err)
 	}
 	project := map[string]any{
-		"version":   1,
-		"project":   map[string]any{"slug": "client", "name": "Client"},
+		"version":   2,
+		"project":   map[string]any{"slug": "client", "password_version": 0},
 		"wordpress": map[string]any{"themes": []any{"twentytwentyfive"}},
 	}
 	data, err := json.MarshalIndent(project, "", "  ")
@@ -16616,9 +16566,9 @@ func TestRunEnvPluginsListReadsWordPressPlugins(t *testing.T) {
 		t.Fatalf("Mkdir(.git) error = %v", err)
 	}
 	project := map[string]any{
-		"version": 1,
-		"project": map[string]any{"slug": "client", "name": "Client"},
-		"wordpress": map[string]any{"theme_path": "theme", "theme_slug": "theme", "plugins": []any{
+		"version": 2,
+		"project": map[string]any{"slug": "client", "password_version": 0},
+		"wordpress": map[string]any{"themes": []any{"twentytwentyfive"}, "plugins": []any{
 			"stream",
 			map[string]any{"slug": "acf-pro", "source": "$NF_PLUGIN_ACF_PRO_ZIP", "activate": true},
 			map[string]any{"slug": "query-monitor", "activate": false},
@@ -16672,10 +16622,9 @@ func TestRunEnvPluginsAddUpdatesProjectMetadata(t *testing.T) {
 		t.Fatalf("Mkdir(.git) error = %v", err)
 	}
 	project := map[string]any{
-		"version":   1,
-		"project":   map[string]any{"slug": "client", "name": "Client"},
-		"wordpress": map[string]any{"theme_path": "theme", "theme_slug": "theme", "plugins": []any{"stream"}},
-		"env":       map[string]any{"compose": "docker compose", "wordpress_service": "wordpress", "cli_service": "cli", "theme_mount_slug": "theme", "uploads_path": "uploads"},
+		"version":   2,
+		"project":   map[string]any{"slug": "client", "password_version": 0},
+		"wordpress": map[string]any{"themes": []any{"twentytwentyfive"}, "plugins": []any{"stream"}},
 		"remotes":   map[string]any{},
 	}
 	data, err := json.MarshalIndent(project, "", "  ")
@@ -16708,7 +16657,7 @@ func TestRunEnvPluginsAddUpdatesProjectMetadata(t *testing.T) {
 		t.Fatalf("ReadFile(nf.json) error = %v", err)
 	}
 	text := string(updated)
-	for _, want := range []string{`"version": 1`, `"wordpress":`, `"plugins": [`, `"stream"`, `"slug": "acf-pro"`, `"source": "$NF_PLUGIN_ACF_PRO_ZIP"`, `"auto_update": false`} {
+	for _, want := range []string{`"version": 2`, `"wordpress":`, `"plugins": [`, `"stream"`, `"slug": "acf-pro"`, `"source": "$NF_PLUGIN_ACF_PRO_ZIP"`, `"auto_update": false`} {
 		if !strings.Contains(text, want) {
 			t.Fatalf("nf.json missing %q:\n%s", want, text)
 		}
@@ -16723,7 +16672,7 @@ func TestRunPluginsAddRepoScaffoldsMissingPlugin(t *testing.T) {
 	if err := os.Mkdir(filepath.Join(repoRoot, ".git"), 0o755); err != nil {
 		t.Fatalf("Mkdir(.git) error = %v", err)
 	}
-	if err := os.WriteFile(filepath.Join(repoRoot, "nf.json"), []byte("{\n  \"version\": 1,\n  \"project\": {\n    \"slug\": \"client\"\n  }\n}\n"), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(repoRoot, "nf.json"), []byte("{\n  \"version\": 2,\n  \"project\": {\"slug\": \"client\", \"password_version\": 0},\n  \"wordpress\": {\"themes\": [\"twentytwentyfive\"]}\n}\n"), 0o644); err != nil {
 		t.Fatalf("WriteFile(nf.json) error = %v", err)
 	}
 	oldwd, err := os.Getwd()
@@ -16753,7 +16702,7 @@ func TestRunPluginsAddRepoScaffoldsMissingPlugin(t *testing.T) {
 	if err != nil {
 		t.Fatalf("loadProjectMetadataOrError() error = %v", err)
 	}
-	plugins := mapMapAtPath(metadata, "wordpress")["plugins"].([]any)
+	plugins := metadata.WordPress.Plugins
 	plugin, ok := plugins[0].(map[string]any)
 	if !ok || plugin["slug"] != "client-plugin" || plugin["source"] != "repo" {
 		t.Fatalf("wordpress.plugins[0] = %#v, want repo plugin object", plugins[0])
@@ -16773,7 +16722,7 @@ func TestRunPluginsAddRepoLeavesExistingPluginDirectoryUntouched(t *testing.T) {
 	if err := os.WriteFile(existingFile, []byte("existing"), 0o644); err != nil {
 		t.Fatalf("WriteFile(existing plugin) error = %v", err)
 	}
-	if err := os.WriteFile(filepath.Join(repoRoot, "nf.json"), []byte("{\n  \"version\": 1,\n  \"project\": {\n    \"slug\": \"client\"\n  }\n}\n"), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(repoRoot, "nf.json"), []byte("{\n  \"version\": 2,\n  \"project\": {\"slug\": \"client\", \"password_version\": 0},\n  \"wordpress\": {\"themes\": [\"twentytwentyfive\"]}\n}\n"), 0o644); err != nil {
 		t.Fatalf("WriteFile(nf.json) error = %v", err)
 	}
 	oldwd, err := os.Getwd()
@@ -16805,7 +16754,7 @@ func TestRunEnvPluginsAddCreatesWordPressPlugins(t *testing.T) {
 	if err := os.Mkdir(filepath.Join(repoRoot, ".git"), 0o755); err != nil {
 		t.Fatalf("Mkdir(.git) error = %v", err)
 	}
-	if err := os.WriteFile(filepath.Join(repoRoot, "nf.json"), []byte("{\n  \"version\": 1,\n  \"project\": {\n    \"slug\": \"client\"\n  }\n}\n"), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(repoRoot, "nf.json"), []byte("{\n  \"version\": 2,\n  \"project\": {\"slug\": \"client\", \"password_version\": 0},\n  \"wordpress\": {\"themes\": [\"twentytwentyfive\"]}\n}\n"), 0o644); err != nil {
 		t.Fatalf("WriteFile(nf.json) error = %v", err)
 	}
 	oldwd, err := os.Getwd()
@@ -16824,7 +16773,7 @@ func TestRunEnvPluginsAddCreatesWordPressPlugins(t *testing.T) {
 	if err != nil {
 		t.Fatalf("loadProjectMetadataOrError() error = %v", err)
 	}
-	plugins := mapMapAtPath(metadata, "wordpress")["plugins"].([]any)
+	plugins := metadata.WordPress.Plugins
 	if len(plugins) != 1 || plugins[0] != "stream" {
 		t.Fatalf("wordpress.plugins = %#v, want [stream]", plugins)
 	}
@@ -16838,7 +16787,7 @@ func TestRunEnvPluginsAddManualPluginUpdatesProjectMetadata(t *testing.T) {
 	if err := os.Mkdir(filepath.Join(repoRoot, ".git"), 0o755); err != nil {
 		t.Fatalf("Mkdir(.git) error = %v", err)
 	}
-	if err := os.WriteFile(filepath.Join(repoRoot, "nf.json"), []byte("{\n  \"version\": 1,\n  \"project\": {\n    \"slug\": \"client\"\n  }\n}\n"), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(repoRoot, "nf.json"), []byte("{\n  \"version\": 2,\n  \"project\": {\"slug\": \"client\", \"password_version\": 0},\n  \"wordpress\": {\"themes\": [\"twentytwentyfive\"]}\n}\n"), 0o644); err != nil {
 		t.Fatalf("WriteFile(nf.json) error = %v", err)
 	}
 	oldwd, err := os.Getwd()
@@ -16857,7 +16806,7 @@ func TestRunEnvPluginsAddManualPluginUpdatesProjectMetadata(t *testing.T) {
 	if err != nil {
 		t.Fatalf("loadProjectMetadataOrError() error = %v", err)
 	}
-	plugins := mapMapAtPath(metadata, "wordpress")["plugins"].([]any)
+	plugins := metadata.WordPress.Plugins
 	if len(plugins) != 1 {
 		t.Fatalf("wordpress.plugins length = %d, want 1", len(plugins))
 	}
@@ -16877,7 +16826,7 @@ func TestRunEnvPluginsAddRejectsDuplicate(t *testing.T) {
 	if err := os.Mkdir(filepath.Join(repoRoot, ".git"), 0o755); err != nil {
 		t.Fatalf("Mkdir(.git) error = %v", err)
 	}
-	project := map[string]any{"version": 1, "project": map[string]any{"slug": "client"}, "wordpress": map[string]any{"plugins": []any{"stream"}}}
+	project := map[string]any{"version": 2, "project": map[string]any{"slug": "client", "password_version": 0}, "wordpress": map[string]any{"themes": []any{"twentytwentyfive"}, "plugins": []any{"stream"}}}
 	data, err := json.MarshalIndent(project, "", "  ")
 	if err != nil {
 		t.Fatalf("MarshalIndent(project) error = %v", err)
@@ -16909,7 +16858,7 @@ func TestRunEnvPluginsRemoveUpdatesProjectMetadata(t *testing.T) {
 	if err := os.Mkdir(filepath.Join(repoRoot, ".git"), 0o755); err != nil {
 		t.Fatalf("Mkdir(.git) error = %v", err)
 	}
-	project := map[string]any{"version": 1, "project": map[string]any{"slug": "client"}, "wordpress": map[string]any{"plugins": []any{"stream", map[string]any{"slug": "acf-pro", "source": "$NF_PLUGIN_ACF_PRO_ZIP"}}}}
+	project := map[string]any{"version": 2, "project": map[string]any{"slug": "client", "password_version": 0}, "wordpress": map[string]any{"themes": []any{"twentytwentyfive"}, "plugins": []any{"stream", map[string]any{"slug": "acf-pro", "source": "$NF_PLUGIN_ACF_PRO_ZIP"}}}}
 	data, err := json.MarshalIndent(project, "", "  ")
 	if err != nil {
 		t.Fatalf("MarshalIndent(project) error = %v", err)
@@ -16955,7 +16904,7 @@ func TestRunEnvPluginsRemoveRejectsMissing(t *testing.T) {
 	if err := os.Mkdir(filepath.Join(repoRoot, ".git"), 0o755); err != nil {
 		t.Fatalf("Mkdir(.git) error = %v", err)
 	}
-	project := map[string]any{"version": 1, "project": map[string]any{"slug": "client"}, "wordpress": map[string]any{"plugins": []any{"stream"}}}
+	project := map[string]any{"version": 2, "project": map[string]any{"slug": "client", "password_version": 0}, "wordpress": map[string]any{"themes": []any{"twentytwentyfive"}, "plugins": []any{"stream"}}}
 	data, err := json.MarshalIndent(project, "", "  ")
 	if err != nil {
 		t.Fatalf("MarshalIndent(project) error = %v", err)
@@ -16988,14 +16937,13 @@ func TestRunEnvPluginsInstallInstallsMissingAndActivatesInstalled(t *testing.T) 
 		t.Fatalf("Mkdir(.git) error = %v", err)
 	}
 	project := map[string]any{
-		"version": 1,
-		"project": map[string]any{"slug": "client", "name": "Client"},
-		"wordpress": map[string]any{"theme_path": "theme", "theme_slug": "theme", "plugins": []any{
+		"version": 2,
+		"project": map[string]any{"slug": "client", "password_version": 0},
+		"wordpress": map[string]any{"themes": []any{map[string]any{"slug": "theme", "source": "repo", "path": "theme"}}, "plugins": []any{
 			"stream",
 			map[string]any{"slug": "acf-pro", "source": "$NF_PLUGIN_ACF_PRO_ZIP", "activate": true},
 			map[string]any{"slug": "sitepress-multilingual-cms", "install": false, "note": "Install manually from wpml.org account"},
 		}},
-		"env": map[string]any{"compose": "docker compose", "wordpress_service": "wordpress", "cli_service": "cli", "theme_mount_slug": "theme", "uploads_path": "uploads"},
 	}
 	data, err := json.MarshalIndent(project, "", "  ")
 	if err != nil {
@@ -17069,10 +17017,9 @@ func TestRunEnvPluginsInstallUsesMountedRepoPluginSource(t *testing.T) {
 		t.Fatalf("WriteFile(plugin include) error = %v", err)
 	}
 	project := map[string]any{
-		"version":   1,
-		"project":   map[string]any{"slug": "client", "name": "Client"},
-		"wordpress": map[string]any{"theme_path": "theme", "theme_slug": "theme", "plugins": []any{map[string]any{"slug": "client-plugin", "source": "repo"}}},
-		"env":       map[string]any{"compose": "docker compose", "wordpress_service": "wordpress", "cli_service": "cli", "theme_mount_slug": "theme", "uploads_path": "uploads"},
+		"version":   2,
+		"project":   map[string]any{"slug": "client", "password_version": 0},
+		"wordpress": map[string]any{"themes": []any{"twentytwentyfive"}, "plugins": []any{map[string]any{"slug": "client-plugin", "source": "repo"}}},
 	}
 	data, err := json.MarshalIndent(project, "", "  ")
 	if err != nil {
@@ -17132,10 +17079,9 @@ func TestRunEnvPluginsCacheAddListShow(t *testing.T) {
 		t.Fatalf("Mkdir(.git) error = %v", err)
 	}
 	project := map[string]any{
-		"version":   1,
-		"project":   map[string]any{"slug": "client", "name": "Client"},
-		"wordpress": map[string]any{"theme_path": "theme", "theme_slug": "theme", "plugins": []any{}},
-		"env":       map[string]any{"compose": "docker compose", "wordpress_service": "wordpress", "cli_service": "cli", "theme_mount_slug": "theme", "uploads_path": "uploads"},
+		"version":   2,
+		"project":   map[string]any{"slug": "client", "password_version": 0},
+		"wordpress": map[string]any{"themes": []any{"twentytwentyfive"}, "plugins": []any{}},
 	}
 	data, err := json.MarshalIndent(project, "", "  ")
 	if err != nil {
@@ -17217,7 +17163,7 @@ func TestRunEnvPluginsCacheRemoveAliasDeletesCachedPlugin(t *testing.T) {
 	if err := os.Mkdir(filepath.Join(repoRoot, ".git"), 0o755); err != nil {
 		t.Fatalf("Mkdir(.git) error = %v", err)
 	}
-	project := map[string]any{"version": 1, "project": map[string]any{"slug": "client"}}
+	project := map[string]any{"version": 2, "project": map[string]any{"slug": "client", "password_version": 0}, "wordpress": map[string]any{"themes": []any{"twentytwentyfive"}}}
 	data, err := json.MarshalIndent(project, "", "  ")
 	if err != nil {
 		t.Fatalf("MarshalIndent(project) error = %v", err)
@@ -17257,10 +17203,9 @@ func TestRunEnvPluginsCacheSaveArchivesInstalledPlugin(t *testing.T) {
 		t.Fatalf("Mkdir(.git) error = %v", err)
 	}
 	project := map[string]any{
-		"version":   1,
-		"project":   map[string]any{"slug": "client", "name": "Client"},
-		"wordpress": map[string]any{"theme_path": "theme", "theme_slug": "theme", "plugins": []any{}},
-		"env":       map[string]any{"compose": "docker compose", "wordpress_service": "wordpress", "cli_service": "cli", "theme_mount_slug": "theme", "uploads_path": "uploads"},
+		"version":   2,
+		"project":   map[string]any{"slug": "client", "password_version": 0},
+		"wordpress": map[string]any{"themes": []any{"twentytwentyfive"}, "plugins": []any{}},
 	}
 	data, err := json.MarshalIndent(project, "", "  ")
 	if err != nil {
@@ -17323,10 +17268,9 @@ func TestRunEnvPluginsInstallUsesCachePluginSource(t *testing.T) {
 		t.Fatalf("Mkdir(.git) error = %v", err)
 	}
 	project := map[string]any{
-		"version":   1,
-		"project":   map[string]any{"slug": "client", "name": "Client"},
-		"wordpress": map[string]any{"theme_path": "theme", "theme_slug": "theme", "plugins": []any{map[string]any{"slug": "acf-pro", "source": "cache", "auto_update": false}}},
-		"env":       map[string]any{"compose": "docker compose", "wordpress_service": "wordpress", "cli_service": "cli", "theme_mount_slug": "theme", "uploads_path": "uploads"},
+		"version":   2,
+		"project":   map[string]any{"slug": "client", "password_version": 0},
+		"wordpress": map[string]any{"themes": []any{"twentytwentyfive"}, "plugins": []any{map[string]any{"slug": "acf-pro", "source": "cache", "auto_update": false}}},
 	}
 	data, err := json.MarshalIndent(project, "", "  ")
 	if err != nil {
@@ -17446,10 +17390,9 @@ func TestRunEnvPluginsInstallSkipsSatisfiedPlugins(t *testing.T) {
 		t.Fatalf("Mkdir(.git) error = %v", err)
 	}
 	project := map[string]any{
-		"version":   1,
-		"project":   map[string]any{"slug": "client", "name": "Client"},
-		"wordpress": map[string]any{"theme_path": "theme", "theme_slug": "theme", "plugins": []any{"stream"}},
-		"env":       map[string]any{"compose": "docker compose", "wordpress_service": "wordpress", "cli_service": "cli", "theme_mount_slug": "theme", "uploads_path": "uploads"},
+		"version":   2,
+		"project":   map[string]any{"slug": "client", "password_version": 0},
+		"wordpress": map[string]any{"themes": []any{"twentytwentyfive"}, "plugins": []any{"stream"}},
 	}
 	data, err := json.MarshalIndent(project, "", "  ")
 	if err != nil {
@@ -17507,10 +17450,9 @@ func TestRunEnvPluginsStatusShowsLocalConfiguredState(t *testing.T) {
 		t.Fatalf("Mkdir(.git) error = %v", err)
 	}
 	project := map[string]any{
-		"version":   1,
-		"project":   map[string]any{"slug": "client", "name": "Client"},
-		"wordpress": map[string]any{"theme_path": "theme", "theme_slug": "theme", "plugins": []any{"stream", map[string]any{"slug": "acf-pro", "source": "private/acf-pro.zip"}}},
-		"env":       map[string]any{"compose": "docker compose", "wordpress_service": "wordpress", "cli_service": "cli", "theme_mount_slug": "theme", "uploads_path": "uploads"},
+		"version":   2,
+		"project":   map[string]any{"slug": "client", "password_version": 0},
+		"wordpress": map[string]any{"themes": []any{"twentytwentyfive"}, "plugins": []any{"stream", map[string]any{"slug": "acf-pro", "source": "private/acf-pro.zip"}}},
 	}
 	data, err := json.MarshalIndent(project, "", "  ")
 	if err != nil {
@@ -17571,15 +17513,14 @@ func TestRunEnvPluginsDiffShowsLocalDrift(t *testing.T) {
 		t.Fatalf("Mkdir(.git) error = %v", err)
 	}
 	project := map[string]any{
-		"version": 1,
-		"project": map[string]any{"slug": "client", "name": "Client"},
-		"wordpress": map[string]any{"plugins": []any{
+		"version": 2,
+		"project": map[string]any{"slug": "client", "password_version": 0},
+		"wordpress": map[string]any{"themes": []any{"twentytwentyfive"}, "plugins": []any{
 			"stream",
 			"wp-crontrol",
 			map[string]any{"slug": "acf-pro", "source": "private/acf-pro.zip"},
 			map[string]any{"slug": "sitepress-multilingual-cms", "install": false, "note": "Install manually from wpml.org account"},
 		}},
-		"env": map[string]any{"compose": "docker compose", "wordpress_service": "wordpress", "cli_service": "cli", "theme_mount_slug": "theme", "uploads_path": "uploads"},
 	}
 	data, err := json.MarshalIndent(project, "", "  ")
 	if err != nil {
@@ -17704,7 +17645,7 @@ func TestRunEnvPluginsStatusRemoteShowsConfiguredState(t *testing.T) {
 	if err := os.Mkdir(filepath.Join(repoRoot, ".git"), 0o755); err != nil {
 		t.Fatalf("Mkdir(.git) error = %v", err)
 	}
-	project := map[string]any{"version": 1, "project": map[string]any{"slug": "client"}, "wordpress": map[string]any{"plugins": []any{"stream", map[string]any{"slug": "acf-pro", "source": "private/acf-pro.zip"}}}, "remotes": map[string]any{"production": "client-kinsta:live"}}
+	project := map[string]any{"version": 2, "project": map[string]any{"slug": "client", "password_version": 0}, "wordpress": map[string]any{"themes": []any{"twentytwentyfive"}, "plugins": []any{"stream", map[string]any{"slug": "acf-pro", "source": "private/acf-pro.zip"}}}, "remotes": map[string]any{"production": "client-kinsta:live"}}
 	data, err := json.MarshalIndent(project, "", "  ")
 	if err != nil {
 		t.Fatalf("MarshalIndent(project) error = %v", err)
@@ -17759,7 +17700,7 @@ func TestRunEnvPluginsDiffRemoteShowsDrift(t *testing.T) {
 	if err := os.Mkdir(filepath.Join(repoRoot, ".git"), 0o755); err != nil {
 		t.Fatalf("Mkdir(.git) error = %v", err)
 	}
-	project := map[string]any{"version": 1, "project": map[string]any{"slug": "client"}, "wordpress": map[string]any{"plugins": []any{"stream", "wp-crontrol"}}, "remotes": map[string]any{"production": "client-kinsta:live"}}
+	project := map[string]any{"version": 2, "project": map[string]any{"slug": "client", "password_version": 0}, "wordpress": map[string]any{"themes": []any{"twentytwentyfive"}, "plugins": []any{"stream", "wp-crontrol"}}, "remotes": map[string]any{"production": "client-kinsta:live"}}
 	data, err := json.MarshalIndent(project, "", "  ")
 	if err != nil {
 		t.Fatalf("MarshalIndent(project) error = %v", err)
@@ -17805,7 +17746,7 @@ func TestRunEnvPluginsInstallRemoteDryRunPrintsPlan(t *testing.T) {
 	if err := os.Mkdir(filepath.Join(repoRoot, ".git"), 0o755); err != nil {
 		t.Fatalf("Mkdir(.git) error = %v", err)
 	}
-	project := map[string]any{"version": 1, "project": map[string]any{"slug": "client"}, "wordpress": map[string]any{"plugins": []any{"stream", map[string]any{"slug": "query-monitor", "activate": false, "auto_update": false}, map[string]any{"slug": "acf-pro", "source": "private/acf-pro.zip"}}}, "remotes": map[string]any{"production": "client-kinsta:live"}}
+	project := map[string]any{"version": 2, "project": map[string]any{"slug": "client", "password_version": 0}, "wordpress": map[string]any{"themes": []any{"twentytwentyfive"}, "plugins": []any{"stream", map[string]any{"slug": "query-monitor", "activate": false, "auto_update": false}, map[string]any{"slug": "acf-pro", "source": "private/acf-pro.zip"}}}, "remotes": map[string]any{"production": "client-kinsta:live"}}
 	data, err := json.MarshalIndent(project, "", "  ")
 	if err != nil {
 		t.Fatalf("MarshalIndent(project) error = %v", err)
@@ -17854,7 +17795,7 @@ func TestRunEnvPluginsInstallRemoteUploadsLocalZipSource(t *testing.T) {
 	if err := os.WriteFile(localZip, []byte("zip"), 0o644); err != nil {
 		t.Fatalf("WriteFile(local zip) error = %v", err)
 	}
-	project := map[string]any{"version": 1, "project": map[string]any{"slug": "client"}, "wordpress": map[string]any{"plugins": []any{map[string]any{"slug": "acf-pro", "source": "private/acf-pro.zip"}}}, "remotes": map[string]any{"production": "client-kinsta:live"}}
+	project := map[string]any{"version": 2, "project": map[string]any{"slug": "client", "password_version": 0}, "wordpress": map[string]any{"themes": []any{"twentytwentyfive"}, "plugins": []any{map[string]any{"slug": "acf-pro", "source": "private/acf-pro.zip"}}}, "remotes": map[string]any{"production": "client-kinsta:live"}}
 	data, err := json.MarshalIndent(project, "", "  ")
 	if err != nil {
 		t.Fatalf("MarshalIndent(project) error = %v", err)
@@ -17941,7 +17882,7 @@ func TestRunEnvPluginsInstallRemotePackagesRepoPluginSource(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(pluginDir, "includes", "feature.php"), []byte("<?php\n"), 0o644); err != nil {
 		t.Fatalf("WriteFile(plugin include) error = %v", err)
 	}
-	project := map[string]any{"version": 1, "project": map[string]any{"slug": "client"}, "wordpress": map[string]any{"plugins": []any{map[string]any{"slug": "client-plugin", "source": "repo"}}}, "remotes": map[string]any{"production": "client-kinsta:live"}}
+	project := map[string]any{"version": 2, "project": map[string]any{"slug": "client", "password_version": 0}, "wordpress": map[string]any{"themes": []any{"twentytwentyfive"}, "plugins": []any{map[string]any{"slug": "client-plugin", "source": "repo"}}}, "remotes": map[string]any{"production": "client-kinsta:live"}}
 	data, err := json.MarshalIndent(project, "", "  ")
 	if err != nil {
 		t.Fatalf("MarshalIndent(project) error = %v", err)
@@ -18031,7 +17972,7 @@ func TestRunEnvPluginsInstallRemoteExecutesBootstrapScriptWithYes(t *testing.T) 
 	if err := os.Mkdir(filepath.Join(repoRoot, ".git"), 0o755); err != nil {
 		t.Fatalf("Mkdir(.git) error = %v", err)
 	}
-	project := map[string]any{"version": 1, "project": map[string]any{"slug": "client"}, "wordpress": map[string]any{"plugins": []any{map[string]any{"slug": "stream", "source": "$NF_PLUGIN_STREAM_ZIP"}}}, "remotes": map[string]any{"production": "client.app1-linode:live"}}
+	project := map[string]any{"version": 2, "project": map[string]any{"slug": "client", "password_version": 0}, "wordpress": map[string]any{"themes": []any{"twentytwentyfive"}, "plugins": []any{map[string]any{"slug": "stream", "source": "$NF_PLUGIN_STREAM_ZIP"}}}, "remotes": map[string]any{"production": "client.app1-linode:live"}}
 	data, err := json.MarshalIndent(project, "", "  ")
 	if err != nil {
 		t.Fatalf("MarshalIndent(project) error = %v", err)
@@ -18092,7 +18033,7 @@ func TestRunEnvPluginsInstallRemotePromptsBeforeExecution(t *testing.T) {
 	if err := os.Mkdir(filepath.Join(repoRoot, ".git"), 0o755); err != nil {
 		t.Fatalf("Mkdir(.git) error = %v", err)
 	}
-	project := map[string]any{"version": 1, "project": map[string]any{"slug": "client"}, "wordpress": map[string]any{"plugins": []any{"stream"}}, "remotes": map[string]any{"production": "client-kinsta:live"}}
+	project := map[string]any{"version": 2, "project": map[string]any{"slug": "client", "password_version": 0}, "wordpress": map[string]any{"themes": []any{"twentytwentyfive"}, "plugins": []any{"stream"}}, "remotes": map[string]any{"production": "client-kinsta:live"}}
 	data, err := json.MarshalIndent(project, "", "  ")
 	if err != nil {
 		t.Fatalf("MarshalIndent(project) error = %v", err)
@@ -18165,19 +18106,14 @@ func TestLoadEnvConfigAppliesPortOverrides(t *testing.T) {
 	if err := os.MkdirAll(filepath.Join(root, "theme"), 0o755); err != nil {
 		t.Fatalf("MkdirAll() error = %v", err)
 	}
-	metadata := map[string]any{
-		"project":   map[string]any{"slug": "client", "name": "Client"},
-		"wordpress": map[string]any{"theme_slug": "theme", "theme_path": "theme"},
-		"env": map[string]any{
-			"compose":           "docker compose",
-			"wordpress_service": "wordpress",
-			"cli_service":       "cli",
-			"theme_mount_slug":  "theme",
-			"uploads_path":      "uploads",
-			"ports": map[string]any{
-				"wordpress": 19111,
-				"mailpit":   19112,
-			},
+	metadata := &project.Manifest{
+		Project:   project.Project{Slug: "client"},
+		WordPress: project.WordPress{Themes: []any{map[string]any{"slug": "theme", "source": "repo", "path": "theme"}}},
+		Local: &project.Local{
+			Compose:          "docker compose",
+			WordPressService: "wordpress",
+			UploadsPath:      "uploads",
+			Ports:            &project.Ports{WordPress: 19111, Mailpit: 19112},
 		},
 	}
 	cfg, ok := loadEnvConfig(root, metadata)
@@ -18197,24 +18133,22 @@ func TestLoadEnvConfigFallsBackPerPortIndependently(t *testing.T) {
 	derivedWordpress, derivedMailpit, _ := envDerivedPorts("client")
 	for _, tc := range []struct {
 		name          string
-		envPorts      map[string]any
+		ports         project.Ports
 		wantWordpress int
 		wantMailpit   int
 	}{
-		{name: "wordpress override only", envPorts: map[string]any{"wordpress": 19111, "mailpit": 0}, wantWordpress: 19111, wantMailpit: derivedMailpit},
-		{name: "mailpit override only", envPorts: map[string]any{"wordpress": 0, "mailpit": 19112}, wantWordpress: derivedWordpress, wantMailpit: 19112},
+		{name: "wordpress override only", ports: project.Ports{WordPress: 19111}, wantWordpress: 19111, wantMailpit: derivedMailpit},
+		{name: "mailpit override only", ports: project.Ports{Mailpit: 19112}, wantWordpress: derivedWordpress, wantMailpit: 19112},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			metadata := map[string]any{
-				"project":   map[string]any{"slug": "client", "name": "Client"},
-				"wordpress": map[string]any{"theme_slug": "theme", "theme_path": "theme"},
-				"env": map[string]any{
-					"compose":           "docker compose",
-					"wordpress_service": "wordpress",
-					"cli_service":       "cli",
-					"theme_mount_slug":  "theme",
-					"uploads_path":      "uploads",
-					"ports":             tc.envPorts,
+			metadata := &project.Manifest{
+				Project:   project.Project{Slug: "client"},
+				WordPress: project.WordPress{Themes: []any{map[string]any{"slug": "theme", "source": "repo", "path": "theme"}}},
+				Local: &project.Local{
+					Compose:          "docker compose",
+					WordPressService: "wordpress",
+					UploadsPath:      "uploads",
+					Ports:            &tc.ports,
 				},
 			}
 			cfg, ok := loadEnvConfig(root, metadata)
@@ -18321,7 +18255,6 @@ func TestEnvCommandHelpersBuildExpectedArgs(t *testing.T) {
 		EnvDir:           filepath.Join("/data", "envs", "client"),
 		Compose:          "docker compose",
 		WordpressService: "wordpress",
-		CliService:       "cli",
 		ThemeMountSlug:   "theme",
 		UploadsPath:      "uploads",
 		ThemeSlug:        "client",
@@ -18428,10 +18361,10 @@ func TestEnsureManagedEnvWritesManagedFiles(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(root, "theme", "style.css"), []byte("/* demo */\n"), 0o644); err != nil {
 		t.Fatalf("WriteFile() error = %v", err)
 	}
-	metadata := map[string]any{
-		"project":   map[string]any{"slug": "client", "name": "Client"},
-		"wordpress": map[string]any{"theme_slug": "theme", "theme_path": "theme"},
-		"env":       map[string]any{"compose": "docker compose", "wordpress_service": "wordpress", "cli_service": "cli", "theme_mount_slug": "theme", "uploads_path": "uploads"},
+	metadata := &project.Manifest{
+		Project:   project.Project{Slug: "client"},
+		WordPress: project.WordPress{Themes: []any{map[string]any{"slug": "theme", "source": "repo", "path": "theme"}}},
+		Local:     &project.Local{Compose: "docker compose", WordPressService: "wordpress", UploadsPath: "uploads"},
 	}
 	cfg, ok := loadEnvConfig(root, metadata)
 	if !ok {
@@ -18493,10 +18426,9 @@ func TestRunEnvUpPrintsUnderlyingCommands(t *testing.T) {
 		t.Fatalf("WriteFile() error = %v", err)
 	}
 	project := map[string]any{
-		"version":   1,
-		"project":   map[string]any{"slug": "client-site", "name": "Client Site", "type": "wordpress-theme"},
-		"wordpress": map[string]any{"deploy_unit": "theme", "theme_slug": "theme", "theme_path": "theme"},
-		"env":       map[string]any{"compose": "docker compose", "wordpress_service": "wordpress", "cli_service": "cli", "theme_mount_slug": "theme", "uploads_path": "uploads"},
+		"version":   2,
+		"project":   map[string]any{"slug": "client-site", "password_version": 0},
+		"wordpress": map[string]any{"themes": []any{map[string]any{"slug": "theme", "source": "repo", "path": "theme"}}},
 	}
 	data, err := json.MarshalIndent(project, "", "  ")
 	if err != nil {
@@ -18567,10 +18499,9 @@ func TestRunEnvDownRemovesManagedUploadsSymlink(t *testing.T) {
 		t.Fatalf("MkdirAll(theme) error = %v", err)
 	}
 	project := map[string]any{
-		"version":   1,
-		"project":   map[string]any{"slug": "client-site", "name": "Client Site", "type": "wordpress-theme"},
-		"wordpress": map[string]any{"deploy_unit": "theme", "theme_slug": "theme", "theme_path": "theme"},
-		"env":       map[string]any{"compose": "docker compose", "wordpress_service": "wordpress", "cli_service": "cli", "theme_mount_slug": "theme", "uploads_path": "uploads"},
+		"version":   2,
+		"project":   map[string]any{"slug": "client-site", "password_version": 0},
+		"wordpress": map[string]any{"themes": []any{map[string]any{"slug": "theme", "source": "repo", "path": "theme"}}},
 	}
 	data, err := json.MarshalIndent(project, "", "  ")
 	if err != nil {
@@ -18650,10 +18581,9 @@ func TestRunEnvUpActivatesThemeWhenAlreadyInstalled(t *testing.T) {
 		t.Fatalf("WriteFile() error = %v", err)
 	}
 	project := map[string]any{
-		"version":   1,
-		"project":   map[string]any{"slug": "client-site", "name": "Client Site", "type": "wordpress-theme"},
-		"wordpress": map[string]any{"deploy_unit": "theme", "theme_slug": "theme", "theme_path": "theme"},
-		"env":       map[string]any{"compose": "docker compose", "wordpress_service": "wordpress", "cli_service": "cli", "theme_mount_slug": "theme", "uploads_path": "uploads"},
+		"version":   2,
+		"project":   map[string]any{"slug": "client-site", "password_version": 0},
+		"wordpress": map[string]any{"themes": []any{map[string]any{"slug": "theme", "source": "repo", "path": "theme"}}},
 	}
 	data, err := json.MarshalIndent(project, "", "  ")
 	if err != nil {
@@ -18728,15 +18658,18 @@ func TestRunEnvUpBootstrapsMissingThemeDependencies(t *testing.T) {
 		t.Fatalf("WriteFile(package.json) error = %v", err)
 	}
 	project := map[string]any{
-		"version":   1,
-		"project":   map[string]any{"slug": "client-site", "name": "Client Site", "type": "wordpress-theme"},
-		"wordpress": map[string]any{"deploy_unit": "theme", "theme_slug": "theme", "theme_path": "theme"},
-		"env":       map[string]any{"compose": "docker compose", "wordpress_service": "wordpress", "cli_service": "cli", "theme_mount_slug": "theme", "uploads_path": "uploads"},
-		"tasks": map[string]any{
-			"composer": map[string]any{"description": "Install Composer dependencies", "run": "mkdir -p theme/vendor && touch theme/vendor/autoload.php"},
-			"npm":      map[string]any{"description": "Install npm dependencies", "run": "mkdir -p theme/node_modules && touch theme/node_modules/.installed"},
-			"build":    map[string]any{"description": "Build theme assets", "run": "mkdir -p theme/dist && touch theme/dist/manifest.json"},
-		},
+		"version": 2,
+		"project": map[string]any{"slug": "client-site", "password_version": 0},
+		"wordpress": map[string]any{"themes": []any{map[string]any{
+			"slug":   "theme",
+			"source": "repo",
+			"path":   "theme",
+			"tasks": map[string]any{
+				"composer": map[string]any{"description": "Install Composer dependencies", "run": "mkdir -p theme/vendor && touch theme/vendor/autoload.php"},
+				"npm":      map[string]any{"description": "Install npm dependencies", "run": "mkdir -p theme/node_modules && touch theme/node_modules/.installed"},
+				"build":    map[string]any{"description": "Build theme assets", "run": "mkdir -p theme/dist && touch theme/dist/manifest.json"},
+			},
+		}}},
 	}
 	data, err := json.MarshalIndent(project, "", "  ")
 	if err != nil {
@@ -18795,10 +18728,9 @@ func TestRunEnvResetPrintsUnderlyingCommands(t *testing.T) {
 		t.Fatalf("WriteFile() error = %v", err)
 	}
 	project := map[string]any{
-		"version":   1,
-		"project":   map[string]any{"slug": "client-site", "name": "Client Site", "type": "wordpress-theme"},
-		"wordpress": map[string]any{"deploy_unit": "theme", "theme_slug": "theme", "theme_path": "theme"},
-		"env":       map[string]any{"compose": "docker compose", "wordpress_service": "wordpress", "cli_service": "cli", "theme_mount_slug": "theme", "uploads_path": "uploads"},
+		"version":   2,
+		"project":   map[string]any{"slug": "client-site", "password_version": 0},
+		"wordpress": map[string]any{"themes": []any{map[string]any{"slug": "theme", "source": "repo", "path": "theme"}}},
 	}
 	data, err := json.MarshalIndent(project, "", "  ")
 	if err != nil {
@@ -18888,15 +18820,9 @@ func TestRunThemePackageUsesThemeStyleVersionWhenPresent(t *testing.T) {
 		t.Fatalf("WriteFile() error = %v", err)
 	}
 	project := map[string]any{
-		"version":   1,
-		"project":   map[string]any{"slug": "client", "name": "Client", "type": "wordpress-theme"},
-		"wordpress": map[string]any{"deploy_unit": "theme", "theme_slug": "theme", "theme_path": "theme"},
-		"artifact":  map[string]any{"path": "release/client-v{version}.zip"},
-
-		"project_slug": "legacy-project",
-		"project_name": "Legacy Project",
-		"theme_slug":   "legacy-theme",
-		"theme_source": "legacy-theme",
+		"version":   2,
+		"project":   map[string]any{"slug": "client", "password_version": 0},
+		"wordpress": map[string]any{"themes": []any{map[string]any{"slug": "theme", "source": "repo", "path": "theme", "package": map[string]any{"output": "release/client-v{version}.zip"}}}},
 	}
 	projectData, err := json.MarshalIndent(project, "", "  ")
 	if err != nil {
@@ -18923,11 +18849,6 @@ func TestRunThemePackageUsesThemeStyleVersionWhenPresent(t *testing.T) {
 	if !strings.Contains(output, "Would package "+filepath.Join(workdir, "theme")+" -> "+filepath.Join(workdir, "release", "client-v2.0.0.zip")) {
 		t.Fatalf("Run() output = %q, want style.css version to win over package.json", output)
 	}
-	for _, unwanted := range []string{"legacy-theme", "legacy-project"} {
-		if strings.Contains(output, unwanted) {
-			t.Fatalf("Run() output unexpectedly contained %q: %s", unwanted, output)
-		}
-	}
 }
 
 func TestRunThemePackageUsesThemeSlugAsArchiveRoot(t *testing.T) {
@@ -18945,10 +18866,9 @@ func TestRunThemePackageUsesThemeSlugAsArchiveRoot(t *testing.T) {
 		t.Fatalf("WriteFile() error = %v", err)
 	}
 	project := map[string]any{
-		"version":   1,
-		"project":   map[string]any{"slug": "client", "name": "Client", "type": "wordpress-theme"},
-		"wordpress": map[string]any{"deploy_unit": "theme", "theme_slug": "client", "theme_path": "theme"},
-		"artifact":  map[string]any{"path": "dist/client-v{version}.zip"},
+		"version":   2,
+		"project":   map[string]any{"slug": "client", "password_version": 0},
+		"wordpress": map[string]any{"themes": []any{map[string]any{"slug": "client", "source": "repo", "path": "theme", "package": map[string]any{"output": "dist/client-v{version}.zip"}}}},
 	}
 	projectData, err := json.MarshalIndent(project, "", "  ")
 	if err != nil {
@@ -19029,10 +18949,9 @@ func TestRunThemePackageStagesProductionComposerDependencies(t *testing.T) {
 		}
 	}
 	project := map[string]any{
-		"version":   1,
-		"project":   map[string]any{"slug": "client", "name": "Client", "type": "wordpress-theme"},
-		"wordpress": map[string]any{"deploy_unit": "theme", "theme_slug": "client", "theme_path": "theme"},
-		"artifact":  map[string]any{"path": "dist/client-v{version}.zip"},
+		"version":   2,
+		"project":   map[string]any{"slug": "client", "password_version": 0},
+		"wordpress": map[string]any{"themes": []any{map[string]any{"slug": "client", "source": "repo", "path": "theme", "package": map[string]any{"output": "dist/client-v{version}.zip"}}}},
 	}
 	projectData, err := json.MarshalIndent(project, "", "  ")
 	if err != nil {
@@ -19121,10 +19040,9 @@ func TestRunThemePackageFailsWhenBuildOutputMissing(t *testing.T) {
 		t.Fatalf("WriteFile(package.json) error = %v", err)
 	}
 	project := map[string]any{
-		"version":   1,
-		"project":   map[string]any{"slug": "client", "name": "Client", "type": "wordpress-theme"},
-		"wordpress": map[string]any{"deploy_unit": "theme", "theme_slug": "client", "theme_path": "theme"},
-		"artifact":  map[string]any{"path": "dist/client-v{version}.zip"},
+		"version":   2,
+		"project":   map[string]any{"slug": "client", "password_version": 0},
+		"wordpress": map[string]any{"themes": []any{map[string]any{"slug": "client", "source": "repo", "path": "theme", "package": map[string]any{"output": "dist/client-v{version}.zip"}}}},
 	}
 	projectData, err := json.MarshalIndent(project, "", "  ")
 	if err != nil {
@@ -19181,10 +19099,9 @@ func TestRunThemePackageFallsBackToPackageVersionWhenStyleVersionMissing(t *test
 		t.Fatalf("WriteFile() error = %v", err)
 	}
 	project := map[string]any{
-		"version":   1,
-		"project":   map[string]any{"slug": "client", "name": "Client", "type": "wordpress-theme"},
-		"wordpress": map[string]any{"deploy_unit": "theme", "theme_slug": "theme", "theme_path": "theme"},
-		"artifact":  map[string]any{"path": "dist/client-v{version}.zip"},
+		"version":   2,
+		"project":   map[string]any{"slug": "client", "password_version": 0},
+		"wordpress": map[string]any{"themes": []any{map[string]any{"slug": "theme", "source": "repo", "path": "theme", "package": map[string]any{"output": "dist/client-v{version}.zip"}}}},
 	}
 	projectData, err := json.MarshalIndent(project, "", "  ")
 	if err != nil {
@@ -19228,10 +19145,9 @@ func TestRunThemePackageFailsWhenThemeVersionMissingFromStyleAndPackage(t *testi
 		t.Fatalf("WriteFile() error = %v", err)
 	}
 	project := map[string]any{
-		"version":   1,
-		"project":   map[string]any{"slug": "client", "name": "Client", "type": "wordpress-theme"},
-		"wordpress": map[string]any{"deploy_unit": "theme", "theme_slug": "theme", "theme_path": "theme"},
-		"artifact":  map[string]any{"path": "dist/client-v{version}.zip"},
+		"version":   2,
+		"project":   map[string]any{"slug": "client", "password_version": 0},
+		"wordpress": map[string]any{"themes": []any{map[string]any{"slug": "theme", "source": "repo", "path": "theme", "package": map[string]any{"output": "dist/client-v{version}.zip"}}}},
 	}
 	projectData, err := json.MarshalIndent(project, "", "  ")
 	if err != nil {
@@ -19337,7 +19253,7 @@ func TestRunEnvShowPrintsEnvInfo(t *testing.T) {
 	if err := os.Mkdir(filepath.Join(workdir, ".git"), 0o755); err != nil {
 		t.Fatalf("Mkdir() error = %v", err)
 	}
-	project := map[string]any{"version": 1, "project": map[string]any{"slug": "client", "name": "Client"}, "env": map[string]any{"compose": "docker compose", "wordpress_service": "wordpress", "cli_service": "cli", "theme_mount_slug": "theme", "uploads_path": "uploads", "admin_user": "cached-owner"}}
+	project := map[string]any{"version": 2, "project": map[string]any{"slug": "client", "password_version": 0}, "wordpress": map[string]any{"themes": []any{"twentytwentyfive"}}, "local": map[string]any{"admin_user": "cached-owner"}}
 	projectData, err := json.MarshalIndent(project, "", "  ")
 	if err != nil {
 		t.Fatalf("MarshalIndent() error = %v", err)
@@ -19414,9 +19330,10 @@ func TestRunEnvShowPrintsConfiguredRemoteURLs(t *testing.T) {
 		t.Fatalf("Mkdir() error = %v", err)
 	}
 	project := map[string]any{
-		"version": 1,
-		"project": map[string]any{"slug": "client", "name": "Client"},
-		"env":     map[string]any{"compose": "docker compose", "wordpress_service": "wordpress", "cli_service": "cli", "theme_mount_slug": "theme", "uploads_path": "uploads", "admin_user": "cached-owner"},
+		"version":   2,
+		"project":   map[string]any{"slug": "client", "password_version": 0},
+		"wordpress": map[string]any{"themes": []any{"twentytwentyfive"}},
+		"local":     map[string]any{"admin_user": "cached-owner"},
 		"remotes": map[string]any{
 			"staging": "client-app1-linode:staging",
 			"live":    "client-app1-linode:live",
@@ -19472,10 +19389,9 @@ func TestRunEnvShellRemoteUsesConfiguredRemote(t *testing.T) {
 		t.Fatalf("Mkdir(.git) error = %v", err)
 	}
 	project := map[string]any{
-		"version":   1,
-		"project":   map[string]any{"slug": "client", "name": "Client"},
-		"wordpress": map[string]any{"theme_path": "theme", "theme_slug": "theme"},
-		"env":       map[string]any{"compose": "docker compose", "wordpress_service": "wordpress", "theme_mount_slug": "theme", "uploads_path": "uploads"},
+		"version":   2,
+		"project":   map[string]any{"slug": "client", "password_version": 0},
+		"wordpress": map[string]any{"themes": []any{map[string]any{"slug": "theme", "source": "repo", "path": "theme"}}},
 		"remotes":   map[string]any{"production": "client-kinsta:live"},
 	}
 	projectData, err := json.MarshalIndent(project, "", "  ")
@@ -19541,10 +19457,9 @@ func TestRunEnvLogsRemoteUsesConfiguredRemote(t *testing.T) {
 		t.Fatalf("Mkdir(.git) error = %v", err)
 	}
 	project := map[string]any{
-		"version":   1,
-		"project":   map[string]any{"slug": "client", "name": "Client"},
-		"wordpress": map[string]any{"theme_path": "theme", "theme_slug": "theme"},
-		"env":       map[string]any{"compose": "docker compose", "wordpress_service": "wordpress", "theme_mount_slug": "theme", "uploads_path": "uploads"},
+		"version":   2,
+		"project":   map[string]any{"slug": "client", "password_version": 0},
+		"wordpress": map[string]any{"themes": []any{map[string]any{"slug": "theme", "source": "repo", "path": "theme"}}},
 		"remotes":   map[string]any{"production": "client-kinsta:live"},
 	}
 	projectData, err := json.MarshalIndent(project, "", "  ")
@@ -19620,7 +19535,7 @@ func TestRunEnvLogsExecutesLocalComposeLogs(t *testing.T) {
 	if err := os.Mkdir(filepath.Join(workdir, ".git"), 0o755); err != nil {
 		t.Fatalf("Mkdir(.git) error = %v", err)
 	}
-	project := map[string]any{"version": 1, "project": map[string]any{"slug": "client", "name": "Client"}, "wordpress": map[string]any{"theme_path": "theme", "theme_slug": "theme"}, "env": map[string]any{"compose": "docker compose", "wordpress_service": "wordpress", "theme_mount_slug": "theme", "uploads_path": "uploads"}}
+	project := map[string]any{"version": 2, "project": map[string]any{"slug": "client", "password_version": 0}, "wordpress": map[string]any{"themes": []any{map[string]any{"slug": "theme", "source": "repo", "path": "theme"}}}}
 	projectData, err := json.MarshalIndent(project, "", "  ")
 	if err != nil {
 		t.Fatalf("MarshalIndent() error = %v", err)
@@ -19680,7 +19595,7 @@ func TestRunEnvShellExecutesWordpressShell(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(workdir, "theme", "style.css"), []byte("/* demo */\n"), 0o644); err != nil {
 		t.Fatalf("WriteFile() error = %v", err)
 	}
-	project := map[string]any{"version": 1, "project": map[string]any{"slug": "client", "name": "Client"}, "wordpress": map[string]any{"theme_path": "theme", "theme_slug": "theme"}, "env": map[string]any{"compose": "docker compose", "wordpress_service": "wordpress", "cli_service": "cli", "theme_mount_slug": "theme", "uploads_path": "uploads"}}
+	project := map[string]any{"version": 2, "project": map[string]any{"slug": "client", "password_version": 0}, "wordpress": map[string]any{"themes": []any{map[string]any{"slug": "theme", "source": "repo", "path": "theme"}}}}
 	projectData, err := json.MarshalIndent(project, "", "  ")
 	if err != nil {
 		t.Fatalf("MarshalIndent() error = %v", err)

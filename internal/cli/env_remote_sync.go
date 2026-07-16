@@ -18,7 +18,7 @@ import (
 	"github.com/nonfiction/nf/internal/state"
 )
 
-func resolveEnvRemoteSyncTarget(action, remoteName string, metadata map[string]any) (envRemoteSyncTarget, error) {
+func resolveEnvRemoteSyncTarget(action, remoteName string, metadata *projectMetadata) (envRemoteSyncTarget, error) {
 	remoteName = strings.TrimSpace(remoteName)
 	if remoteName == "" {
 		return envRemoteSyncTarget{}, ProjectError{Msg: fmt.Sprintf("env %s requires a non-empty remote", action)}
@@ -113,7 +113,7 @@ func envRemoteSyncTargetFromSiteRecord(record map[string]any, remoteName, siteID
 	return target, nil
 }
 
-func cmdEnvRemoteSyncPlan(action, remoteName string, cfg envConfig, metadata map[string]any, opts envRemoteSyncOptions) int {
+func cmdEnvRemoteSyncPlan(action, remoteName string, cfg envConfig, metadata *projectMetadata, opts envRemoteSyncOptions) int {
 	if opts.execute && opts.dryRun {
 		fmt.Fprintln(os.Stderr, "Choose either --execute or --dry-run, not both.")
 		return 1

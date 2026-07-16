@@ -13,7 +13,18 @@ Configured WordPress themes live in `nf.json` under `wordpress.themes`. The list
       {
         "slug": "client",
         "source": "repo",
-        "path": "theme"
+        "path": "theme",
+        "package": {
+          "output": "dist/client-v{version}.zip"
+        },
+        "tasks": {
+          "build": "npm run build",
+          "lint": ["npm", "run", "lint"],
+          "dev": {
+            "description": "Start the theme development server",
+            "run": ["npm", "run", "dev"]
+          }
+        }
       },
       "twentytwentyfive",
       "twentytwentyfour",
@@ -121,9 +132,9 @@ nf theme build
 nf theme <task> -- <args>
 ```
 
-`nf theme tasks` lists project tasks from `nf.json`.
+`nf theme tasks` lists the tasks on the configured `source: "repo"` theme.
 
-String tasks run through `sh -lc` from the project root. Array tasks execute directly. The underlying command is printed before execution.
+Each task may be a shell string, an argv array, or an object with an optional `description` and a required `run` value in either form. String tasks run through `sh -lc` from the project root. Array tasks execute directly. The underlying command is printed before execution.
 
 ## Package a Release
 
@@ -148,9 +159,9 @@ nf theme package
 
 If `package.json` has a `build` script, packaging requires built files under `dist/` or `assets/dist/` and fails clearly when they are missing. Development-only files such as `node_modules`, editor config, PHP-CS-Fixer/PHPCS/PHPStan/Psalm config, npm manifests and lockfiles, and common frontend tooling config are excluded from the artifact.
 
-The zip root is the configured repo theme slug, not necessarily the local repo theme path basename.
+The zip root is the configured repo theme slug, not necessarily the local repo theme path basename. Set the repo theme's optional `package.output` to override the output path. When omitted, the output defaults to `dist/<project-slug>-v{version}.zip`.
 
-If `artifact.path` contains `{version}`, `nf` resolves it from:
+If `package.output` contains `{version}`, `nf` resolves it from:
 
 1. the repo theme `style.css` `Version:`
 2. the repo theme `package.json` `version`

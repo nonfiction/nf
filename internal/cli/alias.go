@@ -1,6 +1,6 @@
 package cli
 
-// Root-level WordPress docroot aliases backed by top-level nf.json aliases.
+// Root-level WordPress docroot aliases backed by wordpress.aliases in nf.json.
 
 import (
 	"fmt"
@@ -17,28 +17,17 @@ type aliasSpec struct {
 	Target string
 }
 
-func loadAliasSpecs(metadata map[string]any) ([]aliasSpec, error) {
-	value, ok := metadata["aliases"]
-	if !ok || value == nil {
-		return nil, nil
-	}
-	raw, ok := value.(map[string]any)
-	if !ok || raw == nil {
-		return nil, ProjectError{Msg: "nf.json aliases must be an object"}
-	}
+func loadAliasSpecs(metadata *projectMetadata) ([]aliasSpec, error) {
+	raw := metadata.WordPress.Aliases
 	specs := make([]aliasSpec, 0, len(raw))
 	for name, rawTarget := range raw {
 		aliasName, _, err := normalizeAliasName(name)
 		if err != nil {
-			return nil, ProjectError{Msg: fmt.Sprintf("nf.json aliases.%s: %s", name, err)}
+			return nil, ProjectError{Msg: fmt.Sprintf("nf.json wordpress.aliases.%s: %s", name, err)}
 		}
-		target, ok := rawTarget.(string)
-		if !ok {
-			return nil, ProjectError{Msg: fmt.Sprintf("nf.json aliases.%s must be a string target", name)}
-		}
-		target, err = normalizeAliasTarget(target)
+		target, err := normalizeAliasTarget(rawTarget)
 		if err != nil {
-			return nil, ProjectError{Msg: fmt.Sprintf("nf.json aliases.%s target: %s", name, err)}
+			return nil, ProjectError{Msg: fmt.Sprintf("nf.json wordpress.aliases.%s target: %s", name, err)}
 		}
 		specs = append(specs, aliasSpec{Alias: aliasName, Target: target})
 	}
@@ -46,21 +35,14 @@ func loadAliasSpecs(metadata map[string]any) ([]aliasSpec, error) {
 	return specs, nil
 }
 
-func projectAliases(metadata map[string]any, create bool) (map[string]any, error) {
-	value, ok := metadata["aliases"]
-	if !ok || value == nil {
+func projectAliases(metadata *projectMetadata, create bool) (map[string]string, error) {
+	if metadata.WordPress.Aliases == nil {
 		if !create {
 			return nil, nil
 		}
-		aliases := map[string]any{}
-		metadata["aliases"] = aliases
-		return aliases, nil
+		metadata.WordPress.Aliases = map[string]string{}
 	}
-	aliases, ok := value.(map[string]any)
-	if !ok || aliases == nil {
-		return nil, ProjectError{Msg: "nf.json aliases must be an object"}
-	}
-	return aliases, nil
+	return metadata.WordPress.Aliases, nil
 }
 
 func normalizeAliasName(value string) (string, string, error) {
@@ -132,7 +114,7 @@ func normalizeAliasTarget(value string) (string, error) {
 	return clean, nil
 }
 
-func cmdAliasesList(metadata map[string]any) int {
+func cmdAliasesList(metadata *projectMetadata) int {
 	specs, err := loadAliasSpecs(metadata)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, err)
@@ -174,7 +156,7 @@ func projectAliasCompletionNames() []string {
 	return values
 }
 
-func cmdAliasesAdd(root string, metadata map[string]any, aliasName, target string) int {
+func cmdAliasesAdd(root string, metadata *projectMetadata, aliasName, target string) int {
 	if _, err := loadAliasSpecs(metadata); err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		return 1
@@ -195,7 +177,7 @@ func cmdAliasesAdd(root string, metadata map[string]any, aliasName, target strin
 		return 1
 	}
 	if _, ok := aliases[aliasName]; ok {
-		fmt.Fprintf(os.Stderr, "nf.json aliases already contains /%s\n", aliasName)
+		fmt.Fprintf(os.Stderr, "nf.json wordpress.aliases already contains /%s\n", aliasName)
 		return 1
 	}
 	aliases[aliasName] = target
@@ -210,7 +192,7 @@ func cmdAliasesAdd(root string, metadata map[string]any, aliasName, target strin
 	return 0
 }
 
-func cmdAliasesRemove(root string, metadata map[string]any, aliasName string) int {
+func cmdAliasesRemove(root string, metadata *projectMetadata, aliasName string) int {
 	if _, err := loadAliasSpecs(metadata); err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		return 1
@@ -226,11 +208,11 @@ func cmdAliasesRemove(root string, metadata map[string]any, aliasName string) in
 		return 1
 	}
 	if aliases == nil {
-		fmt.Fprintf(os.Stderr, "nf.json aliases does not contain /%s\n", aliasName)
+		fmt.Fprintf(os.Stderr, "nf.json wordpress.aliases does not contain /%s\n", aliasName)
 		return 1
 	}
 	if _, ok := aliases[aliasName]; !ok {
-		fmt.Fprintf(os.Stderr, "nf.json aliases does not contain /%s\n", aliasName)
+		fmt.Fprintf(os.Stderr, "nf.json wordpress.aliases does not contain /%s\n", aliasName)
 		return 1
 	}
 	delete(aliases, aliasName)
@@ -242,7 +224,7 @@ func cmdAliasesRemove(root string, metadata map[string]any, aliasName string) in
 	return 0
 }
 
-func cmdAliasesStatusWithOptions(root string, metadata map[string]any, remoteName string) int {
+func cmdAliasesStatusWithOptions(root string, metadata *projectMetadata, remoteName string) int {
 	specs, err := loadAliasSpecs(metadata)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, err)
@@ -251,7 +233,7 @@ func cmdAliasesStatusWithOptions(root string, metadata map[string]any, remoteNam
 	if strings.TrimSpace(remoteName) == "" {
 		cfg, ok := loadEnvConfig(root, metadata)
 		if !ok {
-			fmt.Fprintln(os.Stderr, "Missing env metadata in nf.json. Run nf env up first.")
+			fmt.Fprintln(os.Stderr, "Invalid local project metadata in nf.json.")
 			return 1
 		}
 		return cmdAliasesStatusLocal(cfg, specs)
@@ -259,7 +241,7 @@ func cmdAliasesStatusWithOptions(root string, metadata map[string]any, remoteNam
 	return cmdAliasesStatusRemote(metadata, remoteName, specs)
 }
 
-func cmdAliasesSyncWithOptions(root string, metadata map[string]any, remoteName string) int {
+func cmdAliasesSyncWithOptions(root string, metadata *projectMetadata, remoteName string) int {
 	specs, err := loadAliasSpecs(metadata)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, err)
@@ -268,7 +250,7 @@ func cmdAliasesSyncWithOptions(root string, metadata map[string]any, remoteName 
 	if strings.TrimSpace(remoteName) == "" {
 		cfg, ok := loadEnvConfig(root, metadata)
 		if !ok {
-			fmt.Fprintln(os.Stderr, "Missing env metadata in nf.json. Run nf env up first.")
+			fmt.Fprintln(os.Stderr, "Invalid local project metadata in nf.json.")
 			return 1
 		}
 		return cmdAliasesSyncLocal(cfg, specs)
@@ -287,7 +269,7 @@ func cmdAliasesStatusLocal(cfg envConfig, specs []aliasSpec) int {
 	return 0
 }
 
-func cmdAliasesStatusRemote(metadata map[string]any, remoteName string, specs []aliasSpec) int {
+func cmdAliasesStatusRemote(metadata *projectMetadata, remoteName string, specs []aliasSpec) int {
 	target, err := resolveEnvRemoteSyncTarget("alias status", remoteName, metadata)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, err)
@@ -316,7 +298,7 @@ func cmdAliasesSyncLocal(cfg envConfig, specs []aliasSpec) int {
 	return 0
 }
 
-func cmdAliasesSyncRemote(metadata map[string]any, remoteName string, specs []aliasSpec) int {
+func cmdAliasesSyncRemote(metadata *projectMetadata, remoteName string, specs []aliasSpec) int {
 	target, err := resolveEnvRemoteSyncTarget("alias sync", remoteName, metadata)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, err)
