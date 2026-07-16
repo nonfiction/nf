@@ -703,6 +703,69 @@ Rules:
 * secrets, license keys, and private signed URLs must not be stored directly in `nf.json`
 * generated env scaffolding stays under `NF_DATA_HOME`, not in project repos
 
+### Planned shared artifact cache
+
+`nf` may support an optional SSH-backed team cache for private or paid plugin and theme zips. This is an artifact cache, not project metadata, provider inventory, or shared application state.
+
+Planned model:
+
+* the SSH host alias and remote base path belong in global config, never `nf.json`
+* SSH authentication remains in the user's SSH configuration; nf does not store SSH credentials
+* the remote layout mirrors the local cache layout at `plugins/<slug>/<slug>.zip` and `themes/<slug>/<slug>.zip`
+* `source: "cache"` remains explicit; nf must not silently fall back from a wordpress.org source to the shared cache
+* when an install explicitly requests `source: "cache"`, nf uses the local zip first and may hydrate a missing local zip from the configured shared cache
+* a zip missing from both local and shared caches remains an error
+* planned explicit operations are `plugin cache fetch/publish/list --remote` and equivalent `theme cache` operations
+* fetching is missing-only by default; publishing is explicit and does not happen automatically after local cache add/save
+* publishing a different artifact over an existing remote zip requires explicit replacement and confirmation
+* transfers use temporary files, SHA-256 verification, archive/path validation, and atomic rename
+* removing a local cache entry does not remove the shared artifact
+* if the shared server becomes the only durable copy of an artifact, it needs backup and version-retention policy beyond the cache feature itself
+
+### Planned plugin and theme pulls
+
+`nf` may support pulling one installed plugin or theme from a configured Kinsta or Linode repo remote back to the developer's machine. This is separate from `nf env pull`, which moves the database and mutable `wp-content`, and from shared artifact cache fetches, which copy an already-published zip between caches.
+
+Primary use cases:
+
+* refresh a local cache zip after a paid plugin or theme updates itself on a remote site
+* recover theme or plugin changes made directly on a remote site by a third-party developer
+* bring those remote source changes into a clean Git worktree for review, local testing, a normal commit, and a later explicit install or deploy
+
+Planned command shape:
+
+```text
+nf plugin pull [remote] [plugin]
+nf theme pull [remote] [theme]
+```
+
+Omitted values may use interactive selectors. Non-interactive execution requires an explicit remote and plugin or theme. The configured `source` determines the local destination:
+
+* `source: "cache"` downloads the installed remote directory, packages it under the configured slug, validates it, and atomically replaces the local cache zip
+* `source: "repo"` mirrors the installed remote directory into the configured repo source path so the resulting changes are visible to Git
+* other source types are rejected initially rather than guessing whether to mutate a cache or repo path
+
+Repo-source safety rules:
+
+* require the entire Git worktree to be clean before downloading or applying remote files
+* download into temporary local storage and validate the complete transfer before mutating the repo
+* recheck that the worktree is still clean immediately before applying the staged transfer
+* print an itemized plan showing additions, modifications, and deletions before execution
+* mirror remote additions, modifications, and deletions for deployable/runtime files
+* preserve local files and directories intentionally excluded by that resource's packaging rules, such as theme package manifests, lockfiles, development tooling config, and development-only directories
+* leave the worktree dirty after a successful pull; nf does not stage, commit, run build tasks, install, or deploy the result
+
+General transfer rules:
+
+* cache pulls do not require a clean Git worktree because they write only under `NF_DATA_HOME`
+* validate configured slugs and remote paths, reject unsafe symlinks or traversal, and keep transfers inside the expected `wp-content/plugins/<slug>` or `wp-content/themes/<slug>` directory
+* use temporary files/directories, archive validation, SHA-256 verification where an archive is produced, and atomic replacement of cache zips
+* show the selected project, provider, environment, remote path, local destination, source type, and execution mode in a reviewable preflight
+* support `--dry-run`; interactive execution prompts for confirmation, while non-interactive execution requires `--execute --yes --non-interactive`
+* do not update `nf.json`, plugin/theme activation state, licenses, or WordPress auto-update settings
+* do not automatically publish a newly pulled cache zip to the planned shared artifact cache; publishing remains a separate explicit operation
+* do not add generic plugin/theme `push` commands: remote `plugin/theme install` and `theme deploy` remain the outbound workflows
+
 Snapshots:
 
 * local env snapshots are stored under `NF_DATA_HOME/snapshots/local/<project-slug>/<snapshot-name>/`
@@ -859,10 +922,12 @@ Status:
 
 * [ ] improved interactive selectors
 * [ ] richer diagnostics for missing config/cache
+* [ ] optional SSH-backed shared plugin/theme artifact cache
+* [ ] remote-to-local plugin/theme pull workflows
 * [ ] release/update workflow
 * [ ] onboarding docs
 
-No separate shared state sync is planned. Shared truth comes from provider APIs, Kinsta API, each Linode target's `/var/lib/nf/sites.json`, and deterministic password derivation from the agreed `NF_PASSWORD_SALT` plus the repo-local `project.password_version` when non-zero.
+No separate shared state sync is planned. The optional shared artifact cache does not become project or provider truth. Shared truth comes from provider APIs, Kinsta API, each Linode target's `/var/lib/nf/sites.json`, and deterministic password derivation from the agreed `NF_PASSWORD_SALT` plus the repo-local `project.password_version` when non-zero.
 
 ## Non-goals for now
 
