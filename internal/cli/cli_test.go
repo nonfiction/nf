@@ -7411,6 +7411,177 @@ func TestSiteDomainPrimaryReadinessPlanChecksOnlyRequestedPrimary(t *testing.T) 
 	}
 }
 
+func TestRunSiteDomainKinstaPrimaryWaitsForRequestedRoutingChain(t *testing.T) {
+	stateDir := t.TempDir()
+	t.Setenv("NF_STATE_HOME", stateDir)
+	t.Setenv("KINSTA_API_KEY", "test-token")
+	if err := state.SaveStateRecords("sites", []map[string]any{{
+		"provider":          "kinsta",
+		"site_id":           "client.kinsta",
+		"env_id":            "client.kinsta:live",
+		"name":              "client",
+		"env":               "live",
+		"target":            "kinsta",
+		"hostname":          "client.kinsta.nonfiction.dev",
+		"url":               "https://client.kinsta.nonfiction.dev",
+		"internal_hostname": "client.kinsta.nonfiction.dev",
+		"internal_url":      "https://client.kinsta.nonfiction.dev",
+		"domains": []map[string]any{
+			{"name": "client.kinsta.nonfiction.dev", "role": "primary", "management": "internal", "status": "active", "domain_id": "kdom-internal"},
+			{"name": "client.com", "role": "secondary", "management": "external", "status": "pending", "domain_id": "kdom-apex"},
+			{"name": "www.client.com", "role": "secondary", "management": "external", "status": "active", "domain_id": "kdom-www"},
+			{"name": "client.kinsta.cloud", "role": "secondary", "management": "internal", "status": "active", "domain_id": "kdom-generated"},
+		},
+		"kinsta": map[string]any{"site_id": "ksite123", "environment_id": "kenv-live", "domain_id": "kdom-internal"},
+	}}); err != nil {
+		t.Fatalf("SaveStateRecords(sites) error = %v", err)
+	}
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		switch r.Method + " " + r.URL.Path {
+		case "GET /sites/environments/kenv-live/domains":
+			_ = json.NewEncoder(w).Encode(map[string]any{"environment": map[string]any{"site_domains": []map[string]any{
+				{"id": "kdom-internal", "name": "client.kinsta.nonfiction.dev", "is_primary": true, "is_verified": true},
+				{"id": "kdom-apex", "name": "client.com", "is_verified": true},
+				{"id": "kdom-www", "name": "www.client.com", "is_verified": true},
+				{"id": "kdom-generated", "name": "client.kinsta.cloud", "is_verified": true},
+			}}})
+		case "GET /sites/environments/domains/kdom-www/verification-records":
+			_ = json.NewEncoder(w).Encode(map[string]any{"site_domain": map[string]any{}})
+		case "GET /sites/environments/domains/kdom-apex/verification-records":
+			_ = json.NewEncoder(w).Encode(map[string]any{"site_domain": map[string]any{"pointing_records": []map[string]any{
+				{"name": "client.com", "type": "A", "content": "162.159.135.42"},
+				{"name": "www", "type": "CNAME", "content": "client.com"},
+			}}})
+		default:
+			t.Fatalf("unexpected Kinsta request: %s %s", r.Method, r.URL.Path)
+		}
+	}))
+	t.Cleanup(server.Close)
+	t.Setenv("KINSTA_BASE_URL", server.URL)
+
+	oldPrimary := kinstaPrimaryDomainFn
+	oldLookupHost := siteDomainLookupHostFn
+	oldLookupCNAME := siteDomainLookupCNAMEFn
+	oldHTTP := siteDomainHTTPStatusFn
+	oldHTTPS := siteDomainHTTPSStatusFn
+	oldTLS := siteDomainTLSStatusFn
+	launches := 0
+	kinstaPrimaryDomainFn = func(plan siteDomainPlan) (siteDomainProviderResult, error) {
+		launches++
+		return siteDomainProviderResult{}, nil
+	}
+	siteDomainLookupHostFn = func(host string) ([]string, error) {
+		switch host {
+		case "client.com", "www.client.com":
+			return []string{"159.203.49.164"}, nil
+		default:
+			return nil, fmt.Errorf("unexpected host lookup %s", host)
+		}
+	}
+	siteDomainLookupCNAMEFn = func(host string) (string, error) {
+		if host == "www.client.com" {
+			return "client.com.", nil
+		}
+		return "", fmt.Errorf("unexpected CNAME lookup %s", host)
+	}
+	siteDomainHTTPStatusFn = func(domain string) siteDomainHTTPCheckResult {
+		return siteDomainHTTPCheckResult{StatusCode: 301, Location: "https://www.client.com/"}
+	}
+	siteDomainHTTPSStatusFn = func(domain string) siteDomainHTTPCheckResult { return siteDomainHTTPCheckResult{StatusCode: 200} }
+	siteDomainTLSStatusFn = func(domain string) siteDomainTLSCheckResult {
+		return siteDomainTLSCheckResult{OK: true, NotAfter: time.Date(2026, 12, 31, 0, 0, 0, 0, time.UTC), Issuer: "Let's Encrypt"}
+	}
+	t.Cleanup(func() {
+		kinstaPrimaryDomainFn = oldPrimary
+		siteDomainLookupHostFn = oldLookupHost
+		siteDomainLookupCNAMEFn = oldLookupCNAME
+		siteDomainHTTPStatusFn = oldHTTP
+		siteDomainHTTPSStatusFn = oldHTTPS
+		siteDomainTLSStatusFn = oldTLS
+	})
+
+	var output string
+	stderr := captureStderr(t, func() {
+		output = captureStdout(t, func() {
+			if got := Run([]string{"domain", "primary", "client.kinsta:live", "www.client.com", "--no-search-replace", "--wait-interval", "1ns", "--wait-timeout", "1ns", "--execute", "--yes", "--non-interactive"}); got != 1 {
+				t.Fatalf("Run(domain primary Kinsta stale DNS) = %d, want 1", got)
+			}
+		})
+	})
+	if launches != 0 {
+		t.Fatalf("Kinsta primary launches = %d, want 0", launches)
+	}
+	for _, want := range []string{"[ok] CNAME", "name: www.client.com", "[pending] A", "name: client.com", "expected: 162.159.135.42", "got 159.203.49.164", "Overall: pending"} {
+		if !strings.Contains(output, want) {
+			t.Fatalf("Kinsta stale DNS output missing %q:\n%s", want, output)
+		}
+	}
+	if !strings.Contains(stderr, "Timed out waiting for public domain checks; primary was not changed.") {
+		t.Fatalf("stderr = %q", stderr)
+	}
+}
+
+func TestKinstaRoutingExpectationsUseOnlyRequestedBareDomain(t *testing.T) {
+	records := kinsta.DomainRecords{Pointing: []kinsta.DNSRecord{
+		{Name: "client.com", Type: "A", Content: "162.159.135.42"},
+		{Name: "www", Type: "CNAME", Content: "client.com"},
+	}}
+	expectations, complete := kinstaRoutingExpectations("client.com", []kinstaOwnedDomainRecords{{Domain: "client.com", Records: records}})
+	if !complete {
+		t.Fatal("bare-domain routing expectations are incomplete")
+	}
+	want := []siteDomainExpectedDNSRecord{{Domain: "client.com", Type: "A", Name: "client.com", Value: "162.159.135.42"}}
+	if !reflect.DeepEqual(expectations, want) {
+		t.Fatalf("bare-domain expectations = %#v, want %#v", expectations, want)
+	}
+}
+
+func TestKinstaRoutingRecordNameHandlesRelativeSelectedAndChildNames(t *testing.T) {
+	for _, test := range []struct {
+		owner string
+		name  string
+		want  string
+	}{
+		{owner: "www.client.com", name: "www", want: "www.client.com"},
+		{owner: "client.com", name: "www", want: "www.client.com"},
+		{owner: "client.com", name: "@", want: "client.com"},
+		{owner: "client.com", name: "client.com", want: "client.com"},
+	} {
+		if got := kinstaRoutingRecordName(test.owner, test.name); got != test.want {
+			t.Errorf("kinstaRoutingRecordName(%q, %q) = %q, want %q", test.owner, test.name, got, test.want)
+		}
+	}
+}
+
+func TestKinstaInternalRoutingExpectationUsesGeneratedDomainAddresses(t *testing.T) {
+	oldLookupHost := siteDomainLookupHostFn
+	siteDomainLookupHostFn = func(host string) ([]string, error) {
+		if host != "client.kinsta.cloud" {
+			return nil, fmt.Errorf("unexpected host lookup %s", host)
+		}
+		return []string{"162.159.134.42", "162.159.135.42"}, nil
+	}
+	t.Cleanup(func() { siteDomainLookupHostFn = oldLookupHost })
+
+	expectation, ok := kinstaInternalRoutingExpectation("client.kinsta.nonfiction.dev", []kinsta.Domain{{Name: "client.kinsta.cloud"}})
+	if !ok {
+		t.Fatal("internal Kinsta routing expectation was not derived")
+	}
+	want := siteDomainExpectedDNSRecord{Domain: "client.kinsta.nonfiction.dev", Type: "A", Name: "client.kinsta.nonfiction.dev", Values: []string{"162.159.134.42", "162.159.135.42"}}
+	if !reflect.DeepEqual(expectation, want) {
+		t.Fatalf("internal routing expectation = %#v, want %#v", expectation, want)
+	}
+
+	siteDomainLookupHostFn = func(host string) ([]string, error) {
+		return []string{"162.159.135.42"}, nil
+	}
+	if result := checkSiteDomainDNSRecord(expectation); !result.OK {
+		t.Fatalf("internal DNS result = %#v, want any generated Kinsta address to match", result)
+	}
+}
+
 func TestRunSiteDomainLinodePrimaryTimeoutDoesNotLaunch(t *testing.T) {
 	configDir := t.TempDir()
 	stateDir := t.TempDir()

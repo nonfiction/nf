@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"net/netip"
 	"os"
+	"sort"
 	"strings"
 	"time"
 
@@ -22,6 +23,7 @@ type siteDomainExpectedDNSRecord struct {
 	Type   string
 	Name   string
 	Value  string
+	Values []string
 }
 
 type siteDomainHTTPCheckResult struct {
@@ -387,6 +389,20 @@ func checkKinstaSiteDomainProvider(plan siteDomainPlan) (siteDomainProviderCheck
 			out.KinstaVerificationPending = true
 		}
 		routingLabel, routingReady, routingKnown := kinstaDomainPointingState(domain)
+		expectations := kinstaDNSExpectations(name, records)
+		routingEvidence := true
+		if plan.Primary {
+			expectations, routingEvidence = kinstaPrimaryRoutingExpectations(ctx, client, plan, domains, domain, records)
+			if routingKnown && routingReady {
+				routingEvidence = true
+			}
+			if !routingEvidence && !(routingKnown && routingReady) {
+				out.Ready = false
+				out.KinstaPointingPending = true
+				routingLabel = "pending"
+				routingKnown = true
+			}
+		}
 		fields = append(fields, siteDomainField("routing", kinstaDomainRoutingDescription(routingLabel, routingKnown)))
 		if routingKnown && !routingReady {
 			out.Ready = false
@@ -395,13 +411,158 @@ func checkKinstaSiteDomainProvider(plan siteDomainPlan) (siteDomainProviderCheck
 			out.KinstaPointingPending = true
 		}
 		providerStatus := "ok"
-		if (verificationKnown && !verificationReady) || (routingKnown && !routingReady) {
+		if (verificationKnown && !verificationReady) || (routingKnown && !routingReady) || !routingEvidence {
 			providerStatus = "pending"
 		}
 		out.Description = append(out.Description, siteDomainStatusBlockLines(providerStatus, name, fields...)...)
-		out.DNSRecords = append(out.DNSRecords, kinstaDNSExpectations(name, records)...)
+		out.DNSRecords = append(out.DNSRecords, expectations...)
 	}
 	return out, nil
+}
+
+type kinstaOwnedDomainRecords struct {
+	Domain  string
+	Records kinsta.DomainRecords
+}
+
+func kinstaPrimaryRoutingExpectations(ctx context.Context, client *kinsta.Client, plan siteDomainPlan, domains []kinsta.Domain, selected kinsta.Domain, selectedRecords kinsta.DomainRecords) ([]siteDomainExpectedDNSRecord, bool) {
+	requested := normalizeDomainName(domainName(selected))
+	owned := []kinstaOwnedDomainRecords{{Domain: requested, Records: selectedRecords}}
+	if expectations, complete := kinstaRoutingExpectations(requested, owned); complete {
+		return expectations, true
+	}
+	for _, owner := range kinstaRoutingRecordOwners(domains, requested) {
+		if sameKinstaDomain(owner, selected) {
+			continue
+		}
+		records, err := kinstaDomainRecords(ctx, client, owner.ID)
+		if err != nil {
+			continue
+		}
+		owned = append(owned, kinstaOwnedDomainRecords{Domain: domainName(owner), Records: records})
+		if expectations, complete := kinstaRoutingExpectations(requested, owned); complete {
+			return expectations, true
+		}
+	}
+	if normalizeDomainName(plan.InternalHostname) == requested {
+		if expectation, ok := kinstaInternalRoutingExpectation(requested, domains); ok {
+			return []siteDomainExpectedDNSRecord{expectation}, true
+		}
+	}
+	return nil, false
+}
+
+func kinstaRoutingRecordOwners(domains []kinsta.Domain, requested string) []kinsta.Domain {
+	requested = normalizeDomainName(requested)
+	owners := []kinsta.Domain{}
+	for _, domain := range domains {
+		name := normalizeDomainName(domainName(domain))
+		if name == "" || name == requested || !strings.HasSuffix(requested, "."+name) {
+			continue
+		}
+		owners = append(owners, domain)
+	}
+	sort.SliceStable(owners, func(i, j int) bool {
+		return len(normalizeDomainName(domainName(owners[i]))) > len(normalizeDomainName(domainName(owners[j])))
+	})
+	return owners
+}
+
+func kinstaRoutingExpectations(requested string, owned []kinstaOwnedDomainRecords) ([]siteDomainExpectedDNSRecord, bool) {
+	requested = normalizeDomainName(requested)
+	byName := map[string][]siteDomainExpectedDNSRecord{}
+	for _, owner := range owned {
+		ownerName := normalizeDomainName(owner.Domain)
+		for _, record := range owner.Records.Pointing {
+			recordType := strings.ToUpper(strings.TrimSpace(record.RecordTypeName()))
+			if recordType != "A" && recordType != "AAAA" && recordType != "CNAME" {
+				continue
+			}
+			name := kinstaRoutingRecordName(ownerName, record.RecordName())
+			value := strings.TrimSpace(record.RecordContent())
+			if name == "" || value == "" {
+				continue
+			}
+			if recordType == "CNAME" {
+				value = kinstaRoutingRecordName(ownerName, value)
+			}
+			byName[name] = append(byName[name], siteDomainExpectedDNSRecord{Domain: requested, Type: recordType, Name: name, Value: value})
+		}
+	}
+
+	expectations := []siteDomainExpectedDNSRecord{}
+	seenRecords := map[string]bool{}
+	visiting := map[string]bool{}
+	var walk func(string) bool
+	walk = func(name string) bool {
+		name = normalizeDomainName(name)
+		if name == "" || visiting[name] {
+			return false
+		}
+		visiting[name] = true
+		defer delete(visiting, name)
+		complete := false
+		for _, record := range byName[name] {
+			key := record.Type + "\x00" + record.Name + "\x00" + record.Value
+			if !seenRecords[key] {
+				expectations = append(expectations, record)
+				seenRecords[key] = true
+			}
+			switch record.Type {
+			case "A", "AAAA":
+				complete = true
+			case "CNAME":
+				target := normalizeDomainName(record.Value)
+				if strings.HasSuffix(target, ".kinsta.cloud") || walk(target) {
+					complete = true
+				}
+			}
+		}
+		return complete
+	}
+	if !walk(requested) {
+		return nil, false
+	}
+	return expectations, len(expectations) > 0
+}
+
+func kinstaRoutingRecordName(owner, name string) string {
+	owner = normalizeDomainName(owner)
+	name = normalizeDomainName(name)
+	if name == "@" || name == "" {
+		return owner
+	}
+	if label, _, ok := strings.Cut(owner, "."); ok && name == label {
+		return owner
+	}
+	if owner == "" || name == owner || strings.HasSuffix(name, "."+owner) || strings.Contains(name, ".") {
+		return name
+	}
+	return name + "." + owner
+}
+
+func kinstaInternalRoutingExpectation(requested string, domains []kinsta.Domain) (siteDomainExpectedDNSRecord, bool) {
+	for _, domain := range domains {
+		generated := normalizeDomainName(domainName(domain))
+		if generated == "" || !strings.HasSuffix(generated, ".kinsta.cloud") {
+			continue
+		}
+		addresses, err := siteDomainLookupHostFn(generated)
+		if err != nil || len(addresses) == 0 {
+			continue
+		}
+		values := []string{}
+		for _, address := range addresses {
+			ip := net.ParseIP(strings.TrimSpace(address))
+			if ip != nil && ip.To4() != nil {
+				values = append(values, ip.String())
+			}
+		}
+		if len(values) > 0 {
+			return siteDomainExpectedDNSRecord{Domain: requested, Type: "A", Name: requested, Values: values}, true
+		}
+	}
+	return siteDomainExpectedDNSRecord{}, false
 }
 
 func kinstaDomainRecords(ctx context.Context, client *kinsta.Client, domainID string) (kinsta.DomainRecords, error) {
@@ -706,7 +867,7 @@ func printSiteDomainDNSCheck(plan siteDomainPlan, records []siteDomainExpectedDN
 		}
 		printSiteDomainStatusBlock(siteDomainStatus(result.OK), record.Type,
 			siteDomainField("name", record.Name),
-			siteDomainField("expected", record.Value),
+			siteDomainField("expected", siteDomainExpectedDNSValue(record)),
 			siteDomainField("result", result.Result),
 			siteDomainField("detail", result.Detail),
 		)
@@ -909,6 +1070,7 @@ func bundledCloudflareIPRanges() siteDomainIPRangeSet {
 }
 
 func checkSiteDomainDNSRecord(record siteDomainExpectedDNSRecord) siteDomainDNSCheckResult {
+	expected := siteDomainExpectedDNSValues(record)
 	switch strings.ToUpper(record.Type) {
 	case "A", "AAAA":
 		hosts, err := siteDomainLookupHostFn(record.Name)
@@ -916,8 +1078,10 @@ func checkSiteDomainDNSRecord(record siteDomainExpectedDNSRecord) siteDomainDNSC
 			return siteDomainDNSCheckResult{Result: "lookup failed", Detail: err.Error()}
 		}
 		for _, host := range hosts {
-			if strings.TrimSpace(host) == record.Value {
-				return siteDomainDNSCheckResult{OK: true, Result: "matches expected"}
+			for _, value := range expected {
+				if strings.TrimSpace(host) == value {
+					return siteDomainDNSCheckResult{OK: true, Result: "matches expected"}
+				}
 			}
 		}
 		return siteDomainDNSCheckResult{Result: "unexpected DNS value", Detail: "got " + strings.Join(hosts, ", ")}
@@ -927,8 +1091,10 @@ func checkSiteDomainDNSRecord(record siteDomainExpectedDNSRecord) siteDomainDNSC
 			return siteDomainDNSCheckResult{Result: "lookup failed", Detail: err.Error()}
 		}
 		for _, value := range values {
-			if value == record.Value {
-				return siteDomainDNSCheckResult{OK: true, Result: "matches expected"}
+			for _, want := range expected {
+				if value == want {
+					return siteDomainDNSCheckResult{OK: true, Result: "matches expected"}
+				}
 			}
 		}
 		return siteDomainDNSCheckResult{Result: "unexpected DNS value", Detail: "got " + strings.Join(values, ", ")}
@@ -937,13 +1103,29 @@ func checkSiteDomainDNSRecord(record siteDomainExpectedDNSRecord) siteDomainDNSC
 		if err != nil {
 			return siteDomainDNSCheckResult{Result: "lookup failed", Detail: err.Error()}
 		}
-		if normalizeDNSName(value) == normalizeDNSName(record.Value) {
-			return siteDomainDNSCheckResult{OK: true, Result: "matches expected"}
+		for _, want := range expected {
+			if normalizeDNSName(value) == normalizeDNSName(want) {
+				return siteDomainDNSCheckResult{OK: true, Result: "matches expected"}
+			}
 		}
 		return siteDomainDNSCheckResult{Result: "unexpected DNS value", Detail: "got " + strings.TrimSuffix(value, ".")}
 	default:
 		return siteDomainDNSCheckResult{Result: "record type is not checked"}
 	}
+}
+
+func siteDomainExpectedDNSValues(record siteDomainExpectedDNSRecord) []string {
+	if len(record.Values) > 0 {
+		return record.Values
+	}
+	if strings.TrimSpace(record.Value) != "" {
+		return []string{strings.TrimSpace(record.Value)}
+	}
+	return nil
+}
+
+func siteDomainExpectedDNSValue(record siteDomainExpectedDNSRecord) string {
+	return strings.Join(siteDomainExpectedDNSValues(record), ", ")
 }
 
 func normalizeDNSName(value string) string {

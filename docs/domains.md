@@ -154,7 +154,7 @@ Execute:
 nf domain primary production www.client.com --no-proxy --search-replace --execute --yes
 ```
 
-`nf domain primary` launches one external domain as the primary public hostname for the env. By default it approves once up front, polls the same readiness checks as `nf domain check`, then launches immediately when checks pass without a second prompt.
+`nf domain primary` launches one eligible cached domain as the primary hostname for the env, including the nf-managed Kinsta identity domain. By default it approves once up front, polls readiness, then launches immediately when checks pass without a second prompt. Kinsta promotion follows the DNS route for the requested hostname only: a bare domain checks its own address, a CNAME such as `www` checks the CNAME and its required address chain, and an nf-managed identity domain checks against the environment's Kinsta routing. Reachable HTTP and valid TLS on an old host do not satisfy this routing gate.
 
 Every primary launch requires an explicit search-replace choice. Use `--search-replace` for the normal final launch from an internal or old hostname to the public hostname. Use `--no-search-replace` only when content URLs are already correct or old-domain references should intentionally remain.
 
