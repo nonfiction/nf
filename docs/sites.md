@@ -83,7 +83,7 @@ nf site shell client.linode1:live
 nf site wp client.linode1:live -- plugin list
 ```
 
-These commands validate the cache, print the SSH or wp-cli command preview, then execute the remote command.
+These commands validate the cache, print the SSH or WP-CLI command preview, then execute the remote command.
 
 From a project repo with a configured remote, use the env commands:
 

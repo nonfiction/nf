@@ -166,7 +166,7 @@ func runRemote(argv []string) int {
 }
 
 func runSite(argv []string) int {
-	if len(argv) == 0 || argv[0] == "help" {
+	if len(argv) == 0 || argv[0] == "help" || argv[0] == "--help" || argv[0] == "-h" {
 		return runSiteHelp()
 	}
 	argv[0] = cliCommandAlias(argv[0])
@@ -246,6 +246,9 @@ func runSite(argv []string) int {
 		}
 		return cmdSiteExport(envRef, opts)
 	case "snapshot":
+		if len(argv) == 2 && (argv[1] == "help" || argv[1] == "--help" || argv[1] == "-h") {
+			return runSiteSnapshotHelp()
+		}
 		if len(argv) == 2 && (argv[1] == "list" || argv[1] == "ls") {
 			return cmdSiteSnapshotList()
 		}

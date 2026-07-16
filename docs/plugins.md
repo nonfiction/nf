@@ -64,13 +64,14 @@ nf plugin cache add acf-pro ~/Downloads/acf-pro.zip
 nf plugin cache save sitepress-multilingual-cms
 nf plugin cache list
 nf plugin cache show acf-pro
+nf plugin cache remove acf-pro
 ```
 
 `nf plugin cache add <plugin> <zip>` copies an existing zip into `$NF_DATA_HOME/plugins/<slug>/<slug>.zip`.
 
 `nf plugin cache save <plugin>` archives the plugin currently installed in the local WordPress env and stores it as the cached zip. Use this as a local recovery aid for paid/manual plugins that were installed through WordPress admin or vendor updaters.
 
-`nf plugin cache list` and `nf plugin cache show <plugin>` inspect the local cache. Cached zips are local machine state, not project metadata, and are not committed.
+`nf plugin cache list` and `nf plugin cache show <plugin>` inspect the local cache. `nf plugin cache remove <plugin>` deletes one cached plugin zip. Cached zips are local machine state, not project metadata, and are not committed.
 
 ## Compare Config to WordPress State
 

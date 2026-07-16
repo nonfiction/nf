@@ -91,9 +91,9 @@ func printHelpLinesWithIndent(lines []helpLine, indent string, maxWidth int) {
 func runProviderHelp() int {
 	printCommandHelp("provider", []helpLine{
 		{"list, ls", "list provider integrations"},
-		{"check [provider]", "run provider healthcheck"},
 		{"show [provider]", "show cached provider metadata"},
-	}, helpSection{"Options", []helpLine{
+		{"check [provider]", "check provider access and refresh cached metadata"},
+	}, helpSection{"Show/Check Options", []helpLine{
 		{"--json", "print JSON output"},
 	}})
 	return 0
@@ -102,26 +102,40 @@ func runProviderHelp() int {
 func runTargetHelp() int {
 	printCommandHelp("target", []helpLine{
 		{"list, ls", "list deployable targets"},
-		{"show <target>", "show a deployable target"},
-		{"password [target]", "show target password only"},
+		{"show [target]", "show a deployable target"},
+		{"password [target]", "print only a target password"},
 		{"refresh", "refresh targets from providers"},
 		{},
 		{"add linode <name>", "create a Linode target"},
-		{"remove, rm <target>", "remove an empty Linode target"},
-	}, helpSection{"Password Options", []helpLine{
+		{"remove, rm [target]", "remove an empty Linode target"},
+	}, helpSection{"Show Options", []helpLine{
+		{"--json", "print JSON output"},
+	}}, helpSection{"Password Options", []helpLine{
 		{"--root", "show the target root password"},
 		{"--db", "show the target database UI password"},
 	}}, helpSection{"Add Options", []helpLine{
 		{"--region <region>", "Linode region"},
 		{"--type <type>", "Linode instance type"},
 		{"--image <image>", "Linode image"},
+		{"--ubuntu-version <version>", "Ubuntu LTS version"},
+		{"--firewall <managed|none>", "Linode cloud firewall mode"},
+		{"--firewall-id <id>", "existing Linode cloud firewall ID"},
 		{"--db-user <user>", "database UI/admin user"},
 		{"--ssh-user <user>", "standard SSH user"},
+		{"--ssh-key-source <source>", "linode-profile or file"},
+		{"--ssh-key-label <label>", "filter Linode profile SSH keys by label"},
+		{"--ssh-key-id <id>", "filter Linode profile SSH keys by ID"},
+		{"--all-linode-ssh-keys", "use all Linode profile SSH keys"},
+		{"--ssh-public-key-file <path>", "SSH public key file"},
+		{"--write-cloud-init <path>", "write cloud-init preview to a file"},
+		{"--show-cloud-init", "print the cloud-init preview"},
+		{"--wait", "wait for SSH, TLS, and health checks"},
+		{"--no-wait", "skip SSH, TLS, and health checks"},
 	}}, helpSection{"Mutation Options", []helpLine{
-		{"--dry-run", "show the mutation plan only"},
-		{"--execute", "execute the mutation plan"},
-		{"--yes", "confirm mutation execution"},
-		{"--non-interactive", "fail instead of prompting"},
+		{"--dry-run", "show the plan without making changes"},
+		{"--execute", "apply the plan"},
+		{"--yes", "skip confirmation"},
+		{"--non-interactive", "do not prompt"},
 	}})
 	return 0
 }
@@ -129,50 +143,78 @@ func runTargetHelp() int {
 func runRemoteHelp() int {
 	printGroupHelp("remote", []helpLine{
 		{"list, ls", "list repo remotes"},
-		{"show <name>", "show a repo remote"},
+		{"show [name]", "show a repo remote"},
 		{},
 		{"add [name] [env]", "add a repo remote"},
-		{"remove, rm <name>", "remove a repo remote"},
+		{"remove, rm [name]", "remove a repo remote"},
 	})
 	return 0
 }
 
 func runSiteHelp() int {
 	printCommandHelp("site", []helpLine{
-		{"list, ls", "list sites or remote envs"},
+		{"list, ls [--envs [site]]", "list sites or remote envs"},
 		{"show [site|env]", "show a site or remote env"},
 		{"refresh", "refresh local site cache"},
 		{"cache [site|env]", "clear cache for a remote env"},
 		{"repair [site|env]", "repair provider platform files"},
 		{},
-		{"shell, sh <env>", "shell into a remote env"},
-		{"wp <env> -- <args>", "run wp-cli against a remote env"},
-		{"password [site|env]", "show a site password only"},
+		{"shell, sh [env]", "shell into a remote env"},
+		{"wp <env> -- <args>", "run WP-CLI against a remote env"},
+		{"password [site|env]", "print only a site password"},
 		{},
-		{"snapshot [env|list|remove|prune]", "manage remote snapshots"},
+		{"snapshot [env]", "create a remote snapshot"},
+		{"snapshot list, ls", "list downloaded remote snapshots"},
+		{"snapshot remove, rm [name]", "delete a downloaded remote snapshot"},
+		{"snapshot prune", "delete older downloaded remote snapshots"},
 		{"export [env]", "create a full WordPress handoff export"},
 		{"basicauth <action> [site|env]", "manage provider basic auth"},
 		{},
 		{"add <target> <site>", "create a live env"},
-		{"staging <action> <site>", "manage staging env lifecycle"},
+		{"staging <action> [site]", "manage staging env lifecycle"},
 		{"remove, rm [site]", "remove a whole site"},
-	}, helpSection{"Options", []helpLine{
+	}, helpSection{"List Options", []helpLine{
 		{"--envs", "include remote env records when listing"},
+		{"--refresh", "refresh the site cache before listing"},
+	}}, helpSection{"Show Options", []helpLine{
 		{"--json", "print JSON output for show"},
+	}}, helpSection{"Password Options", []helpLine{
 		{"--wp", "show WordPress admin password"},
 		{"--db", "show database password"},
 		{"--basicauth", "show basic-auth password"},
-		{"--output <path>", "site export destination"},
+	}}, helpSection{"Snapshot/Export Options", []helpLine{
+		{"--output <path>", "output directory"},
+		{"--dry-run", "show the plan without writing an export or snapshot"},
 	}}, helpSection{"Add Options", []helpLine{
 		{"--with-staging", "create live and staging envs together"},
+		{"--password-version <version>", "password derivation version"},
 		{"--kinsta-slug <slug>", "Kinsta site slug"},
 		{"--region <region>", "provider region"},
 		{"--php <version>", "Kinsta PHP version"},
 	}}, helpSection{"Mutation Options", []helpLine{
-		{"--dry-run", "show the mutation plan only"},
-		{"--execute", "execute the mutation plan"},
-		{"--yes", "confirm mutation execution"},
-		{"--non-interactive", "fail instead of prompting"},
+		{"--dry-run", "show the plan without making changes"},
+		{"--execute", "apply the plan"},
+		{"--yes", "skip confirmation"},
+		{"--non-interactive", "do not prompt"},
+	}})
+	return 0
+}
+
+func runSiteSnapshotHelp() int {
+	printCommandHelp("site snapshot", []helpLine{
+		{"[env]", "create a remote snapshot"},
+		{"list, ls", "list downloaded remote snapshots"},
+		{"remove, rm [name]", "delete a downloaded remote snapshot"},
+		{"prune", "delete older downloaded remote snapshots"},
+	}, helpSection{"Create Options", []helpLine{
+		{"--output <path>", "snapshot output directory"},
+		{"--dry-run", "show the plan without writing a snapshot"},
+	}}, helpSection{"Remove Options", []helpLine{
+		{"--yes", "skip confirmation"},
+	}}, helpSection{"Prune Options", []helpLine{
+		{"--keep <N>", "snapshots to keep per remote env"},
+		{"--dry-run", "show the plan without deleting snapshots"},
+		{"--yes", "skip confirmation"},
 	}})
 	return 0
 }
@@ -184,13 +226,15 @@ func runDomainHelp() int {
 func runConfigHelp() int {
 	printCommandHelp("config", []helpLine{
 		{"show", "show effective config"},
-		{"get <key>", "show a config value"},
-		{"set <key> <value>", "set a config value"},
+		{"get [key]", "show a config value"},
+		{"set [key] [value]", "set a config value"},
 		{"unset <key>", "unset a config value"},
 		{"keys", "list available config keys"},
 		{"edit", "edit config file"},
 		{"init", "initialize config"},
-	}, helpSection{"Examples", []helpLine{
+	}, helpSection{"Init Options", []helpLine{
+		{"--non-interactive", "do not prompt"},
+	}}, helpSection{"Examples", []helpLine{
 		{"nf config show", ""},
 		{"nf config keys", ""},
 		{"nf config get", "pick a key"},
@@ -205,9 +249,9 @@ func runConfigHelp() int {
 
 func runPasswordHelp() int {
 	printCommandHelp("password", []helpLine{
-		{"derive <scope> <value...>", "derive a password"},
+		{"derive [scope] [value...]", "derive a password"},
 		{},
-		{"show-salt", "show the masked password salt"},
+		{"show-salt", "print the masked password salt"},
 		{"set-salt <salt>", "save the shared password salt"},
 	}, helpSection{"Options", []helpLine{
 		{"--password-version <N>", "derive with a project password version"},

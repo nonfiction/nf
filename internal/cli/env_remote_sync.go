@@ -707,7 +707,7 @@ func cmdSiteRemoteCommandPlan(action, envRef string, args []string) int {
 	if action == "wp" {
 		args = normalizePassthroughArgs(args)
 		if len(args) == 0 {
-			fmt.Fprintln(os.Stderr, "site wp requires an env ref and wp-cli command")
+			fmt.Fprintln(os.Stderr, "site wp requires an env ref and WP-CLI command")
 			return 1
 		}
 	}

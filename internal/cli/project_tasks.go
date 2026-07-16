@@ -216,6 +216,9 @@ func loadProjectTasksFromMetadata(metadata *projectMetadata) (map[string]project
 	}
 	for name, value := range tasks {
 		location := fmt.Sprintf("nf.json wordpress.themes[%d].tasks", themeIndex)
+		if themeTaskNameReserved(name) {
+			return nil, ProjectError{Msg: fmt.Sprintf("%s.%s conflicts with the built-in nf theme command %q", location, name, name)}
+		}
 		_, desc, run, err := parseProjectTask(location, name, value)
 		if err != nil {
 			return nil, err
@@ -223,6 +226,15 @@ func loadProjectTasksFromMetadata(metadata *projectMetadata) (map[string]project
 		parsed[name] = projectCommand{Description: desc, Run: run}
 	}
 	return parsed, nil
+}
+
+func themeTaskNameReserved(name string) bool {
+	switch name {
+	case "list", "ls", "status", "diff", "install", "add", "activate", "remove", "rm", "cache", "tasks", "package", "deploy", "rollback", "help", "--help", "-h":
+		return true
+	default:
+		return false
+	}
 }
 
 func projectRepoThemeTasks(metadata *projectMetadata) (map[string]any, int, error) {
@@ -517,7 +529,7 @@ func defaultEnvCommands(cfg envConfig) map[string]projectCommand {
 		"logs":  {Description: "Tail WordPress logs", Run: envCommandRunner{name: "logs", cfg: cfg}},
 		"reset": {Description: "Destroy and recreate the local env", Run: envCommandRunner{name: "reset", cfg: cfg}},
 		"shell": {Description: "Open a shell in the WordPress container", Run: envCommandRunner{name: "shell", cfg: cfg}},
-		"wp":    {Description: "Run wp-cli passthrough", Run: envCommandRunner{name: "wp", cfg: cfg}},
+		"wp":    {Description: "Run WP-CLI passthrough", Run: envCommandRunner{name: "wp", cfg: cfg}},
 	}
 }
 

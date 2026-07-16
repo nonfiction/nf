@@ -31,10 +31,10 @@ func runEnvHelp() int {
 		{"up", "start the local env"},
 		{"down", "stop the local env"},
 		{"show", "show paths, ports, and URLs"},
-		{"password [remote]", "show a local or remote env password only"},
+		{"password [remote]", "print only a local or remote env password"},
 		{"logs [remote]", "tail local or remote WordPress logs"},
 		{"shell, sh [remote]", "open a local or remote shell"},
-		{"wp -- <args>", "run wp-cli in the local env"},
+		{"wp -- <args>", "run WP-CLI in the local env"},
 		{},
 		{"snapshot", "manage env snapshots"},
 		{},
@@ -43,17 +43,23 @@ func runEnvHelp() int {
 		{"import <source>", "import an external WordPress site into local env"},
 		{},
 		{"reset", "destroy and recreate the local env"},
-	}, helpSection{"Options", []helpLine{
+	}, helpSection{"Up/Reset Options", []helpLine{
 		{"--rebuild", "rebuild the local WordPress image"},
+	}}, helpSection{"Password Options", []helpLine{
 		{"--wp", "show WordPress admin password"},
-		{"--db", "show database password, or import DB path"},
+		{"--db", "show database password"},
 		{"--basicauth", "show basic-auth password"},
+	}}, helpSection{"Import Options", []helpLine{
+		{"--db <path>", "database dump path"},
 		{"--source-url <url>", "source URL for import search-replace"},
+		{"--name <name>", "snapshot name for the imported source"},
+		{"--dry-run", "show the import plan without making changes"},
+		{"--yes", "skip destructive import confirmation"},
 	}}, helpSection{"Sync Options", []helpLine{
-		{"--dry-run", "show the sync/import plan only"},
-		{"--execute", "execute push or pull"},
-		{"--yes", "confirm destructive local import/reset"},
-		{"--non-interactive", "fail instead of prompting"},
+		{"--dry-run", "show the sync plan without making changes"},
+		{"--execute", "apply push or pull"},
+		{"--yes", "skip confirmation"},
+		{"--non-interactive", "do not prompt"},
 	}})
 	return 0
 }
@@ -101,13 +107,13 @@ func runEnvImportHelp() int {
 func runPluginHelp() int {
 	printCommandHelp("plugin", []helpLine{
 		{"list, ls", "list configured WordPress plugins"},
-		{"status [remote]", "show configured WordPress plugin status"},
-		{"diff [remote]", "show configured WordPress plugin drift"},
+		{"status [remote]", "show plugin state against nf.json"},
+		{"diff [remote]", "show plugin changes needed to match nf.json"},
+		{},
+		{"install [remote]", "apply configured plugin installation settings"},
 		{},
 		{"add <plugin>", "add a WordPress plugin to nf.json"},
 		{"remove, rm <plugin>", "remove a WordPress plugin from nf.json"},
-		{},
-		{"install [remote]", "install and activate configured WordPress plugins"},
 	}, helpSection{"Add Options", []helpLine{
 		{"--source <source>", "wordpress.org, repo, cache, URL/path, or env-var zip"},
 		{"--manual", "check only; never install this plugin"},
@@ -115,8 +121,8 @@ func runPluginHelp() int {
 		{"--no-activate", "install without activating"},
 		{"--no-auto-update", "do not enable WordPress auto-updates"},
 	}}, helpSection{"Install Options", []helpLine{
-		{"--dry-run", "preview a remote install"},
-		{"--yes", "skip remote install confirmation"},
+		{"--dry-run", "show the remote install plan without making changes"},
+		{"--yes", "skip confirmation"},
 	}}, helpSection{"Cache Commands", []helpLine{
 		{"cache add <plugin> <zip>", "add a plugin zip to the local nf plugin cache"},
 		{"cache save <plugin>", "save an installed local plugin to the local nf plugin cache"},
@@ -127,17 +133,28 @@ func runPluginHelp() int {
 	return 0
 }
 
+func runPluginCacheHelp() int {
+	printGroupHelp("plugin cache", []helpLine{
+		{"add <plugin> <zip>", "add a plugin zip to the local nf plugin cache"},
+		{"save <plugin>", "save an installed local plugin to the local nf plugin cache"},
+		{"list, ls", "list cached WordPress plugin zips"},
+		{"show <plugin>", "show local plugin cache details"},
+		{"remove, rm <plugin>", "remove a plugin from the local nf plugin cache"},
+	})
+	return 0
+}
+
 func runThemeHelp() int {
 	lines := []helpLine{
 		{"list, ls", "list configured WordPress themes"},
-		{"status [remote]", "show configured WordPress theme status"},
-		{"diff [remote]", "show configured WordPress theme drift"},
+		{"status [remote]", "show theme state against nf.json"},
+		{"diff [remote]", "show theme changes needed to match nf.json"},
+		{},
+		{"install [remote]", "apply configured theme installation settings"},
 		{},
 		{"add <theme>", "add a WordPress theme to nf.json"},
-		{"activate <theme>", "move a configured theme to the top of wordpress.themes"},
+		{"activate <theme>", "make a configured theme first and active in nf.json"},
 		{"remove, rm <theme>", "remove a WordPress theme from nf.json"},
-		{},
-		{"install [remote]", "install configured WordPress themes"},
 		{},
 		{"tasks", "list configured theme tasks"},
 		{"package", "package a clean theme artifact"},
@@ -151,13 +168,14 @@ func runThemeHelp() int {
 		{"--auto-update", "enable WordPress auto-updates for this non-repo theme"},
 		{"--note <note>", "store an install note for humans"},
 	}}, helpSection{"Install Options", []helpLine{
-		{"--dry-run", "preview a remote install"},
-		{"--yes", "skip remote install confirmation"},
+		{"--dry-run", "show the remote install plan without making changes"},
+		{"--yes", "skip confirmation"},
 	}}, helpSection{"Cache Commands", []helpLine{
 		{"cache add <theme> <zip>", "add a theme zip to the local nf theme cache"},
 		{"cache save <theme>", "save an installed local theme to the local nf theme cache"},
 		{"cache list, cache ls", "list cached WordPress theme zips"},
 		{"cache show <theme>", "show local theme cache details"},
+		{"cache remove, cache rm <theme>", "remove a theme from the local nf theme cache"},
 	}}, helpSection{"Package Options", []helpLine{
 		{"--dry-run", "show package actions without writing a zip"},
 		{"--source <path>", "theme source directory"},
@@ -178,6 +196,17 @@ func runThemeHelp() int {
 	return 0
 }
 
+func runThemeCacheHelp() int {
+	printGroupHelp("theme cache", []helpLine{
+		{"add <theme> <zip>", "add a theme zip to the local nf theme cache"},
+		{"save <theme>", "save an installed local theme to the local nf theme cache"},
+		{"list, ls", "list cached WordPress theme zips"},
+		{"show <theme>", "show local theme cache details"},
+		{"remove, rm <theme>", "remove a theme from the local nf theme cache"},
+	})
+	return 0
+}
+
 func runAliasHelp() int {
 	printCommandHelp("alias", []helpLine{
 		{"list, ls", "list configured root aliases"},
@@ -192,9 +221,9 @@ func runAliasHelp() int {
 
 func runDefineHelp() int {
 	printCommandHelp("define", []helpLine{
-		{"list, ls", "list configured wp-config defines"},
-		{"status [remote]", "show local or remote define status"},
-		{"sync [remote]", "sync local or remote wp-config defines"},
+		{"list, ls", "list configured wp-config.php constants"},
+		{"status [remote]", "show local or remote constant state against nf.json"},
+		{"sync [remote]", "apply configured constants to wp-config.php"},
 		{},
 		{"add", "open an interactive define wizard"},
 		{"add <name> <value>", "add a literal define to nf.json"},
@@ -406,6 +435,9 @@ func runTheme(argv []string) int {
 		}
 		return cmdEnvThemesInstallWithOptions(root, metadata, installOpts)
 	case "cache":
+		if len(argv) == 1 || (len(argv) == 2 && (argv[1] == "help" || argv[1] == "--help" || argv[1] == "-h")) {
+			return runThemeCacheHelp()
+		}
 		cacheOpts, ok := parseEnvThemeCacheArgs(argv[1:])
 		if !ok {
 			return 1
@@ -599,7 +631,7 @@ func runAlias(argv []string) int {
 }
 
 func runEnv(argv []string) int {
-	if len(argv) == 0 || argv[0] == "help" {
+	if len(argv) == 0 || argv[0] == "help" || argv[0] == "--help" || argv[0] == "-h" {
 		return runEnvHelp()
 	}
 	name := argv[0]
@@ -847,7 +879,7 @@ func runEnv(argv []string) int {
 }
 
 func runPlugin(argv []string) int {
-	if len(argv) == 0 || argv[0] == "help" {
+	if len(argv) == 0 || argv[0] == "help" || argv[0] == "--help" || argv[0] == "-h" {
 		return runPluginHelp()
 	}
 	cmd := cliCommandAlias(argv[0])
@@ -894,6 +926,9 @@ func runPlugin(argv []string) int {
 			return 1
 		}
 	case "cache":
+		if len(args) == 0 || (len(args) == 1 && (args[0] == "help" || args[0] == "--help" || args[0] == "-h")) {
+			return runPluginCacheHelp()
+		}
 		var ok bool
 		cacheOpts, ok = parseEnvPluginCacheArgs(args)
 		if !ok {
@@ -1216,7 +1251,7 @@ func parseEnvThemeCacheArgs(args []string) (envThemeCacheOptions, bool) {
 			fmt.Fprintln(os.Stderr, "theme cache add requires a theme slug and zip path")
 			return opts, false
 		}
-	case "save", "show":
+	case "save", "show", "remove":
 		if len(args) != 2 {
 			fmt.Fprintf(os.Stderr, "theme cache %s requires exactly one theme slug\n", cmd)
 			return opts, false
@@ -1239,7 +1274,7 @@ func parseEnvThemeCacheArgs(args []string) (envThemeCacheOptions, bool) {
 }
 
 func runEnvSnapshot(argv []string) int {
-	if len(argv) == 0 || argv[0] == "help" {
+	if len(argv) == 0 || argv[0] == "help" || argv[0] == "--help" || argv[0] == "-h" {
 		printGroupHelp("env snapshot", []helpLine{
 			{"list, ls", "list env snapshots"},
 			{"add [name]", "create an env snapshot"},
@@ -1338,20 +1373,18 @@ func runHelp() int {
 		{"target", "manage deployable targets"},
 		{"site", "manage remote sites and envs"},
 		{"domain", "manage remote env domains"},
+		{"password", "manage and derive passwords"},
 	}
 	if projectContextAvailable() {
 		lines = append(lines,
 			helpLine{},
 			helpLine{"env", "manage the local development env"},
-			helpLine{"theme", "package clean artifacts and run theme tasks"},
+			helpLine{"theme", "manage configured WordPress themes"},
 			helpLine{"plugin", "manage configured WordPress plugins"},
 			helpLine{"define", "manage configured WordPress constants"},
 			helpLine{"alias", "manage root-level WordPress content aliases"},
 			helpLine{"remote", "manage repo remotes"},
-			helpLine{"password", "derive passwords"},
 		)
-	} else {
-		lines = append(lines, helpLine{"password", "derive passwords"})
 	}
 	lines = append(lines,
 		helpLine{},

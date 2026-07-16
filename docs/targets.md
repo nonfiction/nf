@@ -26,8 +26,8 @@ nf target add linode linode1 \
   --type g6-standard-1 \
   --image linode/ubuntu24.04 \
   --db-user admin \
-  --user nonfiction \
-  --keys all \
+  --ssh-user nonfiction \
+  --all-linode-ssh-keys \
   --dry-run
 ```
 
@@ -39,8 +39,8 @@ nf target add linode linode1 \
   --type g6-standard-1 \
   --image linode/ubuntu24.04 \
   --db-user admin \
-  --user nonfiction \
-  --keys all \
+  --ssh-user nonfiction \
+  --all-linode-ssh-keys \
   --execute --yes --wait
 ```
 

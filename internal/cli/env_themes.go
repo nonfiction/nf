@@ -369,7 +369,7 @@ func cmdEnvThemesActivate(root string, metadata *projectMetadata, slug string) i
 		fmt.Fprintln(os.Stderr, err)
 		return 1
 	}
-	fmt.Printf("Moved WordPress theme %s to the top of wordpress.themes.\n", slug)
+	fmt.Printf("Made WordPress theme %s first in wordpress.themes and configured it as active.\n", slug)
 	return 0
 }
 
@@ -383,6 +383,8 @@ func cmdEnvThemesCache(cfg envConfig, opts envThemeCacheOptions) int {
 		return cmdEnvThemesCacheList()
 	case "show":
 		return cmdEnvThemesCacheShow(opts.Slug)
+	case "remove":
+		return cmdEnvThemesCacheRemove(opts.Slug)
 	default:
 		fmt.Fprintln(os.Stderr, "unsupported theme cache command")
 		return 1
@@ -507,6 +509,28 @@ func cmdEnvThemesCacheShow(slug string) int {
 		return 1
 	}
 	fmt.Printf("Theme cache:\n  theme:  %s\n  status: %s\n  zip:    %s\n", slug, status, zipPath)
+	return 0
+}
+
+func cmdEnvThemesCacheRemove(slug string) int {
+	if err := validateThemeSlug(slug); err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		return 1
+	}
+	themeDir := config.ThemeCacheThemeDir(slug)
+	if _, err := os.Stat(themeDir); err != nil {
+		if os.IsNotExist(err) {
+			fmt.Fprintf(os.Stderr, "theme cache for %s does not exist: %s\n", slug, themeDir)
+			return 1
+		}
+		fmt.Fprintln(os.Stderr, err)
+		return 1
+	}
+	if err := os.RemoveAll(themeDir); err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		return 1
+	}
+	fmt.Printf("Removed WordPress theme cache %s from %s\n", slug, themeDir)
 	return 0
 }
 

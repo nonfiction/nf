@@ -105,6 +105,21 @@ func TestValidateProjectMetadataAllowsOptionalRecipeFields(t *testing.T) {
 	}
 }
 
+func TestValidateProjectMetadataRejectsThemeTaskCommandCollisions(t *testing.T) {
+	metadata := &projectMetadata{
+		Version: project.ManifestVersion,
+		Project: project.Project{Slug: "client"},
+		WordPress: project.WordPress{Themes: []any{map[string]any{
+			"slug": "client", "source": "repo",
+			"tasks": map[string]any{"deploy": "npm run deploy"},
+		}}},
+	}
+	err := validateProjectMetadata(metadata)
+	if err == nil || !strings.Contains(err.Error(), "conflicts with the built-in nf theme command") {
+		t.Fatalf("validateProjectMetadata() error = %v, want theme command collision", err)
+	}
+}
+
 func TestValidateProjectMetadataRejectsRecipesOnNonRepoTheme(t *testing.T) {
 	metadata := &projectMetadata{
 		Version: project.ManifestVersion,

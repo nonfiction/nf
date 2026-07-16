@@ -72,13 +72,14 @@ nf theme cache add paid-parent-theme ~/Downloads/paid-parent-theme.zip
 nf theme cache save paid-parent-theme
 nf theme cache list
 nf theme cache show paid-parent-theme
+nf theme cache remove paid-parent-theme
 ```
 
 `nf theme cache add <theme> <zip>` copies an existing zip into `$NF_DATA_HOME/themes/<slug>/<slug>.zip`.
 
 `nf theme cache save <theme>` archives the theme currently installed in the local WordPress env and stores it as the cached zip. Use this as a local recovery aid for paid/manual themes that were installed through WordPress admin or vendor updaters.
 
-`nf theme cache list` and `nf theme cache show <theme>` inspect the local cache. Cached zips are local machine state, not project metadata, and are not committed.
+`nf theme cache list` and `nf theme cache show <theme>` inspect the local cache. `nf theme cache remove <theme>` deletes one cached theme zip. Cached zips are local machine state, not project metadata, and are not committed.
 
 ## Compare Config to WordPress State
 
@@ -182,7 +183,7 @@ Deploy:
 nf theme deploy production
 ```
 
-`nf theme deploy <remote>` builds the same repo theme artifact as `nf theme package`, installs any configured non-repo themes first, uploads the repo theme release to the selected remote env, extracts it under `wp-content/themes/.nf-releases/<repo-theme-slug>/`, copies the release into `wp-content/themes/<repo-theme-slug>/`, activates the first configured theme with wp-cli, and records release metadata. After the release switch succeeds, it runs `wp rewrite flush`; a flush failure makes the deploy command fail without undoing the recorded release.
+`nf theme deploy <remote>` builds the same repo theme artifact as `nf theme package`, installs any configured non-repo themes first, uploads the repo theme release to the selected remote env, extracts it under `wp-content/themes/.nf-releases/<repo-theme-slug>/`, copies the release into `wp-content/themes/<repo-theme-slug>/`, activates the first configured theme with WP-CLI, and records release metadata. After the release switch succeeds, it runs `wp rewrite flush`; a flush failure makes the deploy command fail without undoing the recorded release.
 
 Theme deploy keeps the last 5 releases and matching uploaded zips, so release storage does not grow indefinitely. It does not require manual WordPress admin zip upload and supersedes direct in-place source rsync deploys.
 

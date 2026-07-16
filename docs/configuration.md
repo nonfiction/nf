@@ -101,20 +101,20 @@ Use:
 
 ```sh
 nf config init
-nf config set-base-domain nonfiction.dev
-nf config set-default-wp-email dev@example.com
-nf config set-default-wp-user admin
-nf config set-basicauth-default-user nonfiction
-nf config set-db-default-user admin
-nf config set-docker-db-image mariadb:11
-nf config set-docker-wordpress-image wordpress:php8.3-apache
-nf config set-docker-user nonfiction
-nf config set-kinsta-default-php 8.3
-nf config set-kinsta-default-region us-central1
-nf config set-linode-default-region us-east
-nf config set-linode-default-type g6-standard-1
-nf config set-linode-default-image linode/ubuntu24.04
-nf config set-linode-default-user nonfiction
+nf config set core.base-domain nonfiction.dev
+nf config set wordpress.admin-email dev@example.com
+nf config set wordpress.admin-user admin
+nf config set wordpress.basic-auth-user nonfiction
+nf config set database.user admin
+nf config set docker.images.db mariadb:11
+nf config set docker.images.wordpress wordpress:php8.3-apache
+nf config set docker.user nonfiction
+nf config set kinsta.php 8.3
+nf config set kinsta.region us-central1
+nf config set linode.region us-east
+nf config set linode.type g6-standard-1
+nf config set linode.image linode/ubuntu24.04
+nf config set linode.user nonfiction
 nf config show
 nf password set-salt <salt>
 ```

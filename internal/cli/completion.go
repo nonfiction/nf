@@ -142,6 +142,8 @@ func configCompletionCandidates(args []string) []string {
 		if args[0] == "set" && len(args) == 2 {
 			return configSetValueCompletionCandidates(args[1])
 		}
+	case "init":
+		return []string{"--non-interactive"}
 	}
 	return nil
 }
@@ -214,7 +216,7 @@ func providerCompletionCandidates(args []string) []string {
 	args[0] = cliCommandAlias(args[0])
 	switch args[0] {
 	case "check", "show":
-		return []string{"dnsimple", "kinsta", "linode"}
+		return []string{"dnsimple", "kinsta", "linode", "--json"}
 	default:
 		return nil
 	}
@@ -232,18 +234,18 @@ func targetCompletionCandidates(args []string) []string {
 		}
 		return targetAddFlagCandidates()
 	case "show":
-		return cachedTargetCompletionNames()
+		return append(cachedTargetCompletionNames(), "--json")
 	case "password":
 		return append(cachedLinodeTargetCompletionNames(), "--root", "--db")
 	case "remove":
-		return cachedTargetCompletionNames()
+		return append(cachedTargetCompletionNames(), "--dry-run", "--execute", "--yes", "--non-interactive")
 	default:
 		return nil
 	}
 }
 
 func targetAddFlagCandidates() []string {
-	return []string{"--region", "--type", "--image", "--db-user", "--ssh-user", "--execute", "--yes", "--non-interactive", "--dry-run"}
+	return []string{"--region", "--type", "--image", "--ubuntu-version", "--firewall", "--firewall-id", "--db-user", "--ssh-user", "--ssh-key-source", "--ssh-key-label", "--ssh-key-id", "--all-linode-ssh-keys", "--ssh-public-key-file", "--write-cloud-init", "--show-cloud-init", "--wait", "--no-wait", "--execute", "--yes", "--non-interactive", "--dry-run"}
 }
 
 func siteCompletionCandidates(args []string) []string {
@@ -258,24 +260,27 @@ func siteCompletionCandidates(args []string) []string {
 				return cachedSiteCompletionNames()
 			}
 		}
-		return []string{"--envs"}
+		return []string{"--envs", "--refresh"}
 	case "show", "cache":
 		return cachedSiteAndEnvCompletionNames()
 	case "repair":
 		return append(cachedSiteAndEnvCompletionNames(), "--dry-run", "--execute", "--yes", "--non-interactive")
-	case "shell", "wp", "export":
+	case "shell", "wp":
 		return cachedSiteEnvCompletionNames()
+	case "export":
+		return append(cachedSiteEnvCompletionNames(), "--output", "--dry-run")
 	case "snapshot":
 		if len(args) == 1 {
-			return append([]string{"list", "ls", "remove", "rm", "prune"}, cachedSiteEnvCompletionNames()...)
+			values := append([]string{"list", "ls", "remove", "rm", "prune", "help"}, cachedSiteEnvCompletionNames()...)
+			return append(values, "--output", "--dry-run")
 		}
 		if len(args) >= 2 && (args[1] == "remove" || args[1] == "rm") {
-			return remoteSnapshotCompletionNames()
+			return append(remoteSnapshotCompletionNames(), "--yes")
 		}
 		if len(args) >= 2 && args[1] == "prune" {
 			return []string{"--keep", "--dry-run", "--yes"}
 		}
-		return nil
+		return []string{"--output", "--dry-run"}
 	case "password":
 		return append(cachedSiteAndEnvCompletionNames(), "--wp", "--db", "--basicauth")
 	case "basicauth":
@@ -288,7 +293,7 @@ func siteCompletionCandidates(args []string) []string {
 		if len(args) == 1 {
 			return cachedTargetCompletionNames()
 		}
-		return []string{"--with-staging", "--kinsta-slug", "--region", "--php", "--dry-run", "--execute", "--yes", "--non-interactive"}
+		return []string{"--with-staging", "--password-version", "--kinsta-slug", "--region", "--php", "--dry-run", "--execute", "--yes", "--non-interactive"}
 	default:
 		return nil
 	}
@@ -404,8 +409,10 @@ func envCompletionCandidates(args []string) []string {
 		return append(projectRemoteCompletionNames(), "--wp", "--db", "--basicauth")
 	case "up", "reset":
 		return []string{"--rebuild"}
-	case "logs", "pull", "push":
+	case "logs":
 		return projectRemoteCompletionNames()
+	case "pull", "push":
+		return append(projectRemoteCompletionNames(), "--dry-run", "--execute", "--yes", "--non-interactive")
 	case "shell":
 		return projectRemoteCompletionNames()
 	case "snapshot":
@@ -442,11 +449,11 @@ func pluginCompletionCandidates(args []string) []string {
 
 func pluginCacheCompletionCandidates(args []string) []string {
 	if len(args) == 0 {
-		return []string{"add", "save", "list", "ls", "show", "help"}
+		return []string{"add", "save", "list", "ls", "show", "remove", "rm", "help"}
 	}
 	args[0] = cliCommandAlias(args[0])
 	switch args[0] {
-	case "save", "show":
+	case "save", "show", "remove":
 		return projectPluginCompletionNames()
 	default:
 		return nil
@@ -499,7 +506,7 @@ func themeCompletionCandidates(args []string) []string {
 	case "package":
 		return []string{"--dry-run", "--source", "--output"}
 	case "deploy", "rollback":
-		return projectRemoteCompletionNames()
+		return append(projectRemoteCompletionNames(), "--dry-run")
 	default:
 		return nil
 	}
@@ -507,11 +514,11 @@ func themeCompletionCandidates(args []string) []string {
 
 func themeCacheCompletionCandidates(args []string) []string {
 	if len(args) == 0 {
-		return []string{"add", "save", "list", "ls", "show", "help"}
+		return []string{"add", "save", "list", "ls", "show", "remove", "rm", "help"}
 	}
 	args[0] = cliCommandAlias(args[0])
 	switch args[0] {
-	case "save", "show":
+	case "save", "show", "remove":
 		return projectThemeCompletionNames()
 	default:
 		return nil

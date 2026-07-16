@@ -12,11 +12,12 @@ Commands:
   target      manage deployable targets
   site        manage remote sites and envs
   domain      manage remote env domains
-  password    derive passwords
+  password    manage and derive passwords
 
   init        initialize project metadata
   config      manage global config
   completion  print shell completion scripts
+  refresh     refresh all provider, target, and site caches
   version     show nf version
   help        show help
 ```
@@ -33,18 +34,19 @@ Commands:
   target      manage deployable targets
   site        manage remote sites and envs
   domain      manage remote env domains
-  password    derive passwords
+  password    manage and derive passwords
 
-  remote      manage repo remotes
   env         manage the local development env
-  theme       package clean artifacts and run theme tasks
+  theme       manage configured WordPress themes
   plugin      manage configured WordPress plugins
   define      manage configured WordPress constants
   alias       manage root-level WordPress content aliases
+  remote      manage repo remotes
 
   init        initialize project metadata
   config      manage global config
   completion  print shell completion scripts
+  refresh     refresh all provider, target, and site caches
   version     show nf version
   help        show help
 ```
@@ -55,45 +57,45 @@ Commands:
 
 ```sh
 nf provider list
-nf provider show <provider>
-nf provider check <provider>
+nf provider show [provider] [--json]
+nf provider check [provider] [--json]
 nf refresh
-nf target add linode <name> [--region region] [--type type] [--image image] [--db-user user] [--user user] [--keys all] [--execute --yes] [--wait]
-nf target remove <target> [--dry-run] [--execute --yes]
+nf target add linode <name> [--region region] [--type type] [--image image] [--db-user user] [--ssh-user user] [--all-linode-ssh-keys] [--execute --yes] [--wait]
+nf target remove [target] [--dry-run] [--execute --yes]
 nf target refresh
 nf target list
-nf target show <target>
+nf target show [target] [--json]
 nf target password [target] [--root|--db]
 nf site add <target> <site> [--with-staging] [--password-version version] [--kinsta-slug slug] [--region region] [--php version] [--execute --yes]
 nf site refresh
-nf site list [--refresh] [--envs]
-nf site show <site-id-or-alias-or-env-id>
-nf site staging status <site-id-or-alias>
-nf site staging add <site-id-or-alias> [--dry-run] [--execute --yes]
-nf site staging remove <site-id-or-alias> [--dry-run] [--execute --yes]
-nf site shell <site.target:env>
+nf site list [--refresh] [--envs [site-id-or-alias]]
+nf site show [site-id-or-alias-or-env-id] [--json]
+nf site staging status [site-id-or-alias]
+nf site staging add [site-id-or-alias] [--dry-run] [--execute --yes]
+nf site staging remove [site-id-or-alias] [--dry-run] [--execute --yes]
+nf site shell [site.target:env]
 nf site wp <site.target:env> -- <cmd>
 nf site cache [site.target|site.target:env]
 nf site repair [site.target|site.target:env] [--dry-run|--execute --yes]
 nf site export <site.target:env> [--output path] [--dry-run]
-nf site snapshot <site.target:env> [--output path] [--dry-run]
+nf site snapshot [site.target:env] [--output path] [--dry-run]
 nf site snapshot list
-nf site snapshot remove <name> [--yes]
+nf site snapshot remove [name] [--yes]
 nf site snapshot prune [--keep N] [--dry-run] [--yes]
 nf site password [site-id-or-alias-or-env-id] [--wp|--db|--basicauth]
-nf site basicauth status <site.target:env>
-nf site basicauth enable <site.target:env> [--dry-run] [--execute --yes]
-nf site basicauth disable <site.target:env> [--dry-run] [--execute --yes]
+nf site basicauth status [site.target:env]
+nf site basicauth enable [site.target:env] [--dry-run] [--execute --yes]
+nf site basicauth disable [site.target:env] [--dry-run] [--execute --yes]
 nf site basicauth password [site-id-or-alias]
 nf domain list [site|site.target:env|remote]
-nf domain add <site.target:env|remote> <domain> [domain...] [--proxy cloudflare|<ip>|--no-proxy] [--dry-run] [--execute --yes]
-nf domain check <site.target:env|remote> [domain...] [--proxy cloudflare|<ip>|--no-proxy]
-nf domain primary <site.target:env|remote> <domain> [--proxy cloudflare|<ip>|--no-proxy] [--search-replace|--no-search-replace] [--force] [--wait-timeout 30m] [--wait-interval 30s] [--dry-run] [--execute --yes]
-nf domain remove <site.target:env|remote> <domain> [domain...] [--proxy cloudflare|<ip>|--no-proxy] [--delete-cert] [--dry-run] [--execute --yes]
+nf domain add [site.target:env|remote] [domain...] [--proxy cloudflare|<ip>|--no-proxy] [--dry-run] [--execute --yes]
+nf domain check [site.target:env|remote] [domain...] [--proxy cloudflare|<ip>|--no-proxy]
+nf domain primary [site.target:env|remote] [domain] [--proxy cloudflare|<ip>|--no-proxy] [--search-replace|--no-search-replace] [--force] [--wait-timeout 30m] [--wait-interval 30s] [--dry-run] [--execute --yes]
+nf domain remove [site.target:env|remote] [domain...] [--proxy cloudflare|<ip>|--no-proxy] [--delete-cert] [--dry-run] [--execute --yes]
 nf site remove [site-id-or-alias] [--dry-run] [--execute --yes]
 nf remote add [name] [site.target:env]
-nf remote show <name>
-nf remote remove <name>
+nf remote show [name]
+nf remote remove [name]
 nf remote list
 nf define list
 nf define status [remote]
@@ -118,8 +120,8 @@ nf target add linode linode1 \
   --type g6-standard-1 \
   --image linode/ubuntu24.04 \
   --db-user admin \
-  --user nonfiction \
-  --keys all
+  --ssh-user nonfiction \
+  --all-linode-ssh-keys
 ```
 
 ## Current Behavior
@@ -152,7 +154,7 @@ nf target add linode linode1 \
 * `nf site remove [site]` removes a whole Linode site and deletes its env data.
 * `nf remote add` validates an env ID against the cache, then repo remotes are stored in `nf.json` under `remotes` as `<site>.<target>:<env>` refs.
 * `nf alias ...` manages root-level webroot symlinks declared in `wordpress.aliases` in `nf.json`. Alias targets must be `wp-content` or descendants. `nf alias status [remote]` reports configured, missing, conflicting, and stale symlinks. `nf alias sync [remote]` creates or updates configured symlinks and prunes stale root symlinks, but never overwrites or removes real files/directories.
-* `nf site shell/wp ...` validate the cache, print the SSH or wp-cli command preview, then execute the remote command.
+* `nf site shell/wp ...` validate the cache, print the SSH or WP-CLI command preview, then execute the remote command.
 * `nf env logs <remote>` resolves a configured repo remote, prints the SSH command preview, ensures `wp-content/debug.log` exists, and tails it on the remote host.
 * `nf define ...` manages `wordpress.defines` from `nf.json`. `list` prints configured names/selectors/sources without resolving secret values. `status [remote]` compares configured constants against local or remote `wp-config.php`. `sync [remote]` patches local or remote `wp-config.php` through a temp file and atomic replace, without persistent backups. It replaces only the nf-managed project define block, so removed `nf.json` entries are pruned from that block while manual constants outside the block are preserved. Older per-define nf markers are migrated into the block on sync. `add` writes shared values by default and opens an interactive wizard when required arguments are omitted; `remove` opens a picker when the name is omitted. The add wizard scopes values to all environments, `local`, or configured remotes. `--for <selector>` writes a remote/env-specific value and promotes an existing shared value to `values.default`. Use `--env <VAR>` for secrets and license keys; nf stores only the local env/config variable name in `nf.json` and resolves the real value during sync. Never commit raw secret values to `nf.json`. Provider-owned constants such as `KINSTAMU_WHITELABEL` are rejected from project defines. Duplicate constants, including configured constants outside the nf-managed project block, are unsafe and block sync until resolved manually.
 * `nf env import <source>` imports external WordPress data into the local env after creating a safety snapshot. It never writes directly to a remote env.

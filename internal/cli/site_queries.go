@@ -639,7 +639,7 @@ func parseSiteShellArgs(argv []string) (string, bool) {
 
 func parseSiteWPArgs(argv []string) (string, []string, bool) {
 	if len(argv) == 0 || strings.HasPrefix(argv[0], "-") {
-		fmt.Fprintln(os.Stderr, "site wp requires an env ref and wp-cli command")
+		fmt.Fprintln(os.Stderr, "site wp requires an env ref and WP-CLI command")
 		return "", nil, false
 	}
 	envRef, ok := resolveSiteCommandEnvRef("wp", argv[0])
@@ -648,7 +648,7 @@ func parseSiteWPArgs(argv []string) (string, []string, bool) {
 	}
 	command := normalizePassthroughArgs(argv[1:])
 	if len(command) == 0 {
-		fmt.Fprintln(os.Stderr, "site wp requires an env ref and wp-cli command")
+		fmt.Fprintln(os.Stderr, "site wp requires an env ref and WP-CLI command")
 		return "", nil, false
 	}
 	return envRef, command, true

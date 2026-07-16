@@ -66,10 +66,10 @@ nf env sh
 nf env wp -- plugin list
 ```
 
-The generated WordPress Docker image includes useful CLI tools plus `wp-cli`. `nf env shell`, `nf env sh`, and `nf env wp` run in the WordPress container as `docker_user`, which defaults to `nonfiction` and can be changed with:
+The generated WordPress Docker image includes useful CLI tools plus WP-CLI. `nf env shell`, `nf env sh`, and `nf env wp` run in the WordPress container as `docker_user`, which defaults to `nonfiction` and can be changed with:
 
 ```sh
-nf config set-docker-user <user>
+nf config set docker.user <user>
 ```
 
 ## Reconcile Defines

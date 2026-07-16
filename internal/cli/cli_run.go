@@ -99,6 +99,16 @@ func runTopicHelp(argv []string) int {
 	case "target":
 		return runTargetHelp()
 	case "site":
+		if len(argv) > 1 {
+			switch argv[1] {
+			case "snapshot":
+				return runSiteSnapshotHelp()
+			case "staging":
+				return runSiteStagingHelp()
+			case "basicauth":
+				return runSiteBasicAuthHelp()
+			}
+		}
 		return runSiteHelp()
 	case "refresh":
 		return runRefreshHelp()
@@ -113,10 +123,21 @@ func runTopicHelp(argv []string) int {
 		if rejectOutsideProject(argv[0]) {
 			return 1
 		}
+		if len(argv) > 1 && argv[1] == "cache" {
+			return runPluginCacheHelp()
+		}
 		return runPluginHelp()
 	case "env":
 		if rejectOutsideProject(argv[0]) {
 			return 1
+		}
+		if len(argv) > 1 {
+			switch argv[1] {
+			case "snapshot":
+				return runEnvSnapshot([]string{"help"})
+			case "import":
+				return runEnvImportHelp()
+			}
 		}
 		return runEnvHelp()
 	case "init":
@@ -124,6 +145,9 @@ func runTopicHelp(argv []string) int {
 	case "theme":
 		if rejectOutsideProject(argv[0]) {
 			return 1
+		}
+		if len(argv) > 1 && argv[1] == "cache" {
+			return runThemeCacheHelp()
 		}
 		return runThemeHelp()
 	case "alias":

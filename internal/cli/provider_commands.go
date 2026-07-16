@@ -314,7 +314,7 @@ func cmdProviderCheck(name string, jsonOutput bool) int {
 	}
 	result, err := runProviderHealthcheck(status.Name)
 	if err != nil {
-		fmt.Printf("Provider %s healthcheck failed.\n", status.Name)
+		fmt.Printf("Provider %s health check failed.\n", status.Name)
 		fmt.Fprintln(os.Stderr, err)
 		return 1
 	}
@@ -330,7 +330,7 @@ func cmdProviderCheck(name string, jsonOutput bool) int {
 		fmt.Println(string(data))
 		return 0
 	}
-	fmt.Printf("Provider %s healthcheck passed.\n", status.Name)
+	fmt.Printf("Provider %s health check passed.\n", status.Name)
 	for _, line := range providerHealthDetailLines(status.Name, result.Details) {
 		fmt.Println(line)
 	}

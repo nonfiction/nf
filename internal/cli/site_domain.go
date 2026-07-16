@@ -121,7 +121,7 @@ func runSiteDomainHelp() int {
 	printCommandHelp("domain", []helpLine{
 		{"list, ls [site|env|remote]", "list cached domain bindings"},
 		{"add [env|remote] [domain...]", "add external domains; prompts when omitted"},
-		{"check <env|remote> [domain]...", "check DNS, provider, HTTP, and HTTPS readiness"},
+		{"check [env|remote] [domain...]", "check DNS, provider, HTTP, and HTTPS readiness"},
 		{"primary [env|remote] [domain]", "make one domain primary"},
 		{"remove, rm [env|remote] [domain...]", "remove external domain bindings"},
 	}, helpSection{"Domain Options", []helpLine{
@@ -134,10 +134,10 @@ func runSiteDomainHelp() int {
 		{"--wait-interval <duration>", "primary readiness poll interval; default 30s"},
 		{"--delete-cert", "also delete the Linode Let's Encrypt certificate lineage"},
 	}}, helpSection{"Mutation Options", []helpLine{
-		{"--dry-run", "show the mutation plan only"},
-		{"--execute", "execute the mutation plan"},
-		{"--yes", "confirm mutation execution"},
-		{"--non-interactive", "fail instead of prompting"},
+		{"--dry-run", "show the plan without making changes"},
+		{"--execute", "apply the plan"},
+		{"--yes", "skip confirmation"},
+		{"--non-interactive", "do not prompt"},
 	}})
 	return 0
 }
