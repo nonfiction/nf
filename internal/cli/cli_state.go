@@ -49,6 +49,7 @@ var (
 	runSSHStdinOutputFn                   = runSSHStdinOutput
 	runSSHOutputFn                        = runSSHOutput
 	runRsyncCommandFn                     = runRsyncCommand
+	runThemeRuntimeMaintenanceFn          = runThemeRuntimeMaintenance
 	runCommandSpecOutputSilentFn          = runCommandSpecOutputSilent
 	localAvailableDiskBytesFn             = localAvailableDiskBytes
 	localWordPressTransferEstimateBytesFn = localWordPressTransferEstimateBytes

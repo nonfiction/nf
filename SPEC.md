@@ -576,9 +576,11 @@ Deploy rules:
 * release metadata is recorded at `wp-content/themes/.nf-releases/<repo-theme-slug>/releases.json` without secrets
 * deploy prunes remote release storage after success, keeping the last 5 distinct releases and their matching uploaded artifacts
 * deploy also removes stale extraction/temp release dirs under `.nf-releases/<repo-theme-slug>/`
+* after switching the release, deploy regenerates WordPress rewrite rules; Kinsta deploys then restart the environment PHP engine and clear site cache through the Kinsta API, waiting for each operation before reporting success
 * rollback UX is `nf theme rollback <remote> [--dry-run]`
 * rollback selects the previous distinct `release_id` from remote `releases.json`, copies that release back into the repo theme directory, runs wp-cli activation for the first configured theme, and appends a rollback metadata entry
 * rollback does not rebuild or upload artifacts
+* rollback runs the same rewrite and Kinsta PHP/cache maintenance as deploy after switching releases
 
 ## Root aliases
 

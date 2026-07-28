@@ -294,6 +294,10 @@ type ClearCacheRequest struct {
 	EnvironmentID string `json:"environment_id"`
 }
 
+type RestartPHPRequest struct {
+	EnvironmentID string `json:"environment_id"`
+}
+
 func (c *Client) Validate(ctx context.Context) (ValidateResponse, error) {
 	var out ValidateResponse
 	return out, c.do(ctx, http.MethodGet, "/validate", nil, &out)
@@ -495,6 +499,14 @@ func (c *Client) ModifyPHPVersion(ctx context.Context, req ModifyPHPVersionReque
 func (c *Client) ClearSiteCache(ctx context.Context, environmentID string) (string, error) {
 	var out operationResponse
 	if err := c.do(ctx, http.MethodPost, "/sites/tools/clear-cache", ClearCacheRequest{EnvironmentID: environmentID}, &out); err != nil {
+		return "", err
+	}
+	return out.OperationID(), nil
+}
+
+func (c *Client) RestartPHP(ctx context.Context, environmentID string) (string, error) {
+	var out operationResponse
+	if err := c.do(ctx, http.MethodPost, "/sites/tools/restart-php", RestartPHPRequest{EnvironmentID: environmentID}, &out); err != nil {
 		return "", err
 	}
 	return out.OperationID(), nil

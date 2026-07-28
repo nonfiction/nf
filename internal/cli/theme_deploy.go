@@ -6,6 +6,7 @@ package cli
 // and keep remote release metadata so rollback can restore the previous build.
 
 import (
+	"context"
 	"crypto/sha256"
 	"encoding/json"
 	"fmt"
@@ -17,6 +18,8 @@ import (
 	"strings"
 	"time"
 
+	"github.com/nonfiction/nf/internal/config"
+	"github.com/nonfiction/nf/internal/envwizard"
 	"github.com/nonfiction/nf/internal/state"
 	"github.com/nonfiction/nf/internal/theme"
 )
@@ -34,6 +37,7 @@ type themeDeployTarget struct {
 	RemoteThemeDir string
 	WPCommand      string
 	PHPVersion     string
+	KinstaEnvID    string
 }
 
 type themeDeployArtifact struct {
@@ -78,6 +82,10 @@ func cmdThemeDeploy(remoteName string, dryRun bool) int {
 	}
 	target, err := resolveThemeDeployTarget(remoteName, themeSlug, metadata)
 	if err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		return 1
+	}
+	if err := validateThemeRuntimeMaintenance(target, dryRun); err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		return 1
 	}
@@ -145,6 +153,7 @@ func cmdThemeDeploy(remoteName string, dryRun bool) int {
 	rewriteArgs := remoteWPSSHArgs(syncTarget, wpRewriteFlushArgs()...)
 	fmt.Println("  post-deploy: regenerate WordPress rewrite rules")
 	printCommandArgs(rewriteArgs)
+	printThemeRuntimeMaintenancePlan(target, "deploy")
 	if !dryRun {
 		if len(dependencyUploads) > 0 {
 			if err := uploadRemoteThemeSources(syncTarget, dependencyTmp, dependencyUploads); err != nil {
@@ -177,6 +186,10 @@ func cmdThemeDeploy(remoteName string, dryRun bool) int {
 			return 1
 		}
 		if err := flushRemoteRewriteRules(syncTarget); err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			return 1
+		}
+		if err := runThemeRuntimeMaintenanceFn(target); err != nil {
 			fmt.Fprintln(os.Stderr, err)
 			return 1
 		}
@@ -221,6 +234,10 @@ func cmdThemeRollback(remoteName string, dryRun bool) int {
 		fmt.Fprintln(os.Stderr, err)
 		return 1
 	}
+	if err := validateThemeRuntimeMaintenance(target, dryRun); err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		return 1
+	}
 	releaseBase := path.Join(target.WordPressPath, "wp-content", "themes", ".nf-releases", themeSlug)
 	metadataFile := path.Join(releaseBase, "releases.json")
 	rollbackScript := themeRollbackScript(target, themeSlug, activeThemeSlug, releaseBase, metadataFile)
@@ -249,12 +266,17 @@ func cmdThemeRollback(remoteName string, dryRun bool) int {
 	printCommandArgs(rollbackArgs)
 	fmt.Println("  post-rollback: regenerate WordPress rewrite rules")
 	printCommandArgs(rewriteArgs)
+	printThemeRuntimeMaintenancePlan(target, "rollback")
 	if !dryRun {
 		if err := runSSHStdinCommandFn(rollbackArgs, rollbackScript); err != nil {
 			fmt.Fprintln(os.Stderr, err)
 			return 1
 		}
 		if err := flushRemoteRewriteRules(syncTarget); err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			return 1
+		}
+		if err := runThemeRuntimeMaintenanceFn(target); err != nil {
 			fmt.Fprintln(os.Stderr, err)
 			return 1
 		}
@@ -289,6 +311,7 @@ func resolveThemeDeployTarget(remoteName, themeSlug string, metadata *projectMet
 	target := themeDeployTarget{Provider: provider, RemoteName: remoteName, SiteID: siteID, Env: remoteEnv, URL: firstRecordString(record, "url", "site_url", "home_url", "hostname"), PHPVersion: sitePHPVersion(record)}
 	switch provider {
 	case "kinsta":
+		target.KinstaEnvID = siteKinstaID(record, "environment_id")
 		target.SSHHost = firstNonEmpty(mapStringAtPath(record, "ssh", "host"), mapStringAtPath(record, "kinsta", "ssh", "host"), firstRecordString(record, "ssh_host"))
 		target.SSHUser = firstNonEmpty(mapStringAtPath(record, "ssh", "user"), mapStringAtPath(record, "kinsta", "ssh", "user"), firstRecordString(record, "ssh_user", "ssh_username"))
 		target.SSHPort = firstNonEmpty(mapStringAtPath(record, "ssh", "port"), mapStringAtPath(record, "kinsta", "ssh", "port"), firstRecordString(record, "ssh_port"), "22")
@@ -318,6 +341,59 @@ func resolveThemeDeployTarget(remoteName, themeSlug string, metadata *projectMet
 	}
 	target.RemoteThemeDir = path.Join(target.WordPressPath, "wp-content", "themes", themeSlug)
 	return target, nil
+}
+
+func validateThemeRuntimeMaintenance(target themeDeployTarget, dryRun bool) error {
+	if target.Provider != "kinsta" {
+		return nil
+	}
+	if target.KinstaEnvID == "" {
+		return ProjectError{Msg: fmt.Sprintf("Kinsta site env %q is missing environment_id. Run nf site refresh.", canonicalEnvID(target.SiteID, target.Env))}
+	}
+	if !dryRun && envwizard.Value("KINSTA_API_KEY") == "" {
+		return ProjectError{Msg: fmt.Sprintf("Expected KINSTA_API_KEY in the environment or %s.", config.EnvFile())}
+	}
+	return nil
+}
+
+func printThemeRuntimeMaintenancePlan(target themeDeployTarget, action string) {
+	if target.Provider == "kinsta" {
+		fmt.Printf("  post-%s: restart Kinsta PHP and clear site cache\n", action)
+	}
+}
+
+func runThemeRuntimeMaintenance(target themeDeployTarget) error {
+	if target.Provider != "kinsta" {
+		return nil
+	}
+	if err := validateThemeRuntimeMaintenance(target, false); err != nil {
+		return err
+	}
+	client := newKinstaClient(envwizard.Value("KINSTA_API_KEY"))
+	ctx := context.Background()
+	opID, err := client.RestartPHP(ctx, target.KinstaEnvID)
+	if err != nil {
+		return fmt.Errorf("failed to restart Kinsta PHP: %w", err)
+	}
+	if opID != "" {
+		fmt.Printf("Kinsta PHP restart operation: %s\n", opID)
+	}
+	if err := waitKinstaOperation(ctx, client, opID); err != nil {
+		return fmt.Errorf("failed to restart Kinsta PHP: %w", err)
+	}
+	fmt.Println("Kinsta PHP restarted.")
+	opID, err = client.ClearSiteCache(ctx, target.KinstaEnvID)
+	if err != nil {
+		return fmt.Errorf("failed to clear Kinsta site cache: %w", err)
+	}
+	if opID != "" {
+		fmt.Printf("Kinsta site cache operation: %s\n", opID)
+	}
+	if err := waitKinstaOperation(ctx, client, opID); err != nil {
+		return fmt.Errorf("failed to clear Kinsta site cache: %w", err)
+	}
+	fmt.Println("Kinsta site cache cleared.")
+	return nil
 }
 
 func themeDeploySyncTarget(target themeDeployTarget) envRemoteSyncTarget {

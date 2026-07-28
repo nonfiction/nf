@@ -86,6 +86,16 @@ func TestClientSiteEnvironmentDomainFlow(t *testing.T) {
 			}
 			w.WriteHeader(http.StatusAccepted)
 			_ = json.NewEncoder(w).Encode(map[string]any{"operation_id": "cache:clear-kenv-live", "status": 202})
+		case "POST /sites/tools/restart-php":
+			var payload map[string]any
+			if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
+				t.Fatalf("restart php decode error = %v", err)
+			}
+			if payload["environment_id"] != "kenv-live" {
+				t.Fatalf("restart php payload = %#v", payload)
+			}
+			w.WriteHeader(http.StatusAccepted)
+			_ = json.NewEncoder(w).Encode(map[string]any{"operation_id": "php:restart-kenv-live", "status": 202})
 		case "DELETE /sites/environments/kenv-staging":
 			w.WriteHeader(http.StatusAccepted)
 			_ = json.NewEncoder(w).Encode(map[string]any{"operation_id": "op-delete-env", "status": 202})
@@ -169,6 +179,9 @@ func TestClientSiteEnvironmentDomainFlow(t *testing.T) {
 	}
 	if opID, err := client.ClearSiteCache(ctx, "kenv-live"); err != nil || opID != "cache:clear-kenv-live" {
 		t.Fatalf("ClearSiteCache() = %q, %v; want cache:clear-kenv-live", opID, err)
+	}
+	if opID, err := client.RestartPHP(ctx, "kenv-live"); err != nil || opID != "php:restart-kenv-live" {
+		t.Fatalf("RestartPHP() = %q, %v; want php:restart-kenv-live", opID, err)
 	}
 	if opID, err := client.DeleteEnvironment(ctx, "kenv-staging"); err != nil || opID != "op-delete-env" {
 		t.Fatalf("DeleteEnvironment() = %q, %v; want op-delete-env", opID, err)
