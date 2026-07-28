@@ -53,7 +53,7 @@ type themeDeployArtifact struct {
 
 const themeReleaseKeep = 5
 
-func cmdThemeDeploy(remoteName string, dryRun bool) int {
+func cmdThemeDeploy(remoteName string, dryRun, restartPHP bool) int {
 	remoteName = strings.TrimSpace(remoteName)
 	if remoteName == "" {
 		fmt.Fprintln(os.Stderr, "theme deploy requires a non-empty remote")
@@ -153,7 +153,7 @@ func cmdThemeDeploy(remoteName string, dryRun bool) int {
 	rewriteArgs := remoteWPSSHArgs(syncTarget, wpRewriteFlushArgs()...)
 	fmt.Println("  post-deploy: regenerate WordPress rewrite rules")
 	printCommandArgs(rewriteArgs)
-	printThemeRuntimeMaintenancePlan(target, "deploy")
+	printThemeRuntimeMaintenancePlan(target, "deploy", restartPHP)
 	if !dryRun {
 		if len(dependencyUploads) > 0 {
 			if err := uploadRemoteThemeSources(syncTarget, dependencyTmp, dependencyUploads); err != nil {
@@ -189,7 +189,7 @@ func cmdThemeDeploy(remoteName string, dryRun bool) int {
 			fmt.Fprintln(os.Stderr, err)
 			return 1
 		}
-		if err := runThemeRuntimeMaintenanceFn(target); err != nil {
+		if err := runThemeRuntimeMaintenanceFn(target, restartPHP); err != nil {
 			fmt.Fprintln(os.Stderr, err)
 			return 1
 		}
@@ -266,7 +266,7 @@ func cmdThemeRollback(remoteName string, dryRun bool) int {
 	printCommandArgs(rollbackArgs)
 	fmt.Println("  post-rollback: regenerate WordPress rewrite rules")
 	printCommandArgs(rewriteArgs)
-	printThemeRuntimeMaintenancePlan(target, "rollback")
+	printThemeRuntimeMaintenancePlan(target, "rollback", true)
 	if !dryRun {
 		if err := runSSHStdinCommandFn(rollbackArgs, rollbackScript); err != nil {
 			fmt.Fprintln(os.Stderr, err)
@@ -276,7 +276,7 @@ func cmdThemeRollback(remoteName string, dryRun bool) int {
 			fmt.Fprintln(os.Stderr, err)
 			return 1
 		}
-		if err := runThemeRuntimeMaintenanceFn(target); err != nil {
+		if err := runThemeRuntimeMaintenanceFn(target, true); err != nil {
 			fmt.Fprintln(os.Stderr, err)
 			return 1
 		}
@@ -356,13 +356,17 @@ func validateThemeRuntimeMaintenance(target themeDeployTarget, dryRun bool) erro
 	return nil
 }
 
-func printThemeRuntimeMaintenancePlan(target themeDeployTarget, action string) {
+func printThemeRuntimeMaintenancePlan(target themeDeployTarget, action string, restartPHP bool) {
 	if target.Provider == "kinsta" {
-		fmt.Printf("  post-%s: restart Kinsta PHP and clear site cache\n", action)
+		if restartPHP {
+			fmt.Printf("  post-%s: restart Kinsta PHP and clear site cache\n", action)
+		} else {
+			fmt.Printf("  post-%s: clear Kinsta site cache\n", action)
+		}
 	}
 }
 
-func runThemeRuntimeMaintenance(target themeDeployTarget) error {
+func runThemeRuntimeMaintenance(target themeDeployTarget, restartPHP bool) error {
 	if target.Provider != "kinsta" {
 		return nil
 	}
@@ -371,18 +375,20 @@ func runThemeRuntimeMaintenance(target themeDeployTarget) error {
 	}
 	client := newKinstaClient(envwizard.Value("KINSTA_API_KEY"))
 	ctx := context.Background()
-	opID, err := client.RestartPHP(ctx, target.KinstaEnvID)
-	if err != nil {
-		return fmt.Errorf("failed to restart Kinsta PHP: %w", err)
+	if restartPHP {
+		opID, err := client.RestartPHP(ctx, target.KinstaEnvID)
+		if err != nil {
+			return fmt.Errorf("failed to restart Kinsta PHP: %w", err)
+		}
+		if opID != "" {
+			fmt.Printf("Kinsta PHP restart operation: %s\n", opID)
+		}
+		if err := waitKinstaOperation(ctx, client, opID); err != nil {
+			return fmt.Errorf("failed to restart Kinsta PHP: %w", err)
+		}
+		fmt.Println("Kinsta PHP restarted.")
 	}
-	if opID != "" {
-		fmt.Printf("Kinsta PHP restart operation: %s\n", opID)
-	}
-	if err := waitKinstaOperation(ctx, client, opID); err != nil {
-		return fmt.Errorf("failed to restart Kinsta PHP: %w", err)
-	}
-	fmt.Println("Kinsta PHP restarted.")
-	opID, err = client.ClearSiteCache(ctx, target.KinstaEnvID)
+	opID, err := client.ClearSiteCache(ctx, target.KinstaEnvID)
 	if err != nil {
 		return fmt.Errorf("failed to clear Kinsta site cache: %w", err)
 	}

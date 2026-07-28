@@ -5,15 +5,15 @@ This page is an overview of deployment-related workflows. Use the practical guid
 ## Theme Releases
 
 ```sh
-nf theme deploy <remote> [--dry-run]
+nf theme deploy <remote> [--dry-run] [--restart]
 nf theme rollback <remote> [--dry-run]
 ```
 
-`nf theme deploy <remote>` is a one-command packaged release deploy. It builds the same theme artifact as `nf theme package`, uploads it to the selected remote env, extracts it under `wp-content/themes/.nf-releases/<theme-slug>/`, copies the release into the active theme directory, activates the configured theme slug with WP-CLI, records release metadata, and then regenerates WordPress rewrite rules with `wp rewrite flush`. On Kinsta, it next restarts the environment's PHP engine and clears the site cache through the Kinsta API, waiting for each operation to finish so PHP-FPM cannot keep stale theme bytecode.
+`nf theme deploy <remote>` is a one-command packaged release deploy. It builds the same theme artifact as `nf theme package`, uploads it to the selected remote env, extracts it under `wp-content/themes/.nf-releases/<theme-slug>/`, copies the release into the active theme directory, activates the configured theme slug with WP-CLI, records release metadata, and then regenerates WordPress rewrite rules with `wp rewrite flush`. On Kinsta, it next clears the site cache through the Kinsta API. Pass `--restart` to restart PHP before clearing cache when changed PHP code must invalidate PHP-FPM bytecode.
 
 Theme deploy keeps the last 5 releases and matching uploaded zips, so release storage does not grow indefinitely. It does not require manual WordPress admin zip upload and supersedes direct in-place source rsync deploys.
 
-`nf theme rollback <remote>` switches the active theme directory back to the previous recorded release, activates the configured theme slug again, and then runs the same rewrite and provider runtime maintenance as deploy. It uses remote `releases.json`; it does not rebuild or upload artifacts. See [Themes](themes.md).
+`nf theme rollback <remote>` switches the active theme directory back to the previous recorded release, activates the configured theme slug again, and then regenerates rewrite rules. Kinsta rollbacks always restart PHP and clear site cache after switching back to older code. Rollback uses remote `releases.json`; it does not rebuild or upload artifacts. See [Themes](themes.md).
 
 ## Root Aliases
 

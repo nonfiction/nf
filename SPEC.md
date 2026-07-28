@@ -565,7 +565,7 @@ Packaging rules:
 
 Deploy rules:
 
-* deploy UX stays `nf theme deploy <remote> [--dry-run]`
+* deploy UX stays `nf theme deploy <remote> [--dry-run] [--restart]`
 * deploy is a one-command packaged release deploy, not manual WordPress zip upload
 * deploy uses the same packaging behavior as `nf theme package`; it stages Composer production dependencies but does not run npm or asset builds automatically
 * deploy installs configured non-repo themes before uploading the repo theme release when needed for parent-theme dependencies
@@ -576,11 +576,11 @@ Deploy rules:
 * release metadata is recorded at `wp-content/themes/.nf-releases/<repo-theme-slug>/releases.json` without secrets
 * deploy prunes remote release storage after success, keeping the last 5 distinct releases and their matching uploaded artifacts
 * deploy also removes stale extraction/temp release dirs under `.nf-releases/<repo-theme-slug>/`
-* after switching the release, deploy regenerates WordPress rewrite rules; Kinsta deploys then restart the environment PHP engine and clear site cache through the Kinsta API, waiting for each operation before reporting success
+* after switching the release, deploy regenerates WordPress rewrite rules; Kinsta deploys then clear site cache through the Kinsta API, and `--restart` restarts the environment PHP engine before that cache clear
 * rollback UX is `nf theme rollback <remote> [--dry-run]`
 * rollback selects the previous distinct `release_id` from remote `releases.json`, copies that release back into the repo theme directory, runs wp-cli activation for the first configured theme, and appends a rollback metadata entry
 * rollback does not rebuild or upload artifacts
-* rollback runs the same rewrite and Kinsta PHP/cache maintenance as deploy after switching releases
+* rollback regenerates rewrite rules and always restarts Kinsta PHP before clearing site cache after switching releases
 
 ## Root aliases
 
@@ -884,7 +884,7 @@ Status:
 * [x] theme task execution
 * [x] theme packaging
 * [x] repo remote model
-* [x] packaged release deploy via `nf theme deploy <remote> [--dry-run]`
+* [x] packaged release deploy via `nf theme deploy <remote> [--dry-run] [--restart]`
 * [x] Linode and Kinsta SSH/rsync artifact deploy paths
 * [x] release metadata layout for rollback/history
 * [x] public rollback command

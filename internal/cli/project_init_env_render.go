@@ -545,24 +545,26 @@ func cmdThemePackage(source, output string, dryRun bool) int {
 	return cmdPackage("theme package", source, output, dryRun)
 }
 
-func parseThemeDeployArgs(args []string) (remote string, dryRun bool, ok bool) {
+func parseThemeDeployArgs(args []string) (remote string, dryRun, restart, ok bool) {
 	for _, arg := range args {
 		switch arg {
 		case "--dry-run":
 			dryRun = true
+		case "--restart":
+			restart = true
 		case "--":
-			return "", false, false
+			return "", false, false, false
 		default:
 			if strings.HasPrefix(arg, "-") {
-				return "", false, false
+				return "", false, false, false
 			}
 			if remote != "" {
-				return "", false, false
+				return "", false, false, false
 			}
 			remote = arg
 		}
 	}
-	return remote, dryRun, true
+	return remote, dryRun, restart, true
 }
 
 func chooseProjectRemote(action string) (string, error) {

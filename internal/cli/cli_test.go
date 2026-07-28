@@ -1299,7 +1299,7 @@ func TestRunCompleteSuggestsProjectValues(t *testing.T) {
 			t.Fatalf("Run(__complete theme deploy) = %d, want 0", got)
 		}
 	})
-	if got, want := strings.TrimSpace(themeDeployAllOutput), "production\n--dry-run"; got != want {
+	if got, want := strings.TrimSpace(themeDeployAllOutput), "production\n--dry-run\n--restart"; got != want {
 		t.Fatalf("theme deploy completion order = %q, want %q", got, want)
 	}
 
@@ -12537,7 +12537,7 @@ func TestRunThemeDeployDryRunPlansPackagedReleaseToConfiguredRemote(t *testing.T
 			t.Fatalf("Run(theme deploy --dry-run) = %d, want 0", got)
 		}
 	})
-	for _, want := range []string{"Theme deploy plan:", "remote:      production", "site:        client-kinsta", "env:         live", "provider:    kinsta", "source:      " + filepath.Join(repoRoot, "build", "theme"), "artifact:    " + filepath.Join(repoRoot, "dist", "client-v1.2.3.zip"), "release id:  v1.2.3-", "release dir: /www/client/public/wp-content/themes/.nf-releases/theme/v1.2.3-", "active dir:  /www/client/public/wp-content/themes/theme", "keep:        last 5 releases", "mode:        dry-run", "Would package " + filepath.Join(repoRoot, "build", "theme") + " -> " + filepath.Join(repoRoot, "dist", "client-v1.2.3.zip"), "> ssh -p 12345 client@203.0.113.10 'mkdir -p /www/client/public/wp-content/themes/.nf-releases/theme/_uploads'", "> rsync -az -e 'ssh -p 12345' " + filepath.Join(repoRoot, "dist", "client-v1.2.3.zip") + " client@203.0.113.10:/www/client/public/wp-content/themes/.nf-releases/theme/_uploads/client-v1.2.3.zip", "remote script: extract release, switch active theme, refresh runtime mtimes, activate, record metadata, prune old releases", "> ssh -p 12345 client@203.0.113.10 'sh -s -- nf-theme-deploy-release'", "post-deploy: restart Kinsta PHP and clear site cache", "No remote files were changed."} {
+	for _, want := range []string{"Theme deploy plan:", "remote:      production", "site:        client-kinsta", "env:         live", "provider:    kinsta", "source:      " + filepath.Join(repoRoot, "build", "theme"), "artifact:    " + filepath.Join(repoRoot, "dist", "client-v1.2.3.zip"), "release id:  v1.2.3-", "release dir: /www/client/public/wp-content/themes/.nf-releases/theme/v1.2.3-", "active dir:  /www/client/public/wp-content/themes/theme", "keep:        last 5 releases", "mode:        dry-run", "Would package " + filepath.Join(repoRoot, "build", "theme") + " -> " + filepath.Join(repoRoot, "dist", "client-v1.2.3.zip"), "> ssh -p 12345 client@203.0.113.10 'mkdir -p /www/client/public/wp-content/themes/.nf-releases/theme/_uploads'", "> rsync -az -e 'ssh -p 12345' " + filepath.Join(repoRoot, "dist", "client-v1.2.3.zip") + " client@203.0.113.10:/www/client/public/wp-content/themes/.nf-releases/theme/_uploads/client-v1.2.3.zip", "remote script: extract release, switch active theme, refresh runtime mtimes, activate, record metadata, prune old releases", "> ssh -p 12345 client@203.0.113.10 'sh -s -- nf-theme-deploy-release'", "post-deploy: clear Kinsta site cache", "No remote files were changed."} {
 		if !strings.Contains(stdout, want) {
 			t.Fatalf("theme deploy stdout missing %q:\n%s", want, stdout)
 		}
@@ -12546,6 +12546,17 @@ func TestRunThemeDeployDryRunPlansPackagedReleaseToConfiguredRemote(t *testing.T
 		if strings.Contains(stdout, unwanted) {
 			t.Fatalf("theme deploy stdout should not print remote script fragment %q:\n%s", unwanted, stdout)
 		}
+	}
+	if strings.Contains(stdout, "restart Kinsta PHP") {
+		t.Fatalf("theme deploy without --restart planned a PHP restart:\n%s", stdout)
+	}
+	stdout = captureStdout(t, func() {
+		if got := Run([]string{"theme", "deploy", "production", "--dry-run", "--restart"}); got != 0 {
+			t.Fatalf("Run(theme deploy --dry-run --restart) = %d, want 0", got)
+		}
+	})
+	if !strings.Contains(stdout, "post-deploy: restart Kinsta PHP and clear site cache") {
+		t.Fatalf("theme deploy --restart plan missing PHP restart:\n%s", stdout)
 	}
 }
 
@@ -12580,16 +12591,28 @@ func TestRunThemeRuntimeMaintenanceRestartsKinstaPHPBeforeClearingCache(t *testi
 	t.Setenv("KINSTA_BASE_URL", server.URL)
 
 	stdout := captureStdout(t, func() {
-		if err := runThemeRuntimeMaintenance(themeDeployTarget{Provider: "kinsta", SiteID: "client-kinsta", Env: "live", KinstaEnvID: "kenv-live"}); err != nil {
+		if err := runThemeRuntimeMaintenance(themeDeployTarget{Provider: "kinsta", SiteID: "client-kinsta", Env: "live", KinstaEnvID: "kenv-live"}, false); err != nil {
 			t.Fatalf("runThemeRuntimeMaintenance() error = %v", err)
 		}
 	})
-	if got, want := strings.Join(events, ","), "restart,wait-restart,cache,wait-cache"; got != want {
+	if got, want := strings.Join(events, ","), "cache,wait-cache"; got != want {
 		t.Fatalf("runtime maintenance events = %q, want %q", got, want)
+	}
+	if strings.Contains(stdout, "Kinsta PHP restarted.") || !strings.Contains(stdout, "Kinsta site cache cleared.") {
+		t.Fatalf("runtime maintenance without restart stdout = %q", stdout)
+	}
+	events = nil
+	stdout = captureStdout(t, func() {
+		if err := runThemeRuntimeMaintenance(themeDeployTarget{Provider: "kinsta", SiteID: "client-kinsta", Env: "live", KinstaEnvID: "kenv-live"}, true); err != nil {
+			t.Fatalf("runThemeRuntimeMaintenance(restart) error = %v", err)
+		}
+	})
+	if got, want := strings.Join(events, ","), "restart,wait-restart,cache,wait-cache"; got != want {
+		t.Fatalf("runtime maintenance restart events = %q, want %q", got, want)
 	}
 	for _, want := range []string{"Kinsta PHP restarted.", "Kinsta site cache cleared."} {
 		if !strings.Contains(stdout, want) {
-			t.Fatalf("runtime maintenance stdout missing %q:\n%s", want, stdout)
+			t.Fatalf("runtime maintenance restart stdout missing %q:\n%s", want, stdout)
 		}
 	}
 }
@@ -13156,8 +13179,10 @@ func TestRunThemeDeployWithoutRemotePromptsPicker(t *testing.T) {
 	t.Cleanup(func() { runSSHStdinCommandFn = oldRunSSHStdin })
 	oldRuntimeMaintenance := runThemeRuntimeMaintenanceFn
 	maintenanceCalls := 0
-	runThemeRuntimeMaintenanceFn = func(target themeDeployTarget) error {
+	restartRequests := []bool{}
+	runThemeRuntimeMaintenanceFn = func(target themeDeployTarget, restartPHP bool) error {
 		maintenanceCalls++
+		restartRequests = append(restartRequests, restartPHP)
 		if target.Provider != "kinsta" || target.KinstaEnvID != "kenv-live" {
 			t.Fatalf("runtime maintenance target = %#v", target)
 		}
@@ -13181,6 +13206,17 @@ func TestRunThemeDeployWithoutRemotePromptsPicker(t *testing.T) {
 	}
 	if maintenanceCalls != 1 {
 		t.Fatalf("theme deploy runtime maintenance calls = %d, want 1", maintenanceCalls)
+	}
+	if len(restartRequests) != 1 || restartRequests[0] {
+		t.Fatalf("theme deploy restart requests = %#v, want false", restartRequests)
+	}
+	stdout = captureStdout(t, func() {
+		if got := Run([]string{"theme", "deploy", "production", "--restart"}); got != 0 {
+			t.Fatalf("Run(theme deploy --restart) = %d, want 0", got)
+		}
+	})
+	if maintenanceCalls != 2 || len(restartRequests) != 2 || !restartRequests[1] {
+		t.Fatalf("theme deploy restart requests = %#v, maintenance calls = %d", restartRequests, maintenanceCalls)
 	}
 }
 
@@ -13239,8 +13275,11 @@ func TestRunThemeRollbackPlansAndExecutesKinstaMaintenance(t *testing.T) {
 	t.Cleanup(func() { runSSHStdinCommandFn = oldRunSSHStdin })
 	oldRuntimeMaintenance := runThemeRuntimeMaintenanceFn
 	maintenanceCalls := 0
-	runThemeRuntimeMaintenanceFn = func(target themeDeployTarget) error {
+	runThemeRuntimeMaintenanceFn = func(target themeDeployTarget, restartPHP bool) error {
 		maintenanceCalls++
+		if !restartPHP {
+			t.Fatal("theme rollback did not request PHP restart")
+		}
 		if target.Provider != "kinsta" || target.KinstaEnvID != "kenv-live" {
 			t.Fatalf("runtime maintenance target = %#v", target)
 		}
@@ -15632,7 +15671,7 @@ func TestRunThemeHelpShowsThemeCommandsInsideGit(t *testing.T) {
 	t.Cleanup(func() { _ = os.Chdir(oldwd) })
 
 	output := captureStdout(t, func() { _ = runThemeHelp() })
-	assertContainsInOrder(t, output, []string{"tasks", "package", "\n\n  deploy <remote>", "rollback <remote>", "\nPackage Options:\n", "--source <path>", "\nDeploy Options:\n", "--dry-run", "\nTheme tasks:\n", "build"})
+	assertContainsInOrder(t, output, []string{"tasks", "package", "\n\n  deploy <remote>", "rollback <remote>", "\nPackage Options:\n", "--source <path>", "\nDeploy Options:\n", "--dry-run", "--restart", "\nTheme tasks:\n", "build"})
 	for _, wanted := range []string{"\n  tasks", "list configured theme tasks\n", "\n  package", "package a clean theme artifact\n", "\n  deploy <remote>", "deploy a packaged theme release\n", "\n  rollback <remote>", "roll back to the previous theme release\n", "\nPackage Options:\n", "\nDeploy Options:\n", "\nTheme tasks:\n"} {
 		if !strings.Contains(output, wanted) {
 			t.Fatalf("runThemeHelp() output missing %q:\n%s", wanted, output)
@@ -15652,7 +15691,7 @@ func TestRunThemeHelpShowsCommandsOnlyOutsideGit(t *testing.T) {
 	t.Cleanup(func() { _ = os.Chdir(oldwd) })
 
 	output := captureStdout(t, func() { _ = runThemeHelp() })
-	assertContainsInOrder(t, output, []string{"tasks", "package", "\n\n  deploy <remote>", "rollback <remote>", "\nPackage Options:\n", "--source <path>", "\nDeploy Options:\n", "--dry-run"})
+	assertContainsInOrder(t, output, []string{"tasks", "package", "\n\n  deploy <remote>", "rollback <remote>", "\nPackage Options:\n", "--source <path>", "\nDeploy Options:\n", "--dry-run", "--restart"})
 	for _, want := range []string{"\n  tasks", "list configured theme tasks\n", "\n  package", "package a clean theme artifact\n", "\n  deploy <remote>", "deploy a packaged theme release\n", "\n  rollback <remote>", "roll back to the previous theme release\n", "\nPackage Options:\n", "\nDeploy Options:\n"} {
 		if !strings.Contains(output, want) {
 			t.Fatalf("runThemeHelp() output missing %q:\n%s", want, output)

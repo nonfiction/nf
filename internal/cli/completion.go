@@ -505,7 +505,9 @@ func themeCompletionCandidates(args []string) []string {
 	switch args[0] {
 	case "package":
 		return []string{"--dry-run", "--source", "--output"}
-	case "deploy", "rollback":
+	case "deploy":
+		return append(projectRemoteCompletionNames(), "--dry-run", "--restart")
+	case "rollback":
 		return append(projectRemoteCompletionNames(), "--dry-run")
 	default:
 		return nil

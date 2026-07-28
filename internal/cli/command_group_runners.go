@@ -182,6 +182,7 @@ func runThemeHelp() int {
 		{"--output <path>", "package output path"},
 	}}, helpSection{"Deploy Options", []helpLine{
 		{"--dry-run", "preview deploy or rollback"},
+		{"--restart", "restart Kinsta PHP after deploy"},
 	}})
 	if projectContextAvailable() {
 		if root, ok := currentGitRoot(); ok {
@@ -494,7 +495,7 @@ func runTheme(argv []string) int {
 			fmt.Fprintln(os.Stderr, err)
 			return 1
 		}
-		remote, dryRun, ok := parseThemeDeployArgs(argv[1:])
+		remote, dryRun, restart, ok := parseThemeDeployArgs(argv[1:])
 		if !ok {
 			fmt.Fprintln(os.Stderr, "theme deploy takes exactly one remote")
 			return 1
@@ -507,14 +508,14 @@ func runTheme(argv []string) int {
 			}
 			remote = selected
 		}
-		return cmdThemeDeploy(remote, dryRun)
+		return cmdThemeDeploy(remote, dryRun, restart)
 	case "rollback":
 		if err := requireProjectContext("theme rollback"); err != nil {
 			fmt.Fprintln(os.Stderr, err)
 			return 1
 		}
-		remote, dryRun, ok := parseThemeDeployArgs(argv[1:])
-		if !ok {
+		remote, dryRun, restart, ok := parseThemeDeployArgs(argv[1:])
+		if !ok || restart {
 			fmt.Fprintln(os.Stderr, "theme rollback takes exactly one remote")
 			return 1
 		}
