@@ -720,7 +720,6 @@ func cmdEnvPluginsInstallRemote(root string, metadata *projectMetadata, opts env
 		}
 		for _, upload := range uploads {
 			uploadArgs := remotePluginUploadArgs(target, upload)
-			printCommandArgs(uploadArgs)
 			if err := runRsyncCommandFn(uploadArgs); err != nil {
 				fmt.Fprintln(os.Stderr, err)
 				_ = runSSHCommandFn(remoteSSHArgs(target, "rm -rf "+shellQuoteArg(remoteTmp)))
@@ -747,6 +746,12 @@ func cmdEnvPluginsInstallRemote(root string, metadata *projectMetadata, opts env
 type remotePluginInstallSpec struct {
 	Plugin        wordpressPluginSpec
 	InstallSource string
+	SourceVersion string
+}
+
+type preparedPluginInstallSource struct {
+	Path    string
+	Version string
 }
 
 type remotePluginUpload struct {
@@ -773,7 +778,7 @@ type envPluginInstaller struct {
 	cfg envConfig
 }
 
-func (i envPluginInstaller) Install(plugins []wordpressPluginSpec, installSources map[string]string) error {
+func (i envPluginInstaller) Install(plugins []wordpressPluginSpec, installSources map[string]preparedPluginInstallSource) error {
 	envDir := localEnvDir(i.cfg)
 	args := envWordpressExecArgs(i.cfg, "sh", "-lc", localPluginInstallScript(plugins, installSources))
 	preview := envWordpressExecArgs(i.cfg, "<wp plugin bootstrap script>")
@@ -921,8 +926,8 @@ func envMutableWpContentTarExcludeArgs(cfg envConfig) string {
 	return strings.Join(kept, " ")
 }
 
-func prepareLocalPluginInstallSources(cfg envConfig, plugins []wordpressPluginSpec) (map[string]string, func(), error) {
-	sources := map[string]string{}
+func prepareLocalPluginInstallSources(cfg envConfig, plugins []wordpressPluginSpec) (map[string]preparedPluginInstallSource, func(), error) {
+	sources := map[string]preparedPluginInstallSource{}
 	if !hasLocalPreparedPluginSource(plugins) {
 		return sources, nil, nil
 	}
@@ -946,7 +951,7 @@ func prepareLocalPluginInstallSources(cfg envConfig, plugins []wordpressPluginSp
 				cleanup()
 				return nil, nil, ProjectError{Msg: fmt.Sprintf("repo plugin source directory does not exist: %s", sourceDir)}
 			}
-			sources[plugin.Slug] = localRepoPluginInstallSourceMark
+			sources[plugin.Slug] = preparedPluginInstallSource{Path: localRepoPluginInstallSourceMark}
 			continue
 		}
 		if pluginSourceIsCache(plugin) {
@@ -960,6 +965,11 @@ func prepareLocalPluginInstallSources(cfg envConfig, plugins []wordpressPluginSp
 				cleanup()
 				return nil, nil, ProjectError{Msg: fmt.Sprintf("plugin cache for %s must be a zip file, got directory: %s", plugin.Slug, cacheZip)}
 			}
+			version, err := pluginZipVersion(cacheZip, plugin.Slug)
+			if err != nil {
+				cleanup()
+				return nil, nil, err
+			}
 			zipPath := filepath.Join(outputDir, plugin.Slug+".zip")
 			if err := os.MkdirAll(filepath.Dir(zipPath), 0o755); err != nil {
 				cleanup()
@@ -969,7 +979,10 @@ func prepareLocalPluginInstallSources(cfg envConfig, plugins []wordpressPluginSp
 				cleanup()
 				return nil, nil, err
 			}
-			sources[plugin.Slug] = path.Join(cfg.uploadsContainerPath(), ".nf-plugin-cache", plugin.Slug+".zip")
+			sources[plugin.Slug] = preparedPluginInstallSource{
+				Path:    path.Join(cfg.uploadsContainerPath(), ".nf-plugin-cache", plugin.Slug+".zip"),
+				Version: version,
+			}
 		}
 	}
 	return sources, cleanup, nil
@@ -1166,6 +1179,53 @@ func writePluginZip(sourceDir, outputPath, archiveRoot string, files []string) e
 	return out.Close()
 }
 
+func pluginZipVersion(zipPath, slug string) (string, error) {
+	reader, err := zip.OpenReader(zipPath)
+	if err != nil {
+		return "", ProjectError{Msg: fmt.Sprintf("plugin cache for %s is not a readable zip: %s", slug, zipPath)}
+	}
+	defer reader.Close()
+
+	prefix := slug + "/"
+	for _, file := range reader.File {
+		name := path.Clean(file.Name)
+		if file.FileInfo().IsDir() || path.Dir(name) != slug || !strings.HasPrefix(name, prefix) || !strings.EqualFold(path.Ext(name), ".php") {
+			continue
+		}
+		contents, err := file.Open()
+		if err != nil {
+			return "", err
+		}
+		header, readErr := io.ReadAll(io.LimitReader(contents, 8192))
+		closeErr := contents.Close()
+		if readErr != nil {
+			return "", readErr
+		}
+		if closeErr != nil {
+			return "", closeErr
+		}
+		if pluginHeaderValue(header, "Plugin Name") == "" {
+			continue
+		}
+		if version := pluginHeaderValue(header, "Version"); version != "" {
+			return version, nil
+		}
+	}
+	return "", ProjectError{Msg: fmt.Sprintf("plugin cache for %s does not declare a Version header: %s", slug, zipPath)}
+}
+
+func pluginHeaderValue(header []byte, field string) string {
+	for _, line := range strings.Split(string(header), "\n") {
+		line = strings.TrimSpace(strings.TrimLeft(strings.TrimSpace(line), "/*#@"))
+		key, value, ok := strings.Cut(line, ":")
+		if !ok || !strings.EqualFold(strings.TrimSpace(key), field) {
+			continue
+		}
+		return strings.TrimSpace(strings.TrimSuffix(strings.TrimSpace(value), "*/"))
+	}
+	return ""
+}
+
 func remotePluginInstallSpecs(root string, plugins []wordpressPluginSpec, remoteTmp string, requireFiles bool, repoZips map[string]string) ([]remotePluginInstallSpec, []remotePluginUpload, error) {
 	remotePlugins := make([]remotePluginInstallSpec, 0, len(plugins))
 	uploads := []remotePluginUpload{}
@@ -1189,6 +1249,7 @@ func remotePluginInstallSpecs(root string, plugins []wordpressPluginSpec, remote
 		}
 		if pluginSourceIsCache(plugin) {
 			localPath := config.PluginCacheZip(plugin.Slug)
+			version := ""
 			if requireFiles {
 				info, err := os.Stat(localPath)
 				if err != nil {
@@ -1197,10 +1258,14 @@ func remotePluginInstallSpecs(root string, plugins []wordpressPluginSpec, remote
 				if info.IsDir() {
 					return nil, nil, ProjectError{Msg: fmt.Sprintf("plugin cache for %s must be a zip file, got directory: %s", plugin.Slug, localPath)}
 				}
+				version, err = pluginZipVersion(localPath, plugin.Slug)
+				if err != nil {
+					return nil, nil, err
+				}
 			}
 			remotePath := path.Join(remoteTmp, plugin.Slug+".zip")
 			uploads = append(uploads, remotePluginUpload{Plugin: plugin, LocalPath: localPath, RemotePath: remotePath})
-			remotePlugins = append(remotePlugins, remotePluginInstallSpec{Plugin: plugin, InstallSource: remotePath})
+			remotePlugins = append(remotePlugins, remotePluginInstallSpec{Plugin: plugin, InstallSource: remotePath, SourceVersion: version})
 			continue
 		}
 		installSource := pluginInstallSource(plugin)
@@ -1413,39 +1478,93 @@ func remotePluginInstallScript(target envRemoteSyncTarget, plugins []remotePlugi
 	builder.WriteString(" \"$@\"; }\n")
 	for _, remotePlugin := range plugins {
 		plugin := remotePlugin.Plugin
-		slug := shellQuoteArg(plugin.Slug)
-		source := shellQuoteArg(remotePlugin.InstallSource)
-		builder.WriteString("if ! wp_cmd plugin is-installed ")
-		builder.WriteString(slug)
-		builder.WriteString("; then\n")
-		builder.WriteString("  wp_cmd plugin install ")
+		writePluginInstallScript(&builder, "wp_cmd", plugin, remotePlugin.InstallSource, remotePlugin.SourceVersion, pluginSourceIsRepo(plugin))
+	}
+	return builder.String()
+}
+
+func writePluginInstallScript(builder *strings.Builder, wpCommand string, plugin wordpressPluginSpec, installSource, sourceVersion string, refresh bool) {
+	slug := shellQuoteArg(plugin.Slug)
+	source := shellQuoteArg(installSource)
+	writeInstall := func(force bool, indent string) {
+		builder.WriteString(indent)
+		builder.WriteString(wpCommand)
+		builder.WriteString(" plugin install ")
 		builder.WriteString(source)
+		if force {
+			builder.WriteString(" --force")
+		}
 		if plugin.Activate {
 			builder.WriteString(" --activate")
 		}
 		builder.WriteString("\n")
-		if plugin.Activate {
-			builder.WriteString("elif ! wp_cmd plugin is-active ")
+	}
+
+	if refresh {
+		writeInstall(true, "")
+	} else {
+		builder.WriteString("if ! ")
+		builder.WriteString(wpCommand)
+		builder.WriteString(" plugin is-installed ")
+		builder.WriteString(slug)
+		builder.WriteString("; then\n")
+		writeInstall(false, "  ")
+		if sourceVersion != "" {
+			builder.WriteString("else\n")
+			builder.WriteString("  installed_version=$(")
+			builder.WriteString(wpCommand)
+			builder.WriteString(" plugin get ")
+			builder.WriteString(slug)
+			builder.WriteString(" --field=version 2>/dev/null || true)\n")
+			builder.WriteString("  if [ -n \"$installed_version\" ] && NF_CACHED_PLUGIN_VERSION=")
+			builder.WriteString(shellQuoteArg(sourceVersion))
+			builder.WriteString(" NF_INSTALLED_PLUGIN_VERSION=\"$installed_version\" ")
+			builder.WriteString(wpCommand)
+			builder.WriteString(" eval 'exit(version_compare((string) getenv(\"NF_CACHED_PLUGIN_VERSION\"), (string) getenv(\"NF_INSTALLED_PLUGIN_VERSION\"), \">\") ? 0 : 1);' --skip-plugins --skip-themes; then\n")
+			writeInstall(true, "    ")
+			if plugin.Activate {
+				builder.WriteString("  elif ! ")
+				builder.WriteString(wpCommand)
+				builder.WriteString(" plugin is-active ")
+				builder.WriteString(slug)
+				builder.WriteString("; then\n")
+				builder.WriteString("    ")
+				builder.WriteString(wpCommand)
+				builder.WriteString(" plugin activate ")
+				builder.WriteString(slug)
+				builder.WriteString("\n")
+			}
+			builder.WriteString("  fi\n")
+		} else if plugin.Activate {
+			builder.WriteString("elif ! ")
+			builder.WriteString(wpCommand)
+			builder.WriteString(" plugin is-active ")
 			builder.WriteString(slug)
 			builder.WriteString("; then\n")
-			builder.WriteString("  wp_cmd plugin activate ")
+			builder.WriteString("  ")
+			builder.WriteString(wpCommand)
+			builder.WriteString(" plugin activate ")
 			builder.WriteString(slug)
 			builder.WriteString("\n")
 		}
 		builder.WriteString("fi\n")
-		if plugin.AutoUpdate {
-			builder.WriteString("if ! wp_cmd plugin auto-updates status ")
-			builder.WriteString(slug)
-			builder.WriteString(" --enabled-only --field=name | grep -qx ")
-			builder.WriteString(slug)
-			builder.WriteString("; then\n")
-			builder.WriteString("  wp_cmd plugin auto-updates enable ")
-			builder.WriteString(slug)
-			builder.WriteString("\n")
-			builder.WriteString("fi\n")
-		}
 	}
-	return builder.String()
+
+	if plugin.AutoUpdate {
+		builder.WriteString("if ! ")
+		builder.WriteString(wpCommand)
+		builder.WriteString(" plugin auto-updates status ")
+		builder.WriteString(slug)
+		builder.WriteString(" --enabled-only --field=name | grep -qx ")
+		builder.WriteString(slug)
+		builder.WriteString("; then\n")
+		builder.WriteString("  ")
+		builder.WriteString(wpCommand)
+		builder.WriteString(" plugin auto-updates enable ")
+		builder.WriteString(slug)
+		builder.WriteString("\n")
+		builder.WriteString("fi\n")
+	}
 }
 
 func localPluginStatusScript(plugins []wordpressPluginSpec) string {
@@ -1476,7 +1595,7 @@ func localPluginStatusScript(plugins []wordpressPluginSpec) string {
 	return builder.String()
 }
 
-func localPluginInstallScript(plugins []wordpressPluginSpec, installSources map[string]string) string {
+func localPluginInstallScript(plugins []wordpressPluginSpec, installSources map[string]preparedPluginInstallSource) string {
 	var builder strings.Builder
 	builder.WriteString("set -eu\n")
 	for _, plugin := range plugins {
@@ -1484,11 +1603,11 @@ func localPluginInstallScript(plugins []wordpressPluginSpec, installSources map[
 			continue
 		}
 		slug := shellQuoteArg(plugin.Slug)
-		installSource := pluginInstallSource(plugin)
-		if override := installSources[plugin.Slug]; override != "" {
+		installSource := preparedPluginInstallSource{Path: pluginInstallSource(plugin)}
+		if override, ok := installSources[plugin.Slug]; ok {
 			installSource = override
 		}
-		if installSource == localRepoPluginInstallSourceMark {
+		if installSource.Path == localRepoPluginInstallSourceMark {
 			builder.WriteString("if ! wp plugin is-installed ")
 			builder.WriteString(slug)
 			builder.WriteString("; then\n")
@@ -1518,36 +1637,7 @@ func localPluginInstallScript(plugins []wordpressPluginSpec, installSources map[
 			}
 			continue
 		}
-		source := shellQuoteArg(installSource)
-		builder.WriteString("if ! wp plugin is-installed ")
-		builder.WriteString(slug)
-		builder.WriteString("; then\n")
-		builder.WriteString("  wp plugin install ")
-		builder.WriteString(source)
-		if plugin.Activate {
-			builder.WriteString(" --activate")
-		}
-		builder.WriteString("\n")
-		if plugin.Activate {
-			builder.WriteString("elif ! wp plugin is-active ")
-			builder.WriteString(slug)
-			builder.WriteString("; then\n")
-			builder.WriteString("  wp plugin activate ")
-			builder.WriteString(slug)
-			builder.WriteString("\n")
-		}
-		builder.WriteString("fi\n")
-		if plugin.AutoUpdate {
-			builder.WriteString("if ! wp plugin auto-updates status ")
-			builder.WriteString(slug)
-			builder.WriteString(" --enabled-only --field=name 2>/dev/null | grep -qx ")
-			builder.WriteString(slug)
-			builder.WriteString("; then\n")
-			builder.WriteString("  wp plugin auto-updates enable ")
-			builder.WriteString(slug)
-			builder.WriteString("\n")
-			builder.WriteString("fi\n")
-		}
+		writePluginInstallScript(&builder, "wp", plugin, installSource.Path, installSource.Version, false)
 	}
 	return builder.String()
 }

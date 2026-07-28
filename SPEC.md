@@ -699,7 +699,7 @@ Rules:
 * `nf plugin install <remote>` validates the repo remote/cache, prints a remote plugin plan, and asks for yes/no confirmation unless `--yes` is passed
 * `nf plugin install <remote> --dry-run` previews only and does not run SSH
 * remote plugin installs run WP-CLI on the remote host; URL sources must be reachable from that host, and local zip sources are uploaded to a temporary remote directory before install and cleaned up afterward
-* plugin install is idempotent: it installs only missing plugins where `install` is true, activates only inactive plugins when requested, and enables native WordPress auto-updates only when not already enabled; it does not install manual plugins, update, remove, pin, disable auto-updates, or manage licenses
+* plugin install is source-aware: remote repo plugins replace the installed copy from current repo source on every explicit install; cached plugins replace an installed copy only when the cache package's declared WordPress plugin version is newer; other sources install only missing plugins; it activates inactive plugins when requested and enables native WordPress auto-updates only when not already enabled; it does not install manual plugins, update WordPress.org/URL plugins, remove, pin, disable auto-updates, or manage licenses
 * secrets, license keys, and private signed URLs must not be stored directly in `nf.json`
 * generated env scaffolding stays under `NF_DATA_HOME`, not in project repos
 

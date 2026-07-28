@@ -35,9 +35,9 @@ Configured WordPress plugins live in `nf.json` under `wordpress.plugins`. The li
 
 String entries install from wordpress.org, activate, and enable auto-updates by default. Object entries require `slug`, may set `source` to a zip URL/path, env var, `repo`, or `cache`, may set `activate` or `auto_update` to `false`, and may set `install` to `false` for manual/documentation-only plugins that nf should check but never install.
 
-Use `source: "repo"` for project-specific plugins stored at `plugins/<slug>/` in the repo. Local envs bind mount configured repo plugins into `/var/www/html/wp-content/plugins/<slug>` for live development, then `nf plugin install` activates them and configures auto-updates as requested. Remote installs package repo plugins into temporary zips, upload them through WP-CLI, and clean up. No plugin artifact is written to `dist/` or committed to the repo.
+Use `source: "repo"` for project-specific plugins stored at `plugins/<slug>/` in the repo. Local envs bind mount configured repo plugins into `/var/www/html/wp-content/plugins/<slug>` for live development, then `nf plugin install` activates them and configures auto-updates as requested. Remote installs package repo plugins into temporary zips, replace the installed copy through WP-CLI, and clean up. No plugin artifact is written to `dist/` or committed to the repo.
 
-Use `source: "cache"` for paid/private plugins whose installable zip is kept in nf's local plugin cache under `$NF_DATA_HOME/plugins/<slug>/<slug>.zip`. This is explicit; nf does not silently fall back from wordpress.org to the cache.
+Use `source: "cache"` for paid/private plugins whose installable zip is kept in nf's local plugin cache under `$NF_DATA_HOME/plugins/<slug>/<slug>.zip`. The plugin's main file must declare `Plugin Name` and `Version` headers. This is explicit; nf does not silently fall back from wordpress.org to the cache.
 
 Keep private plugin URLs and license data in environment variables, not `nf.json`.
 
@@ -115,4 +115,4 @@ nf plugin install production --yes
 
 Local installs use configured repo plugin bind mounts and cached zips when requested. Remote installs run WP-CLI on the remote host. URL sources must be reachable from that host; local zip, cache, and repo sources are uploaded to a temporary remote directory before install and cleaned up afterward. Repo sources are zipped locally on demand before upload.
 
-Plugin install is idempotent: it installs only missing configured plugins where `install` is true, activates only inactive plugins when `activate` is true, and enables native WordPress auto-updates only when not already enabled. It does not install manual plugins, update, remove, pin, disable auto-updates, or manage plugin licenses.
+Plugin install is source-aware. Remote repo plugins are replaced from the current repo source on every explicit install. Cached plugins are replaced only when the cache package's declared version is newer than the installed version; equal, older, or unversioned installed copies are preserved. Other sources install only missing plugins. The command also activates inactive plugins when requested and enables native WordPress auto-updates only when not already enabled. It does not install manual plugins, update WordPress.org/URL plugins, remove, pin, disable auto-updates, or manage plugin licenses.

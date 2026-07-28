@@ -17858,7 +17858,7 @@ func TestRunEnvPluginsInstallUsesCachePluginSource(t *testing.T) {
 	if err := os.MkdirAll(sourceDir, 0o755); err != nil {
 		t.Fatalf("MkdirAll(source plugin) error = %v", err)
 	}
-	if err := os.WriteFile(filepath.Join(sourceDir, "acf-pro.php"), []byte("<?php\n"), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(sourceDir, "acf-pro.php"), []byte("<?php\n/*\nPlugin Name: ACF Pro\nVersion: 2.8.1\n*/\n"), 0o644); err != nil {
 		t.Fatalf("WriteFile(plugin) error = %v", err)
 	}
 	if _, err := packagePluginSource(sourceDir, config.PluginCacheZip("acf-pro"), "acf-pro"); err != nil {
@@ -17889,7 +17889,7 @@ func TestRunEnvPluginsInstallUsesCachePluginSource(t *testing.T) {
 		t.Fatalf("ReadFile(log) error = %v", err)
 	}
 	logText := string(logData)
-	for _, want := range []string{"wp plugin install /env/uploads/.nf-plugin-cache/acf-pro.zip --activate", "wp plugin is-installed acf-pro"} {
+	for _, want := range []string{"wp plugin install /env/uploads/.nf-plugin-cache/acf-pro.zip --activate", "wp plugin is-installed acf-pro", "wp plugin get acf-pro --field=version", "NF_CACHED_PLUGIN_VERSION=2.8.1", "version_compare", "wp plugin install /env/uploads/.nf-plugin-cache/acf-pro.zip --force --activate"} {
 		if !strings.Contains(logText, want) {
 			t.Fatalf("cache plugin install script missing %q:\n%s", want, logText)
 		}
@@ -17909,7 +17909,7 @@ func TestRemotePluginInstallSpecsUploadsCacheSource(t *testing.T) {
 	if err := os.MkdirAll(sourceDir, 0o755); err != nil {
 		t.Fatalf("MkdirAll(source plugin) error = %v", err)
 	}
-	if err := os.WriteFile(filepath.Join(sourceDir, "acf-pro.php"), []byte("<?php\n"), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(sourceDir, "acf-pro.php"), []byte("<?php\n/**\n * Plugin Name: ACF Pro\n * Version: 2.8.1\n */\n"), 0o644); err != nil {
 		t.Fatalf("WriteFile(plugin) error = %v", err)
 	}
 	cacheZip := config.PluginCacheZip("acf-pro")
@@ -17921,11 +17921,49 @@ func TestRemotePluginInstallSpecsUploadsCacheSource(t *testing.T) {
 	if err != nil {
 		t.Fatalf("remotePluginInstallSpecs() error = %v", err)
 	}
-	if len(remotePlugins) != 1 || remotePlugins[0].InstallSource != "/tmp/nf-plugins-client/acf-pro.zip" {
+	if len(remotePlugins) != 1 || remotePlugins[0].InstallSource != "/tmp/nf-plugins-client/acf-pro.zip" || remotePlugins[0].SourceVersion != "2.8.1" {
 		t.Fatalf("remotePlugins = %#v, want cache remote install source", remotePlugins)
 	}
 	if len(uploads) != 1 || uploads[0].LocalPath != cacheZip || uploads[0].RemotePath != "/tmp/nf-plugins-client/acf-pro.zip" {
 		t.Fatalf("uploads = %#v, want cache zip upload", uploads)
+	}
+	script := remotePluginInstallScript(envRemoteSyncTarget{WordPressPath: "/www/client/public", WPCommand: "wp"}, remotePlugins)
+	for _, want := range []string{"wp_cmd plugin is-installed acf-pro", "wp_cmd plugin get acf-pro --field=version", "[ -n \"$installed_version\" ]", "NF_CACHED_PLUGIN_VERSION=2.8.1", "version_compare", "wp_cmd plugin install /tmp/nf-plugins-client/acf-pro.zip --force --activate"} {
+		if !strings.Contains(script, want) {
+			t.Fatalf("remote cache plugin script missing %q:\n%s", want, script)
+		}
+	}
+}
+
+func TestPluginZipVersionRequiresVersionedPluginHeader(t *testing.T) {
+	sourceDir := filepath.Join(t.TempDir(), "client-plugin")
+	if err := os.MkdirAll(sourceDir, 0o755); err != nil {
+		t.Fatalf("MkdirAll(source plugin) error = %v", err)
+	}
+	pluginFile := filepath.Join(sourceDir, "client-plugin.php")
+	if err := os.WriteFile(pluginFile, []byte("<?php\n/**\n * Plugin Name: Client Plugin\n * Version: 3.2.1-beta.2\n */\n"), 0o644); err != nil {
+		t.Fatalf("WriteFile(plugin) error = %v", err)
+	}
+	zipPath := filepath.Join(t.TempDir(), "client-plugin.zip")
+	if _, err := packagePluginSource(sourceDir, zipPath, "client-plugin"); err != nil {
+		t.Fatalf("packagePluginSource() error = %v", err)
+	}
+	version, err := pluginZipVersion(zipPath, "client-plugin")
+	if err != nil {
+		t.Fatalf("pluginZipVersion() error = %v", err)
+	}
+	if version != "3.2.1-beta.2" {
+		t.Fatalf("pluginZipVersion() = %q, want 3.2.1-beta.2", version)
+	}
+
+	if err := os.WriteFile(pluginFile, []byte("<?php\n/* Plugin Name: Client Plugin */\n"), 0o644); err != nil {
+		t.Fatalf("WriteFile(unversioned plugin) error = %v", err)
+	}
+	if _, err := packagePluginSource(sourceDir, zipPath, "client-plugin"); err != nil {
+		t.Fatalf("packagePluginSource(unversioned) error = %v", err)
+	}
+	if _, err := pluginZipVersion(zipPath, "client-plugin"); err == nil || !strings.Contains(err.Error(), "does not declare a Version header") {
+		t.Fatalf("pluginZipVersion(unversioned) error = %v, want missing Version header", err)
 	}
 }
 
@@ -18404,7 +18442,7 @@ func TestRunEnvPluginsInstallRemoteUploadsLocalZipSource(t *testing.T) {
 			t.Fatalf("Run(plugin install remote local zip --yes) = %d, want 0", got)
 		}
 	})
-	for _, want := range []string{"uploads:       1 local plugin zip(s)", "Local plugin sources will be uploaded before install:", "acf-pro -> /tmp/nf-plugins-client-kinsta-live-", "> rsync -az -e 'ssh -p 12345' " + localZip + " client@203.0.113.10:/tmp/nf-plugins-client-kinsta-live-", "Remote WordPress plugins installed."} {
+	for _, want := range []string{"uploads:       1 local plugin zip(s)", "Local plugin sources will be uploaded before install:", "acf-pro -> /tmp/nf-plugins-client-kinsta-live-", "Remote WordPress plugins installed."} {
 		if !strings.Contains(stdout, want) {
 			t.Fatalf("remote plugin local zip stdout missing %q:\n%s", want, stdout)
 		}
@@ -18517,10 +18555,13 @@ func TestRunEnvPluginsInstallRemotePackagesRepoPluginSource(t *testing.T) {
 		t.Fatalf("ssh commands len = %d, want mkdir/install/cleanup: %#v", len(sshCommands), sshCommands)
 	}
 	script := sshCommands[1][len(sshCommands[1])-1]
-	for _, want := range []string{"wp_cmd plugin is-installed client-plugin", "wp_cmd plugin install /tmp/nf-plugins-client-kinsta-live-", "/client-plugin.zip --activate", "wp_cmd plugin auto-updates enable client-plugin"} {
+	for _, want := range []string{"wp_cmd plugin install /tmp/nf-plugins-client-kinsta-live-", "/client-plugin.zip --force --activate", "wp_cmd plugin auto-updates enable client-plugin"} {
 		if !strings.Contains(script, want) {
 			t.Fatalf("remote repo plugin script missing %q:\n%s", want, script)
 		}
+	}
+	if strings.Contains(script, "wp_cmd plugin is-installed client-plugin") {
+		t.Fatalf("remote repo plugin should refresh even when already installed:\n%s", script)
 	}
 	if uploadedZip == "" {
 		t.Fatal("runRsyncCommandFn did not capture generated zip path")
