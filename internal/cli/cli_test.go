@@ -18051,6 +18051,73 @@ func TestRunEnvPluginsInstallUsesCachePluginSource(t *testing.T) {
 	}
 }
 
+func TestRunEnvPluginsInstallSkipsUnavailableLocalSources(t *testing.T) {
+	repoRoot := t.TempDir()
+	if err := os.Mkdir(filepath.Join(repoRoot, ".git"), 0o755); err != nil {
+		t.Fatalf("Mkdir(.git) error = %v", err)
+	}
+	project := map[string]any{
+		"version": 2,
+		"project": map[string]any{"slug": "client", "password_version": 0},
+		"wordpress": map[string]any{"themes": []any{"twentytwentyfive"}, "plugins": []any{
+			map[string]any{"slug": "gravityformsstripe", "source": "cache"},
+			map[string]any{"slug": "client-plugin", "source": "repo"},
+			"stream",
+		}},
+	}
+	data, err := json.MarshalIndent(project, "", "  ")
+	if err != nil {
+		t.Fatalf("MarshalIndent(project) error = %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(repoRoot, "nf.json"), append(data, '\n'), 0o644); err != nil {
+		t.Fatalf("WriteFile(nf.json) error = %v", err)
+	}
+	dockerDir := t.TempDir()
+	logPath := filepath.Join(dockerDir, "docker-args.txt")
+	dockerScript := []byte("#!/bin/sh\nprintf '%s\\n' \"$@\" >> \"$DOCKER_LOG\"\nexit 0\n")
+	if err := os.WriteFile(filepath.Join(dockerDir, "docker"), dockerScript, 0o755); err != nil {
+		t.Fatalf("WriteFile(docker) error = %v", err)
+	}
+	dataDir := t.TempDir()
+	t.Setenv("DOCKER_LOG", logPath)
+	t.Setenv("NF_DATA_HOME", dataDir)
+	t.Setenv("PATH", dockerDir+string(os.PathListSeparator)+os.Getenv("PATH"))
+	oldwd, err := os.Getwd()
+	if err != nil {
+		t.Fatalf("Getwd() error = %v", err)
+	}
+	if err := os.Chdir(repoRoot); err != nil {
+		t.Fatalf("Chdir() error = %v", err)
+	}
+	t.Cleanup(func() { _ = os.Chdir(oldwd) })
+
+	stderr := captureStderr(t, func() {
+		if got := Run([]string{"plugin", "install"}); got != 0 {
+			t.Fatalf("Run(plugin install unavailable sources) = %d, want 0", got)
+		}
+	})
+	missingZip := filepath.Join(dataDir, "plugins", "gravityformsstripe", "gravityformsstripe.zip")
+	for _, want := range []string{
+		"Skipping WordPress plugin gravityformsstripe: cache does not exist: " + missingZip,
+		"Skipping WordPress plugin client-plugin: repo source directory does not exist: " + filepath.Join(repoRoot, "plugins", "client-plugin"),
+	} {
+		if !strings.Contains(stderr, want) {
+			t.Fatalf("plugin install stderr missing %q:\n%s", want, stderr)
+		}
+	}
+	logData, err := os.ReadFile(logPath)
+	if err != nil {
+		t.Fatalf("ReadFile(log) error = %v", err)
+	}
+	logText := string(logData)
+	if !strings.Contains(logText, "wp plugin install stream --activate") {
+		t.Fatalf("plugin install script did not install available plugin:\n%s", logText)
+	}
+	if strings.Contains(logText, "gravityformsstripe") || strings.Contains(logText, "client-plugin") {
+		t.Fatalf("plugin install script included an unavailable plugin:\n%s", logText)
+	}
+}
+
 func TestRemotePluginInstallSpecsUploadsCacheSource(t *testing.T) {
 	dataDir := t.TempDir()
 	t.Setenv("NF_DATA_HOME", dataDir)

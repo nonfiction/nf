@@ -604,6 +604,11 @@ func cmdEnvPluginsInstall(cfg envConfig, metadata *projectMetadata) int {
 		fmt.Fprintln(os.Stderr, err)
 		return 1
 	}
+	for _, plugin := range plugins {
+		if source := localSources[plugin.Slug]; source.SkipReason != "" {
+			fmt.Fprintf(os.Stderr, "Skipping WordPress plugin %s: %s\n", plugin.Slug, source.SkipReason)
+		}
+	}
 	runner := envPluginInstaller{cfg: cfg}
 	if err := runner.Install(plugins, localSources); err != nil {
 		fmt.Fprintln(os.Stderr, err)
@@ -750,8 +755,9 @@ type remotePluginInstallSpec struct {
 }
 
 type preparedPluginInstallSource struct {
-	Path    string
-	Version string
+	Path       string
+	Version    string
+	SkipReason string
 }
 
 type remotePluginUpload struct {
@@ -947,7 +953,15 @@ func prepareLocalPluginInstallSources(cfg envConfig, plugins []wordpressPluginSp
 				return nil, nil, err
 			}
 			info, err := os.Stat(sourceDir)
-			if err != nil || !info.IsDir() {
+			if os.IsNotExist(err) {
+				sources[plugin.Slug] = preparedPluginInstallSource{SkipReason: "repo source directory does not exist: " + sourceDir}
+				continue
+			}
+			if err != nil {
+				cleanup()
+				return nil, nil, err
+			}
+			if !info.IsDir() {
 				cleanup()
 				return nil, nil, ProjectError{Msg: fmt.Sprintf("repo plugin source directory does not exist: %s", sourceDir)}
 			}
@@ -957,9 +971,13 @@ func prepareLocalPluginInstallSources(cfg envConfig, plugins []wordpressPluginSp
 		if pluginSourceIsCache(plugin) {
 			cacheZip := config.PluginCacheZip(plugin.Slug)
 			info, err := os.Stat(cacheZip)
+			if os.IsNotExist(err) {
+				sources[plugin.Slug] = preparedPluginInstallSource{SkipReason: "cache does not exist: " + cacheZip}
+				continue
+			}
 			if err != nil {
 				cleanup()
-				return nil, nil, ProjectError{Msg: fmt.Sprintf("plugin cache for %s does not exist: %s", plugin.Slug, cacheZip)}
+				return nil, nil, err
 			}
 			if info.IsDir() {
 				cleanup()
@@ -1606,6 +1624,9 @@ func localPluginInstallScript(plugins []wordpressPluginSpec, installSources map[
 		installSource := preparedPluginInstallSource{Path: pluginInstallSource(plugin)}
 		if override, ok := installSources[plugin.Slug]; ok {
 			installSource = override
+		}
+		if installSource.SkipReason != "" {
+			continue
 		}
 		if installSource.Path == localRepoPluginInstallSourceMark {
 			builder.WriteString("if ! wp plugin is-installed ")
