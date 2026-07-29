@@ -19,7 +19,7 @@
           src = ./.;
           modRoot = ".";
           subPackages = ["cmd/nf"];
-          vendorHash = "sha256-DeRPEIZL//++6CBlY6WHSUQFywsNf4iHBvlHDmYCGpI=";
+          vendorHash = "sha256-PSigVf9QNYXXi2agas4ZuGF8jRnl9XS8ZqeL9/vUxd8=";
           ldflags = [
             "-s"
             "-w"

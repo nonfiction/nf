@@ -46,6 +46,28 @@ func runPassword(argv []string) int {
 		}
 		fmt.Printf("Password Salt: %s\n", maskSecret(salt))
 		return 0
+	case "age-identity", "age-recipient":
+		if len(argv) != 1 {
+			fmt.Fprintf(os.Stderr, "password %s takes no arguments\n", argv[0])
+			return 1
+		}
+		salt, err := passwords.SecretSalt()
+		if err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			return 1
+		}
+		path := config.AgeIdentityFile()
+		recipient, err := passwords.EnsureAgeIdentity(path, salt)
+		if err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			return 1
+		}
+		if argv[0] == "age-recipient" {
+			fmt.Println(recipient)
+		} else {
+			fmt.Println(path)
+		}
+		return 0
 	case "derive":
 		args, err := parsePasswordDeriveArgs(argv[1:])
 		if err != nil {

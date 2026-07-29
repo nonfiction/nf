@@ -166,7 +166,7 @@ func configSetValueCompletionCandidates(key string) []string {
 
 func passwordCompletionCandidates(args []string) []string {
 	if len(args) == 0 {
-		return []string{"show-salt", "set-salt", "derive", "help"}
+		return []string{"show-salt", "set-salt", "age-identity", "age-recipient", "derive", "help"}
 	}
 	if args[0] != "derive" {
 		return nil

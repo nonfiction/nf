@@ -438,7 +438,7 @@ func TestGroupedHelpScreensUseIntendedOrder(t *testing.T) {
 		{
 			name:   "password",
 			render: func() string { return captureStdout(t, func() { _ = runPasswordHelp() }) },
-			values: []string{"derive [scope] [value...]", "\n\n  show-salt", "set-salt <salt>", "\nOptions:\n", "--password-version <N>"},
+			values: []string{"derive [scope] [value...]", "\n\n  show-salt", "set-salt <salt>", "\n\n  age-identity", "age-recipient", "\nOptions:\n", "--password-version <N>", "\nAge Secret Examples:\n", "nf password age-recipient", "agenix -e .env.age -i \"$(nf password age-identity)\""},
 		},
 		{
 			name:   "site add",

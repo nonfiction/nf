@@ -98,6 +98,8 @@ Local state is disposable. Provider truth is canonical remotely.
 * `dnsimple_account_id` belongs in `config.json`, fetched by DNSimple provider check from `DNSIMPLE_TOKEN`; do not set `DNSIMPLE_ACCOUNT_ID` in `.env`.
 * Password salt is `NF_PASSWORD_SALT`; legacy `NF_SECRET_SALT` is migration-only fallback.
 * `project.password_version` belongs in `nf.json`, defaults to `0`, is safe to commit, and rotates project/site derived passwords when set non-zero without changing `NF_PASSWORD_SALT`.
+* `nf password age-identity` deterministically derives one agency-global X25519 age identity from `NF_PASSWORD_SALT`, stores it at `NF_CONFIG_HOME/age-identity.txt` with mode `0600`, and prints only the path. `nf password age-recipient` prints only its public recipient. The derivation has its own permanent domain separation and never includes `project.password_version`.
+* Project `.env.age` files use the agency age recipient and may be committed; decrypted `.env` files and the private age identity must stay ignored. Rotating `NF_PASSWORD_SALT` is an explicit rekey event, and the old salt is required until old ciphertexts are re-encrypted.
 * `basicauth_default_user` belongs in `config.json`, defaults to `nonfiction`, and is used with a per-site derived `basic-auth` password.
 * `db_default_user` belongs in `config.json`, defaults to `admin`, and is used for Linode target database UI HTTP Basic auth, the shared MySQL admin user, and the database UI subdomain label unless `nf target add linode --db-user` overrides it for that target. Legacy `adminer_default_user` may remain as fallback during migration.
 * DNSimple provider check validates it can read the configured `base_domain` zone and writes zero targets.

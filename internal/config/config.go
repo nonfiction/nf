@@ -63,6 +63,8 @@ func StateDir() string { return StateHome() }
 
 func EnvFile() string { return filepath.Join(ConfigHome(), ".env") }
 
+func AgeIdentityFile() string { return filepath.Join(ConfigHome(), "age-identity.txt") }
+
 func EnvsDir() string { return filepath.Join(DataHome(), "envs") }
 
 func SnapshotsDir() string { return filepath.Join(DataHome(), "snapshots") }

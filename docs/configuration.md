@@ -132,6 +132,28 @@ nf target password [target] [--root|--db]
 
 Password derivation uses `NF_PASSWORD_SALT` from the environment or `~/.config/nf/.env`. Legacy `NF_SECRET_SALT` is accepted only as a migration fallback. Project site scopes are `wp-admin`, `mysql`, and `basic-auth`; target scopes are `linode-root` and `db-admin`. Project site passwords, including provider basic-auth passwords, also include `project.password_version` from `nf.json` when it is non-zero; missing or `0` preserves the original derivation. Use `--password-version` when deriving a project site password outside the matching repo context.
 
+## Encrypted Project Environment
+
+Projects may commit an age-encrypted `.env.age` while keeping the decrypted `.env` ignored. In projects with the standard nonfiction `.envrc`, entering an allowed directory automatically decrypts a changed `.env.age` and loads `.env`. Developers consuming existing secrets do not need to run agenix manually.
+
+The project `secrets.nix` contains the public recipient returned by:
+
+```sh
+nf password age-recipient
+```
+
+This command deterministically derives the agency age identity from `NF_PASSWORD_SALT`, ensures the private identity exists at `~/.config/nf/age-identity.txt`, and prints only its public recipient. The identity file is mode `0600`; `nf password age-identity` prints only its path for scripts.
+
+To create or edit project secrets from the project development shell:
+
+```sh
+agenix -e .env.age -i "$(nf password age-identity)"
+```
+
+Commit `.env.age`, never `.env` or the private identity. The standard `.envrc` watches `.env.age`, decrypts through a mode-`0600` temporary file under `.direnv/`, replaces `.env` only when its contents changed, and then calls `dotenv_if_exists .env`. A missing `.env.age` or `.env` does not block direnv. A decryption failure prints a warning and preserves any existing `.env`; treat that file as potentially stale until decryption succeeds.
+
+`project.password_version` does not affect the agency age identity. Changing `NF_PASSWORD_SALT` changes the age recipient and is therefore an explicit rekey operation: keep the old salt available until every committed `.env.age` has been decrypted with the old identity and encrypted for the new recipient. A committed ciphertext allows offline guesses against weak salts, so the shared salt must be generated randomly and stored in the team password vault.
+
 ## Test and Isolation Overrides
 
 Use overrides in tests or isolated runs:

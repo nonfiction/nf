@@ -343,6 +343,8 @@ Do not add old compatibility routes unless explicitly requested.
 * [x] `nf password set-salt <salt>`
 * [x] `nf password show-salt`
 * [x] `nf password derive <scope> <value...> [--password-version N]`
+* [x] `nf password age-identity`: deterministically derive the agency age identity from `NF_PASSWORD_SALT`, materialize it securely under config home, and print only its path
+* [x] `nf password age-recipient`: ensure the agency age identity and print only its public recipient
 
 ### Guarded / destructive
 
