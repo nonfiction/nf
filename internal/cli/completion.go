@@ -544,7 +544,7 @@ func aliasCompletionCandidates(args []string) []string {
 
 func defineCompletionCandidates(args []string) []string {
 	if len(args) == 0 {
-		return []string{"list", "ls", "status", "sync", "add", "remove", "rm", "migrate-env", "rekey", "help"}
+		return []string{"list", "ls", "get", "status", "sync", "set", "remove", "rm", "migrate-env", "rekey", "help"}
 	}
 	args[0] = cliCommandAlias(args[0])
 	switch args[0] {
@@ -552,9 +552,24 @@ func defineCompletionCandidates(args []string) []string {
 		return projectRemoteCompletionNames()
 	case "remove":
 		return append(projectDefineCompletionNames(), "--for")
-	case "add":
+	case "get":
 		if len(args) > 1 && args[len(args)-1] == "--for" {
-			return defineSelectorCompletionNames()
+			return projectDefineSelectorCompletionNames(args[1])
+		}
+		if len(args) == 1 {
+			return append(projectDefineCompletionNames(), "--for")
+		}
+		return []string{"--for"}
+	case "set":
+		if len(args) > 1 && args[len(args)-1] == "--for" {
+			values := defineSelectorCompletionNames()
+			if len(args) > 1 {
+				values = append(values, projectDefineSelectorCompletionNames(args[1])...)
+			}
+			return uniqueSortedStrings(values)
+		}
+		if len(args) == 1 {
+			return append(projectDefineCompletionNames(), "--secret", "--secret-stdin", "--for")
 		}
 		return []string{"--secret", "--secret-stdin", "--for"}
 	case "migrate-env":
@@ -758,6 +773,27 @@ func projectDefineCompletionNames() []string {
 		values = append(values, recordValueString(item["name"]))
 	}
 	return uniqueSortedStrings(values)
+}
+
+func projectDefineSelectorCompletionNames(name string) []string {
+	root, ok := currentNFProjectRoot()
+	if !ok {
+		return nil
+	}
+	metadata, err := loadProjectMetadataOrError(root)
+	if err != nil {
+		return nil
+	}
+	item := configuredDefineItem(metadata, strings.TrimSpace(name))
+	if item == nil {
+		return nil
+	}
+	values, _ := item["values"].(map[string]any)
+	selectors := make([]string, 0, len(values))
+	for selector := range values {
+		selectors = append(selectors, selector)
+	}
+	return uniqueSortedStrings(selectors)
 }
 
 func defineSelectorCompletionNames() []string {

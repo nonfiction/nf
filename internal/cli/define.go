@@ -18,10 +18,10 @@ import (
 const (
 	wpConfigDefineModeForce        = "force"
 	wpConfigDefineModeReplaceFalse = "replace_false"
-	defineAddValueSourceLiteral    = "literal"
-	defineAddValueSourceSecret     = "secret"
-	defineAddSelectorAll           = "__all__"
-	defineAddSelectorCustom        = "__custom__"
+	defineSetValueSourceLiteral    = "literal"
+	defineSetValueSourceSecret     = "secret"
+	defineSetSelectorAll           = "__all__"
+	defineSetSelectorCustom        = "__custom__"
 	wpConfigProjectBlockBegin      = "/* nf-managed wp-config defines: begin */"
 	wpConfigProjectBlockEnd        = "/* nf-managed wp-config defines: end */"
 	wpConfigProviderBlockBegin     = "/* nf-managed provider wp-config defines: begin */"
@@ -75,10 +75,17 @@ type defineValueSpec struct {
 	IsSecret    bool
 }
 
-type defineAddPartial struct {
+type defineSetPartial struct {
 	Positionals     []string
 	SecretSet       bool
 	SecretStdin     bool
+	Selector        string
+	SelectorSet     bool
+	SelectorMissing bool
+}
+
+type defineGetPartial struct {
+	Positionals     []string
 	Selector        string
 	SelectorSet     bool
 	SelectorMissing bool
@@ -97,7 +104,7 @@ func runDefine(argv []string) int {
 	}
 	cmd := cliCommandAlias(argv[0])
 	switch cmd {
-	case "list", "status", "sync", "add", "remove", "migrate-env", "rekey":
+	case "list", "get", "status", "sync", "set", "remove", "migrate-env", "rekey":
 	default:
 		fmt.Fprintln(os.Stderr, "unsupported define command")
 		return 1
@@ -123,6 +130,8 @@ func runDefine(argv []string) int {
 			return 1
 		}
 		return cmdDefineList(metadata)
+	case "get":
+		return cmdDefineGet(root, metadata, argv[1:])
 	case "status":
 		remoteName, ok := parseDefineRemoteArg("status", argv[1:])
 		if !ok {
@@ -135,8 +144,8 @@ func runDefine(argv []string) int {
 			return 1
 		}
 		return cmdDefineSync(root, metadata, remoteName)
-	case "add":
-		return cmdDefineAdd(root, metadata, argv[1:])
+	case "set":
+		return cmdDefineSet(root, metadata, argv[1:])
 	case "remove":
 		return cmdDefineRemove(root, metadata, argv[1:])
 	case "migrate-env":
@@ -179,6 +188,26 @@ func cmdDefineList(metadata *projectMetadata) int {
 		rows = append(rows, []string{entry.Name, entry.Selector, entry.Source})
 	}
 	fmt.Println(formatTable(rows))
+	return 0
+}
+
+func cmdDefineGet(root string, metadata *projectMetadata, args []string) int {
+	name, selector, err := resolveDefineGetArgs(metadata, args)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		return 1
+	}
+	value, err := configuredDefineRawValue(root, metadata, name, selector)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		return 1
+	}
+	output, err := defineRawValueString(value)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		return 1
+	}
+	fmt.Println(output)
 	return 0
 }
 
@@ -318,8 +347,8 @@ func cmdDefineSyncRemote(target envRemoteSyncTarget, defines []wpConfigDefine) i
 	return 0
 }
 
-func cmdDefineAdd(root string, metadata *projectMetadata, args []string) int {
-	name, selector, spec, err := resolveDefineAddArgs(metadata, args)
+func cmdDefineSet(root string, metadata *projectMetadata, args []string) int {
+	name, selector, spec, err := resolveDefineSetArgs(root, metadata, args)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		return 1
@@ -391,9 +420,9 @@ func cmdDefineAdd(root string, metadata *projectMetadata, args []string) int {
 		}
 	}
 	if selector == "" {
-		fmt.Printf("Added define %s.\n", name)
+		fmt.Printf("Set define %s.\n", name)
 	} else {
-		fmt.Printf("Added define %s for %s.\n", name, selector)
+		fmt.Printf("Set define %s for %s.\n", name, selector)
 	}
 	return 0
 }
@@ -444,50 +473,55 @@ func cmdDefineRemove(root string, metadata *projectMetadata, args []string) int 
 	return 0
 }
 
-func parseDefineAddArgs(args []string) (string, string, defineValueSpec, error) {
-	partial, err := parseDefineAddPartial(args)
+func resolveDefineGetArgs(metadata *projectMetadata, args []string) (string, string, error) {
+	partial, err := parseDefineGetPartial(args)
 	if err != nil {
-		return "", "", defineValueSpec{}, err
+		return "", "", err
 	}
-	return strictDefineAddArgs(partial)
+	if len(partial.Positionals) != 1 {
+		return "", "", fmt.Errorf("define get requires exactly one name")
+	}
+	name := strings.TrimSpace(partial.Positionals[0])
+	if err := validateDefineName(name); err != nil {
+		return "", "", err
+	}
+	item := configuredDefineItem(metadata, name)
+	if item == nil {
+		return "", "", fmt.Errorf("define %s is not configured", name)
+	}
+	selector := strings.TrimSpace(partial.Selector)
+	if partial.SelectorSet && !partial.SelectorMissing && selector == "" {
+		return "", "", fmt.Errorf("define get --for requires a selector")
+	}
+	_, hasValues := item["values"]
+	if !hasValues {
+		if partial.SelectorSet {
+			return "", "", fmt.Errorf("define %s uses a shared value and does not accept --for", name)
+		}
+		return name, "", nil
+	}
+	if !partial.SelectorSet || partial.SelectorMissing {
+		if !siteIsInteractiveFn() {
+			return "", "", fmt.Errorf("define get %s requires --for because it has selector-specific values", name)
+		}
+		selector, err = promptConfiguredDefineSelector(name, item, false)
+		if err != nil {
+			return "", "", err
+		}
+	}
+	if configuredDefineSpec(metadata, name, selector) == nil {
+		return "", "", fmt.Errorf("define %s is not configured for %s", name, selector)
+	}
+	return name, selector, nil
 }
 
-func resolveDefineAddArgs(metadata *projectMetadata, args []string) (string, string, defineValueSpec, error) {
-	partial, err := parseDefineAddPartial(args)
-	if err != nil {
-		return "", "", defineValueSpec{}, err
-	}
-	name, selector, spec, err := strictDefineAddArgs(partial)
-	if err == nil {
-		return name, selector, spec, nil
-	}
-	if !siteIsInteractiveFn() {
-		return "", "", defineValueSpec{}, err
-	}
-	return promptDefineAddArgs(metadata, partial)
-}
-
-func parseDefineAddPartial(args []string) (defineAddPartial, error) {
-	partial := defineAddPartial{Positionals: []string{}}
+func parseDefineGetPartial(args []string) (defineGetPartial, error) {
+	partial := defineGetPartial{Positionals: []string{}}
 	for i := 0; i < len(args); i++ {
-		arg := args[i]
-		switch arg {
-		case "--env":
-			return partial, fmt.Errorf("define add --env is no longer supported; use --secret or run `nf define migrate-env`")
-		case "--secret":
-			if partial.SecretSet {
-				return partial, fmt.Errorf("define add accepts only one secret input option")
-			}
-			partial.SecretSet = true
-		case "--secret-stdin":
-			if partial.SecretSet {
-				return partial, fmt.Errorf("define add accepts only one secret input option")
-			}
-			partial.SecretSet = true
-			partial.SecretStdin = true
+		switch arg := args[i]; arg {
 		case "--for":
 			if partial.SelectorSet {
-				return partial, fmt.Errorf("define add accepts --for only once")
+				return partial, fmt.Errorf("define get accepts --for only once")
 			}
 			partial.SelectorSet = true
 			if i+1 >= len(args) || strings.HasPrefix(args[i+1], "-") {
@@ -498,7 +532,7 @@ func parseDefineAddPartial(args []string) (defineAddPartial, error) {
 			i++
 		default:
 			if strings.HasPrefix(arg, "-") {
-				return partial, fmt.Errorf("unknown define add flag: %s", arg)
+				return partial, fmt.Errorf("unknown define get flag: %s", arg)
 			}
 			partial.Positionals = append(partial.Positionals, arg)
 		}
@@ -506,15 +540,69 @@ func parseDefineAddPartial(args []string) (defineAddPartial, error) {
 	return partial, nil
 }
 
-func strictDefineAddArgs(partial defineAddPartial) (string, string, defineValueSpec, error) {
+func resolveDefineSetArgs(root string, metadata *projectMetadata, args []string) (string, string, defineValueSpec, error) {
+	partial, err := parseDefineSetPartial(args)
+	if err != nil {
+		return "", "", defineValueSpec{}, err
+	}
+	name, selector, spec, err := strictDefineSetArgs(partial)
+	if err == nil {
+		return name, selector, spec, nil
+	}
+	if !siteIsInteractiveFn() {
+		return "", "", defineValueSpec{}, err
+	}
+	return promptDefineSetArgs(root, metadata, partial)
+}
+
+func parseDefineSetPartial(args []string) (defineSetPartial, error) {
+	partial := defineSetPartial{Positionals: []string{}}
+	for i := 0; i < len(args); i++ {
+		arg := args[i]
+		switch arg {
+		case "--env":
+			return partial, fmt.Errorf("define set --env is no longer supported; use --secret or run `nf define migrate-env`")
+		case "--secret":
+			if partial.SecretSet {
+				return partial, fmt.Errorf("define set accepts only one secret input option")
+			}
+			partial.SecretSet = true
+		case "--secret-stdin":
+			if partial.SecretSet {
+				return partial, fmt.Errorf("define set accepts only one secret input option")
+			}
+			partial.SecretSet = true
+			partial.SecretStdin = true
+		case "--for":
+			if partial.SelectorSet {
+				return partial, fmt.Errorf("define set accepts --for only once")
+			}
+			partial.SelectorSet = true
+			if i+1 >= len(args) || strings.HasPrefix(args[i+1], "-") {
+				partial.SelectorMissing = true
+				continue
+			}
+			partial.Selector = strings.TrimSpace(args[i+1])
+			i++
+		default:
+			if strings.HasPrefix(arg, "-") {
+				return partial, fmt.Errorf("unknown define set flag: %s", arg)
+			}
+			partial.Positionals = append(partial.Positionals, arg)
+		}
+	}
+	return partial, nil
+}
+
+func strictDefineSetArgs(partial defineSetPartial) (string, string, defineValueSpec, error) {
 	if partial.SelectorSet && partial.SelectorMissing {
-		return "", "", defineValueSpec{}, fmt.Errorf("define add --for requires a selector")
+		return "", "", defineValueSpec{}, fmt.Errorf("define set --for requires a selector")
 	}
 	if partial.SecretSet && len(partial.Positionals) != 1 {
-		return "", "", defineValueSpec{}, fmt.Errorf("define add with a secret input option requires exactly one name")
+		return "", "", defineValueSpec{}, fmt.Errorf("define set with a secret input option requires exactly one name")
 	}
 	if !partial.SecretSet && len(partial.Positionals) != 2 {
-		return "", "", defineValueSpec{}, fmt.Errorf("define add requires a name and value, or a name with --secret")
+		return "", "", defineValueSpec{}, fmt.Errorf("define set requires a name and value, or a name with --secret")
 	}
 	name := strings.TrimSpace(partial.Positionals[0])
 	if err := validateProjectDefineName(name); err != nil {
@@ -522,19 +610,13 @@ func strictDefineAddArgs(partial defineAddPartial) (string, string, defineValueS
 	}
 	selector := strings.TrimSpace(partial.Selector)
 	if partial.SelectorSet && selector == "" {
-		return "", "", defineValueSpec{}, fmt.Errorf("define add --for requires a selector")
+		return "", "", defineValueSpec{}, fmt.Errorf("define set --for requires a selector")
 	}
 	if partial.SecretSet {
-		var value string
-		var err error
-		if partial.SecretStdin {
-			value, err = readDefineSecretStdin()
-		} else {
-			if !siteIsInteractiveFn() {
-				return "", "", defineValueSpec{}, fmt.Errorf("define add --secret requires an interactive terminal; use --secret-stdin for automation")
-			}
-			value, err = definePromptSecretFn("Encrypted define value")
+		if !partial.SecretStdin {
+			return "", "", defineValueSpec{}, fmt.Errorf("define set --secret requires an interactive terminal; use --secret-stdin for automation")
 		}
+		value, err := readDefineSecretStdin()
 		if err != nil {
 			return "", "", defineValueSpec{}, err
 		}
@@ -546,9 +628,9 @@ func strictDefineAddArgs(partial defineAddPartial) (string, string, defineValueS
 	return name, selector, defineValueSpec{Value: parseDefineCLIValue(partial.Positionals[1])}, nil
 }
 
-func promptDefineAddArgs(metadata *projectMetadata, partial defineAddPartial) (string, string, defineValueSpec, error) {
+func promptDefineSetArgs(root string, metadata *projectMetadata, partial defineSetPartial) (string, string, defineValueSpec, error) {
 	if len(partial.Positionals) > 2 || (partial.SecretSet && len(partial.Positionals) > 1) {
-		return strictDefineAddArgs(partial)
+		return strictDefineSetArgs(partial)
 	}
 	name := ""
 	if len(partial.Positionals) > 0 {
@@ -569,25 +651,86 @@ func promptDefineAddArgs(metadata *projectMetadata, partial defineAddPartial) (s
 			return "", "", defineValueSpec{}, err
 		}
 		if !confirmed {
-			return "", "", defineValueSpec{}, fmt.Errorf("define add cancelled")
+			return "", "", defineValueSpec{}, fmt.Errorf("define set cancelled")
 		}
 	}
 
-	source := defineAddValueSourceLiteral
-	if partial.SecretSet {
-		source = defineAddValueSourceSecret
-	} else if len(partial.Positionals) < 2 {
-		selected, err := defineSelectFn("Choose value source", defineAddValueSourceOptions())
+	selector := strings.TrimSpace(partial.Selector)
+	item := configuredDefineItem(metadata, name)
+	if partial.SelectorSet && (partial.SelectorMissing || selector == "") {
+		selected, err := promptDefineSelector(metadata)
 		if err != nil {
 			return "", "", defineValueSpec{}, err
 		}
-		source = selected
+		selector = selected
+	} else if !partial.SelectorSet && len(partial.Positionals) < 2 {
+		if item == nil {
+			if !partial.SecretSet {
+				selected, err := promptDefineSelector(metadata)
+				if err != nil {
+					return "", "", defineValueSpec{}, err
+				}
+				selector = selected
+			}
+		} else if _, hasValues := item["values"]; hasValues {
+			selected, err := promptConfiguredDefineSelector(name, item, true)
+			if err != nil {
+				return "", "", defineValueSpec{}, err
+			}
+			if selected == defineSetSelectorCustom {
+				selected, err = promptDefineSelector(metadata)
+				if err != nil {
+					return "", "", defineValueSpec{}, err
+				}
+			}
+			selector = selected
+		}
+	}
+
+	existingSpec := configuredDefineSpec(metadata, name, selector)
+	var existingValue any
+	if existingSpec != nil {
+		var err error
+		existingValue, err = configuredDefineSpecRawValue(root, metadata, name, existingSpec)
+		if err != nil {
+			return "", "", defineValueSpec{}, err
+		}
+	}
+	existingText, err := defineRawValueString(existingValue)
+	if err != nil {
+		return "", "", defineValueSpec{}, err
+	}
+
+	source := defineSetValueSourceLiteral
+	if partial.SecretSet {
+		source = defineSetValueSourceSecret
+	} else if len(partial.Positionals) < 2 {
+		if existingSpec != nil {
+			switch {
+			case strings.TrimSpace(recordValueString(existingSpec["secret"])) != "":
+				source = defineSetValueSourceSecret
+			case existingSpec["env"] != nil:
+				return "", "", defineValueSpec{}, fmt.Errorf("define %s uses a legacy env source; run `nf define migrate-env` before editing it", name)
+			}
+		} else {
+			selected, err := defineSelectFn("Choose value source", defineSetValueSourceOptions())
+			if err != nil {
+				return "", "", defineValueSpec{}, err
+			}
+			source = selected
+		}
 	}
 
 	var spec defineValueSpec
 	switch source {
-	case defineAddValueSourceSecret:
-		value, err := definePromptSecretFn("Encrypted define value")
+	case defineSetValueSourceSecret:
+		var value string
+		var err error
+		if partial.SecretStdin {
+			value, err = readDefineSecretStdin()
+		} else {
+			value, err = definePromptSecretFn("Encrypted define value", existingText)
+		}
 		if err != nil {
 			return "", "", defineValueSpec{}, err
 		}
@@ -595,44 +738,54 @@ func promptDefineAddArgs(metadata *projectMetadata, partial defineAddPartial) (s
 			return "", "", defineValueSpec{}, fmt.Errorf("encrypted define value must not be empty")
 		}
 		spec = defineValueSpec{SecretValue: value, IsSecret: true}
-	case defineAddValueSourceLiteral:
+	case defineSetValueSourceLiteral:
 		value := ""
 		if len(partial.Positionals) >= 2 {
 			value = partial.Positionals[1]
 		} else {
-			prompted, err := definePromptStringFn("Define value", "", true)
+			prompted, err := definePromptStringFn("Define value", existingText, true)
 			if err != nil {
 				return "", "", defineValueSpec{}, err
 			}
 			value = prompted
 		}
-		spec = defineValueSpec{Value: parseDefineCLIValue(value)}
+		spec = defineValueSpec{Value: parseEditedDefineCLIValue(value, existingValue)}
 	default:
 		return "", "", defineValueSpec{}, fmt.Errorf("unsupported define value source")
 	}
 
-	selector := strings.TrimSpace(partial.Selector)
-	if partial.SelectorSet && (partial.SelectorMissing || selector == "") {
-		selected, err := promptDefineSelector(metadata)
-		if err != nil {
-			return "", "", defineValueSpec{}, err
-		}
-		selector = selected
-	} else if !partial.SelectorSet && len(partial.Positionals) < 2 && !partial.SecretSet {
-		selected, err := promptDefineSelector(metadata)
-		if err != nil {
-			return "", "", defineValueSpec{}, err
-		}
-		selector = selected
-	}
 	return name, selector, spec, nil
 }
 
-func defineAddValueSourceOptions() []ui.SelectOption {
+func defineSetValueSourceOptions() []ui.SelectOption {
 	return []ui.SelectOption{
-		{Value: defineAddValueSourceLiteral, Label: "Literal value stored in nf.json", Default: true},
-		{Value: defineAddValueSourceSecret, Label: "Encrypted secret stored in nf.age"},
+		{Value: defineSetValueSourceLiteral, Label: "Literal value stored in nf.json", Default: true},
+		{Value: defineSetValueSourceSecret, Label: "Encrypted secret stored in nf.age"},
 	}
+}
+
+func promptConfiguredDefineSelector(name string, item map[string]any, allowNew bool) (string, error) {
+	values, err := defineValuesMap(item)
+	if err != nil {
+		return "", err
+	}
+	selectors := make([]string, 0, len(values))
+	for selector := range values {
+		selectors = append(selectors, selector)
+	}
+	sort.Strings(selectors)
+	options := make([]ui.SelectOption, 0, len(selectors)+1)
+	for _, selector := range selectors {
+		label := selector
+		if selector == "default" {
+			label += " (shared default)"
+		}
+		options = append(options, ui.SelectOption{Value: selector, Label: label})
+	}
+	if allowNew {
+		options = append(options, ui.SelectOption{Value: defineSetSelectorCustom, Label: "Set another selector..."})
+	}
+	return defineSelectFn("Choose a selector for "+name, options)
 }
 
 func promptDefineSelector(metadata *projectMetadata) (string, error) {
@@ -641,16 +794,16 @@ func promptDefineSelector(metadata *projectMetadata) (string, error) {
 		return "", err
 	}
 	switch selected {
-	case defineAddSelectorAll:
+	case defineSetSelectorAll:
 		return "", nil
-	case defineAddSelectorCustom:
+	case defineSetSelectorCustom:
 		prompted, err := definePromptStringFn("Define selector", "", false)
 		if err != nil {
 			return "", err
 		}
 		selector := strings.TrimSpace(prompted)
 		if selector == "" {
-			return "", fmt.Errorf("define add --for requires a selector")
+			return "", fmt.Errorf("define set --for requires a selector")
 		}
 		return selector, nil
 	default:
@@ -659,7 +812,7 @@ func promptDefineSelector(metadata *projectMetadata) (string, error) {
 }
 
 func defineSelectorOptions(metadata *projectMetadata) []ui.SelectOption {
-	options := []ui.SelectOption{{Value: defineAddSelectorAll, Label: "All environments (shared default)", Default: true}}
+	options := []ui.SelectOption{{Value: defineSetSelectorAll, Label: "All environments (shared default)", Default: true}}
 	options = append(options, ui.SelectOption{Value: "local", Label: "local"})
 	remotes, err := projectRemotes(metadata, false)
 	if err == nil {
@@ -682,7 +835,7 @@ func defineSelectorOptions(metadata *projectMetadata) []ui.SelectOption {
 			}
 		}
 	}
-	options = append(options, ui.SelectOption{Value: defineAddSelectorCustom, Label: "Custom selector..."})
+	options = append(options, ui.SelectOption{Value: defineSetSelectorCustom, Label: "Custom selector..."})
 	return options
 }
 
@@ -849,6 +1002,77 @@ func validateDefineEnvName(name string) error {
 	return nil
 }
 
+func configuredDefineItem(metadata *projectMetadata, name string) map[string]any {
+	for _, raw := range metadata.WordPress.Defines {
+		item, _ := raw.(map[string]any)
+		if item != nil && strings.TrimSpace(recordValueString(item["name"])) == name {
+			return item
+		}
+	}
+	return nil
+}
+
+func configuredDefineRawValue(root string, metadata *projectMetadata, name, selector string) (any, error) {
+	item := configuredDefineItem(metadata, name)
+	if item == nil {
+		return nil, fmt.Errorf("define %s is not configured", name)
+	}
+	spec := item
+	if _, hasValues := item["values"]; hasValues {
+		if strings.TrimSpace(selector) == "" {
+			return nil, fmt.Errorf("define get %s requires --for because it has selector-specific values", name)
+		}
+		spec = configuredDefineSpec(metadata, name, selector)
+		if spec == nil {
+			return nil, fmt.Errorf("define %s is not configured for %s", name, selector)
+		}
+	}
+	return configuredDefineSpecRawValue(root, metadata, name, spec)
+}
+
+func configuredDefineSpecRawValue(root string, metadata *projectMetadata, name string, spec map[string]any) (any, error) {
+	if envName := strings.TrimSpace(recordValueString(spec["env"])); envName != "" {
+		value := envwizard.Value(envName)
+		if value == "" {
+			return nil, ProjectError{Msg: fmt.Sprintf("Expected %s in the environment or %s for define %s.", envName, config.EnvFile(), name)}
+		}
+		return value, nil
+	}
+	if ref := strings.TrimSpace(recordValueString(spec["secret"])); ref != "" {
+		store, err := loadDefineSecretStore(root, metadata, false)
+		if err != nil {
+			return nil, err
+		}
+		value, ok := store.Secrets[ref]
+		if !ok {
+			return nil, ProjectError{Msg: fmt.Sprintf("%s has no encrypted value for %s", defineSecretStoreFilename, name)}
+		}
+		return value, nil
+	}
+	if value, ok := spec["value"]; ok {
+		return value, nil
+	}
+	return nil, fmt.Errorf("define %s has no configured value", name)
+}
+
+func defineRawValueString(value any) (string, error) {
+	switch typed := value.(type) {
+	case nil:
+		return "", nil
+	case string:
+		return typed, nil
+	case bool:
+		return strconv.FormatBool(typed), nil
+	case float64:
+		if math.IsNaN(typed) || math.IsInf(typed, 0) {
+			return "", fmt.Errorf("define value number must be finite")
+		}
+		return strconv.FormatFloat(typed, 'f', -1, 64), nil
+	default:
+		return "", fmt.Errorf("define value has unsupported type %T", value)
+	}
+}
+
 func parseDefineCLIValue(value string) any {
 	switch strings.ToLower(value) {
 	case "true":
@@ -858,6 +1082,22 @@ func parseDefineCLIValue(value string) any {
 	default:
 		return value
 	}
+}
+
+func parseEditedDefineCLIValue(value string, existing any) any {
+	switch existing.(type) {
+	case string:
+		return value
+	case bool:
+		if parsed, err := strconv.ParseBool(strings.ToLower(value)); err == nil {
+			return parsed
+		}
+	case float64:
+		if parsed, err := strconv.ParseFloat(value, 64); err == nil && !math.IsNaN(parsed) && !math.IsInf(parsed, 0) {
+			return parsed
+		}
+	}
+	return parseDefineCLIValue(value)
 }
 
 func configuredDefineArray(metadata *projectMetadata, create bool) ([]any, *[]any, error) {

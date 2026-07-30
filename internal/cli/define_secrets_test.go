@@ -252,8 +252,8 @@ func TestRunDefineRekeySupportsRecipientTransition(t *testing.T) {
 	oldStdin := defineSecretStdin
 	t.Cleanup(func() { defineSecretStdin = oldStdin })
 	defineSecretStdin = strings.NewReader("first-secret\n")
-	if got := Run([]string{"define", "add", "FIRST_SECRET", "--secret-stdin"}); got != 0 {
-		t.Fatalf("Run(define add FIRST_SECRET) = %d", got)
+	if got := Run([]string{"define", "set", "FIRST_SECRET", "--secret-stdin"}); got != 0 {
+		t.Fatalf("Run(define set FIRST_SECRET) = %d", got)
 	}
 	_, newRecipient, err := passwords.DeriveAgeIdentity(newSalt)
 	if err != nil {
@@ -276,8 +276,8 @@ func TestRunDefineRekeySupportsRecipientTransition(t *testing.T) {
 		t.Fatalf("transition recipients = %d, want 2", len(store.Recipients))
 	}
 	defineSecretStdin = strings.NewReader("second-secret\n")
-	if got := Run([]string{"define", "add", "SECOND_SECRET", "--secret-stdin"}); got != 0 {
-		t.Fatalf("Run(define add SECOND_SECRET) = %d", got)
+	if got := Run([]string{"define", "set", "SECOND_SECRET", "--secret-stdin"}); got != 0 {
+		t.Fatalf("Run(define set SECOND_SECRET) = %d", got)
 	}
 	metadata, _ = loadProjectMetadataOrError(root)
 	store, err = loadDefineSecretStore(root, metadata, false)

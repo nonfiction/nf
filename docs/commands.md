@@ -98,12 +98,13 @@ nf remote show [name]
 nf remote remove [name]
 nf remote list
 nf define list
+nf define get <name> [--for selector]
 nf define status [remote]
 nf define sync [remote]
-nf define add
-nf define add <name> <value> [--for selector]
-nf define add <name> --secret [--for selector]
-nf define add <name> --secret-stdin [--for selector]
+nf define set
+nf define set <name> <value> [--for selector]
+nf define set <name> --secret [--for selector]
+nf define set <name> --secret-stdin [--for selector]
 nf define remove
 nf define remove <name> [--for selector]
 nf define migrate-env [--dry-run|--delete-source]
@@ -159,6 +160,6 @@ nf target add linode linode1 \
 * `nf alias ...` manages root-level webroot symlinks declared in `wordpress.aliases` in `nf.json`. Alias targets must be `wp-content` or descendants. `nf alias status [remote]` reports configured, missing, conflicting, and stale symlinks. `nf alias sync [remote]` creates or updates configured symlinks and prunes stale root symlinks, but never overwrites or removes real files/directories.
 * `nf site shell/wp ...` validate the cache, print the SSH or WP-CLI command preview, then execute the remote command.
 * `nf env logs <remote>` resolves a configured repo remote, prints the SSH command preview, ensures `wp-content/debug.log` exists, and tails it on the remote host.
-* `nf define ...` manages `wordpress.defines` from `nf.json`. `list` prints configured names/selectors/sources without decrypting or printing secret values. `status [remote]` compares configured constants against local or remote `wp-config.php`. `sync [remote]` patches local or remote `wp-config.php` through a temp file and atomic replace, without persistent backups. It replaces only the nf-managed project define block, so removed `nf.json` entries are pruned from that block while manual constants outside the block are preserved. Older per-define nf markers are migrated into the block on sync. `add` writes shared values by default and opens an interactive wizard when required arguments are omitted; use `--secret` for hidden secret entry or `--secret-stdin` for automation. Secret values are age-encrypted in committed `nf.age`; `nf.json` stores only opaque references. `remove` opens a picker when the name is omitted and prunes unused ciphertext entries. `--for <selector>` writes a remote/env-specific value and promotes an existing shared value to `values.default`. `migrate-env` converts legacy env-backed define entries and remaining project-root `.env` assignments to encrypted defines; `--delete-source` removes `.env` only after encrypted readback and manifest verification. `rekey` manages recipient transitions for `nf.age`. Provider-owned constants such as `KINSTAMU_WHITELABEL` are rejected from project defines. Duplicate constants, including configured constants outside the nf-managed project block, are unsafe and block sync until resolved manually.
+* `nf define ...` manages `wordpress.defines` from `nf.json`. `list` prints configured names/selectors/sources without decrypting or printing secret values. `get <name>` prints only one raw value to stdout, decrypting secrets when needed; selector-backed defines require an exact `--for`, with an interactive picker when omitted in a terminal and no implicit `default` fallback. `status [remote]` compares configured constants against local or remote `wp-config.php`. `sync [remote]` patches local or remote `wp-config.php` through a temp file and atomic replace, without persistent backups. It replaces only the nf-managed project define block, so removed `nf.json` entries are pruned from that block while manual constants outside the block are preserved. Older per-define nf markers are migrated into the block on sync. `set` adds or edits values and prepopulates existing interactive literal or masked secret input; use `--secret` for hidden secret entry or `--secret-stdin` for automation. Secret values are age-encrypted in committed `nf.age`; `nf.json` stores only opaque references. `remove` opens a picker when the name is omitted and prunes unused ciphertext entries. `--for <selector>` writes a remote/env-specific value and promotes an existing shared value to `values.default`. `migrate-env` converts legacy env-backed define entries and remaining project-root `.env` assignments to encrypted defines; `--delete-source` removes `.env` only after encrypted readback and manifest verification. `rekey` manages recipient transitions for `nf.age`. Provider-owned constants such as `KINSTAMU_WHITELABEL` are rejected from project defines. Duplicate constants, including configured constants outside the nf-managed project block, are unsafe and block sync until resolved manually.
 * `nf env import <source>` imports external WordPress data into the local env after creating a safety snapshot. It never writes directly to a remote env.
 * `nf env push/pull [remote]` syncs database and mutable `wp-content` after an interactive confirmation. Omit `remote` to pick from configured repo remotes. Add `--dry-run` for a non-mutating plan, or use `--non-interactive` without `--execute` for preflight-only output.

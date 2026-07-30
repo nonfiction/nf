@@ -21,7 +21,7 @@ func (e ProjectError) Error() string { return e.Msg }
 
 var defineSecretStdin io.Reader = os.Stdin
 
-var definePromptSecretFn = ui.PromptSecret
+var definePromptSecretFn = ui.PromptSecretWithDefault
 
 var (
 	runLinodeDeleteFn                     = runLinodeDelete

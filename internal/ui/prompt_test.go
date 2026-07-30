@@ -82,6 +82,22 @@ func TestPromptModelAllowBlankUsesPlaceholder(t *testing.T) {
 	}
 }
 
+func TestSecretPromptModelPrepopulatesWithoutExposingDefault(t *testing.T) {
+	m := newSecretPromptModel("Secret", "sensitive-value")
+	if got, want := m.input.Value(), "sensitive-value"; got != want {
+		t.Fatalf("secret input value = %q, want %q", got, want)
+	}
+	view := m.View()
+	if strings.Contains(view, "sensitive-value") {
+		t.Fatalf("secret prompt exposed initial value:\n%s", view)
+	}
+	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	m = updated.(promptModel)
+	if got, want := m.result, "sensitive-value"; got != want {
+		t.Fatalf("secret result = %q, want %q", got, want)
+	}
+}
+
 func TestSelectModelNavigationAndSubmit(t *testing.T) {
 	m := newSelectModel("Choose", []SelectOption{{Label: "One", Value: "1"}, {Label: "Two", Value: "2"}})
 

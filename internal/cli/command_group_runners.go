@@ -223,13 +223,14 @@ func runAliasHelp() int {
 func runDefineHelp() int {
 	printCommandHelp("define", []helpLine{
 		{"list, ls", "list configured wp-config.php constants"},
+		{"get <name>", "print one configured constant value"},
 		{"status [remote]", "show local or remote constant state against nf.json"},
 		{"sync [remote]", "apply configured constants to wp-config.php"},
 		{},
-		{"add", "open an interactive define wizard"},
-		{"add <name> <value>", "add a literal define to nf.json"},
-		{"add <name> --secret", "prompt for an encrypted define value"},
-		{"add <name> --secret-stdin", "read an encrypted define value from stdin"},
+		{"set", "open an interactive define editor"},
+		{"set <name> <value>", "set a literal define in nf.json"},
+		{"set <name> --secret", "prompt for an encrypted define value"},
+		{"set <name> --secret-stdin", "read an encrypted define value from stdin"},
 		{"remove, rm", "choose and remove a define from nf.json"},
 		{"remove, rm <name>", "remove a define from nf.json"},
 		{},

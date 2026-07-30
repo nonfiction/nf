@@ -740,10 +740,13 @@ func TestRunCompleteSuggestsStaticAndCachedValues(t *testing.T) {
 			t.Fatalf("Run(__complete define) = %d, want 0", got)
 		}
 	})
-	for _, want := range []string{"list\n", "status\n", "sync\n", "add\n", "remove\n", "rm\n", "migrate-env\n", "rekey\n"} {
+	for _, want := range []string{"list\n", "get\n", "status\n", "sync\n", "set\n", "remove\n", "rm\n", "migrate-env\n", "rekey\n"} {
 		if !strings.Contains(defineCommandOutput, want) {
 			t.Fatalf("define completion missing %q:\n%s", want, defineCommandOutput)
 		}
+	}
+	if strings.Contains(defineCommandOutput, "add\n") {
+		t.Fatalf("define completion retained removed add command:\n%s", defineCommandOutput)
 	}
 	defineSyncOutput := captureStdout(t, func() {
 		if got := Run([]string{"__complete", "--", "define", "sync", "pro"}); got != 0 {
@@ -761,9 +764,25 @@ func TestRunCompleteSuggestsStaticAndCachedValues(t *testing.T) {
 	if strings.TrimSpace(defineRemoveOutput) != "OTGS_INSTALLER_SITE_KEY_WPML" {
 		t.Fatalf("define remove completion = %q, want configured define", defineRemoveOutput)
 	}
+	defineGetOutput := captureStdout(t, func() {
+		if got := Run([]string{"__complete", "--", "define", "get", "OT"}); got != 0 {
+			t.Fatalf("Run(__complete define get OT) = %d, want 0", got)
+		}
+	})
+	if strings.TrimSpace(defineGetOutput) != "OTGS_INSTALLER_SITE_KEY_WPML" {
+		t.Fatalf("define get completion = %q, want configured define", defineGetOutput)
+	}
+	defineSetOutput := captureStdout(t, func() {
+		if got := Run([]string{"__complete", "--", "define", "set", "OT"}); got != 0 {
+			t.Fatalf("Run(__complete define set OT) = %d, want 0", got)
+		}
+	})
+	if strings.TrimSpace(defineSetOutput) != "OTGS_INSTALLER_SITE_KEY_WPML" {
+		t.Fatalf("define set completion = %q, want configured define", defineSetOutput)
+	}
 	defineForOutput := captureStdout(t, func() {
-		if got := Run([]string{"__complete", "--", "define", "add", "SOME_PLUGIN_CONSTANT", "true", "--for", ""}); got != 0 {
-			t.Fatalf("Run(__complete define add --for) = %d, want 0", got)
+		if got := Run([]string{"__complete", "--", "define", "set", "SOME_PLUGIN_CONSTANT", "true", "--for", ""}); got != 0 {
+			t.Fatalf("Run(__complete define set --for) = %d, want 0", got)
 		}
 	})
 	if strings.TrimSpace(defineForOutput) != "local\nproduction" {
@@ -11936,7 +11955,7 @@ func TestRunDefineSyncRemoteUsesStdinScript(t *testing.T) {
 	}
 }
 
-func TestRunDefineAddRemoveWritesSharedAndSelectorValues(t *testing.T) {
+func TestRunDefineSetRemoveWritesSharedAndSelectorValues(t *testing.T) {
 	t.Setenv("NF_CONFIG_HOME", t.TempDir())
 	t.Setenv("NF_PASSWORD_SALT", "nf_test-define-secret-salt")
 	root := setupTestNFProjectWithMetadata(t, map[string]any{
@@ -11945,8 +11964,8 @@ func TestRunDefineAddRemoveWritesSharedAndSelectorValues(t *testing.T) {
 		"wordpress": map[string]any{"themes": []any{"twentytwentyfive"}},
 	})
 	stderr := captureStderr(t, func() {
-		if got := Run([]string{"define", "add", "KINSTAMU_WHITELABEL", "true"}); got != 1 {
-			t.Fatalf("Run(define add KINSTAMU_WHITELABEL) = %d, want 1", got)
+		if got := Run([]string{"define", "set", "KINSTAMU_WHITELABEL", "true"}); got != 1 {
+			t.Fatalf("Run(define set KINSTAMU_WHITELABEL) = %d, want 1", got)
 		}
 	})
 	if !strings.Contains(stderr, "define KINSTAMU_WHITELABEL is provider-owned") {
@@ -11954,21 +11973,21 @@ func TestRunDefineAddRemoveWritesSharedAndSelectorValues(t *testing.T) {
 	}
 
 	if output := captureStdout(t, func() {
-		if got := Run([]string{"define", "add", "SOME_PLUGIN_CONSTANT", "true"}); got != 0 {
-			t.Fatalf("Run(define add literal) = %d, want 0", got)
+		if got := Run([]string{"define", "set", "SOME_PLUGIN_CONSTANT", "true"}); got != 0 {
+			t.Fatalf("Run(define set literal) = %d, want 0", got)
 		}
-	}); !strings.Contains(output, "Added define SOME_PLUGIN_CONSTANT.") {
-		t.Fatalf("define add literal output = %q", output)
+	}); !strings.Contains(output, "Set define SOME_PLUGIN_CONSTANT.") {
+		t.Fatalf("define set literal output = %q", output)
 	}
 	oldStdin := defineSecretStdin
 	t.Cleanup(func() { defineSecretStdin = oldStdin })
 	defineSecretStdin = strings.NewReader("shared-secret\n")
-	if got := Run([]string{"define", "add", "OTGS_INSTALLER_SITE_KEY_WPML", "--secret-stdin"}); got != 0 {
-		t.Fatalf("Run(define add secret) = %d, want 0", got)
+	if got := Run([]string{"define", "set", "OTGS_INSTALLER_SITE_KEY_WPML", "--secret-stdin"}); got != 0 {
+		t.Fatalf("Run(define set secret) = %d, want 0", got)
 	}
 	defineSecretStdin = strings.NewReader("production-secret\n")
-	if got := Run([]string{"define", "add", "OTGS_INSTALLER_SITE_KEY_WPML", "--secret-stdin", "--for", "production"}); got != 0 {
-		t.Fatalf("Run(define add secret for production) = %d, want 0", got)
+	if got := Run([]string{"define", "set", "OTGS_INSTALLER_SITE_KEY_WPML", "--secret-stdin", "--for", "production"}); got != 0 {
+		t.Fatalf("Run(define set secret for production) = %d, want 0", got)
 	}
 
 	metadata, err := loadProjectMetadataOrError(root)
@@ -12036,7 +12055,7 @@ func TestRunDefineAddRemoveWritesSharedAndSelectorValues(t *testing.T) {
 	}
 }
 
-func TestRunDefineAddInteractiveWizardWritesSecretSelector(t *testing.T) {
+func TestRunDefineSetInteractiveWizardWritesSecretSelector(t *testing.T) {
 	t.Setenv("NF_CONFIG_HOME", t.TempDir())
 	t.Setenv("NF_PASSWORD_SALT", "nf_test-define-secret-salt")
 	root := setupTestNFProjectWithMetadata(t, map[string]any{
@@ -12073,9 +12092,12 @@ func TestRunDefineAddInteractiveWizardWritesSecretSelector(t *testing.T) {
 			return "", nil
 		}
 	}
-	definePromptSecretFn = func(prompt string) (string, error) {
+	definePromptSecretFn = func(prompt, defaultValue string) (string, error) {
 		if prompt != "Encrypted define value" {
 			t.Fatalf("unexpected secret prompt %q", prompt)
+		}
+		if defaultValue != "" {
+			t.Fatalf("secret default = %q, want empty", defaultValue)
 		}
 		return "wizard-secret", nil
 	}
@@ -12102,17 +12124,17 @@ func TestRunDefineAddInteractiveWizardWritesSecretSelector(t *testing.T) {
 	}
 
 	output := captureStdout(t, func() {
-		if got := Run([]string{"define", "add"}); got != 0 {
-			t.Fatalf("Run(define add wizard) = %d, want 0", got)
+		if got := Run([]string{"define", "set"}); got != 0 {
+			t.Fatalf("Run(define set wizard) = %d, want 0", got)
 		}
 	})
-	if !strings.Contains(output, "Added define SomePluginKey for production.") {
-		t.Fatalf("define add wizard output = %q", output)
+	if !strings.Contains(output, "Set define SomePluginKey for production.") {
+		t.Fatalf("define set wizard output = %q", output)
 	}
 	if !slices.Equal(prompts, []string{"Define name (usually ALL_CAPS)"}) {
 		t.Fatalf("prompts = %#v", prompts)
 	}
-	if !slices.Equal(selectTitles, []string{"Choose value source", "Choose where this define applies"}) {
+	if !slices.Equal(selectTitles, []string{"Choose where this define applies", "Choose value source"}) {
 		t.Fatalf("select titles = %#v", selectTitles)
 	}
 	if !strings.Contains(confirmPrompt, "ALL_CAPS") || !strings.Contains(confirmPrompt, "SomePluginKey") {
@@ -12152,7 +12174,7 @@ func TestRunDefineAddInteractiveWizardWritesSecretSelector(t *testing.T) {
 	}
 }
 
-func TestRunDefineAddInteractivePromptsForSecretAndSelector(t *testing.T) {
+func TestRunDefineSetInteractivePromptsForSecretAndSelector(t *testing.T) {
 	t.Setenv("NF_CONFIG_HOME", t.TempDir())
 	t.Setenv("NF_PASSWORD_SALT", "nf_test-define-secret-salt")
 	root := setupTestNFProjectWithMetadata(t, map[string]any{
@@ -12166,15 +12188,17 @@ func TestRunDefineAddInteractivePromptsForSecretAndSelector(t *testing.T) {
 	oldPromptSecret := definePromptSecretFn
 	oldSelect := defineSelectFn
 	oldConfirm := defineConfirmFn
+	oldStdin := defineSecretStdin
 	t.Cleanup(func() {
 		siteIsInteractiveFn = oldInteractive
 		definePromptStringFn = oldPrompt
 		definePromptSecretFn = oldPromptSecret
 		defineSelectFn = oldSelect
 		defineConfirmFn = oldConfirm
+		defineSecretStdin = oldStdin
 	})
 	siteIsInteractiveFn = func() bool { return true }
-	definePromptSecretFn = func(prompt string) (string, error) {
+	definePromptSecretFn = func(prompt, defaultValue string) (string, error) {
 		return "shared-secret", nil
 	}
 	defineSelectFn = func(title string, options []ui.SelectOption) (string, error) {
@@ -12188,11 +12212,15 @@ func TestRunDefineAddInteractivePromptsForSecretAndSelector(t *testing.T) {
 		return false, nil
 	}
 
-	if got := Run([]string{"define", "add", "SHARED_KEY", "--secret", "--for"}); got != 0 {
-		t.Fatalf("Run(define add --secret --for) = %d, want 0", got)
+	if got := Run([]string{"define", "set", "SHARED_KEY", "--secret", "--for"}); got != 0 {
+		t.Fatalf("Run(define set --secret --for) = %d, want 0", got)
 	}
-	if got := Run([]string{"define", "add", "SCOPED_FLAG", "true", "--for"}); got != 0 {
-		t.Fatalf("Run(define add --for) = %d, want 0", got)
+	if got := Run([]string{"define", "set", "SCOPED_FLAG", "true", "--for"}); got != 0 {
+		t.Fatalf("Run(define set --for) = %d, want 0", got)
+	}
+	defineSecretStdin = strings.NewReader("stdin-secret\n")
+	if got := Run([]string{"define", "set", "STDIN_KEY", "--secret-stdin", "--for"}); got != 0 {
+		t.Fatalf("Run(define set --secret-stdin --for) = %d, want 0", got)
 	}
 
 	metadata, err := loadProjectMetadataOrError(root)
@@ -12213,9 +12241,18 @@ func TestRunDefineAddInteractivePromptsForSecretAndSelector(t *testing.T) {
 	if got, want := values["production"].(map[string]any)["value"], true; got != want {
 		t.Fatalf("SCOPED_FLAG production value = %#v, want %#v", got, want)
 	}
+	stdinValues := items["STDIN_KEY"]["values"].(map[string]any)
+	stdinRef := recordValueString(stdinValues["production"].(map[string]any)["secret"])
+	store, err := loadDefineSecretStore(root, metadata, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := store.Secrets[stdinRef]; got != "stdin-secret" {
+		t.Fatalf("STDIN_KEY encrypted value = %q", got)
+	}
 }
 
-func TestRunDefineAddMissingArgsRequiresInteractiveTerminal(t *testing.T) {
+func TestRunDefineSetMissingArgsRequiresInteractiveTerminal(t *testing.T) {
 	setupTestNFProjectWithMetadata(t, map[string]any{
 		"version":   2,
 		"project":   map[string]any{"slug": "client", "password_version": 0},
@@ -12226,12 +12263,226 @@ func TestRunDefineAddMissingArgsRequiresInteractiveTerminal(t *testing.T) {
 	t.Cleanup(func() { siteIsInteractiveFn = oldInteractive })
 
 	stderr := captureStderr(t, func() {
-		if got := Run([]string{"define", "add"}); got != 1 {
-			t.Fatalf("Run(define add non-interactive) = %d, want 1", got)
+		if got := Run([]string{"define", "set"}); got != 1 {
+			t.Fatalf("Run(define set non-interactive) = %d, want 1", got)
 		}
 	})
-	if !strings.Contains(stderr, "define add requires a name and value, or a name with --secret") {
+	if !strings.Contains(stderr, "define set requires a name and value, or a name with --secret") {
 		t.Fatalf("stderr = %q", stderr)
+	}
+}
+
+func TestRunDefineGetPrintsRawValuesAndRequiresExactSelector(t *testing.T) {
+	t.Setenv("NF_CONFIG_HOME", t.TempDir())
+	t.Setenv("NF_PASSWORD_SALT", "nf_test-define-get-salt")
+	t.Setenv("LEGACY_DEFINE_VALUE", "legacy-value")
+	setupTestNFProjectWithMetadata(t, map[string]any{
+		"version": 2,
+		"project": map[string]any{"slug": "client", "password_version": 0},
+		"wordpress": map[string]any{"themes": []any{"twentytwentyfive"}, "defines": []any{
+			map[string]any{"name": "LITERAL_VALUE", "value": "plain-value"},
+			map[string]any{"name": "BOOL_VALUE", "value": true},
+			map[string]any{"name": "NUMBER_VALUE", "value": 42.5},
+			map[string]any{"name": "LEGACY_VALUE", "env": "LEGACY_DEFINE_VALUE"},
+			map[string]any{"name": "SCOPED_VALUE", "values": map[string]any{
+				"default": map[string]any{"value": "default-value"},
+				"local":   map[string]any{"value": "local-value"},
+			}},
+		}},
+	})
+	oldStdin := defineSecretStdin
+	oldInteractive := siteIsInteractiveFn
+	oldSelect := defineSelectFn
+	t.Cleanup(func() {
+		defineSecretStdin = oldStdin
+		siteIsInteractiveFn = oldInteractive
+		defineSelectFn = oldSelect
+	})
+	defineSecretStdin = strings.NewReader("encrypted-value\n")
+	if got := Run([]string{"define", "set", "SECRET_VALUE", "--secret-stdin"}); got != 0 {
+		t.Fatalf("Run(define set SECRET_VALUE) = %d", got)
+	}
+	siteIsInteractiveFn = func() bool { return false }
+
+	for _, tc := range []struct {
+		args []string
+		want string
+	}{
+		{[]string{"define", "get", "LITERAL_VALUE"}, "plain-value\n"},
+		{[]string{"define", "get", "BOOL_VALUE"}, "true\n"},
+		{[]string{"define", "get", "NUMBER_VALUE"}, "42.5\n"},
+		{[]string{"define", "get", "LEGACY_VALUE"}, "legacy-value\n"},
+		{[]string{"define", "get", "SECRET_VALUE"}, "encrypted-value\n"},
+		{[]string{"define", "get", "SCOPED_VALUE", "--for", "local"}, "local-value\n"},
+	} {
+		output := captureStdout(t, func() {
+			if got := Run(tc.args); got != 0 {
+				t.Fatalf("Run(%v) = %d", tc.args, got)
+			}
+		})
+		if output != tc.want {
+			t.Fatalf("Run(%v) output = %q, want %q", tc.args, output, tc.want)
+		}
+	}
+
+	stderr := captureStderr(t, func() {
+		if got := Run([]string{"define", "get", "SCOPED_VALUE"}); got != 1 {
+			t.Fatalf("Run(define get SCOPED_VALUE) = %d, want 1", got)
+		}
+	})
+	if !strings.Contains(stderr, "requires --for") {
+		t.Fatalf("missing selector stderr = %q", stderr)
+	}
+	stderr = captureStderr(t, func() {
+		if got := Run([]string{"define", "get", "SCOPED_VALUE", "--for", "staging"}); got != 1 {
+			t.Fatalf("Run(define get SCOPED_VALUE --for staging) = %d, want 1", got)
+		}
+	})
+	if !strings.Contains(stderr, "not configured for staging") || strings.Contains(stderr, "default-value") {
+		t.Fatalf("unknown selector stderr = %q", stderr)
+	}
+	stderr = captureStderr(t, func() {
+		if got := Run([]string{"define", "get", "LITERAL_VALUE", "--for", "local"}); got != 1 {
+			t.Fatalf("Run(define get shared --for local) = %d, want 1", got)
+		}
+	})
+	if !strings.Contains(stderr, "uses a shared value") {
+		t.Fatalf("shared selector stderr = %q", stderr)
+	}
+
+	siteIsInteractiveFn = func() bool { return true }
+	defineSelectFn = func(title string, options []ui.SelectOption) (string, error) {
+		if title != "Choose a selector for SCOPED_VALUE" {
+			t.Fatalf("selector title = %q", title)
+		}
+		if !slices.Equal(options, []ui.SelectOption{{Value: "default", Label: "default (shared default)"}, {Value: "local", Label: "local"}}) {
+			t.Fatalf("selector options = %#v", options)
+		}
+		return "default", nil
+	}
+	output := captureStdout(t, func() {
+		if got := Run([]string{"define", "get", "SCOPED_VALUE"}); got != 0 {
+			t.Fatalf("interactive Run(define get SCOPED_VALUE) = %d", got)
+		}
+	})
+	if output != "default-value\n" {
+		t.Fatalf("interactive get output = %q", output)
+	}
+
+	stderr = captureStderr(t, func() {
+		if got := Run([]string{"define", "add", "OLD_COMMAND", "value"}); got != 1 {
+			t.Fatalf("Run(define add) = %d, want 1", got)
+		}
+	})
+	if !strings.Contains(stderr, "unsupported define command") {
+		t.Fatalf("define add stderr = %q", stderr)
+	}
+}
+
+func TestRunDefineSetInteractivePrepopulatesExistingValues(t *testing.T) {
+	t.Setenv("NF_CONFIG_HOME", t.TempDir())
+	t.Setenv("NF_PASSWORD_SALT", "nf_test-define-edit-salt")
+	root := setupTestNFProjectWithMetadata(t, map[string]any{
+		"version": 2,
+		"project": map[string]any{"slug": "client", "password_version": 0},
+		"wordpress": map[string]any{"themes": []any{"twentytwentyfive"}, "defines": []any{
+			map[string]any{"name": "AGENCY_NAME", "value": "old-name"},
+			map[string]any{"name": "FEATURE_ENABLED", "value": true},
+			map[string]any{"name": "SAMPLE_RATIO", "value": 1.5},
+			map[string]any{"name": "SCOPED_VALUE", "values": map[string]any{
+				"default": map[string]any{"value": "shared-value"},
+				"local":   map[string]any{"value": "local-old"},
+			}},
+		}},
+	})
+	oldStdin := defineSecretStdin
+	oldInteractive := siteIsInteractiveFn
+	oldPrompt := definePromptStringFn
+	oldSecretPrompt := definePromptSecretFn
+	oldSelect := defineSelectFn
+	t.Cleanup(func() {
+		defineSecretStdin = oldStdin
+		siteIsInteractiveFn = oldInteractive
+		definePromptStringFn = oldPrompt
+		definePromptSecretFn = oldSecretPrompt
+		defineSelectFn = oldSelect
+	})
+	defineSecretStdin = strings.NewReader("secret-old\n")
+	if got := Run([]string{"define", "set", "SECRET_VALUE", "--secret-stdin"}); got != 0 {
+		t.Fatalf("Run(define set SECRET_VALUE) = %d", got)
+	}
+	metadata, err := loadProjectMetadataOrError(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	secretRef := recordValueString(configuredDefineItem(metadata, "SECRET_VALUE")["secret"])
+
+	siteIsInteractiveFn = func() bool { return true }
+	definePromptStringFn = func(prompt, defaultValue string, allowBlank bool) (string, error) {
+		if prompt != "Define value" || !allowBlank {
+			t.Fatalf("unexpected value prompt %q allowBlank=%t", prompt, allowBlank)
+		}
+		switch defaultValue {
+		case "old-name":
+			return "new-name", nil
+		case "true":
+			return "false", nil
+		case "1.5":
+			return "2.5", nil
+		case "local-old":
+			return "local-new", nil
+		default:
+			t.Fatalf("unexpected default value %q", defaultValue)
+			return "", nil
+		}
+	}
+	definePromptSecretFn = func(prompt, defaultValue string) (string, error) {
+		if prompt != "Encrypted define value" || defaultValue != "secret-old" {
+			t.Fatalf("secret prompt = %q default = %q", prompt, defaultValue)
+		}
+		return "secret-new", nil
+	}
+	defineSelectFn = func(title string, options []ui.SelectOption) (string, error) {
+		if title != "Choose a selector for SCOPED_VALUE" {
+			t.Fatalf("unexpected selector %q", title)
+		}
+		return "local", nil
+	}
+
+	for _, name := range []string{"AGENCY_NAME", "FEATURE_ENABLED", "SAMPLE_RATIO", "SECRET_VALUE", "SCOPED_VALUE"} {
+		if got := Run([]string{"define", "set", name}); got != 0 {
+			t.Fatalf("Run(define set %s) = %d", name, got)
+		}
+	}
+	metadata, err = loadProjectMetadataOrError(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := configuredDefineItem(metadata, "AGENCY_NAME")["value"]; got != "new-name" {
+		t.Fatalf("AGENCY_NAME = %#v", got)
+	}
+	if got := configuredDefineItem(metadata, "FEATURE_ENABLED")["value"]; got != false {
+		t.Fatalf("FEATURE_ENABLED = %#v", got)
+	}
+	if got := configuredDefineItem(metadata, "SAMPLE_RATIO")["value"]; got != float64(2.5) {
+		t.Fatalf("SAMPLE_RATIO = %#v", got)
+	}
+	scopedValues := configuredDefineItem(metadata, "SCOPED_VALUE")["values"].(map[string]any)
+	if got := scopedValues["local"].(map[string]any)["value"]; got != "local-new" {
+		t.Fatalf("SCOPED_VALUE local = %#v", got)
+	}
+	if got := scopedValues["default"].(map[string]any)["value"]; got != "shared-value" {
+		t.Fatalf("SCOPED_VALUE default = %#v", got)
+	}
+	if got := recordValueString(configuredDefineItem(metadata, "SECRET_VALUE")["secret"]); got != secretRef {
+		t.Fatalf("SECRET_VALUE ref = %q, want %q", got, secretRef)
+	}
+	store, err := loadDefineSecretStore(root, metadata, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := store.Secrets[secretRef]; got != "secret-new" {
+		t.Fatalf("SECRET_VALUE = %q", got)
 	}
 }
 
@@ -14150,9 +14401,12 @@ func TestRunEnvHelpShowsCommandsWithoutShortcuts(t *testing.T) {
 
 func TestRunDefineHelpShowsCommands(t *testing.T) {
 	output := captureStdout(t, func() { _ = runDefineHelp() })
-	assertContainsInOrder(t, output, []string{"define", "list, ls", "status [remote]", "sync [remote]", "add", "add <name> <value>", "add <name> --secret", "add <name> --secret-stdin", "remove, rm", "remove, rm <name>", "migrate-env", "rekey", "\nOptions:\n", "--for <selector>", "--dry-run", "--delete-source", "--add-recipient <age1...>"})
+	assertContainsInOrder(t, output, []string{"define", "list, ls", "get <name>", "status [remote]", "sync [remote]", "set", "set <name> <value>", "set <name> --secret", "set <name> --secret-stdin", "remove, rm", "remove, rm <name>", "migrate-env", "rekey", "\nOptions:\n", "--for <selector>", "--dry-run", "--delete-source", "--add-recipient <age1...>"})
 	if strings.Contains(output, "--env") || !strings.Contains(output, "encrypted define value") {
 		t.Fatalf("define help did not describe encrypted authoring:\n%s", output)
+	}
+	if strings.Contains(output, "\n  add ") || strings.Contains(output, "\n  add\n") {
+		t.Fatalf("define help retained removed add command:\n%s", output)
 	}
 }
 

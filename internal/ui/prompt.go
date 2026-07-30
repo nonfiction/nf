@@ -66,11 +66,11 @@ func newPromptModel(prompt, defaultValue string, allowBlank bool) promptModel {
 	return promptModel{prompt: prompt, allowBlank: allowBlank, input: ti, width: 64}
 }
 
-func newSecretPromptModel(prompt string) promptModel {
+func newSecretPromptModel(prompt, defaultValue string) promptModel {
 	ti := textinput.New()
 	ti.Prompt = "> "
 	ti.Placeholder = ""
-	ti.SetValue("")
+	ti.SetValue(defaultValue)
 	ti.EchoMode = textinput.EchoPassword
 	ti.Focus()
 	ti.CharLimit = 4096
@@ -491,7 +491,11 @@ func PromptString(prompt, defaultValue string, allowBlank bool) (string, error) 
 }
 
 func PromptSecret(prompt string) (string, error) {
-	program := tea.NewProgram(newSecretPromptModel(prompt))
+	return PromptSecretWithDefault(prompt, "")
+}
+
+func PromptSecretWithDefault(prompt, defaultValue string) (string, error) {
+	program := tea.NewProgram(newSecretPromptModel(prompt, defaultValue))
 	model, err := program.Run()
 	if err != nil {
 		return "", err
