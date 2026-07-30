@@ -223,7 +223,7 @@ func runAliasHelp() int {
 func runDefineHelp() int {
 	printCommandHelp("define", []helpLine{
 		{"list, ls", "list configured wp-config.php constants"},
-		{"get <name>", "print one configured constant value"},
+		{"get [name]", "choose or print one configured constant value"},
 		{"status [remote]", "show local or remote constant state against nf.json"},
 		{"sync [remote]", "apply configured constants to wp-config.php"},
 		{},

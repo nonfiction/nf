@@ -12079,6 +12079,7 @@ func TestRunDefineSetInteractiveWizardWritesSecretSelector(t *testing.T) {
 	siteIsInteractiveFn = func() bool { return true }
 	prompts := []string{}
 	selectTitles := []string{}
+	var defineOptions []ui.SelectOption
 	var sourceOptions []ui.SelectOption
 	var selectorOptions []ui.SelectOption
 	confirmPrompt := ""
@@ -12104,6 +12105,9 @@ func TestRunDefineSetInteractiveWizardWritesSecretSelector(t *testing.T) {
 	defineSelectFn = func(title string, options []ui.SelectOption) (string, error) {
 		selectTitles = append(selectTitles, title)
 		switch title {
+		case "Choose a define to set":
+			defineOptions = append([]ui.SelectOption(nil), options...)
+			return defineSetNewDefine, nil
 		case "Choose value source":
 			sourceOptions = append([]ui.SelectOption(nil), options...)
 			return "secret", nil
@@ -12134,7 +12138,7 @@ func TestRunDefineSetInteractiveWizardWritesSecretSelector(t *testing.T) {
 	if !slices.Equal(prompts, []string{"Define name (usually ALL_CAPS)"}) {
 		t.Fatalf("prompts = %#v", prompts)
 	}
-	if !slices.Equal(selectTitles, []string{"Choose where this define applies", "Choose value source"}) {
+	if !slices.Equal(selectTitles, []string{"Choose a define to set", "Choose where this define applies", "Choose value source"}) {
 		t.Fatalf("select titles = %#v", selectTitles)
 	}
 	if !strings.Contains(confirmPrompt, "ALL_CAPS") || !strings.Contains(confirmPrompt, "SomePluginKey") {
@@ -12142,6 +12146,9 @@ func TestRunDefineSetInteractiveWizardWritesSecretSelector(t *testing.T) {
 	}
 	if len(sourceOptions) != 2 || sourceOptions[0].Value != "literal" || sourceOptions[1].Value != "secret" {
 		t.Fatalf("source options = %#v, want literal/secret", sourceOptions)
+	}
+	if !slices.Equal(defineOptions, []ui.SelectOption{{Value: defineSetNewDefine, Label: "Add a new define..."}}) {
+		t.Fatalf("define options = %#v", defineOptions)
 	}
 	if !slices.ContainsFunc(selectorOptions, func(option ui.SelectOption) bool { return option.Value == "__all__" && option.Default }) {
 		t.Fatalf("selector options missing shared default: %#v", selectorOptions)
@@ -12352,17 +12359,33 @@ func TestRunDefineGetPrintsRawValuesAndRequiresExactSelector(t *testing.T) {
 
 	siteIsInteractiveFn = func() bool { return true }
 	defineSelectFn = func(title string, options []ui.SelectOption) (string, error) {
-		if title != "Choose a selector for SCOPED_VALUE" {
-			t.Fatalf("selector title = %q", title)
+		switch title {
+		case "Choose a define to get":
+			want := []ui.SelectOption{
+				{Value: "BOOL_VALUE", Label: "BOOL_VALUE"},
+				{Value: "LEGACY_VALUE", Label: "LEGACY_VALUE"},
+				{Value: "LITERAL_VALUE", Label: "LITERAL_VALUE"},
+				{Value: "NUMBER_VALUE", Label: "NUMBER_VALUE"},
+				{Value: "SCOPED_VALUE", Label: "SCOPED_VALUE"},
+				{Value: "SECRET_VALUE", Label: "SECRET_VALUE"},
+			}
+			if !slices.Equal(options, want) {
+				t.Fatalf("define options = %#v, want %#v", options, want)
+			}
+			return "SCOPED_VALUE", nil
+		case "Choose a selector for SCOPED_VALUE":
+			if !slices.Equal(options, []ui.SelectOption{{Value: "default", Label: "default (shared default)"}, {Value: "local", Label: "local"}}) {
+				t.Fatalf("selector options = %#v", options)
+			}
+			return "default", nil
+		default:
+			t.Fatalf("unexpected select %q", title)
+			return "", nil
 		}
-		if !slices.Equal(options, []ui.SelectOption{{Value: "default", Label: "default (shared default)"}, {Value: "local", Label: "local"}}) {
-			t.Fatalf("selector options = %#v", options)
-		}
-		return "default", nil
 	}
 	output := captureStdout(t, func() {
-		if got := Run([]string{"define", "get", "SCOPED_VALUE"}); got != 0 {
-			t.Fatalf("interactive Run(define get SCOPED_VALUE) = %d", got)
+		if got := Run([]string{"define", "get"}); got != 0 {
+			t.Fatalf("interactive Run(define get) = %d", got)
 		}
 	})
 	if output != "default-value\n" {
@@ -12376,6 +12399,33 @@ func TestRunDefineGetPrintsRawValuesAndRequiresExactSelector(t *testing.T) {
 	})
 	if !strings.Contains(stderr, "unsupported define command") {
 		t.Fatalf("define add stderr = %q", stderr)
+	}
+}
+
+func TestRunDefineGetWithoutArgsReportsNoConfiguredDefines(t *testing.T) {
+	setupTestNFProjectWithMetadata(t, map[string]any{
+		"version":   2,
+		"project":   map[string]any{"slug": "client", "password_version": 0},
+		"wordpress": map[string]any{"themes": []any{"twentytwentyfive"}},
+	})
+	oldInteractive := siteIsInteractiveFn
+	oldSelect := defineSelectFn
+	t.Cleanup(func() {
+		siteIsInteractiveFn = oldInteractive
+		defineSelectFn = oldSelect
+	})
+	siteIsInteractiveFn = func() bool { return true }
+	defineSelectFn = func(title string, options []ui.SelectOption) (string, error) {
+		t.Fatalf("unexpected picker %q with options %#v", title, options)
+		return "", nil
+	}
+	stderr := captureStderr(t, func() {
+		if got := Run([]string{"define", "get"}); got != 1 {
+			t.Fatalf("Run(define get) = %d, want 1", got)
+		}
+	})
+	if !strings.Contains(stderr, "no defines are configured in nf.json") {
+		t.Fatalf("stderr = %q", stderr)
 	}
 }
 
@@ -12443,13 +12493,32 @@ func TestRunDefineSetInteractivePrepopulatesExistingValues(t *testing.T) {
 		return "secret-new", nil
 	}
 	defineSelectFn = func(title string, options []ui.SelectOption) (string, error) {
-		if title != "Choose a selector for SCOPED_VALUE" {
+		switch title {
+		case "Choose a define to set":
+			want := []ui.SelectOption{
+				{Value: "AGENCY_NAME", Label: "AGENCY_NAME"},
+				{Value: "FEATURE_ENABLED", Label: "FEATURE_ENABLED"},
+				{Value: "SAMPLE_RATIO", Label: "SAMPLE_RATIO"},
+				{Value: "SCOPED_VALUE", Label: "SCOPED_VALUE"},
+				{Value: "SECRET_VALUE", Label: "SECRET_VALUE"},
+				{Value: defineSetNewDefine, Label: "Add a new define..."},
+			}
+			if !slices.Equal(options, want) {
+				t.Fatalf("define options = %#v, want %#v", options, want)
+			}
+			return "AGENCY_NAME", nil
+		case "Choose a selector for SCOPED_VALUE":
+			return "local", nil
+		default:
 			t.Fatalf("unexpected selector %q", title)
+			return "", nil
 		}
-		return "local", nil
 	}
 
-	for _, name := range []string{"AGENCY_NAME", "FEATURE_ENABLED", "SAMPLE_RATIO", "SECRET_VALUE", "SCOPED_VALUE"} {
+	if got := Run([]string{"define", "set"}); got != 0 {
+		t.Fatalf("Run(define set picker) = %d", got)
+	}
+	for _, name := range []string{"FEATURE_ENABLED", "SAMPLE_RATIO", "SECRET_VALUE", "SCOPED_VALUE"} {
 		if got := Run([]string{"define", "set", name}); got != 0 {
 			t.Fatalf("Run(define set %s) = %d", name, got)
 		}
@@ -14401,7 +14470,7 @@ func TestRunEnvHelpShowsCommandsWithoutShortcuts(t *testing.T) {
 
 func TestRunDefineHelpShowsCommands(t *testing.T) {
 	output := captureStdout(t, func() { _ = runDefineHelp() })
-	assertContainsInOrder(t, output, []string{"define", "list, ls", "get <name>", "status [remote]", "sync [remote]", "set", "set <name> <value>", "set <name> --secret", "set <name> --secret-stdin", "remove, rm", "remove, rm <name>", "migrate-env", "rekey", "\nOptions:\n", "--for <selector>", "--dry-run", "--delete-source", "--add-recipient <age1...>"})
+	assertContainsInOrder(t, output, []string{"define", "list, ls", "get [name]", "status [remote]", "sync [remote]", "set", "set <name> <value>", "set <name> --secret", "set <name> --secret-stdin", "remove, rm", "remove, rm <name>", "migrate-env", "rekey", "\nOptions:\n", "--for <selector>", "--dry-run", "--delete-source", "--add-recipient <age1...>"})
 	if strings.Contains(output, "--env") || !strings.Contains(output, "encrypted define value") {
 		t.Fatalf("define help did not describe encrypted authoring:\n%s", output)
 	}

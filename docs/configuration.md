@@ -75,6 +75,7 @@ Use `nf define` to manage and reconcile these entries:
 
 ```sh
 nf define list
+nf define get
 nf define get SOME_PLUGIN_LICENSE_KEY
 nf define get WP_ENVIRONMENT_TYPE --for production
 nf define status
@@ -89,13 +90,13 @@ nf define remove
 nf define remove SOME_PLUGIN_FEATURE_FLAG
 ```
 
-`nf define set` with no or incomplete arguments opens an interactive editor. Existing literal and encrypted values are prepopulated; encrypted input remains masked and is never shown as visible default text. Existing booleans and numbers retain their types. `nf define remove` with no name opens a picker for configured defines. Define names are usually all caps, but nf preserves the exact PHP constant name because plugins may document a specific spelling.
+Bare `nf define set` opens a picker containing every configured define plus `Add a new define...`. Selecting an existing literal or encrypted value prepopulates the editor; encrypted input remains masked and is never shown as visible default text. Existing booleans and numbers retain their types. Incomplete forms prompt for missing input. `nf define remove` with no name opens a picker for configured defines. Define names are usually all caps, but nf preserves the exact PHP constant name because plugins may document a specific spelling.
 
 `nf define set` writes or replaces a shared top-level literal by default. `--secret` prompts with input hidden and stores the encrypted value in `nf.age`; `--secret-stdin` reads one non-empty line for automation. Do not pass secret plaintext as a positional argument. Add `--for <selector>` only when a value differs for a remote, canonical env id, env name, `local`, or `default`. When a shared entry already exists, setting a selector-specific value promotes the shared entry to `values.default`.
 
 The interactive selector picker intentionally shows only the shared default, `local`, and remotes configured in `nf.json`. Advanced selectors such as `default`, env names, or canonical env ids remain valid when typed explicitly with `--for`.
 
-`nf define get <name>` prints only the raw configured value to stdout, including decrypted secret values. A define using `values` requires an exact `--for <selector>`; interactive use opens a configured-selector picker when it is omitted, while non-interactive use fails. `get` never silently falls back to `default`. Treat its output as sensitive and avoid logs or terminal history when retrieving secrets.
+Bare `nf define get` opens a picker containing every configured define and reports an error without opening a picker when none exist. It prints only the raw configured value to stdout, including decrypted secret values. A define using `values` requires an exact `--for <selector>`; interactive use opens a configured-selector picker when it is omitted, while non-interactive use fails. `get` never silently falls back to `default`. Treat its output as sensitive and avoid logs or terminal history when retrieving secrets.
 
 `nf define status` and `nf define list` show define names and sources only; they do not print resolved secret values. `nf define sync` patches `wp-config.php` with an atomic temp-file replace and does not create persistent backup files. It owns only the `/* nf-managed wp-config defines: begin */` to `/* nf-managed wp-config defines: end */` project block. Removing a define from `nf.json` and running `nf define sync` removes it from that managed block, while manual constants outside the block are left alone. Older per-define `/* nf-managed wp-config defines */` markers are migrated into the block on sync. Provider-owned constants such as `KINSTAMU_WHITELABEL` are rejected from project defines and are managed by provider repair commands instead.
 

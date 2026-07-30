@@ -22,6 +22,7 @@ const (
 	defineSetValueSourceSecret     = "secret"
 	defineSetSelectorAll           = "__all__"
 	defineSetSelectorCustom        = "__custom__"
+	defineSetNewDefine             = "__nf/add-new-define__"
 	wpConfigProjectBlockBegin      = "/* nf-managed wp-config defines: begin */"
 	wpConfigProjectBlockEnd        = "/* nf-managed wp-config defines: end */"
 	wpConfigProviderBlockBegin     = "/* nf-managed provider wp-config defines: begin */"
@@ -478,10 +479,26 @@ func resolveDefineGetArgs(metadata *projectMetadata, args []string) (string, str
 	if err != nil {
 		return "", "", err
 	}
-	if len(partial.Positionals) != 1 {
+	if len(partial.Positionals) > 1 {
 		return "", "", fmt.Errorf("define get requires exactly one name")
 	}
-	name := strings.TrimSpace(partial.Positionals[0])
+	name := ""
+	if len(partial.Positionals) == 1 {
+		name = strings.TrimSpace(partial.Positionals[0])
+	} else {
+		options := configuredDefineNameOptions(metadata)
+		if len(options) == 0 {
+			return "", "", fmt.Errorf("no defines are configured in nf.json")
+		}
+		if !siteIsInteractiveFn() {
+			return "", "", fmt.Errorf("define get requires exactly one name")
+		}
+		selected, err := defineSelectFn("Choose a define to get", options)
+		if err != nil {
+			return "", "", err
+		}
+		name = strings.TrimSpace(selected)
+	}
 	if err := validateDefineName(name); err != nil {
 		return "", "", err
 	}
@@ -635,7 +652,17 @@ func promptDefineSetArgs(root string, metadata *projectMetadata, partial defineS
 	name := ""
 	if len(partial.Positionals) > 0 {
 		name = strings.TrimSpace(partial.Positionals[0])
-	} else {
+	} else if !partial.SecretSet && !partial.SelectorSet {
+		options := append(configuredDefineNameOptions(metadata), ui.SelectOption{Value: defineSetNewDefine, Label: "Add a new define..."})
+		selected, err := defineSelectFn("Choose a define to set", options)
+		if err != nil {
+			return "", "", defineValueSpec{}, err
+		}
+		if selected != defineSetNewDefine {
+			name = strings.TrimSpace(selected)
+		}
+	}
+	if name == "" {
 		prompted, err := definePromptStringFn("Define name (usually ALL_CAPS)", "", false)
 		if err != nil {
 			return "", "", defineValueSpec{}, err
