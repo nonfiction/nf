@@ -6,7 +6,9 @@ package cli
 // network, SSH, provider, and prompt behavior without global monkey patches.
 
 import (
+	"io"
 	"net"
+	"os"
 
 	"github.com/nonfiction/nf/internal/envwizard"
 	"github.com/nonfiction/nf/internal/target/provision"
@@ -16,6 +18,10 @@ import (
 type ProjectError struct{ Msg string }
 
 func (e ProjectError) Error() string { return e.Msg }
+
+var defineSecretStdin io.Reader = os.Stdin
+
+var definePromptSecretFn = ui.PromptSecret
 
 var (
 	runLinodeDeleteFn                     = runLinodeDelete

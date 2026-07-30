@@ -228,12 +228,18 @@ func runDefineHelp() int {
 		{},
 		{"add", "open an interactive define wizard"},
 		{"add <name> <value>", "add a literal define to nf.json"},
-		{"add <name> --env <var>", "add an env-backed define to nf.json"},
+		{"add <name> --secret", "prompt for an encrypted define value"},
+		{"add <name> --secret-stdin", "read an encrypted define value from stdin"},
 		{"remove, rm", "choose and remove a define from nf.json"},
 		{"remove, rm <name>", "remove a define from nf.json"},
+		{},
+		{"migrate-env", "migrate project .env and legacy env defines to nf.age"},
+		{"rekey", "re-encrypt nf.age for the current age recipient"},
 	}, helpSection{"Options", []helpLine{
-		{"--env <name>", "read value from a local env/config variable during sync"},
 		{"--for <selector>", "apply the value only for a remote/env selector"},
+		{"--dry-run", "preview migration or rekey changes"},
+		{"--delete-source", "remove project .env after verified migration"},
+		{"--add-recipient <age1...>", "add a recipient before password salt rotation"},
 	}})
 	return 0
 }

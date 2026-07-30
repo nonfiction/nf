@@ -438,7 +438,7 @@ func TestGroupedHelpScreensUseIntendedOrder(t *testing.T) {
 		{
 			name:   "password",
 			render: func() string { return captureStdout(t, func() { _ = runPasswordHelp() }) },
-			values: []string{"derive [scope] [value...]", "\n\n  show-salt", "set-salt <salt>", "\n\n  age-identity", "age-recipient", "\nOptions:\n", "--password-version <N>", "\nAge Secret Examples:\n", "nf password age-recipient", "agenix -e .env.age -i \"$(nf password age-identity)\""},
+			values: []string{"derive [scope] [value...]", "\n\n  show-salt", "set-salt <salt>", "\n\n  age-identity", "age-recipient", "\nOptions:\n", "--password-version <N>"},
 		},
 		{
 			name:   "site add",
@@ -740,7 +740,7 @@ func TestRunCompleteSuggestsStaticAndCachedValues(t *testing.T) {
 			t.Fatalf("Run(__complete define) = %d, want 0", got)
 		}
 	})
-	for _, want := range []string{"list\n", "status\n", "sync\n", "add\n", "remove\n", "rm\n"} {
+	for _, want := range []string{"list\n", "status\n", "sync\n", "add\n", "remove\n", "rm\n", "migrate-env\n", "rekey\n"} {
 		if !strings.Contains(defineCommandOutput, want) {
 			t.Fatalf("define completion missing %q:\n%s", want, defineCommandOutput)
 		}
@@ -11674,7 +11674,7 @@ func TestLoadWordPressConfigDefinesResolvesValuesWithoutLeakingSecrets(t *testin
 		},
 	}
 
-	remoteDefines, err := loadWordPressConfigDefines(metadata, wpConfigDefineSelector{RemoteName: "production", EnvID: "client-kinsta:live", Env: "live"})
+	remoteDefines, err := loadWordPressConfigDefines("", metadata, wpConfigDefineSelector{RemoteName: "production", EnvID: "client-kinsta:live", Env: "live"})
 	if err != nil {
 		t.Fatalf("loadWordPressConfigDefines(remote) error = %v", err)
 	}
@@ -11688,7 +11688,7 @@ func TestLoadWordPressConfigDefinesResolvesValuesWithoutLeakingSecrets(t *testin
 	if got, want := byName["OTGS_INSTALLER_SITE_KEY_WPML"].PHPValue, "'wpml-secret-key'"; got != want {
 		t.Fatalf("OTGS PHPValue = %q, want %q", got, want)
 	}
-	if got, want := byName["OTGS_INSTALLER_SITE_KEY_WPML"].Source, "env CLIENT_WPML_SITE_KEY"; got != want {
+	if got, want := byName["OTGS_INSTALLER_SITE_KEY_WPML"].Source, "legacy env CLIENT_WPML_SITE_KEY"; got != want {
 		t.Fatalf("OTGS Source = %q, want %q", got, want)
 	}
 	if got, want := byName["SHARED_LICENSE_KEY"].PHPValue, "'shared-secret'"; got != want {
@@ -11701,7 +11701,7 @@ func TestLoadWordPressConfigDefinesResolvesValuesWithoutLeakingSecrets(t *testin
 		t.Fatalf("WP_ENVIRONMENT_TYPE PHPValue = %q, want %q", got, want)
 	}
 	listOutput := captureStdout(t, func() { _ = cmdDefineList(metadata) })
-	for _, want := range []string{"OTGS_INSTALLER_SITE_KEY_WPML", "env CLIENT_WPML_SITE_KEY", "SHARED_LICENSE_KEY", "env CLIENT_SHARED_LICENSE"} {
+	for _, want := range []string{"OTGS_INSTALLER_SITE_KEY_WPML", "legacy env CLIENT_WPML_SITE_KEY", "SHARED_LICENSE_KEY", "legacy env CLIENT_SHARED_LICENSE"} {
 		if !strings.Contains(listOutput, want) {
 			t.Fatalf("define list output missing %q:\n%s", want, listOutput)
 		}
@@ -11712,7 +11712,7 @@ func TestLoadWordPressConfigDefinesResolvesValuesWithoutLeakingSecrets(t *testin
 		}
 	}
 
-	localDefines, err := loadWordPressConfigDefines(metadata, wpConfigDefineSelector{Local: true})
+	localDefines, err := loadWordPressConfigDefines("", metadata, wpConfigDefineSelector{Local: true})
 	if err != nil {
 		t.Fatalf("loadWordPressConfigDefines(local) error = %v", err)
 	}
@@ -11731,12 +11731,12 @@ func TestLoadWordPressConfigDefinesResolvesValuesWithoutLeakingSecrets(t *testin
 	}
 
 	missingEnvMetadata := &project.Manifest{WordPress: project.WordPress{Defines: []any{map[string]any{"name": "OTGS_INSTALLER_SITE_KEY_WPML", "env": "MISSING_WPML_SITE_KEY"}}}}
-	_, err = loadWordPressConfigDefines(missingEnvMetadata, wpConfigDefineSelector{Local: true})
+	_, err = loadWordPressConfigDefines("", missingEnvMetadata, wpConfigDefineSelector{Local: true})
 	if err == nil || !strings.Contains(err.Error(), "Expected MISSING_WPML_SITE_KEY") {
 		t.Fatalf("missing env error = %v, want Expected MISSING_WPML_SITE_KEY", err)
 	}
 	reservedMetadata := &project.Manifest{WordPress: project.WordPress{Defines: []any{map[string]any{"name": "KINSTAMU_WHITELABEL", "value": true}}}}
-	_, err = loadWordPressConfigDefines(reservedMetadata, wpConfigDefineSelector{Local: true})
+	_, err = loadWordPressConfigDefines("", reservedMetadata, wpConfigDefineSelector{Local: true})
 	if err == nil || !strings.Contains(err.Error(), "KINSTAMU_WHITELABEL is provider-owned") {
 		t.Fatalf("reserved define load error = %v, want provider-owned error", err)
 	}
@@ -11937,6 +11937,8 @@ func TestRunDefineSyncRemoteUsesStdinScript(t *testing.T) {
 }
 
 func TestRunDefineAddRemoveWritesSharedAndSelectorValues(t *testing.T) {
+	t.Setenv("NF_CONFIG_HOME", t.TempDir())
+	t.Setenv("NF_PASSWORD_SALT", "nf_test-define-secret-salt")
 	root := setupTestNFProjectWithMetadata(t, map[string]any{
 		"version":   2,
 		"project":   map[string]any{"slug": "client", "password_version": 0},
@@ -11958,11 +11960,15 @@ func TestRunDefineAddRemoveWritesSharedAndSelectorValues(t *testing.T) {
 	}); !strings.Contains(output, "Added define SOME_PLUGIN_CONSTANT.") {
 		t.Fatalf("define add literal output = %q", output)
 	}
-	if got := Run([]string{"define", "add", "OTGS_INSTALLER_SITE_KEY_WPML", "--env", "CLIENT_WPML_SITE_KEY"}); got != 0 {
-		t.Fatalf("Run(define add env) = %d, want 0", got)
+	oldStdin := defineSecretStdin
+	t.Cleanup(func() { defineSecretStdin = oldStdin })
+	defineSecretStdin = strings.NewReader("shared-secret\n")
+	if got := Run([]string{"define", "add", "OTGS_INSTALLER_SITE_KEY_WPML", "--secret-stdin"}); got != 0 {
+		t.Fatalf("Run(define add secret) = %d, want 0", got)
 	}
-	if got := Run([]string{"define", "add", "OTGS_INSTALLER_SITE_KEY_WPML", "--env", "CLIENT_WPML_PROD_KEY", "--for", "production"}); got != 0 {
-		t.Fatalf("Run(define add env for production) = %d, want 0", got)
+	defineSecretStdin = strings.NewReader("production-secret\n")
+	if got := Run([]string{"define", "add", "OTGS_INSTALLER_SITE_KEY_WPML", "--secret-stdin", "--for", "production"}); got != 0 {
+		t.Fatalf("Run(define add secret for production) = %d, want 0", got)
 	}
 
 	metadata, err := loadProjectMetadataOrError(root)
@@ -11979,15 +11985,17 @@ func TestRunDefineAddRemoveWritesSharedAndSelectorValues(t *testing.T) {
 		t.Fatalf("SOME_PLUGIN_CONSTANT value = %#v, want %#v", got, want)
 	}
 	wpml := items["OTGS_INSTALLER_SITE_KEY_WPML"]
-	if _, ok := wpml["env"]; ok {
-		t.Fatalf("WPML define kept top-level env after selector promotion: %#v", wpml)
+	if _, ok := wpml["secret"]; ok {
+		t.Fatalf("WPML define kept top-level secret after selector promotion: %#v", wpml)
 	}
 	values := wpml["values"].(map[string]any)
-	if got, want := recordValueString(values["default"].(map[string]any)["env"]), "CLIENT_WPML_SITE_KEY"; got != want {
-		t.Fatalf("WPML default env = %q, want %q", got, want)
+	defaultRef := recordValueString(values["default"].(map[string]any)["secret"])
+	productionRef := recordValueString(values["production"].(map[string]any)["secret"])
+	if !defineSecretRefPattern.MatchString(defaultRef) {
+		t.Fatalf("WPML default secret ref = %q", defaultRef)
 	}
-	if got, want := recordValueString(values["production"].(map[string]any)["env"]), "CLIENT_WPML_PROD_KEY"; got != want {
-		t.Fatalf("WPML production env = %q, want %q", got, want)
+	if !defineSecretRefPattern.MatchString(productionRef) || productionRef == defaultRef {
+		t.Fatalf("WPML production secret ref = %q, default = %q", productionRef, defaultRef)
 	}
 
 	if got := Run([]string{"define", "rm", "OTGS_INSTALLER_SITE_KEY_WPML", "--for", "production"}); got != 0 {
@@ -12007,12 +12015,30 @@ func TestRunDefineAddRemoveWritesSharedAndSelectorValues(t *testing.T) {
 	if _, ok := values["production"]; ok {
 		t.Fatalf("WPML production selector still present after remove: %#v", values)
 	}
-	if got, want := recordValueString(values["default"].(map[string]any)["env"]), "CLIENT_WPML_SITE_KEY"; got != want {
-		t.Fatalf("WPML default env after remove = %q, want %q", got, want)
+	if got := recordValueString(values["default"].(map[string]any)["secret"]); got != defaultRef {
+		t.Fatalf("WPML default secret after remove = %q, want %q", got, defaultRef)
+	}
+	store, err := loadDefineSecretStore(root, metadata, false)
+	if err != nil {
+		t.Fatalf("loadDefineSecretStore() after selector remove error = %v", err)
+	}
+	if _, ok := store.Secrets[productionRef]; ok {
+		t.Fatal("removed selector secret remains in nf.age")
+	}
+	if got := store.Secrets[defaultRef]; got != "shared-secret" {
+		t.Fatalf("default encrypted value = %q", got)
+	}
+	if got := Run([]string{"define", "rm", "OTGS_INSTALLER_SITE_KEY_WPML"}); got != 0 {
+		t.Fatalf("Run(define rm shared secret) = %d, want 0", got)
+	}
+	if _, err := os.Stat(defineSecretStorePath(root)); !os.IsNotExist(err) {
+		t.Fatalf("nf.age remains after removing last secret define: %v", err)
 	}
 }
 
-func TestRunDefineAddInteractiveWizardWritesEnvSelector(t *testing.T) {
+func TestRunDefineAddInteractiveWizardWritesSecretSelector(t *testing.T) {
+	t.Setenv("NF_CONFIG_HOME", t.TempDir())
+	t.Setenv("NF_PASSWORD_SALT", "nf_test-define-secret-salt")
 	root := setupTestNFProjectWithMetadata(t, map[string]any{
 		"version":   2,
 		"project":   map[string]any{"slug": "client", "password_version": 0},
@@ -12021,11 +12047,13 @@ func TestRunDefineAddInteractiveWizardWritesEnvSelector(t *testing.T) {
 	})
 	oldInteractive := siteIsInteractiveFn
 	oldPrompt := definePromptStringFn
+	oldPromptSecret := definePromptSecretFn
 	oldSelect := defineSelectFn
 	oldConfirm := defineConfirmFn
 	t.Cleanup(func() {
 		siteIsInteractiveFn = oldInteractive
 		definePromptStringFn = oldPrompt
+		definePromptSecretFn = oldPromptSecret
 		defineSelectFn = oldSelect
 		defineConfirmFn = oldConfirm
 	})
@@ -12040,22 +12068,23 @@ func TestRunDefineAddInteractiveWizardWritesEnvSelector(t *testing.T) {
 		switch prompt {
 		case "Define name (usually ALL_CAPS)":
 			return "SomePluginKey", nil
-		case "Local env var name":
-			if defaultValue != "SomePluginKey" {
-				t.Fatalf("Local env var default = %q, want SomePluginKey", defaultValue)
-			}
-			return "CLIENT_PLUGIN_KEY", nil
 		default:
 			t.Fatalf("unexpected prompt %q", prompt)
 			return "", nil
 		}
+	}
+	definePromptSecretFn = func(prompt string) (string, error) {
+		if prompt != "Encrypted define value" {
+			t.Fatalf("unexpected secret prompt %q", prompt)
+		}
+		return "wizard-secret", nil
 	}
 	defineSelectFn = func(title string, options []ui.SelectOption) (string, error) {
 		selectTitles = append(selectTitles, title)
 		switch title {
 		case "Choose value source":
 			sourceOptions = append([]ui.SelectOption(nil), options...)
-			return "env", nil
+			return "secret", nil
 		case "Choose where this define applies":
 			selectorOptions = append([]ui.SelectOption(nil), options...)
 			return "production", nil
@@ -12080,7 +12109,7 @@ func TestRunDefineAddInteractiveWizardWritesEnvSelector(t *testing.T) {
 	if !strings.Contains(output, "Added define SomePluginKey for production.") {
 		t.Fatalf("define add wizard output = %q", output)
 	}
-	if !slices.Equal(prompts, []string{"Define name (usually ALL_CAPS)", "Local env var name"}) {
+	if !slices.Equal(prompts, []string{"Define name (usually ALL_CAPS)"}) {
 		t.Fatalf("prompts = %#v", prompts)
 	}
 	if !slices.Equal(selectTitles, []string{"Choose value source", "Choose where this define applies"}) {
@@ -12089,8 +12118,8 @@ func TestRunDefineAddInteractiveWizardWritesEnvSelector(t *testing.T) {
 	if !strings.Contains(confirmPrompt, "ALL_CAPS") || !strings.Contains(confirmPrompt, "SomePluginKey") {
 		t.Fatalf("uppercase confirmation prompt = %q", confirmPrompt)
 	}
-	if len(sourceOptions) != 2 || sourceOptions[0].Value != "literal" || sourceOptions[1].Value != "env" {
-		t.Fatalf("source options = %#v, want literal/env", sourceOptions)
+	if len(sourceOptions) != 2 || sourceOptions[0].Value != "literal" || sourceOptions[1].Value != "secret" {
+		t.Fatalf("source options = %#v, want literal/secret", sourceOptions)
 	}
 	if !slices.ContainsFunc(selectorOptions, func(option ui.SelectOption) bool { return option.Value == "__all__" && option.Default }) {
 		t.Fatalf("selector options missing shared default: %#v", selectorOptions)
@@ -12118,12 +12147,14 @@ func TestRunDefineAddInteractiveWizardWritesEnvSelector(t *testing.T) {
 		t.Fatalf("wizard define name = %q, want %q", got, want)
 	}
 	values := item["values"].(map[string]any)
-	if got, want := recordValueString(values["production"].(map[string]any)["env"]), "CLIENT_PLUGIN_KEY"; got != want {
-		t.Fatalf("wizard production env = %q, want %q", got, want)
+	if got := recordValueString(values["production"].(map[string]any)["secret"]); !defineSecretRefPattern.MatchString(got) {
+		t.Fatalf("wizard production secret ref = %q", got)
 	}
 }
 
-func TestRunDefineAddInteractivePromptsForMissingFlagValues(t *testing.T) {
+func TestRunDefineAddInteractivePromptsForSecretAndSelector(t *testing.T) {
+	t.Setenv("NF_CONFIG_HOME", t.TempDir())
+	t.Setenv("NF_PASSWORD_SALT", "nf_test-define-secret-salt")
 	root := setupTestNFProjectWithMetadata(t, map[string]any{
 		"version":   2,
 		"project":   map[string]any{"slug": "client", "password_version": 0},
@@ -12132,20 +12163,19 @@ func TestRunDefineAddInteractivePromptsForMissingFlagValues(t *testing.T) {
 	})
 	oldInteractive := siteIsInteractiveFn
 	oldPrompt := definePromptStringFn
+	oldPromptSecret := definePromptSecretFn
 	oldSelect := defineSelectFn
 	oldConfirm := defineConfirmFn
 	t.Cleanup(func() {
 		siteIsInteractiveFn = oldInteractive
 		definePromptStringFn = oldPrompt
+		definePromptSecretFn = oldPromptSecret
 		defineSelectFn = oldSelect
 		defineConfirmFn = oldConfirm
 	})
 	siteIsInteractiveFn = func() bool { return true }
-	definePromptStringFn = func(prompt, defaultValue string, allowBlank bool) (string, error) {
-		if prompt != "Local env var name" {
-			t.Fatalf("unexpected prompt %q", prompt)
-		}
-		return "CLIENT_SHARED_KEY", nil
+	definePromptSecretFn = func(prompt string) (string, error) {
+		return "shared-secret", nil
 	}
 	defineSelectFn = func(title string, options []ui.SelectOption) (string, error) {
 		if title != "Choose where this define applies" {
@@ -12158,8 +12188,8 @@ func TestRunDefineAddInteractivePromptsForMissingFlagValues(t *testing.T) {
 		return false, nil
 	}
 
-	if got := Run([]string{"define", "add", "SHARED_KEY", "--env"}); got != 0 {
-		t.Fatalf("Run(define add --env) = %d, want 0", got)
+	if got := Run([]string{"define", "add", "SHARED_KEY", "--secret", "--for"}); got != 0 {
+		t.Fatalf("Run(define add --secret --for) = %d, want 0", got)
 	}
 	if got := Run([]string{"define", "add", "SCOPED_FLAG", "true", "--for"}); got != 0 {
 		t.Fatalf("Run(define add --for) = %d, want 0", got)
@@ -12175,8 +12205,9 @@ func TestRunDefineAddInteractivePromptsForMissingFlagValues(t *testing.T) {
 		item := raw.(map[string]any)
 		items[recordValueString(item["name"])] = item
 	}
-	if got, want := recordValueString(items["SHARED_KEY"]["env"]), "CLIENT_SHARED_KEY"; got != want {
-		t.Fatalf("SHARED_KEY env = %q, want %q", got, want)
+	sharedValues := items["SHARED_KEY"]["values"].(map[string]any)
+	if got := recordValueString(sharedValues["production"].(map[string]any)["secret"]); !defineSecretRefPattern.MatchString(got) {
+		t.Fatalf("SHARED_KEY secret ref = %q", got)
 	}
 	values := items["SCOPED_FLAG"]["values"].(map[string]any)
 	if got, want := values["production"].(map[string]any)["value"], true; got != want {
@@ -12199,7 +12230,7 @@ func TestRunDefineAddMissingArgsRequiresInteractiveTerminal(t *testing.T) {
 			t.Fatalf("Run(define add non-interactive) = %d, want 1", got)
 		}
 	})
-	if !strings.Contains(stderr, "define add requires a name and value, or a name with --env") {
+	if !strings.Contains(stderr, "define add requires a name and value, or a name with --secret") {
 		t.Fatalf("stderr = %q", stderr)
 	}
 }
@@ -14119,9 +14150,9 @@ func TestRunEnvHelpShowsCommandsWithoutShortcuts(t *testing.T) {
 
 func TestRunDefineHelpShowsCommands(t *testing.T) {
 	output := captureStdout(t, func() { _ = runDefineHelp() })
-	assertContainsInOrder(t, output, []string{"define", "list, ls", "status [remote]", "sync [remote]", "add", "add <name> <value>", "add <name> --env <var>", "remove, rm", "remove, rm <name>", "\nOptions:\n", "--env <name>", "--for <selector>"})
-	if !strings.Contains(output, "read value from a local env/config variable during sync") {
-		t.Fatalf("define help missing local env wording:\n%s", output)
+	assertContainsInOrder(t, output, []string{"define", "list, ls", "status [remote]", "sync [remote]", "add", "add <name> <value>", "add <name> --secret", "add <name> --secret-stdin", "remove, rm", "remove, rm <name>", "migrate-env", "rekey", "\nOptions:\n", "--for <selector>", "--dry-run", "--delete-source", "--add-recipient <age1...>"})
+	if strings.Contains(output, "--env") || !strings.Contains(output, "encrypted define value") {
+		t.Fatalf("define help did not describe encrypted authoring:\n%s", output)
 	}
 }
 

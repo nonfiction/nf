@@ -37,7 +37,7 @@ KINSTA_API_KEY=
 
 ## Project Defines
 
-Project `wp-config.php` constants belong in `nf.json` only when their values are safe to commit. Secrets and license keys must use environment variable indirection and live in the shell environment or `~/.config/nf/.env`.
+All project-managed `wp-config.php` constants are declared in `nf.json`. Commit-safe values are stored directly. Secrets and license keys use opaque references whose values are encrypted in the committed `nf.age` file beside `nf.json`.
 
 ```json
 {
@@ -49,7 +49,7 @@ Project `wp-config.php` constants belong in `nf.json` only when their values are
       },
       {
         "name": "SOME_PLUGIN_LICENSE_KEY",
-        "env": "CLIENT_PLUGIN_LICENSE_KEY"
+        "secret": "wpdef_0123456789abcdef0123456789abcdef"
       },
       {
         "name": "WP_ENVIRONMENT_TYPE",
@@ -62,8 +62,8 @@ Project `wp-config.php` constants belong in `nf.json` only when their values are
       {
         "name": "OTGS_INSTALLER_SITE_KEY_WPML",
         "values": {
-          "production": { "env": "CLIENT_WPML_SITE_KEY" },
-          "default": { "env": "CLIENT_WPML_STAGING_SITE_KEY" }
+          "production": { "secret": "wpdef_11111111111111111111111111111111" },
+          "default": { "secret": "wpdef_22222222222222222222222222222222" }
         }
       }
     ]
@@ -81,7 +81,7 @@ nf define sync
 nf define sync production
 nf define add
 nf define add SOME_PLUGIN_FEATURE_FLAG true
-nf define add SOME_PLUGIN_LICENSE_KEY --env CLIENT_PLUGIN_LICENSE_KEY
+nf define add SOME_PLUGIN_LICENSE_KEY --secret
 nf define add WP_ENVIRONMENT_TYPE production --for production
 nf define remove
 nf define remove SOME_PLUGIN_FEATURE_FLAG
@@ -89,7 +89,7 @@ nf define remove SOME_PLUGIN_FEATURE_FLAG
 
 `nf define add` with no or incomplete arguments opens an interactive wizard. `nf define remove` with no name opens a picker for configured defines. Define names are usually all caps, but nf preserves the exact PHP constant name because plugins may document a specific spelling.
 
-`nf define add` writes shared top-level `value` or `env` entries by default. `--env <VAR>` stores only the local env/config variable name in `nf.json`; during `nf define sync`, nf resolves that value from the shell or `~/.config/nf/.env` and writes the real PHP constant value into the target `wp-config.php`. Add `--for <selector>` only when a value differs for a remote, canonical env id, env name, `local`, or `default`. When a shared entry already exists, adding a selector-specific value promotes the shared entry to `values.default`.
+`nf define add` writes a shared top-level literal by default. `--secret` prompts with input hidden and stores the encrypted value in `nf.age`; `--secret-stdin` reads one non-empty line for automation. Do not pass secret plaintext as a positional argument. Add `--for <selector>` only when a value differs for a remote, canonical env id, env name, `local`, or `default`. When a shared entry already exists, adding a selector-specific value promotes the shared entry to `values.default`.
 
 The interactive selector picker intentionally shows only the shared default, `local`, and remotes configured in `nf.json`. Advanced selectors such as `default`, env names, or canonical env ids remain valid when typed explicitly with `--for`.
 
@@ -132,27 +132,32 @@ nf target password [target] [--root|--db]
 
 Password derivation uses `NF_PASSWORD_SALT` from the environment or `~/.config/nf/.env`. Legacy `NF_SECRET_SALT` is accepted only as a migration fallback. Project site scopes are `wp-admin`, `mysql`, and `basic-auth`; target scopes are `linode-root` and `db-admin`. Project site passwords, including provider basic-auth passwords, also include `project.password_version` from `nf.json` when it is non-zero; missing or `0` preserves the original derivation. Use `--password-version` when deriving a project site password outside the matching repo context.
 
-## Encrypted Project Environment
+## Encrypted Project Defines
 
-Projects may commit an age-encrypted `.env.age` while keeping the decrypted `.env` ignored. In projects with the standard nonfiction `.envrc`, entering an allowed directory automatically decrypts a changed `.env.age` and loads `.env`. Developers consuming existing secrets do not need to run agenix manually.
+`nf.age` is an ASCII-armored age ciphertext managed entirely by nf. It exists only when `nf.json` contains encrypted define references and may be committed safely. The agency identity is deterministically derived from `NF_PASSWORD_SALT`; `project.password_version` does not affect it. A committed ciphertext permits offline guesses against weak salts, so the shared salt must be generated randomly and stored in the team password vault.
 
-The project `secrets.nix` contains the public recipient returned by:
+List operations do not decrypt values. Commands that need a value, including local `nf env up`, `nf define status`, and `nf define sync`, fail before modifying `wp-config.php` if `NF_PASSWORD_SALT`, `nf.age`, or a referenced encrypted value is unavailable or invalid.
 
-```sh
-nf password age-recipient
-```
-
-This command deterministically derives the agency age identity from `NF_PASSWORD_SALT`, ensures the private identity exists at `~/.config/nf/age-identity.txt`, and prints only its public recipient. The identity file is mode `0600`; `nf password age-identity` prints only its path for scripts.
-
-To create or edit project secrets from the project development shell:
+To migrate a project-root `.env` and persisted legacy env-backed defines:
 
 ```sh
-agenix -e .env.age -i "$(nf password age-identity)"
+nf define migrate-env --dry-run
+nf define migrate-env --delete-source
 ```
 
-Commit `.env.age`, never `.env` or the private identity. The standard `.envrc` watches `.env.age`, decrypts through a mode-`0600` temporary file under `.direnv/`, replaces `.env` only when its contents changed, and then calls `dotenv_if_exists .env`. A missing `.env.age` or `.env` does not block direnv. A decryption failure prints a warning and preserves any existing `.env`; treat that file as potentially stale until decryption succeeds.
+Migration reads `.env` directly, preserves existing define names and selectors, and adds any remaining assignment as a same-named shared secret define. It validates the complete source before writing, verifies both `nf.age` and `nf.json`, and removes `.env` only when `--delete-source` is explicit. Legacy `env` entries remain readable during migration but cannot be newly authored.
 
-`project.password_version` does not affect the agency age identity. Changing `NF_PASSWORD_SALT` changes the age recipient and is therefore an explicit rekey operation: keep the old salt available until every committed `.env.age` has been decrypted with the old identity and encrypted for the new recipient. A committed ciphertext allows offline guesses against weak salts, so the shared salt must be generated randomly and stored in the team password vault.
+### Rotate The Shared Salt
+
+Salt rotation is a coordinated two-commit rekey across every repository containing `nf.age`:
+
+1. Keep the old `NF_PASSWORD_SALT` active and generate the future public recipient with a one-command environment override: `new_recipient="$(NF_PASSWORD_SALT="$new_salt" nf password age-recipient)"`.
+2. In every affected repository, run `nf define rekey --add-recipient "$new_recipient"`, verify the change, and commit the dual-recipient `nf.age` files.
+3. Only after all repositories are available to both recipients, rotate `NF_PASSWORD_SALT` in the team vault and local nf config.
+4. With the new salt active, run `nf define rekey` in every affected repository and commit the resulting single-recipient files.
+5. Retain the old salt until all step-four commits are verified and available to the team.
+
+`nf define rekey --dry-run --add-recipient "$new_recipient"` previews the first phase. Running `nf define rekey --dry-run` under the new salt previews pruning to the current recipient. Ordinary secret edits preserve all recorded recipients during the transition.
 
 ## Test and Isolation Overrides
 

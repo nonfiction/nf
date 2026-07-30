@@ -88,7 +88,7 @@ nf define status production
 nf define sync production
 ```
 
-Status and list output show define names and whether each value comes from a literal or environment variable, but do not print resolved secret values.
+Status and list output show define names and whether each value is literal, encrypted, or from a legacy environment reference, but do not print resolved secret values. Encrypted define values are read from the committed project `nf.age` file using the agency identity derived from `NF_PASSWORD_SALT`.
 
 ## Stop or Reset
 

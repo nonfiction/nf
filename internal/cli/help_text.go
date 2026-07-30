@@ -259,9 +259,6 @@ func runPasswordHelp() int {
 		{"age-recipient", "print the age public recipient"},
 	}, helpSection{"Options", []helpLine{
 		{"--password-version <N>", "derive with a project password version"},
-	}}, helpSection{"Age Secret Examples", []helpLine{
-		{"nf password age-recipient", "print the recipient for secrets.nix"},
-		{"agenix -e .env.age -i \"$(nf password age-identity)\"", "create or edit project secrets"},
 	}})
 	return 0
 }

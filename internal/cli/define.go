@@ -19,7 +19,7 @@ const (
 	wpConfigDefineModeForce        = "force"
 	wpConfigDefineModeReplaceFalse = "replace_false"
 	defineAddValueSourceLiteral    = "literal"
-	defineAddValueSourceEnv        = "env"
+	defineAddValueSourceSecret     = "secret"
 	defineAddSelectorAll           = "__all__"
 	defineAddSelectorCustom        = "__custom__"
 	wpConfigProjectBlockBegin      = "/* nf-managed wp-config defines: begin */"
@@ -67,16 +67,18 @@ type wpConfigPatchDefinition struct {
 }
 
 type defineValueSpec struct {
-	Env   string
-	Value any
-	IsEnv bool
+	Env         string
+	SecretRef   string
+	SecretValue string
+	Value       any
+	IsEnv       bool
+	IsSecret    bool
 }
 
 type defineAddPartial struct {
 	Positionals     []string
-	EnvName         string
-	EnvSet          bool
-	EnvMissing      bool
+	SecretSet       bool
+	SecretStdin     bool
 	Selector        string
 	SelectorSet     bool
 	SelectorMissing bool
@@ -95,7 +97,7 @@ func runDefine(argv []string) int {
 	}
 	cmd := cliCommandAlias(argv[0])
 	switch cmd {
-	case "list", "status", "sync", "add", "remove":
+	case "list", "status", "sync", "add", "remove", "migrate-env", "rekey":
 	default:
 		fmt.Fprintln(os.Stderr, "unsupported define command")
 		return 1
@@ -137,6 +139,10 @@ func runDefine(argv []string) int {
 		return cmdDefineAdd(root, metadata, argv[1:])
 	case "remove":
 		return cmdDefineRemove(root, metadata, argv[1:])
+	case "migrate-env":
+		return cmdDefineMigrateEnv(root, metadata, argv[1:])
+	case "rekey":
+		return cmdDefineRekey(root, metadata, argv[1:])
 	default:
 		return 1
 	}
@@ -183,7 +189,7 @@ func cmdDefineStatus(root string, metadata *projectMetadata, remoteName string) 
 			fmt.Fprintln(os.Stderr, "Invalid local project metadata in nf.json.")
 			return 1
 		}
-		defines, err := loadWordPressConfigDefines(metadata, wpConfigDefineSelector{Local: true})
+		defines, err := loadWordPressConfigDefines(root, metadata, wpConfigDefineSelector{Local: true})
 		if err != nil {
 			fmt.Fprintln(os.Stderr, err)
 			return 1
@@ -196,7 +202,7 @@ func cmdDefineStatus(root string, metadata *projectMetadata, remoteName string) 
 		return 1
 	}
 	selector := wpConfigDefineSelector{RemoteName: target.RemoteName, EnvID: canonicalEnvID(target.SiteID, target.Env), Env: target.Env}
-	defines, err := loadWordPressConfigDefines(metadata, selector)
+	defines, err := loadWordPressConfigDefines(root, metadata, selector)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		return 1
@@ -249,7 +255,7 @@ func cmdDefineSync(root string, metadata *projectMetadata, remoteName string) in
 			fmt.Fprintln(os.Stderr, "Invalid local project metadata in nf.json.")
 			return 1
 		}
-		defines, err := loadWordPressConfigDefines(metadata, wpConfigDefineSelector{Local: true})
+		defines, err := loadWordPressConfigDefines(root, metadata, wpConfigDefineSelector{Local: true})
 		if err != nil {
 			fmt.Fprintln(os.Stderr, err)
 			return 1
@@ -262,7 +268,7 @@ func cmdDefineSync(root string, metadata *projectMetadata, remoteName string) in
 		return 1
 	}
 	selector := wpConfigDefineSelector{RemoteName: target.RemoteName, EnvID: canonicalEnvID(target.SiteID, target.Env), Env: target.Env}
-	defines, err := loadWordPressConfigDefines(metadata, selector)
+	defines, err := loadWordPressConfigDefines(root, metadata, selector)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		return 1
@@ -318,13 +324,71 @@ func cmdDefineAdd(root string, metadata *projectMetadata, args []string) int {
 		fmt.Fprintln(os.Stderr, err)
 		return 1
 	}
+	beforeRefs, err := configuredDefineSecretRefs(metadata)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		return 1
+	}
+	var store *defineSecretStore
+	if spec.IsSecret {
+		store, err = loadDefineSecretStore(root, metadata, len(beforeRefs) == 0)
+		if err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			return 1
+		}
+		existing := configuredDefineSpec(metadata, name, selector)
+		if existing != nil {
+			spec.SecretRef = strings.TrimSpace(recordValueString(existing["secret"]))
+		}
+		if spec.SecretRef == "" {
+			spec.SecretRef, err = generateDefineSecretRef(beforeRefs)
+			if err != nil {
+				fmt.Fprintln(os.Stderr, err)
+				return 1
+			}
+		}
+	}
 	if err := upsertConfiguredDefine(metadata, name, selector, spec); err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		return 1
 	}
-	if err := saveProjectMetadata(root, metadata); err != nil {
+	afterRefs, err := configuredDefineSecretRefs(metadata)
+	if err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		return 1
+	}
+	if spec.IsSecret {
+		store.Secrets[spec.SecretRef] = spec.SecretValue
+		if err := pruneDefineSecretStore(root, metadata, store); err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			return 1
+		}
+		if _, err := loadDefineSecretStore(root, metadata, false); err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			return 1
+		}
+		if err := saveProjectMetadata(root, metadata); err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			return 1
+		}
+	} else {
+		if removedDefineSecretRefs(beforeRefs, afterRefs) {
+			store, err = loadDefineSecretStore(root, nil, false)
+			if err != nil {
+				fmt.Fprintln(os.Stderr, err)
+				return 1
+			}
+		}
+		if err := saveProjectMetadata(root, metadata); err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			return 1
+		}
+		if store != nil {
+			if err := pruneDefineSecretStore(root, metadata, store); err != nil {
+				fmt.Fprintln(os.Stderr, err)
+				return 1
+			}
+		}
 	}
 	if selector == "" {
 		fmt.Printf("Added define %s.\n", name)
@@ -340,13 +404,37 @@ func cmdDefineRemove(root string, metadata *projectMetadata, args []string) int 
 		fmt.Fprintln(os.Stderr, err)
 		return 1
 	}
+	beforeRefs, err := configuredDefineSecretRefs(metadata)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		return 1
+	}
 	if err := removeConfiguredDefine(metadata, name, selector); err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		return 1
 	}
+	afterRefs, err := configuredDefineSecretRefs(metadata)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		return 1
+	}
+	var store *defineSecretStore
+	if removedDefineSecretRefs(beforeRefs, afterRefs) {
+		store, err = loadDefineSecretStore(root, nil, false)
+		if err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			return 1
+		}
+	}
 	if err := saveProjectMetadata(root, metadata); err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		return 1
+	}
+	if store != nil {
+		if err := pruneDefineSecretStore(root, metadata, store); err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			return 1
+		}
 	}
 	if selector == "" {
 		fmt.Printf("Removed define %s.\n", name)
@@ -385,16 +473,18 @@ func parseDefineAddPartial(args []string) (defineAddPartial, error) {
 		arg := args[i]
 		switch arg {
 		case "--env":
-			if partial.EnvSet {
-				return partial, fmt.Errorf("define add accepts --env only once")
+			return partial, fmt.Errorf("define add --env is no longer supported; use --secret or run `nf define migrate-env`")
+		case "--secret":
+			if partial.SecretSet {
+				return partial, fmt.Errorf("define add accepts only one secret input option")
 			}
-			partial.EnvSet = true
-			if i+1 >= len(args) || strings.HasPrefix(args[i+1], "-") {
-				partial.EnvMissing = true
-				continue
+			partial.SecretSet = true
+		case "--secret-stdin":
+			if partial.SecretSet {
+				return partial, fmt.Errorf("define add accepts only one secret input option")
 			}
-			partial.EnvName = strings.TrimSpace(args[i+1])
-			i++
+			partial.SecretSet = true
+			partial.SecretStdin = true
 		case "--for":
 			if partial.SelectorSet {
 				return partial, fmt.Errorf("define add accepts --for only once")
@@ -417,17 +507,14 @@ func parseDefineAddPartial(args []string) (defineAddPartial, error) {
 }
 
 func strictDefineAddArgs(partial defineAddPartial) (string, string, defineValueSpec, error) {
-	if partial.EnvSet && partial.EnvMissing {
-		return "", "", defineValueSpec{}, fmt.Errorf("define add --env requires an environment variable name")
-	}
 	if partial.SelectorSet && partial.SelectorMissing {
 		return "", "", defineValueSpec{}, fmt.Errorf("define add --for requires a selector")
 	}
-	if partial.EnvSet && len(partial.Positionals) != 1 {
-		return "", "", defineValueSpec{}, fmt.Errorf("define add with --env requires exactly one name")
+	if partial.SecretSet && len(partial.Positionals) != 1 {
+		return "", "", defineValueSpec{}, fmt.Errorf("define add with a secret input option requires exactly one name")
 	}
-	if !partial.EnvSet && len(partial.Positionals) != 2 {
-		return "", "", defineValueSpec{}, fmt.Errorf("define add requires a name and value, or a name with --env")
+	if !partial.SecretSet && len(partial.Positionals) != 2 {
+		return "", "", defineValueSpec{}, fmt.Errorf("define add requires a name and value, or a name with --secret")
 	}
 	name := strings.TrimSpace(partial.Positionals[0])
 	if err := validateProjectDefineName(name); err != nil {
@@ -437,18 +524,30 @@ func strictDefineAddArgs(partial defineAddPartial) (string, string, defineValueS
 	if partial.SelectorSet && selector == "" {
 		return "", "", defineValueSpec{}, fmt.Errorf("define add --for requires a selector")
 	}
-	if partial.EnvSet {
-		envName := strings.TrimSpace(partial.EnvName)
-		if err := validateDefineEnvName(envName); err != nil {
+	if partial.SecretSet {
+		var value string
+		var err error
+		if partial.SecretStdin {
+			value, err = readDefineSecretStdin()
+		} else {
+			if !siteIsInteractiveFn() {
+				return "", "", defineValueSpec{}, fmt.Errorf("define add --secret requires an interactive terminal; use --secret-stdin for automation")
+			}
+			value, err = definePromptSecretFn("Encrypted define value")
+		}
+		if err != nil {
 			return "", "", defineValueSpec{}, err
 		}
-		return name, selector, defineValueSpec{Env: envName, IsEnv: true}, nil
+		if strings.TrimSpace(value) == "" {
+			return "", "", defineValueSpec{}, fmt.Errorf("encrypted define value must not be empty")
+		}
+		return name, selector, defineValueSpec{SecretValue: value, IsSecret: true}, nil
 	}
 	return name, selector, defineValueSpec{Value: parseDefineCLIValue(partial.Positionals[1])}, nil
 }
 
 func promptDefineAddArgs(metadata *projectMetadata, partial defineAddPartial) (string, string, defineValueSpec, error) {
-	if len(partial.Positionals) > 2 || (partial.EnvSet && len(partial.Positionals) > 1) {
+	if len(partial.Positionals) > 2 || (partial.SecretSet && len(partial.Positionals) > 1) {
 		return strictDefineAddArgs(partial)
 	}
 	name := ""
@@ -475,8 +574,8 @@ func promptDefineAddArgs(metadata *projectMetadata, partial defineAddPartial) (s
 	}
 
 	source := defineAddValueSourceLiteral
-	if partial.EnvSet {
-		source = defineAddValueSourceEnv
+	if partial.SecretSet {
+		source = defineAddValueSourceSecret
 	} else if len(partial.Positionals) < 2 {
 		selected, err := defineSelectFn("Choose value source", defineAddValueSourceOptions())
 		if err != nil {
@@ -487,19 +586,15 @@ func promptDefineAddArgs(metadata *projectMetadata, partial defineAddPartial) (s
 
 	var spec defineValueSpec
 	switch source {
-	case defineAddValueSourceEnv:
-		envName := strings.TrimSpace(partial.EnvName)
-		if envName == "" {
-			prompted, err := definePromptStringFn("Local env var name", name, false)
-			if err != nil {
-				return "", "", defineValueSpec{}, err
-			}
-			envName = strings.TrimSpace(prompted)
-		}
-		if err := validateDefineEnvName(envName); err != nil {
+	case defineAddValueSourceSecret:
+		value, err := definePromptSecretFn("Encrypted define value")
+		if err != nil {
 			return "", "", defineValueSpec{}, err
 		}
-		spec = defineValueSpec{Env: envName, IsEnv: true}
+		if strings.TrimSpace(value) == "" {
+			return "", "", defineValueSpec{}, fmt.Errorf("encrypted define value must not be empty")
+		}
+		spec = defineValueSpec{SecretValue: value, IsSecret: true}
 	case defineAddValueSourceLiteral:
 		value := ""
 		if len(partial.Positionals) >= 2 {
@@ -523,7 +618,7 @@ func promptDefineAddArgs(metadata *projectMetadata, partial defineAddPartial) (s
 			return "", "", defineValueSpec{}, err
 		}
 		selector = selected
-	} else if !partial.SelectorSet && len(partial.Positionals) < 2 && !partial.EnvSet {
+	} else if !partial.SelectorSet && len(partial.Positionals) < 2 && !partial.SecretSet {
 		selected, err := promptDefineSelector(metadata)
 		if err != nil {
 			return "", "", defineValueSpec{}, err
@@ -536,7 +631,7 @@ func promptDefineAddArgs(metadata *projectMetadata, partial defineAddPartial) (s
 func defineAddValueSourceOptions() []ui.SelectOption {
 	return []ui.SelectOption{
 		{Value: defineAddValueSourceLiteral, Label: "Literal value stored in nf.json", Default: true},
-		{Value: defineAddValueSourceEnv, Label: "Local env var resolved by nf during sync"},
+		{Value: defineAddValueSourceSecret, Label: "Encrypted secret stored in nf.age"},
 	}
 }
 
@@ -823,6 +918,10 @@ func upsertConfiguredDefine(metadata *projectMetadata, name, selector string, sp
 			values["default"] = map[string]any{"env": item["env"]}
 			delete(item, "env")
 		}
+		if _, hasSecret := item["secret"]; hasSecret {
+			values["default"] = map[string]any{"secret": item["secret"]}
+			delete(item, "secret")
+		}
 		values[selector] = defineValueSpecMap(spec)
 	}
 	defines[idx] = item
@@ -872,7 +971,7 @@ func removeConfiguredDefine(metadata *projectMetadata, name, selector string) er
 		return fmt.Errorf("define %s is not configured for %s", name, selector)
 	}
 	delete(values, selector)
-	if len(values) == 0 && item["value"] == nil && item["env"] == nil {
+	if len(values) == 0 && item["value"] == nil && item["env"] == nil && item["secret"] == nil {
 		defines = append(defines[:idx], defines[idx+1:]...)
 	} else if len(values) == 0 {
 		delete(item, "values")
@@ -888,6 +987,11 @@ func removeConfiguredDefine(metadata *projectMetadata, name, selector string) er
 func setDefineValueSpec(item map[string]any, spec defineValueSpec) {
 	delete(item, "value")
 	delete(item, "env")
+	delete(item, "secret")
+	if spec.IsSecret {
+		item["secret"] = spec.SecretRef
+		return
+	}
 	if spec.IsEnv {
 		item["env"] = spec.Env
 		return
@@ -896,6 +1000,9 @@ func setDefineValueSpec(item map[string]any, spec defineValueSpec) {
 }
 
 func defineValueSpecMap(spec defineValueSpec) map[string]any {
+	if spec.IsSecret {
+		return map[string]any{"secret": spec.SecretRef}
+	}
 	if spec.IsEnv {
 		return map[string]any{"env": spec.Env}
 	}
@@ -955,7 +1062,10 @@ func configuredDefineEntries(metadata *projectMetadata) ([]configuredDefineEntry
 			entries = append(entries, configuredDefineEntry{Name: name, Selector: "all", Source: "literal value"})
 		}
 		if envName := strings.TrimSpace(recordValueString(item["env"])); envName != "" {
-			entries = append(entries, configuredDefineEntry{Name: name, Selector: "all", Source: "env " + envName})
+			entries = append(entries, configuredDefineEntry{Name: name, Selector: "all", Source: "legacy env " + envName})
+		}
+		if secretRef := strings.TrimSpace(recordValueString(item["secret"])); secretRef != "" {
+			entries = append(entries, configuredDefineEntry{Name: name, Selector: "all", Source: "encrypted secret"})
 		}
 		if rawValues, ok := item["values"]; ok {
 			values, ok := rawValues.(map[string]any)
@@ -987,13 +1097,14 @@ func configuredDefineEntries(metadata *projectMetadata) ([]configuredDefineEntry
 
 func validateConfiguredDefineMetadata(metadata *projectMetadata) error {
 	seen := map[string]struct{}{}
+	seenSecretRefs := map[string]string{}
 	for i, raw := range metadata.WordPress.Defines {
 		item, ok := raw.(map[string]any)
 		if !ok || item == nil {
 			return ProjectError{Msg: fmt.Sprintf("nf.json wordpress.defines[%d] must be an object", i)}
 		}
 		location := fmt.Sprintf("nf.json wordpress.defines[%d]", i)
-		if err := validateProjectObjectFields(location, item, "name", "value", "env", "values"); err != nil {
+		if err := validateProjectObjectFields(location, item, "name", "value", "env", "secret", "values"); err != nil {
 			return err
 		}
 		name, err := projectObjectStringField(location, item, "name", true)
@@ -1014,8 +1125,11 @@ func validateConfiguredDefineMetadata(metadata *projectMetadata) error {
 		if envName, ok := item["env"]; ok {
 			shared["env"] = envName
 		}
+		if secretRef, ok := item["secret"]; ok {
+			shared["secret"] = secretRef
+		}
 		if len(shared) > 0 {
-			if err := validateDefineValueSpecShape(i, name, "", shared); err != nil {
+			if err := validateDefineValueSpecShape(i, name, "", shared, seenSecretRefs); err != nil {
 				return err
 			}
 		}
@@ -1038,38 +1152,61 @@ func validateConfiguredDefineMetadata(metadata *projectMetadata) error {
 				if !ok || spec == nil {
 					return ProjectError{Msg: fmt.Sprintf("nf.json wordpress.defines[%d].values.%s for %s must be an object", i, selector, name)}
 				}
-				if err := validateDefineValueSpecShape(i, name, selector, spec); err != nil {
+				if err := validateDefineValueSpecShape(i, name, selector, spec, seenSecretRefs); err != nil {
 					return err
 				}
 			}
 		}
 		if len(shared) == 0 {
 			if _, ok := item["values"]; !ok {
-				return ProjectError{Msg: fmt.Sprintf("nf.json wordpress.defines[%d] for %s requires value, env, or values", i, name)}
+				return ProjectError{Msg: fmt.Sprintf("nf.json wordpress.defines[%d] for %s requires value, env, secret, or values", i, name)}
 			}
 		}
 	}
 	return nil
 }
 
-func validateDefineValueSpecShape(index int, name, selector string, spec map[string]any) error {
+func validateDefineValueSpecShape(index int, name, selector string, spec map[string]any, seenSecretRefs map[string]string) error {
 	value, hasValue := spec["value"]
 	envValue, hasEnv := spec["env"]
+	secretValue, hasSecret := spec["secret"]
 	location := fmt.Sprintf("nf.json wordpress.defines[%d]", index)
 	if selector != "" {
 		location += ".values." + selector
 	}
-	if err := validateProjectObjectFields(location, spec, "value", "env"); err != nil {
+	if err := validateProjectObjectFields(location, spec, "value", "env", "secret"); err != nil {
 		return err
 	}
-	if hasValue == hasEnv {
-		return ProjectError{Msg: fmt.Sprintf("%s for %s must use exactly one of value or env", location, name)}
+	sourceCount := 0
+	for _, present := range []bool{hasValue, hasEnv, hasSecret} {
+		if present {
+			sourceCount++
+		}
+	}
+	if sourceCount != 1 {
+		return ProjectError{Msg: fmt.Sprintf("%s for %s must use exactly one of value, env, or secret", location, name)}
 	}
 	if hasEnv {
 		envName, ok := envValue.(string)
 		if !ok || validateDefineEnvName(strings.TrimSpace(envName)) != nil {
 			return ProjectError{Msg: fmt.Sprintf("%s.env for %s must be an environment variable name", location, name)}
 		}
+		return nil
+	}
+	if hasSecret {
+		secretRef, ok := secretValue.(string)
+		secretRef = strings.TrimSpace(secretRef)
+		if !ok || !defineSecretRefPattern.MatchString(secretRef) {
+			return ProjectError{Msg: fmt.Sprintf("%s.secret for %s must be an nf encrypted define reference", location, name)}
+		}
+		label := name
+		if selector != "" {
+			label += " (" + selector + ")"
+		}
+		if previous, exists := seenSecretRefs[secretRef]; exists {
+			return ProjectError{Msg: fmt.Sprintf("%s.secret for %s duplicates the encrypted reference used by %s", location, name, previous)}
+		}
+		seenSecretRefs[secretRef] = label
 		return nil
 	}
 	if _, err := phpConfigDefineValueLiteral(value); err != nil {
@@ -1080,7 +1217,10 @@ func validateDefineValueSpecShape(index int, name, selector string, spec map[str
 
 func defineSpecSource(spec map[string]any) string {
 	if envName := strings.TrimSpace(recordValueString(spec["env"])); envName != "" {
-		return "env " + envName
+		return "legacy env " + envName
+	}
+	if secretRef := strings.TrimSpace(recordValueString(spec["secret"])); secretRef != "" {
+		return "encrypted secret"
 	}
 	if _, ok := spec["value"]; ok {
 		return "literal value"
@@ -1111,7 +1251,7 @@ func remoteDefineStdinArgs(target envRemoteSyncTarget) []string {
 }
 
 func ensureLocalWPConfigDefines(cfg envConfig, metadata *projectMetadata) error {
-	defines, err := loadWordPressConfigDefines(metadata, wpConfigDefineSelector{Local: true})
+	defines, err := loadWordPressConfigDefines(cfg.RepoRoot, metadata, wpConfigDefineSelector{Local: true})
 	if err != nil {
 		return err
 	}
@@ -1125,12 +1265,27 @@ func ensureLocalWPConfigDefines(cfg envConfig, metadata *projectMetadata) error 
 	return runCommandSpecStdinWithPreview(execSpec{Dir: localEnvDir(cfg), Args: args}, preview, script)
 }
 
-func loadWordPressConfigDefines(metadata *projectMetadata, selector wpConfigDefineSelector) ([]wpConfigDefine, error) {
+func loadWordPressConfigDefines(root string, metadata *projectMetadata, selector wpConfigDefineSelector) ([]wpConfigDefine, error) {
 	raw := metadata.WordPress.Defines
 	defines := make([]wpConfigDefine, 0, len(raw))
 	seen := map[string]struct{}{}
+	var secretStore *defineSecretStore
+	resolveSecret := func(ref, name string) (string, error) {
+		if secretStore == nil {
+			var err error
+			secretStore, err = loadDefineSecretStore(root, metadata, false)
+			if err != nil {
+				return "", err
+			}
+		}
+		value, ok := secretStore.Secrets[ref]
+		if !ok {
+			return "", ProjectError{Msg: fmt.Sprintf("%s has no encrypted value for %s", defineSecretStoreFilename, name)}
+		}
+		return value, nil
+	}
 	for i, item := range raw {
-		define, ok, err := parseWordPressConfigDefine(i, item, selector)
+		define, ok, err := parseWordPressConfigDefine(i, item, selector, resolveSecret)
 		if err != nil {
 			return nil, err
 		}
@@ -1147,7 +1302,7 @@ func loadWordPressConfigDefines(metadata *projectMetadata, selector wpConfigDefi
 	return defines, nil
 }
 
-func parseWordPressConfigDefine(index int, value any, selector wpConfigDefineSelector) (wpConfigDefine, bool, error) {
+func parseWordPressConfigDefine(index int, value any, selector wpConfigDefineSelector, resolveSecret func(string, string) (string, error)) (wpConfigDefine, bool, error) {
 	item, ok := value.(map[string]any)
 	if !ok || item == nil {
 		return wpConfigDefine{}, false, ProjectError{Msg: fmt.Sprintf("nf.json wordpress.defines[%d] must be an object", index)}
@@ -1170,11 +1325,11 @@ func parseWordPressConfigDefine(index int, value any, selector wpConfigDefineSel
 		}
 		if matched {
 			valueSpec = selected
-		} else if _, hasValue := item["value"]; !hasValue && strings.TrimSpace(recordValueString(item["env"])) == "" {
+		} else if _, hasValue := item["value"]; !hasValue && strings.TrimSpace(recordValueString(item["env"])) == "" && strings.TrimSpace(recordValueString(item["secret"])) == "" {
 			return wpConfigDefine{}, false, nil
 		}
 	}
-	phpValue, source, err := parseWordPressConfigDefineValue(index, name, valueSpec)
+	phpValue, source, err := parseWordPressConfigDefineValue(index, name, valueSpec, resolveSecret)
 	if err != nil {
 		return wpConfigDefine{}, false, err
 	}
@@ -1217,11 +1372,19 @@ func (s wpConfigDefineSelector) wpConfigValueKeys() []string {
 	return uniqueStringsPreserveOrder(keys)
 }
 
-func parseWordPressConfigDefineValue(index int, name string, spec map[string]any) (string, string, error) {
+func parseWordPressConfigDefineValue(index int, name string, spec map[string]any, resolveSecret func(string, string) (string, error)) (string, string, error) {
 	_, hasEnv := spec["env"]
 	value, hasValue := spec["value"]
-	if hasEnv && hasValue {
-		return "", "", ProjectError{Msg: fmt.Sprintf("nf.json wordpress.defines[%d] for %s must use either env or value, not both", index, name)}
+	secretRef := strings.TrimSpace(recordValueString(spec["secret"]))
+	hasSecret := secretRef != ""
+	sourceCount := 0
+	for _, present := range []bool{hasEnv, hasValue, hasSecret} {
+		if present {
+			sourceCount++
+		}
+	}
+	if sourceCount != 1 {
+		return "", "", ProjectError{Msg: fmt.Sprintf("nf.json wordpress.defines[%d] for %s must use exactly one of env, value, or secret", index, name)}
 	}
 	if hasEnv {
 		envName := strings.TrimSpace(recordValueString(spec["env"]))
@@ -1235,7 +1398,17 @@ func parseWordPressConfigDefineValue(index int, name string, spec map[string]any
 		if resolved == "" {
 			return "", "", ProjectError{Msg: fmt.Sprintf("Expected %s in the environment or %s for nf.json wordpress.defines[%d] %s.", envName, config.EnvFile(), index, name)}
 		}
-		return phpConfigDefineLiteral(resolved), "env " + envName, nil
+		return phpConfigDefineLiteral(resolved), "legacy env " + envName, nil
+	}
+	if hasSecret {
+		if !defineSecretRefPattern.MatchString(secretRef) {
+			return "", "", ProjectError{Msg: fmt.Sprintf("nf.json wordpress.defines[%d].secret for %s must be an nf encrypted define reference", index, name)}
+		}
+		resolved, err := resolveSecret(secretRef, name)
+		if err != nil {
+			return "", "", err
+		}
+		return phpConfigDefineLiteral(resolved), "encrypted secret", nil
 	}
 	if hasValue {
 		literal, err := phpConfigDefineValueLiteral(value)
@@ -1244,7 +1417,7 @@ func parseWordPressConfigDefineValue(index int, name string, spec map[string]any
 		}
 		return literal, "literal value", nil
 	}
-	return "", "", ProjectError{Msg: fmt.Sprintf("nf.json wordpress.defines[%d] for %s requires env or value", index, name)}
+	return "", "", ProjectError{Msg: fmt.Sprintf("nf.json wordpress.defines[%d] for %s requires env, value, or secret", index, name)}
 }
 
 func phpConfigDefineValueLiteral(value any) (string, error) {

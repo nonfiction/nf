@@ -544,7 +544,7 @@ func aliasCompletionCandidates(args []string) []string {
 
 func defineCompletionCandidates(args []string) []string {
 	if len(args) == 0 {
-		return []string{"list", "ls", "status", "sync", "add", "remove", "rm", "help"}
+		return []string{"list", "ls", "status", "sync", "add", "remove", "rm", "migrate-env", "rekey", "help"}
 	}
 	args[0] = cliCommandAlias(args[0])
 	switch args[0] {
@@ -556,7 +556,11 @@ func defineCompletionCandidates(args []string) []string {
 		if len(args) > 1 && args[len(args)-1] == "--for" {
 			return defineSelectorCompletionNames()
 		}
-		return []string{"--env", "--for"}
+		return []string{"--secret", "--secret-stdin", "--for"}
+	case "migrate-env":
+		return []string{"--dry-run", "--delete-source"}
+	case "rekey":
+		return []string{"--dry-run", "--add-recipient"}
 	default:
 		return nil
 	}
