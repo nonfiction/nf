@@ -253,6 +253,7 @@ func extractTarGzArchive(archivePath, destination string) error {
 }
 
 func parseEnvImportArgs(args []string) (envImportOptions, error) {
+	args = normalizeLongFlagValues(args, "--db", "--source-url", "--name")
 	var opts envImportOptions
 	positionals := make([]string, 0, 1)
 	for i := 0; i < len(args); i++ {
@@ -268,33 +269,18 @@ func parseEnvImportArgs(args []string) (envImportOptions, error) {
 			}
 			i++
 			opts.database = args[i]
-		case strings.HasPrefix(arg, "--db="):
-			opts.database = strings.TrimPrefix(arg, "--db=")
-			if strings.TrimSpace(opts.database) == "" {
-				return opts, ProjectError{Msg: "env import --db requires a path"}
-			}
 		case arg == "--source-url":
 			if i+1 >= len(args) || strings.TrimSpace(args[i+1]) == "" {
 				return opts, ProjectError{Msg: "env import --source-url requires a URL"}
 			}
 			i++
 			opts.sourceURL = args[i]
-		case strings.HasPrefix(arg, "--source-url="):
-			opts.sourceURL = strings.TrimPrefix(arg, "--source-url=")
-			if strings.TrimSpace(opts.sourceURL) == "" {
-				return opts, ProjectError{Msg: "env import --source-url requires a URL"}
-			}
 		case arg == "--name":
 			if i+1 >= len(args) || strings.TrimSpace(args[i+1]) == "" {
 				return opts, ProjectError{Msg: "env import --name requires a name"}
 			}
 			i++
 			opts.name = args[i]
-		case strings.HasPrefix(arg, "--name="):
-			opts.name = strings.TrimPrefix(arg, "--name=")
-			if strings.TrimSpace(opts.name) == "" {
-				return opts, ProjectError{Msg: "env import --name requires a name"}
-			}
 		default:
 			if strings.HasPrefix(arg, "-") {
 				return opts, ProjectError{Msg: fmt.Sprintf("unsupported env import option %q", arg)}

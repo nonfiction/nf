@@ -361,6 +361,7 @@ func runSiteAdd(argv []string) int {
 		})
 		return 0
 	}
+	argv = normalizeLongFlagValues(argv, "--password-version", "--kinsta-slug", "--region", "--php")
 	args := siteAddArgs{}
 	positionals := []string{}
 	for i := 0; i < len(argv); i++ {
@@ -412,45 +413,6 @@ func runSiteAdd(argv []string) int {
 			i++
 			args.phpVersion = argv[i]
 		default:
-			if strings.HasPrefix(arg, "--password-version=") {
-				value := strings.TrimPrefix(arg, "--password-version=")
-				if strings.TrimSpace(value) == "" {
-					fmt.Fprintln(os.Stderr, "--password-version requires a value")
-					return 1
-				}
-				passwordVersion, err := parseExplicitPasswordVersion(value)
-				if err != nil {
-					fmt.Fprintln(os.Stderr, err)
-					return 1
-				}
-				args.passwordVersion = firstNonEmpty(passwordVersion, "0")
-				args.passwordVersionSet = true
-				continue
-			}
-			if strings.HasPrefix(arg, "--kinsta-slug=") {
-				args.kinstaSlug = strings.TrimPrefix(arg, "--kinsta-slug=")
-				if strings.TrimSpace(args.kinstaSlug) == "" {
-					fmt.Fprintln(os.Stderr, "--kinsta-slug requires a value")
-					return 1
-				}
-				continue
-			}
-			if strings.HasPrefix(arg, "--region=") {
-				args.region = strings.TrimPrefix(arg, "--region=")
-				if strings.TrimSpace(args.region) == "" {
-					fmt.Fprintln(os.Stderr, "--region requires a value")
-					return 1
-				}
-				continue
-			}
-			if strings.HasPrefix(arg, "--php=") {
-				args.phpVersion = strings.TrimPrefix(arg, "--php=")
-				if strings.TrimSpace(args.phpVersion) == "" {
-					fmt.Fprintln(os.Stderr, "--php requires a value")
-					return 1
-				}
-				continue
-			}
 			if strings.HasPrefix(arg, "-") {
 				fmt.Fprintf(os.Stderr, "unknown site add flag: %s\n", arg)
 				return 1

@@ -11,6 +11,7 @@ Use this file for repo shortcuts and learned implementation gotchas. Put durable
 * Project-only command groups: `remote`, `plugin`, `theme`, `env`, `alias`, `define`. They appear only when the current repo has `nf.json` next to `.git`.
 * Remote env operations live under `site` (`site list --envs`, `site show <site:env>`, `site shell`, `site wp`, `site cache`, `site repair`, `site snapshot`, `site export`), not as a separate `site env` group.
 * Do not re-add public `nf server ...`, `nf instance ...`, or top-level local env aliases (`nf up/down/logs/reset/info/shell/wp`) unless explicitly requested.
+* Every value-taking long option must accept both `--flag value` and `--flag=value`. Use `normalizeLongFlagValues` in hand-written parsers; Go `flag.FlagSet` parsers already satisfy this contract. Never normalize arguments after a `--` passthrough boundary.
 
 ## Fast checks
 

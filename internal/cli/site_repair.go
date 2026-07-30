@@ -45,6 +45,7 @@ type siteRepairOptions struct {
 }
 
 func parseSiteRepairArgs(argv []string) (string, siteRepairOptions, error) {
+	argv = normalizeLongFlagValues(argv, "--project-slug")
 	var opts siteRepairOptions
 	positionals := make([]string, 0, 1)
 	for i := 0; i < len(argv); i++ {
@@ -68,13 +69,6 @@ func parseSiteRepairArgs(argv []string) (string, siteRepairOptions, error) {
 			}
 			opts.projectSlug = strings.TrimSpace(argv[i])
 		default:
-			if strings.HasPrefix(arg, "--project-slug=") {
-				opts.projectSlug = strings.TrimSpace(strings.TrimPrefix(arg, "--project-slug="))
-				if opts.projectSlug == "" {
-					return "", opts, fmt.Errorf("--project-slug requires a value")
-				}
-				continue
-			}
 			if strings.HasPrefix(arg, "-") {
 				return "", opts, fmt.Errorf("unknown site repair flag: %s", arg)
 			}

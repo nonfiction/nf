@@ -533,6 +533,7 @@ func resolveDefineGetArgs(metadata *projectMetadata, args []string) (string, str
 }
 
 func parseDefineGetPartial(args []string) (defineGetPartial, error) {
+	args = normalizeLongFlagValues(args, "--for")
 	partial := defineGetPartial{Positionals: []string{}}
 	for i := 0; i < len(args); i++ {
 		switch arg := args[i]; arg {
@@ -573,6 +574,7 @@ func resolveDefineSetArgs(root string, metadata *projectMetadata, args []string)
 }
 
 func parseDefineSetPartial(args []string) (defineSetPartial, error) {
+	args = normalizeLongFlagValues(args, "--for")
 	partial := defineSetPartial{Positionals: []string{}}
 	for i := 0; i < len(args); i++ {
 		arg := args[i]
@@ -894,6 +896,7 @@ func resolveDefineRemoveArgs(metadata *projectMetadata, args []string) (string, 
 }
 
 func parseDefineRemovePartial(args []string) (defineRemovePartial, error) {
+	args = normalizeLongFlagValues(args, "--for")
 	partial := defineRemovePartial{Positionals: []string{}}
 	for i := 0; i < len(args); i++ {
 		arg := args[i]

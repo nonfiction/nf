@@ -793,6 +793,14 @@ func TestRunCompleteSuggestsStaticAndCachedValues(t *testing.T) {
 			t.Fatalf("define --for completion included generic selector %q:\n%s", notWant, defineForOutput)
 		}
 	}
+	defineForEqualsOutput := captureStdout(t, func() {
+		if got := Run([]string{"__complete", "--", "define", "set", "SOME_PLUGIN_CONSTANT", "true", "--for=lo"}); got != 0 {
+			t.Fatalf("Run(__complete define set --for=lo) = %d, want 0", got)
+		}
+	})
+	if strings.TrimSpace(defineForEqualsOutput) != "--for=local" {
+		t.Fatalf("define --for= completion = %q, want --for=local", defineForEqualsOutput)
+	}
 
 	sitePasswordOutput := captureStdout(t, func() {
 		if got := Run([]string{"__complete", "--", "site", "password", "client"}); got != 0 {
@@ -12321,6 +12329,7 @@ func TestRunDefineGetPrintsRawValuesAndRequiresExactSelector(t *testing.T) {
 		{[]string{"define", "get", "LEGACY_VALUE"}, "legacy-value\n"},
 		{[]string{"define", "get", "SECRET_VALUE"}, "encrypted-value\n"},
 		{[]string{"define", "get", "SCOPED_VALUE", "--for", "local"}, "local-value\n"},
+		{[]string{"define", "get", "SCOPED_VALUE", "--for=local"}, "local-value\n"},
 	} {
 		output := captureStdout(t, func() {
 			if got := Run(tc.args); got != 0 {

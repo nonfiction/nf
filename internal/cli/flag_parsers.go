@@ -8,6 +8,30 @@ import (
 	"strings"
 )
 
+func normalizeLongFlagValues(argv []string, names ...string) []string {
+	if len(argv) == 0 || len(names) == 0 {
+		return argv
+	}
+	valueFlags := make(map[string]struct{}, len(names))
+	for _, name := range names {
+		valueFlags[name] = struct{}{}
+	}
+	normalized := make([]string, 0, len(argv))
+	for i, arg := range argv {
+		if arg == "--" {
+			normalized = append(normalized, argv[i:]...)
+			break
+		}
+		name, value, hasValue := strings.Cut(arg, "=")
+		if _, ok := valueFlags[name]; ok && hasValue {
+			normalized = append(normalized, name, value)
+			continue
+		}
+		normalized = append(normalized, arg)
+	}
+	return normalized
+}
+
 type deleteServerOptions struct {
 	dryRun         bool
 	execute        bool
@@ -65,6 +89,7 @@ func parseRemoveSiteArgs(argv []string) (string, deleteServerOptions, error) {
 }
 
 func parseSiteSnapshotArgs(argv []string) (string, siteSnapshotOptions, error) {
+	argv = normalizeLongFlagValues(argv, "--output")
 	var opts siteSnapshotOptions
 	positionals := make([]string, 0, 1)
 	for i := 0; i < len(argv); i++ {
@@ -79,13 +104,6 @@ func parseSiteSnapshotArgs(argv []string) (string, siteSnapshotOptions, error) {
 			i++
 			opts.output = argv[i]
 		default:
-			if strings.HasPrefix(arg, "--output=") {
-				opts.output = strings.TrimPrefix(arg, "--output=")
-				if strings.TrimSpace(opts.output) == "" {
-					return "", opts, fmt.Errorf("site snapshot --output requires a path")
-				}
-				continue
-			}
 			if strings.HasPrefix(arg, "-") {
 				return "", opts, fmt.Errorf("unsupported flag %s", arg)
 			}
@@ -102,6 +120,7 @@ func parseSiteSnapshotArgs(argv []string) (string, siteSnapshotOptions, error) {
 }
 
 func parseSiteExportArgs(argv []string) (string, siteExportOptions, error) {
+	argv = normalizeLongFlagValues(argv, "--output")
 	var opts siteExportOptions
 	positionals := make([]string, 0, 1)
 	for i := 0; i < len(argv); i++ {
@@ -116,13 +135,6 @@ func parseSiteExportArgs(argv []string) (string, siteExportOptions, error) {
 			i++
 			opts.output = argv[i]
 		default:
-			if strings.HasPrefix(arg, "--output=") {
-				opts.output = strings.TrimPrefix(arg, "--output=")
-				if strings.TrimSpace(opts.output) == "" {
-					return "", opts, fmt.Errorf("site export --output requires a path")
-				}
-				continue
-			}
 			if strings.HasPrefix(arg, "-") {
 				return "", opts, fmt.Errorf("unsupported flag %s", arg)
 			}
@@ -159,6 +171,7 @@ func parseSiteSnapshotRemoveArgs(argv []string) (string, bool, error) {
 }
 
 func parseSiteSnapshotPruneArgs(args []string) (envSnapshotPruneOptions, error) {
+	args = normalizeLongFlagValues(args, "--keep")
 	opts := envSnapshotPruneOptions{keep: 3}
 	for i := 0; i < len(args); i++ {
 		arg := args[i]
@@ -173,13 +186,6 @@ func parseSiteSnapshotPruneArgs(args []string) (envSnapshotPruneOptions, error) 
 			}
 			i++
 			keep, err := strconv.Atoi(args[i])
-			if err != nil || keep < 0 {
-				return opts, ProjectError{Msg: "site snapshot prune --keep must be 0 or greater"}
-			}
-			opts.keep = keep
-		case strings.HasPrefix(arg, "--keep="):
-			keepText := strings.TrimPrefix(arg, "--keep=")
-			keep, err := strconv.Atoi(keepText)
 			if err != nil || keep < 0 {
 				return opts, ProjectError{Msg: "site snapshot prune --keep must be 0 or greater"}
 			}

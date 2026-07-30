@@ -84,6 +84,16 @@ func completeCandidates(argv []string) []string {
 		prefix = args[len(args)-1]
 		args = args[:len(args)-1]
 	}
+	if option, _, ok := strings.Cut(prefix, "="); ok && strings.HasPrefix(option, "--") {
+		candidates := completeContextCandidates(append(args, option))
+		equalsCandidates := make([]string, 0, len(candidates))
+		for _, candidate := range candidates {
+			if !strings.HasPrefix(candidate, "-") {
+				equalsCandidates = append(equalsCandidates, option+"="+candidate)
+			}
+		}
+		return filterCompletionCandidates(equalsCandidates, prefix)
+	}
 	candidates := completeContextCandidates(args)
 	return filterCompletionCandidates(candidates, prefix)
 }

@@ -230,6 +230,8 @@ Rules:
 
 ## Command surface
 
+Every value-taking long option accepts both `--flag value` and `--flag=value`. Boolean switches remain presence-only. A literal `--` ends nf option parsing for commands that pass remaining arguments through.
+
 Current always-available command groups:
 
 ```text

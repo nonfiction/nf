@@ -45,6 +45,8 @@ nf theme deploy production --dry-run
 nf alias status production
 ```
 
+Long options that take values accept both `--flag value` and `--flag=value`.
+
 ## Documentation
 
 Start with the [documentation index](docs/index.md) or the [usage guide](docs/usage.md).

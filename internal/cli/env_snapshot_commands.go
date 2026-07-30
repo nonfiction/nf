@@ -248,6 +248,7 @@ func cmdEnvSnapshotPrune(cfg envConfig, opts envSnapshotPruneOptions) int {
 }
 
 func parseEnvSnapshotPruneArgs(args []string) (envSnapshotPruneOptions, error) {
+	args = normalizeLongFlagValues(args, "--keep")
 	opts := envSnapshotPruneOptions{keep: 3}
 	for i := 0; i < len(args); i++ {
 		arg := args[i]
@@ -266,13 +267,6 @@ func parseEnvSnapshotPruneArgs(args []string) (envSnapshotPruneOptions, error) {
 				return opts, ProjectError{Msg: "env snapshot prune --keep must be 0 or greater"}
 			}
 			opts.keep = keep
-		case strings.HasPrefix(arg, "--keep="):
-			keepText := strings.TrimPrefix(arg, "--keep=")
-			keep, err := strconv.Atoi(keepText)
-			if err != nil || keep < 0 {
-				return opts, ProjectError{Msg: "env snapshot prune --keep must be 0 or greater"}
-			}
-			opts.keep = keep
 		default:
 			return opts, ProjectError{Msg: fmt.Sprintf("unsupported env snapshot prune option %q", arg)}
 		}
@@ -281,6 +275,7 @@ func parseEnvSnapshotPruneArgs(args []string) (envSnapshotPruneOptions, error) {
 }
 
 func parseEnvSnapshotImportArgs(args []string) (string, string, error) {
+	args = normalizeLongFlagValues(args, "--name")
 	remoteName := ""
 	localName := ""
 	for i := 0; i < len(args); i++ {
@@ -292,11 +287,6 @@ func parseEnvSnapshotImportArgs(args []string) (string, string, error) {
 			}
 			i++
 			localName = args[i]
-		case strings.HasPrefix(arg, "--name="):
-			localName = strings.TrimPrefix(arg, "--name=")
-			if strings.TrimSpace(localName) == "" {
-				return "", "", ProjectError{Msg: "env snapshot import --name requires a name"}
-			}
 		default:
 			if strings.HasPrefix(arg, "-") {
 				return "", "", ProjectError{Msg: fmt.Sprintf("unsupported env snapshot import option %q", arg)}
@@ -311,6 +301,7 @@ func parseEnvSnapshotImportArgs(args []string) (string, string, error) {
 }
 
 func parseEnvSnapshotUseArgs(args []string) (envSnapshotUseOptions, error) {
+	args = normalizeLongFlagValues(args, "--remote", "--name")
 	var opts envSnapshotUseOptions
 	for i := 0; i < len(args); i++ {
 		arg := args[i]
@@ -323,22 +314,12 @@ func parseEnvSnapshotUseArgs(args []string) (envSnapshotUseOptions, error) {
 			}
 			i++
 			opts.remoteName = args[i]
-		case strings.HasPrefix(arg, "--remote="):
-			opts.remoteName = strings.TrimPrefix(arg, "--remote=")
-			if strings.TrimSpace(opts.remoteName) == "" {
-				return opts, ProjectError{Msg: "env snapshot use --remote requires a remote snapshot name"}
-			}
 		case arg == "--name":
 			if i+1 >= len(args) || strings.TrimSpace(args[i+1]) == "" {
 				return opts, ProjectError{Msg: "env snapshot use --name requires a name"}
 			}
 			i++
 			opts.localName = args[i]
-		case strings.HasPrefix(arg, "--name="):
-			opts.localName = strings.TrimPrefix(arg, "--name=")
-			if strings.TrimSpace(opts.localName) == "" {
-				return opts, ProjectError{Msg: "env snapshot use --name requires a name"}
-			}
 		default:
 			if strings.HasPrefix(arg, "-") {
 				return opts, ProjectError{Msg: fmt.Sprintf("unsupported env snapshot use option %q", arg)}

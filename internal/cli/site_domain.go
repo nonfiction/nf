@@ -403,6 +403,7 @@ func siteDomainWildcardName(name string) bool {
 }
 
 func parseSiteDomainActionArgs(action string, argv []string) (string, siteDomainOptions, bool) {
+	argv = normalizeLongFlagValues(argv, "--proxy", "--wait-timeout", "--wait-interval")
 	var opts siteDomainOptions
 	positionals := []string{}
 	for i := 0; i < len(argv); i++ {
@@ -490,35 +491,6 @@ func parseSiteDomainActionArgs(action string, argv []string) (string, siteDomain
 			if strings.HasPrefix(arg, "--setup=") {
 				fmt.Fprintln(os.Stderr, "--setup is no longer supported; Kinsta domain setup always uses avoid-downtime")
 				return "", opts, false
-			}
-			if strings.HasPrefix(arg, "--proxy=") {
-				if opts.proxySet && strings.TrimSpace(opts.proxyMode) == "" {
-					fmt.Fprintln(os.Stderr, "Choose either --proxy or --no-proxy, not both.")
-					return "", opts, false
-				}
-				opts.proxyMode = strings.TrimPrefix(arg, "--proxy=")
-				if strings.TrimSpace(opts.proxyMode) == "" {
-					fmt.Fprintln(os.Stderr, "--proxy requires a value")
-					return "", opts, false
-				}
-				opts.proxySet = true
-				continue
-			}
-			if strings.HasPrefix(arg, "--wait-timeout=") {
-				duration, ok := parseSiteDomainWaitDuration("--wait-timeout", strings.TrimPrefix(arg, "--wait-timeout="))
-				if !ok {
-					return "", opts, false
-				}
-				opts.waitTimeout = duration
-				continue
-			}
-			if strings.HasPrefix(arg, "--wait-interval=") {
-				duration, ok := parseSiteDomainWaitDuration("--wait-interval", strings.TrimPrefix(arg, "--wait-interval="))
-				if !ok {
-					return "", opts, false
-				}
-				opts.waitInterval = duration
-				continue
 			}
 			if strings.HasPrefix(arg, "-") {
 				fmt.Fprintf(os.Stderr, "unknown domain flag: %s\n", arg)

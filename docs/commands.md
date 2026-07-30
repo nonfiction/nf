@@ -2,6 +2,8 @@
 
 Top-level help is context-sensitive.
 
+Value-taking long options accept both `--flag value` and `--flag=value`. Help uses the first form for brevity.
+
 ## Always Available Commands
 
 ```text

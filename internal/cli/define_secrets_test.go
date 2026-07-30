@@ -259,8 +259,8 @@ func TestRunDefineRekeySupportsRecipientTransition(t *testing.T) {
 	if err != nil {
 		t.Fatalf("DeriveAgeIdentity(new salt) error = %v", err)
 	}
-	if got := Run([]string{"define", "rekey", "--add-recipient", newRecipient}); got != 0 {
-		t.Fatalf("Run(define rekey --add-recipient) = %d", got)
+	if got := Run([]string{"define", "rekey", "--add-recipient=" + newRecipient}); got != 0 {
+		t.Fatalf("Run(define rekey --add-recipient=...) = %d", got)
 	}
 
 	t.Setenv("NF_PASSWORD_SALT", newSalt)

@@ -655,6 +655,7 @@ func cmdDefineMigrateEnv(root string, metadata *projectMetadata, args []string) 
 }
 
 func cmdDefineRekey(root string, metadata *projectMetadata, args []string) int {
+	args = normalizeLongFlagValues(args, "--add-recipient")
 	dryRun := false
 	addRecipient := ""
 	for i := 0; i < len(args); i++ {

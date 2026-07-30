@@ -98,6 +98,7 @@ func runPassword(argv []string) int {
 }
 
 func parsePasswordDeriveArgs(argv []string) (passwordDeriveArgs, error) {
+	argv = normalizeLongFlagValues(argv, "--password-version")
 	args := passwordDeriveArgs{}
 	positionals := []string{}
 	for i := 0; i < len(argv); i++ {
@@ -115,19 +116,6 @@ func parsePasswordDeriveArgs(argv []string) (passwordDeriveArgs, error) {
 			args.version = version
 			args.versionSet = true
 		default:
-			if strings.HasPrefix(arg, "--password-version=") {
-				value := strings.TrimPrefix(arg, "--password-version=")
-				if strings.TrimSpace(value) == "" {
-					return args, fmt.Errorf("--password-version requires a value")
-				}
-				version, err := parseExplicitPasswordVersion(value)
-				if err != nil {
-					return args, err
-				}
-				args.version = version
-				args.versionSet = true
-				continue
-			}
 			if strings.HasPrefix(arg, "-") {
 				return args, fmt.Errorf("unknown password derive flag: %s", arg)
 			}

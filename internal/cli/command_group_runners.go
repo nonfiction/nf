@@ -1003,6 +1003,7 @@ func parseEnvPluginRemoveArgs(args []string) (string, bool) {
 }
 
 func parseEnvPluginAddArgs(args []string) (envPluginAddOptions, bool) {
+	args = normalizeLongFlagValues(args, "--source", "--note")
 	opts := envPluginAddOptions{Install: true, Activate: true, AutoUpdate: true}
 	positionals := make([]string, 0, 1)
 	for i := 0; i < len(args); i++ {
@@ -1146,6 +1147,7 @@ func parseEnvThemeRemoveArgs(args []string) (string, bool) {
 }
 
 func parseEnvThemeAddArgs(args []string) (envThemeAddOptions, bool) {
+	args = normalizeLongFlagValues(args, "--source", "--path", "--note")
 	var opts envThemeAddOptions
 	positionals := make([]string, 0, 1)
 	for i := 0; i < len(args); i++ {
