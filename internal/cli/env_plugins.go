@@ -63,6 +63,8 @@ func loadWordPressPluginSpecs(metadata *projectMetadata) ([]wordpressPluginSpec,
 
 func parseWordPressPluginSpec(index int, value any) (wordpressPluginSpec, error) {
 	switch typed := value.(type) {
+	case orderedObject:
+		return parseWordPressPluginSpec(index, orderedObjectMap(typed))
 	case string:
 		slug := strings.TrimSpace(typed)
 		if slug == "" {
@@ -265,17 +267,20 @@ if (!defined('ABSPATH')) {
 }
 
 type envPluginCacheOptions struct {
-	Command string
-	Slug    string
-	Source  string
+	Command    string
+	Slug       string
+	Source     string
+	RemoteName string
 }
 
-func cmdEnvPluginsCache(cfg envConfig, opts envPluginCacheOptions) int {
+func cmdEnvPluginsCache(root string, metadata *projectMetadata, cfg envConfig, opts envPluginCacheOptions) int {
 	switch opts.Command {
 	case "add":
 		return cmdEnvPluginsCacheAdd(opts.Slug, opts.Source)
 	case "save":
 		return cmdEnvPluginsCacheSave(cfg, opts.Slug)
+	case "pull":
+		return cmdEnvPluginsCachePull(root, metadata, opts.Slug, opts.RemoteName)
 	case "list":
 		return cmdEnvPluginsCacheList()
 	case "show":
@@ -286,6 +291,122 @@ func cmdEnvPluginsCache(cfg envConfig, opts envPluginCacheOptions) int {
 		fmt.Fprintln(os.Stderr, "unsupported plugin cache command")
 		return 1
 	}
+}
+
+func cmdEnvPluginsCachePull(root string, metadata *projectMetadata, slug, remoteName string) int {
+	target, inventory, slug, err := resolveRemoteCodeSelection(metadata, wordpressCodePlugin, slug, remoteName, "cache")
+	if err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		return 1
+	}
+	plugins, err := loadWordPressPluginSpecs(metadata)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		return 1
+	}
+	for _, plugin := range plugins {
+		if plugin.Slug == slug && pluginSourceIsRepo(plugin) {
+			fmt.Fprintf(os.Stderr, "plugin %q is configured as repo source; use nf plugin pull %s %s instead\n", slug, slug, target.RemoteName)
+			return 1
+		}
+	}
+	if !remoteInventoryContains(inventory, slug) {
+		fmt.Fprintf(os.Stderr, "Remote %q does not have plugin %q installed.\n", target.RemoteName, slug)
+		return 1
+	}
+	public, err := wordpressOrgCodeAvailableFn(wordpressCodePlugin, slug)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		return 1
+	}
+	if public {
+		if err := configurePulledPlugin(metadata, slug, "wordpress.org"); err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			return 1
+		}
+		if err := saveProjectMetadata(root, metadata); err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			return 1
+		}
+		fmt.Printf("Plugin %s is available on WordPress.org; added it to nf.json without caching remote code.\n", slug)
+		return 0
+	}
+	sourceDir, cleanup, err := downloadRemoteWordPressCode(target, wordpressCodePlugin, slug)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		return 1
+	}
+	defer cleanup()
+	destination := config.PluginCacheZip(slug)
+	if err := os.MkdirAll(filepath.Dir(destination), 0o755); err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		return 1
+	}
+	tmp, err := os.CreateTemp(filepath.Dir(destination), slug+"-*.zip")
+	if err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		return 1
+	}
+	tmpPath := tmp.Name()
+	_ = tmp.Close()
+	_ = os.Remove(tmpPath)
+	defer os.Remove(tmpPath)
+	if _, err := packagePluginSource(sourceDir, tmpPath, slug); err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		return 1
+	}
+	if _, err := pluginZipVersion(tmpPath, slug); err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		return 1
+	}
+	if err := os.Rename(tmpPath, destination); err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		return 1
+	}
+	if err := configurePulledPlugin(metadata, slug, wordpressPluginCacheSource); err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		return 1
+	}
+	if err := saveProjectMetadata(root, metadata); err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		return 1
+	}
+	fmt.Printf("Cached private WordPress plugin %s from %s at %s and configured source cache in nf.json.\n", slug, target.RemoteName, destination)
+	return 0
+}
+
+func configurePulledPlugin(metadata *projectMetadata, slug, source string) error {
+	plugins, err := projectWordPressPlugins(metadata, true)
+	if err != nil {
+		return err
+	}
+	updated := make([]any, 0, len(plugins)+1)
+	found := false
+	for _, item := range plugins {
+		plugin, err := parseWordPressPluginSpec(0, item)
+		if err != nil {
+			return err
+		}
+		if plugin.Slug != slug {
+			updated = append(updated, item)
+			continue
+		}
+		found = true
+		if source == "wordpress.org" {
+			updated = append(updated, slug)
+			continue
+		}
+		updated = append(updated, wordpressPluginAddValue(envPluginAddOptions{Slug: slug, Source: source, Install: plugin.Install, Activate: plugin.Activate, AutoUpdate: plugin.AutoUpdate, Note: plugin.Note, HasInstall: true, HasActivate: true, HasAutoUpdate: true}))
+	}
+	if !found {
+		if source == "wordpress.org" {
+			updated = append(updated, slug)
+		} else {
+			updated = append(updated, wordpressPluginAddValue(envPluginAddOptions{Slug: slug, Source: source}))
+		}
+	}
+	metadata.WordPress.Plugins = updated
+	return nil
 }
 
 func cmdEnvPluginsCacheAdd(slug, sourcePath string) int {

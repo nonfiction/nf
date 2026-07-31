@@ -465,14 +465,14 @@ func runTheme(argv []string) int {
 			return 1
 		}
 		if cacheOpts.Command != "save" {
-			return cmdEnvThemesCache(envConfig{}, cacheOpts)
+			return cmdEnvThemesCache(root, metadata, envConfig{}, cacheOpts)
 		}
 		cfg, ok := loadEnvConfig(root, metadata)
 		if !ok {
 			fmt.Fprintln(os.Stderr, "Invalid local project metadata in nf.json.")
 			return 1
 		}
-		return cmdEnvThemesCache(cfg, cacheOpts)
+		return cmdEnvThemesCache(root, metadata, cfg, cacheOpts)
 	case "tasks":
 		if len(argv) != 1 {
 			fmt.Fprintln(os.Stderr, "theme tasks takes no arguments")
@@ -977,14 +977,14 @@ func runPlugin(argv []string) int {
 	}
 	if cmd == "cache" {
 		if cacheOpts.Command != "save" {
-			return cmdEnvPluginsCache(envConfig{}, cacheOpts)
+			return cmdEnvPluginsCache(root, metadata, envConfig{}, cacheOpts)
 		}
 		cfg, ok := loadEnvConfig(root, metadata)
 		if !ok {
 			fmt.Fprintln(os.Stderr, "Invalid local project metadata in nf.json.")
 			return 1
 		}
-		return cmdEnvPluginsCache(cfg, cacheOpts)
+		return cmdEnvPluginsCache(root, metadata, cfg, cacheOpts)
 	}
 	return cmdEnvPluginsInstallWithOptions(root, metadata, installOpts)
 }
@@ -1115,6 +1115,21 @@ func parseEnvPluginCacheArgs(args []string) (envPluginCacheOptions, bool) {
 		opts.Slug = strings.TrimSpace(args[1])
 		if opts.Slug == "" || strings.HasPrefix(opts.Slug, "-") {
 			fmt.Fprintf(os.Stderr, "plugin cache %s requires exactly one plugin slug\n", cmd)
+			return opts, false
+		}
+	case "pull":
+		if len(args) > 3 {
+			fmt.Fprintln(os.Stderr, "plugin cache pull takes at most a plugin slug and remote")
+			return opts, false
+		}
+		if len(args) >= 2 {
+			opts.Slug = strings.TrimSpace(args[1])
+		}
+		if len(args) == 3 {
+			opts.RemoteName = strings.TrimSpace(args[2])
+		}
+		if strings.HasPrefix(opts.Slug, "-") || strings.HasPrefix(opts.RemoteName, "-") {
+			fmt.Fprintln(os.Stderr, "plugin cache pull arguments must not be flags")
 			return opts, false
 		}
 	case "list":
@@ -1269,6 +1284,21 @@ func parseEnvThemeCacheArgs(args []string) (envThemeCacheOptions, bool) {
 		opts.Slug = strings.TrimSpace(args[1])
 		if opts.Slug == "" || strings.HasPrefix(opts.Slug, "-") {
 			fmt.Fprintf(os.Stderr, "theme cache %s requires exactly one theme slug\n", cmd)
+			return opts, false
+		}
+	case "pull":
+		if len(args) > 3 {
+			fmt.Fprintln(os.Stderr, "theme cache pull takes at most a theme slug and remote")
+			return opts, false
+		}
+		if len(args) >= 2 {
+			opts.Slug = strings.TrimSpace(args[1])
+		}
+		if len(args) == 3 {
+			opts.RemoteName = strings.TrimSpace(args[2])
+		}
+		if strings.HasPrefix(opts.Slug, "-") || strings.HasPrefix(opts.RemoteName, "-") {
+			fmt.Fprintln(os.Stderr, "theme cache pull arguments must not be flags")
 			return opts, false
 		}
 	case "list":

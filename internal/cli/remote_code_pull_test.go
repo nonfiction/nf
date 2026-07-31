@@ -4,11 +4,32 @@ import (
 	"archive/tar"
 	"bytes"
 	"compress/gzip"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 )
+
+func TestWordPressOrgCodeAvailableWithClient(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Query().Get("request[slug]") == "akismet" {
+			_, _ = w.Write([]byte(`{"slug":"akismet"}`))
+			return
+		}
+		http.NotFound(w, r)
+	}))
+	t.Cleanup(server.Close)
+	available, err := wordpressOrgCodeAvailableWithClient(server.Client(), server.URL, wordpressCodePlugin, "akismet")
+	if err != nil || !available {
+		t.Fatalf("public lookup = %v, %v", available, err)
+	}
+	available, err = wordpressOrgCodeAvailableWithClient(server.Client(), server.URL, wordpressCodeTheme, "private-theme")
+	if err != nil || available {
+		t.Fatalf("private lookup = %v, %v", available, err)
+	}
+}
 
 func TestParseRemoteWordPressCodeInventory(t *testing.T) {
 	items := parseRemoteWordPressCodeInventory("name,status\nprivate-pro,active\nakismet,inactive\nbad/name,inactive\nakismet,inactive\n")

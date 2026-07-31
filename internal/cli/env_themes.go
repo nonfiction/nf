@@ -43,9 +43,10 @@ type envThemeAddOptions struct {
 }
 
 type envThemeCacheOptions struct {
-	Command string
-	Slug    string
-	Source  string
+	Command    string
+	Slug       string
+	Source     string
+	RemoteName string
 }
 
 type envThemeInstallOptions struct {
@@ -373,12 +374,14 @@ func cmdEnvThemesActivate(root string, metadata *projectMetadata, slug string) i
 	return 0
 }
 
-func cmdEnvThemesCache(cfg envConfig, opts envThemeCacheOptions) int {
+func cmdEnvThemesCache(root string, metadata *projectMetadata, cfg envConfig, opts envThemeCacheOptions) int {
 	switch opts.Command {
 	case "add":
 		return cmdEnvThemesCacheAdd(opts.Slug, opts.Source)
 	case "save":
 		return cmdEnvThemesCacheSave(cfg, opts.Slug)
+	case "pull":
+		return cmdEnvThemesCachePull(root, metadata, opts.Slug, opts.RemoteName)
 	case "list":
 		return cmdEnvThemesCacheList()
 	case "show":
@@ -389,6 +392,116 @@ func cmdEnvThemesCache(cfg envConfig, opts envThemeCacheOptions) int {
 		fmt.Fprintln(os.Stderr, "unsupported theme cache command")
 		return 1
 	}
+}
+
+func cmdEnvThemesCachePull(root string, metadata *projectMetadata, slug, remoteName string) int {
+	target, inventory, slug, err := resolveRemoteCodeSelection(metadata, wordpressCodeTheme, slug, remoteName, "cache")
+	if err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		return 1
+	}
+	themes, err := loadWordPressThemeSpecsAllowEmpty(metadata)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		return 1
+	}
+	for _, theme := range themes {
+		if theme.Slug == slug && themeSourceIsRepo(theme) {
+			fmt.Fprintf(os.Stderr, "theme %q is configured as repo source; use nf theme pull %s instead\n", slug, target.RemoteName)
+			return 1
+		}
+	}
+	if !remoteInventoryContains(inventory, slug) {
+		fmt.Fprintf(os.Stderr, "Remote %q does not have theme %q installed.\n", target.RemoteName, slug)
+		return 1
+	}
+	public, err := wordpressOrgCodeAvailableFn(wordpressCodeTheme, slug)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		return 1
+	}
+	if public {
+		if err := configurePulledTheme(metadata, slug, "wordpress.org"); err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			return 1
+		}
+		if err := saveProjectMetadata(root, metadata); err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			return 1
+		}
+		fmt.Printf("Theme %s is available on WordPress.org; added it to nf.json without caching remote code.\n", slug)
+		return 0
+	}
+	sourceDir, cleanup, err := downloadRemoteWordPressCode(target, wordpressCodeTheme, slug)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		return 1
+	}
+	defer cleanup()
+	destination := config.ThemeCacheZip(slug)
+	if err := os.MkdirAll(filepath.Dir(destination), 0o755); err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		return 1
+	}
+	tmp, err := os.CreateTemp(filepath.Dir(destination), slug+"-*.zip")
+	if err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		return 1
+	}
+	tmpPath := tmp.Name()
+	_ = tmp.Close()
+	_ = os.Remove(tmpPath)
+	defer os.Remove(tmpPath)
+	if _, err := packageThemeCacheSource(sourceDir, tmpPath, slug); err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		return 1
+	}
+	if err := os.Rename(tmpPath, destination); err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		return 1
+	}
+	if err := configurePulledTheme(metadata, slug, wordpressThemeCacheSource); err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		return 1
+	}
+	if err := saveProjectMetadata(root, metadata); err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		return 1
+	}
+	fmt.Printf("Cached private WordPress theme %s from %s at %s and configured source cache in nf.json.\n", slug, target.RemoteName, destination)
+	return 0
+}
+
+func configurePulledTheme(metadata *projectMetadata, slug, source string) error {
+	themes, err := projectWordPressThemes(metadata, true)
+	if err != nil {
+		return err
+	}
+	updated := make([]any, 0, len(themes)+1)
+	found := false
+	for _, item := range themes {
+		theme, err := parseWordPressThemeSpec(0, item)
+		if err != nil {
+			return err
+		}
+		if theme.Slug != slug {
+			updated = append(updated, item)
+			continue
+		}
+		found = true
+		if source == "wordpress.org" {
+			updated = append(updated, slug)
+		} else {
+			theme.Source = source
+			theme.Path = ""
+			updated = append(updated, wordpressThemeAddValue(theme))
+		}
+	}
+	if !found {
+		updated = append(updated, wordpressThemeAddValue(wordpressThemeSpec{Slug: slug, Source: source}))
+	}
+	metadata.WordPress.Themes = updated
+	return nil
 }
 
 func cmdEnvThemesCacheAdd(slug, sourcePath string) int {

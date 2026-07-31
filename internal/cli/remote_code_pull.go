@@ -16,6 +16,8 @@ import (
 	"sort"
 	"strings"
 	"time"
+
+	"github.com/nonfiction/nf/internal/ui"
 )
 
 type wordpressCodeKind string
@@ -31,6 +33,10 @@ type remoteWordPressCode struct {
 }
 
 func wordpressOrgCodeAvailable(kind wordpressCodeKind, slug string) (bool, error) {
+	return wordpressOrgCodeAvailableWithClient(&http.Client{Timeout: 10 * time.Second}, "https://api.wordpress.org", kind, slug)
+}
+
+func wordpressOrgCodeAvailableWithClient(client *http.Client, baseURL string, kind wordpressCodeKind, slug string) (bool, error) {
 	target := "plugins"
 	action := "plugin_information"
 	if kind == wordpressCodeTheme {
@@ -38,8 +44,7 @@ func wordpressOrgCodeAvailable(kind wordpressCodeKind, slug string) (bool, error
 		action = "theme_information"
 	}
 	query := url.Values{"action": {action}, "request[slug]": {slug}}
-	endpoint := "https://api.wordpress.org/" + target + "/info/1.2/?" + query.Encode()
-	client := &http.Client{Timeout: 10 * time.Second}
+	endpoint := strings.TrimRight(baseURL, "/") + "/" + target + "/info/1.2/?" + query.Encode()
 	response, err := client.Get(endpoint)
 	if err != nil {
 		return false, fmt.Errorf("check WordPress.org for %s %q: %w", kind, slug, err)
@@ -108,6 +113,54 @@ func remoteActiveTheme(items []remoteWordPressCode) (string, error) {
 		}
 	}
 	return "", ProjectError{Msg: "Remote WordPress site did not report an active theme."}
+}
+
+func resolveRemoteCodeSelection(metadata *projectMetadata, kind wordpressCodeKind, slug, remoteName, action string) (envRemoteSyncTarget, []remoteWordPressCode, string, error) {
+	var err error
+	if strings.TrimSpace(remoteName) == "" {
+		remoteName, err = chooseProjectRemote(action + " " + string(kind) + " from")
+		if err != nil {
+			return envRemoteSyncTarget{}, nil, "", err
+		}
+	}
+	target, err := resolveEnvRemoteSyncTarget(string(kind)+" "+action, remoteName, metadata)
+	if err != nil {
+		return envRemoteSyncTarget{}, nil, "", err
+	}
+	inventory, err := remoteWordPressCodeInventory(target, kind)
+	if err != nil {
+		return envRemoteSyncTarget{}, nil, "", err
+	}
+	if strings.TrimSpace(slug) == "" {
+		options := make([]ui.SelectOption, 0, len(inventory))
+		for _, item := range inventory {
+			label := item.Slug
+			if item.Active {
+				label += " (active)"
+			}
+			options = append(options, ui.SelectOption{Value: item.Slug, Label: label})
+		}
+		if len(options) == 0 {
+			return envRemoteSyncTarget{}, nil, "", ProjectError{Msg: fmt.Sprintf("Remote %q has no installed WordPress %ss.", remoteName, kind)}
+		}
+		slug, err = remoteSelectFn("Choose a remote "+string(kind)+" to "+action, options)
+		if err != nil {
+			return envRemoteSyncTarget{}, nil, "", err
+		}
+	}
+	if err := validatePluginSlug(slug); err != nil {
+		return envRemoteSyncTarget{}, nil, "", err
+	}
+	return target, inventory, slug, nil
+}
+
+func remoteInventoryContains(items []remoteWordPressCode, slug string) bool {
+	for _, item := range items {
+		if item.Slug == slug {
+			return true
+		}
+	}
+	return false
 }
 
 func remoteWordPressCodeArchiveScript(target envRemoteSyncTarget, kind wordpressCodeKind, slug, remoteDir string) string {
