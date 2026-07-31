@@ -55,6 +55,7 @@ var (
 	runSSHStdinOutputFn                   = runSSHStdinOutput
 	runSSHOutputFn                        = runSSHOutput
 	runRsyncCommandFn                     = runRsyncCommand
+	wordpressOrgCodeAvailableFn           = wordpressOrgCodeAvailable
 	runThemeRuntimeMaintenanceFn          = runThemeRuntimeMaintenance
 	runCommandSpecOutputSilentFn          = runCommandSpecOutputSilent
 	localAvailableDiskBytesFn             = localAvailableDiskBytes
