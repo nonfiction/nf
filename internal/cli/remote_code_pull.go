@@ -11,6 +11,7 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"os/exec"
 	"path"
 	"path/filepath"
 	"sort"
@@ -161,6 +162,71 @@ func remoteInventoryContains(items []remoteWordPressCode, slug string) bool {
 		}
 	}
 	return false
+}
+
+func gitWorktreeClean(root string) error {
+	output, err := exec.Command("git", "-C", root, "status", "--porcelain=v1", "--untracked-files=all").Output()
+	if err != nil {
+		return fmt.Errorf("check Git worktree: %w", err)
+	}
+	if strings.TrimSpace(string(output)) != "" {
+		return ProjectError{Msg: "Repo pull requires a clean Git worktree, including staged and untracked files."}
+	}
+	return nil
+}
+
+func overlayPulledCode(sourceDir, destinationDir string) error {
+	if err := os.MkdirAll(destinationDir, 0o755); err != nil {
+		return err
+	}
+	return filepath.WalkDir(sourceDir, func(sourcePath string, entry os.DirEntry, walkErr error) error {
+		if walkErr != nil {
+			return walkErr
+		}
+		rel, err := filepath.Rel(sourceDir, sourcePath)
+		if err != nil {
+			return err
+		}
+		if rel == "." {
+			return nil
+		}
+		destinationPath := filepath.Join(destinationDir, rel)
+		if entry.IsDir() {
+			if info, err := os.Stat(destinationPath); err == nil && !info.IsDir() {
+				return ProjectError{Msg: fmt.Sprintf("cannot overlay remote directory onto local file: %s", destinationPath)}
+			}
+			return os.MkdirAll(destinationPath, 0o755)
+		}
+		info, err := entry.Info()
+		if err != nil {
+			return err
+		}
+		if !info.Mode().IsRegular() {
+			return ProjectError{Msg: fmt.Sprintf("cannot overlay unsupported remote entry: %s", sourcePath)}
+		}
+		if local, err := os.Stat(destinationPath); err == nil && local.IsDir() {
+			return ProjectError{Msg: fmt.Sprintf("cannot overlay remote file onto local directory: %s", destinationPath)}
+		}
+		input, err := os.Open(sourcePath)
+		if err != nil {
+			return err
+		}
+		output, err := os.OpenFile(destinationPath, os.O_CREATE|os.O_TRUNC|os.O_WRONLY, info.Mode().Perm())
+		if err != nil {
+			_ = input.Close()
+			return err
+		}
+		_, copyErr := io.Copy(output, input)
+		inputCloseErr := input.Close()
+		outputCloseErr := output.Close()
+		if copyErr != nil {
+			return copyErr
+		}
+		if inputCloseErr != nil {
+			return inputCloseErr
+		}
+		return outputCloseErr
+	})
 }
 
 func remoteWordPressCodeArchiveScript(target envRemoteSyncTarget, kind wordpressCodeKind, slug, remoteDir string) string {

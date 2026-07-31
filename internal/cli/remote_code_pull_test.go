@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -80,5 +81,66 @@ func TestExtractPulledCodeArchiveRejectsUnsafeEntries(t *testing.T) {
 	}
 	if err := extractPulledCodeArchive(archive, t.TempDir(), "private-pro"); err == nil {
 		t.Fatal("extractPulledCodeArchive() error = nil, want unsafe path error")
+	}
+}
+
+func TestOverlayPulledCodePreservesLocalOnlyFiles(t *testing.T) {
+	root := t.TempDir()
+	source := filepath.Join(root, "source")
+	destination := filepath.Join(root, "destination")
+	for _, dir := range []string{source, filepath.Join(destination, "node_modules")} {
+		if err := os.MkdirAll(dir, 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := os.WriteFile(filepath.Join(source, "plugin.php"), []byte("remote"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(destination, "plugin.php"), []byte("local"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(destination, "package.json"), []byte("{}"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := overlayPulledCode(source, destination); err != nil {
+		t.Fatal(err)
+	}
+	data, err := os.ReadFile(filepath.Join(destination, "plugin.php"))
+	if err != nil || string(data) != "remote" {
+		t.Fatalf("overlaid plugin.php = %q, %v", data, err)
+	}
+	if _, err := os.Stat(filepath.Join(destination, "package.json")); err != nil {
+		t.Fatalf("local-only package.json was not preserved: %v", err)
+	}
+}
+
+func TestGitWorktreeCleanIncludesUntrackedFiles(t *testing.T) {
+	root := t.TempDir()
+	if output, err := exec.Command("git", "init", "-q", root).CombinedOutput(); err != nil {
+		t.Fatalf("git init: %v: %s", err, output)
+	}
+	if err := gitWorktreeClean(root); err != nil {
+		t.Fatalf("empty worktree: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(root, "untracked.txt"), []byte("x"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := gitWorktreeClean(root); err == nil {
+		t.Fatal("gitWorktreeClean() error = nil with untracked file")
+	}
+}
+
+func TestConfigureAdoptedRepoThemeMovesThemeFirst(t *testing.T) {
+	metadata := &projectMetadata{}
+	metadata.WordPress.Themes = []any{"twentytwentyfive", orderedObject{Pairs: []orderedPair{{Key: "slug", Value: "legacy-private"}, {Key: "source", Value: "cache"}, {Key: "note", Value: "adopted"}}}}
+	if err := configureAdoptedRepoTheme(metadata, "legacy-private"); err != nil {
+		t.Fatal(err)
+	}
+	themes, err := loadWordPressThemeSpecs(metadata)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(themes) != 2 || themes[0].Slug != "legacy-private" || !themeSourceIsRepo(themes[0]) || themes[0].Path != "theme" || themes[0].Note != "adopted" {
+		t.Fatalf("adopted themes = %#v", themes)
 	}
 }

@@ -442,6 +442,30 @@ func runTheme(argv []string) int {
 			return 1
 		}
 		return cmdEnvThemesInstallWithOptions(root, metadata, installOpts)
+	case "pull":
+		if len(argv) > 2 {
+			fmt.Fprintln(os.Stderr, "theme pull takes at most one remote")
+			return 1
+		}
+		if err := requireProjectContext("theme pull"); err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			return 1
+		}
+		root, err := discoverProjectRootOrError()
+		if err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			return 1
+		}
+		metadata, err := loadProjectMetadataOrError(root)
+		if err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			return 1
+		}
+		remote := ""
+		if len(argv) == 2 {
+			remote = argv[1]
+		}
+		return cmdEnvThemePull(root, metadata, remote)
 	case "cache":
 		if len(argv) == 1 || (len(argv) == 2 && (argv[1] == "help" || argv[1] == "--help" || argv[1] == "-h")) {
 			return runThemeCacheHelp()
@@ -933,6 +957,17 @@ func runPlugin(argv []string) int {
 		if !ok {
 			return 1
 		}
+	case "pull":
+		if len(args) > 2 {
+			fmt.Fprintln(os.Stderr, "plugin pull takes at most a plugin slug and remote")
+			return 1
+		}
+		if len(args) >= 1 {
+			removeSlug = strings.TrimSpace(args[0])
+		}
+		if len(args) == 2 {
+			remoteName = strings.TrimSpace(args[1])
+		}
 	case "cache":
 		if len(args) == 0 || (len(args) == 1 && (args[0] == "help" || args[0] == "--help" || args[0] == "-h")) {
 			return runPluginCacheHelp()
@@ -974,6 +1009,9 @@ func runPlugin(argv []string) int {
 	}
 	if cmd == "diff" {
 		return cmdEnvPluginsDiffWithOptions(root, metadata, remoteName)
+	}
+	if cmd == "pull" {
+		return cmdEnvPluginPull(root, metadata, removeSlug, remoteName)
 	}
 	if cmd == "cache" {
 		if cacheOpts.Command != "save" {

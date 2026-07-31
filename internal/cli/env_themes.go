@@ -504,6 +504,116 @@ func configurePulledTheme(metadata *projectMetadata, slug, source string) error 
 	return nil
 }
 
+func cmdEnvThemePull(root string, metadata *projectMetadata, remoteName string) int {
+	if err := gitWorktreeCleanFn(root); err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		return 1
+	}
+	if strings.TrimSpace(remoteName) == "" {
+		selected, err := chooseProjectRemote("pull the active theme from")
+		if err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			return 1
+		}
+		remoteName = selected
+	}
+	target, err := resolveEnvRemoteSyncTarget("theme pull", remoteName, metadata)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		return 1
+	}
+	inventory, err := remoteWordPressCodeInventory(target, wordpressCodeTheme)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		return 1
+	}
+	slug, err := remoteActiveTheme(inventory)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		return 1
+	}
+	themes, err := loadWordPressThemeSpecsAllowEmpty(metadata)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		return 1
+	}
+	repoTheme, hasRepo := repoWordPressThemeSpec(themes)
+	if hasRepo && repoTheme.Slug != slug {
+		fmt.Fprintf(os.Stderr, "remote active theme %q does not match configured repo theme %q; no files were changed\n", slug, repoTheme.Slug)
+		return 1
+	}
+	if !hasRepo {
+		public, err := wordpressOrgCodeAvailableFn(wordpressCodeTheme, slug)
+		if err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			return 1
+		}
+		if public {
+			fmt.Fprintf(os.Stderr, "active theme %q is available on WordPress.org and cannot be adopted as repo code\n", slug)
+			return 1
+		}
+	}
+	destination := filepath.Join(root, "theme")
+	if hasRepo {
+		destination, err = repoThemeSourceDir(root, repoTheme)
+		if err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			return 1
+		}
+	}
+	sourceDir, cleanup, err := downloadRemoteWordPressCode(target, wordpressCodeTheme, slug)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		return 1
+	}
+	defer cleanup()
+	if err := gitWorktreeCleanFn(root); err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		return 1
+	}
+	if err := overlayPulledCode(sourceDir, destination); err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		return 1
+	}
+	if !hasRepo {
+		if err := configureAdoptedRepoTheme(metadata, slug); err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			return 1
+		}
+		if err := saveProjectMetadata(root, metadata); err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			return 1
+		}
+	}
+	fmt.Printf("Pulled active WordPress theme %s from %s into %s. Review and commit the resulting Git changes.\n", slug, target.RemoteName, destination)
+	return 0
+}
+
+func configureAdoptedRepoTheme(metadata *projectMetadata, slug string) error {
+	themes, err := projectWordPressThemes(metadata, true)
+	if err != nil {
+		return err
+	}
+	updated := make([]any, 0, len(themes)+1)
+	repoValue := wordpressThemeAddValue(wordpressThemeSpec{Slug: slug, Source: wordpressThemeRepoSource, Path: "theme"})
+	for _, item := range themes {
+		theme, err := parseWordPressThemeSpec(0, item)
+		if err != nil {
+			return err
+		}
+		if themeSourceIsRepo(theme) && theme.Slug != slug {
+			return ProjectError{Msg: fmt.Sprintf("nf.json already configures repo theme %q", theme.Slug)}
+		}
+		if theme.Slug == slug {
+			repoValue = wordpressThemeAddValue(wordpressThemeSpec{Slug: slug, Source: wordpressThemeRepoSource, Path: "theme", Note: theme.Note})
+			continue
+		}
+		updated = append(updated, item)
+	}
+	metadata.WordPress.Themes = append([]any{repoValue}, updated...)
+	return nil
+}
+
 func cmdEnvThemesCacheAdd(slug, sourcePath string) int {
 	if err := validateThemeSlug(slug); err != nil {
 		fmt.Fprintln(os.Stderr, err)

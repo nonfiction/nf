@@ -56,6 +56,7 @@ var (
 	runSSHOutputFn                        = runSSHOutput
 	runRsyncCommandFn                     = runRsyncCommand
 	wordpressOrgCodeAvailableFn           = wordpressOrgCodeAvailable
+	gitWorktreeCleanFn                    = gitWorktreeClean
 	runThemeRuntimeMaintenanceFn          = runThemeRuntimeMaintenance
 	runCommandSpecOutputSilentFn          = runCommandSpecOutputSilent
 	localAvailableDiskBytesFn             = localAvailableDiskBytes

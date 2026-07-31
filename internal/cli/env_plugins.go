@@ -409,6 +409,72 @@ func configurePulledPlugin(metadata *projectMetadata, slug, source string) error
 	return nil
 }
 
+func cmdEnvPluginPull(root string, metadata *projectMetadata, slug, remoteName string) int {
+	if err := gitWorktreeCleanFn(root); err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		return 1
+	}
+	target, inventory, slug, err := resolveRemoteCodeSelection(metadata, wordpressCodePlugin, slug, remoteName, "pull into the repo")
+	if err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		return 1
+	}
+	if !remoteInventoryContains(inventory, slug) {
+		fmt.Fprintf(os.Stderr, "Remote %q does not have plugin %q installed.\n", target.RemoteName, slug)
+		return 1
+	}
+	plugins, err := loadWordPressPluginSpecs(metadata)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		return 1
+	}
+	knownRepo := false
+	for _, plugin := range plugins {
+		if plugin.Slug == slug {
+			knownRepo = pluginSourceIsRepo(plugin)
+			break
+		}
+	}
+	if !knownRepo {
+		public, err := wordpressOrgCodeAvailableFn(wordpressCodePlugin, slug)
+		if err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			return 1
+		}
+		if public {
+			fmt.Fprintf(os.Stderr, "plugin %q is available on WordPress.org and cannot be adopted as repo code; use nf plugin add %s\n", slug, slug)
+			return 1
+		}
+	}
+	sourceDir, cleanup, err := downloadRemoteWordPressCode(target, wordpressCodePlugin, slug)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		return 1
+	}
+	defer cleanup()
+	if err := gitWorktreeCleanFn(root); err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		return 1
+	}
+	destination := filepath.Join(root, "plugins", slug)
+	if err := overlayPulledCode(sourceDir, destination); err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		return 1
+	}
+	if !knownRepo {
+		if err := configurePulledPlugin(metadata, slug, wordpressPluginRepoSource); err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			return 1
+		}
+		if err := saveProjectMetadata(root, metadata); err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			return 1
+		}
+	}
+	fmt.Printf("Pulled WordPress plugin %s from %s into %s. Review and commit the resulting Git changes.\n", slug, target.RemoteName, destination)
+	return 0
+}
+
 func cmdEnvPluginsCacheAdd(slug, sourcePath string) int {
 	if err := validatePluginSlug(slug); err != nil {
 		fmt.Fprintln(os.Stderr, err)
