@@ -704,8 +704,10 @@ Rules:
 * `nf plugin add <plugin>` appends to `wordpress.plugins` in `nf.json`, creates the array if missing, rejects duplicate slugs, and does not install anything
 * `nf plugin remove <plugin>` removes a configured plugin from `nf.json`, rejects missing slugs, and does not uninstall anything
 * `nf plugin install` with no remote targets the local env
-* `nf plugin status [remote]` compares configured plugins against local or remote WordPress state and reports installed, active, and auto-update status
-* `nf plugin diff [remote]` reports needed install/activate/auto-update changes, missing manual plugins, and installed plugins that are not configured in `nf.json`; it mutates nothing, exits 0 when configured plugins match and no extras are installed, and exits 2 when drift exists
+* `nf plugin status [remote]` compares configured plugins against local or remote WordPress state and reports installed, active, and auto-update status; repo-plugin rows also report code as current, drifted, or unavailable
+* remote repo-plugin status directly fingerprints the installed plugin directory and compares it with the current package payload from `plugins/<slug>/`; the deterministic fingerprint covers sorted relative file paths and file contents, ignores filesystem/archive metadata, and uses the same file selection as `packagePluginSource`
+* local repo-plugin code is current when its source exists and the bind-mounted plugin is installed; local status does not compare the mount against itself or report `.git` files excluded from deployment as drift
+* `nf plugin diff [remote]` reports needed install/activate/auto-update changes, repo-plugin source refreshes, missing manual plugins, and installed plugins that are not configured in `nf.json`; it combines repo source drift with other changes, mutates nothing, exits 0 when configured plugins and repo payloads match and no extras are installed, and exits 2 when drift exists
 * `nf plugin install <remote>` validates the repo remote/cache, prints a remote plugin plan, and asks for yes/no confirmation unless `--yes` is passed
 * `nf plugin install <remote> --dry-run` previews only and does not run SSH
 * remote plugin installs run WP-CLI on the remote host; URL sources must be reachable from that host, and local zip sources are uploaded to a temporary remote directory before install and cleaned up afterward

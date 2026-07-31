@@ -89,9 +89,17 @@ nf plugin status production
 nf plugin diff production
 ```
 
-`nf plugin status [remote]` compares `nf.json` against the local env or configured remote and reports whether each configured plugin is installed, active, and auto-update enabled.
+`nf plugin status [remote]` compares `nf.json` against the local env or configured remote and reports whether each configured plugin is installed, active, and auto-update enabled. The `code` column is `-` for other plugin sources. For each `source: "repo"` plugin it is:
 
-`nf plugin diff [remote]` reports the install/activate/auto-update changes needed to make the local env or remote match `nf.json`. Manual plugins with `install: false` are still checked and report `manual install required` when missing. It also reports installed plugins that are not configured in `nf.json`. It does not mutate anything. It exits `0` when configured plugins match and no extras are installed, and `2` when drift exists.
+* `current` when the installed code matches the repository package payload
+* `drifted` when file contents or the set of relative file paths differs
+* `unavailable` when the local source, installed plugin, or remote fingerprint cannot be read
+
+Remote status fingerprints the installed directory directly in the existing batched SSH status command. It does not trust a stored deployment hash, so direct remote edits, missing files, and extra files are detected. The deterministic comparison uses relative file paths and contents only and ignores timestamps, ownership, permissions, and archive metadata. The local side covers exactly the regular files that repo-plugin packaging deploys; `.git` directories are excluded from that payload, while unexpected regular files in the installed remote directory count as drift.
+
+Local repo plugins use bind mounts for live development. When the repository source exists and WordPress sees the mounted plugin as installed, local code status is `current`; nf does not compare the mount with itself or treat local `.git` data excluded from packaging as drift.
+
+`nf plugin diff [remote]` reports the install/activate/auto-update changes needed to make the local env or remote match `nf.json`. A drifted installed repo plugin reports `refresh repo source`; activation and auto-update changes remain visible on the same row. Manual plugins with `install: false` are still checked and report `manual install required` when missing. It also reports installed plugins that are not configured in `nf.json`. It does not mutate anything. It exits `0` when configured plugins and repo payloads match and no extras are installed, and `2` when drift exists.
 
 ## Install Configured Plugins
 

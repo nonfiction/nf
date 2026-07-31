@@ -7,6 +7,8 @@ import (
 	"archive/zip"
 	"bytes"
 	"compress/gzip"
+	"crypto/sha256"
+	"encoding/hex"
 	"fmt"
 	"io"
 	"io/fs"
@@ -27,6 +29,9 @@ const (
 	wordpressPluginRepoSource        = "repo"
 	wordpressPluginCacheSource       = "cache"
 	localRepoPluginInstallSourceMark = "__NF_REPO_PLUGIN_MOUNT__"
+	repoPluginCodeCurrent            = "current"
+	repoPluginCodeDrifted            = "drifted"
+	repoPluginCodeUnavailable        = "unavailable"
 )
 
 type wordpressPluginSpec struct {
@@ -465,7 +470,7 @@ func cmdEnvPluginsStatusWithOptions(root string, metadata *projectMetadata, remo
 		}
 		return cmdEnvPluginsStatusLocal(cfg, metadata)
 	}
-	return cmdEnvPluginsStatusRemote(metadata, remoteName)
+	return cmdEnvPluginsStatusRemote(root, metadata, remoteName)
 }
 
 func cmdEnvPluginsDiffWithOptions(root string, metadata *projectMetadata, remoteName string) int {
@@ -527,7 +532,7 @@ func cmdEnvPluginsDiffLocal(cfg envConfig, metadata *projectMetadata) int {
 	return printWordPressPluginDiff("Plugin diff:", nil, statuses, cfg.RepoRoot)
 }
 
-func cmdEnvPluginsStatusRemote(metadata *projectMetadata, remoteName string) int {
+func cmdEnvPluginsStatusRemote(root string, metadata *projectMetadata, remoteName string) int {
 	plugins, err := loadWordPressPluginSpecs(metadata)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, err)
@@ -548,6 +553,7 @@ func cmdEnvPluginsStatusRemote(metadata *projectMetadata, remoteName string) int
 		return 1
 	}
 	statuses := parseRemotePluginStatusOutput(plugins, string(output))
+	applyRepoPluginCodeStatus(statuses, root, true)
 	fmt.Println("Plugin status:")
 	fmt.Printf("  remote:   %s\n", target.RemoteName)
 	fmt.Printf("  site:     %s\n", target.SiteID)
@@ -579,6 +585,7 @@ func cmdEnvPluginsDiffRemote(root string, metadata *projectMetadata, remoteName 
 		return 1
 	}
 	statuses := parseWordPressPluginDiffStatusOutput(plugins, string(output))
+	applyRepoPluginCodeStatus(statuses, root, true)
 	return printWordPressPluginDiff("Plugin diff:", &target, statuses, root)
 }
 
@@ -767,11 +774,14 @@ type remotePluginUpload struct {
 }
 
 type wordpressPluginStatus struct {
-	Plugin     wordpressPluginSpec
-	Installed  bool
-	Active     bool
-	AutoUpdate bool
-	Extra      bool
+	Plugin            wordpressPluginSpec
+	Installed         bool
+	Active            bool
+	AutoUpdate        bool
+	Extra             bool
+	Code              string
+	CodeReason        string
+	RemoteFingerprint string
 }
 
 type wordpressPluginDiff struct {
@@ -803,10 +813,14 @@ func (c envPluginStatusChecker) statuses(plugins []wordpressPluginSpec, includeE
 	if strings.TrimSpace(output) == "__NF_NOT_READY__" {
 		return nil, false, nil
 	}
+	var statuses []wordpressPluginStatus
 	if includeExtras {
-		return parseWordPressPluginDiffStatusOutput(plugins, output), true, nil
+		statuses = parseWordPressPluginDiffStatusOutput(plugins, output)
+	} else {
+		statuses = parseRemotePluginStatusOutput(plugins, output)
 	}
-	return parseRemotePluginStatusOutput(plugins, output), true, nil
+	applyRepoPluginCodeStatus(statuses, c.cfg.RepoRoot, false)
+	return statuses, true, nil
 }
 
 func runCommandSpecOutputSilent(spec execSpec) (string, error) {
@@ -1119,12 +1133,23 @@ func extractPluginTarGz(sourcePath, destinationDir string) error {
 }
 
 func packagePluginSource(sourceDir, outputPath, archiveRoot string) (int, error) {
-	info, err := os.Stat(sourceDir)
-	if err != nil || !info.IsDir() {
-		return 0, ProjectError{Msg: fmt.Sprintf("repo plugin source directory does not exist: %s", sourceDir)}
-	}
 	if err := project.ValidateName(archiveRoot); err != nil {
 		return 0, ProjectError{Msg: fmt.Sprintf("plugin archive root %q must be one safe directory name", archiveRoot)}
+	}
+	files, err := pluginSourceFiles(sourceDir)
+	if err != nil {
+		return 0, err
+	}
+	if err := writePluginZip(sourceDir, outputPath, archiveRoot, files); err != nil {
+		return 0, err
+	}
+	return len(files), nil
+}
+
+func pluginSourceFiles(sourceDir string) ([]string, error) {
+	info, err := os.Stat(sourceDir)
+	if err != nil || !info.IsDir() {
+		return nil, ProjectError{Msg: fmt.Sprintf("repo plugin source directory does not exist: %s", sourceDir)}
 	}
 	files := []string{}
 	err = filepath.WalkDir(sourceDir, func(path string, d fs.DirEntry, walkErr error) error {
@@ -1147,13 +1172,41 @@ func packagePluginSource(sourceDir, outputPath, archiveRoot string) (int, error)
 		return nil
 	})
 	if err != nil {
-		return 0, err
+		return nil, err
 	}
 	sort.Strings(files)
-	if err := writePluginZip(sourceDir, outputPath, archiveRoot, files); err != nil {
-		return 0, err
+	return files, nil
+}
+
+func pluginSourceFingerprint(sourceDir string) (string, error) {
+	files, err := pluginSourceFiles(sourceDir)
+	if err != nil {
+		return "", err
 	}
-	return len(files), nil
+	fingerprint := sha256.New()
+	for _, file := range files {
+		rel, err := filepath.Rel(sourceDir, file)
+		if err != nil {
+			return "", err
+		}
+		input, err := os.Open(file)
+		if err != nil {
+			return "", err
+		}
+		contentHash := sha256.New()
+		_, copyErr := io.Copy(contentHash, input)
+		closeErr := input.Close()
+		if copyErr != nil {
+			return "", copyErr
+		}
+		if closeErr != nil {
+			return "", closeErr
+		}
+		_, _ = io.WriteString(fingerprint, filepath.ToSlash(rel))
+		_, _ = fingerprint.Write([]byte{0})
+		_, _ = fingerprint.Write(contentHash.Sum(nil))
+	}
+	return hex.EncodeToString(fingerprint.Sum(nil)), nil
 }
 
 func writePluginZip(sourceDir, outputPath, archiveRoot string, files []string) error {
@@ -1367,9 +1420,13 @@ func formatWordPressPluginTable(plugins []wordpressPluginSpec) string {
 }
 
 func formatWordPressPluginStatusTable(statuses []wordpressPluginStatus) string {
-	rows := [][]string{{"plugin", "source", "install", "installed", "active", "auto-update", "note"}}
+	rows := [][]string{{"plugin", "source", "install", "installed", "active", "auto-update", "code", "note"}}
 	for _, status := range statuses {
-		rows = append(rows, []string{status.Plugin.Slug, status.Plugin.Source, yesNo(status.Plugin.Install), yesNo(status.Installed), yesNo(status.Active), yesNo(status.AutoUpdate), status.Plugin.Note})
+		code := "-"
+		if pluginSourceIsRepo(status.Plugin) {
+			code = status.Code
+		}
+		rows = append(rows, []string{status.Plugin.Slug, status.Plugin.Source, yesNo(status.Plugin.Install), yesNo(status.Installed), yesNo(status.Active), yesNo(status.AutoUpdate), code, status.Plugin.Note})
 	}
 	return formatTable(rows)
 }
@@ -1406,6 +1463,18 @@ func wordpressPluginDiffs(statuses []wordpressPluginStatus, root string) ([]word
 				}
 			}
 		} else {
+			if pluginSourceIsRepo(status.Plugin) {
+				switch status.Code {
+				case repoPluginCodeDrifted:
+					changes = append(changes, "refresh repo source")
+				case repoPluginCodeUnavailable:
+					if status.CodeReason == "local-source" {
+						changes = append(changes, "source unavailable locally")
+					} else {
+						changes = append(changes, "repo code unavailable remotely")
+					}
+				}
+			}
 			if status.Plugin.Activate && !status.Active {
 				changes = append(changes, "activate")
 			}
@@ -1689,9 +1758,22 @@ func remotePluginStatusScript(target envRemoteSyncTarget, plugins []wordpressPlu
 		builder.WriteString(slug)
 		builder.WriteString("; then auto_update=yes; fi\n")
 		builder.WriteString("fi\n")
-		builder.WriteString("printf '%s\\t%s\\t%s\\t%s\\n' ")
-		builder.WriteString(slug)
-		builder.WriteString(" \"$installed\" \"$active\" \"$auto_update\"\n")
+		if pluginSourceIsRepo(plugin) {
+			builder.WriteString("repo_fingerprint=unavailable\n")
+			builder.WriteString("if [ \"$installed\" = yes ]; then\n")
+			builder.WriteString("  repo_fingerprint=$(wp_cmd eval ")
+			builder.WriteString(shellQuoteArg(remoteRepoPluginFingerprintPHP(plugin.Slug)))
+			builder.WriteString(" --skip-plugins --skip-themes 2>/dev/null || true)\n")
+			builder.WriteString("  if [ ${#repo_fingerprint} -ne 64 ]; then repo_fingerprint=unavailable; fi\n")
+			builder.WriteString("fi\n")
+			builder.WriteString("printf '%s\\t%s\\t%s\\t%s\\trepo:%s\\n' ")
+			builder.WriteString(slug)
+			builder.WriteString(" \"$installed\" \"$active\" \"$auto_update\" \"$repo_fingerprint\"\n")
+		} else {
+			builder.WriteString("printf '%s\\t%s\\t%s\\t%s\\n' ")
+			builder.WriteString(slug)
+			builder.WriteString(" \"$installed\" \"$active\" \"$auto_update\"\n")
+		}
 	}
 	writeExtraPluginStatusScript(&builder, plugins, "wp_cmd", false)
 	return builder.String()
@@ -1740,10 +1822,14 @@ func parseRemotePluginStatusOutput(plugins []wordpressPluginSpec, output string)
 	bySlug := map[string]wordpressPluginStatus{}
 	for _, line := range strings.Split(output, "\n") {
 		fields := strings.Split(strings.TrimSpace(line), "\t")
-		if len(fields) != 4 {
+		if len(fields) != 4 && len(fields) != 5 {
 			continue
 		}
-		bySlug[fields[0]] = wordpressPluginStatus{Installed: fields[1] == "yes", Active: fields[2] == "yes", AutoUpdate: fields[3] == "yes"}
+		status := wordpressPluginStatus{Installed: fields[1] == "yes", Active: fields[2] == "yes", AutoUpdate: fields[3] == "yes"}
+		if len(fields) == 5 && strings.HasPrefix(fields[4], "repo:") {
+			status.RemoteFingerprint = strings.TrimPrefix(fields[4], "repo:")
+		}
+		bySlug[fields[0]] = status
 	}
 	statuses := make([]wordpressPluginStatus, 0, len(plugins))
 	for _, plugin := range plugins {
@@ -1752,6 +1838,51 @@ func parseRemotePluginStatusOutput(plugins []wordpressPluginSpec, output string)
 		statuses = append(statuses, status)
 	}
 	return statuses
+}
+
+func remoteRepoPluginFingerprintPHP(slug string) string {
+	return `$root=WP_PLUGIN_DIR.` + strconv.Quote("/"+slug) + `;try{if(!is_dir($root)){exit(1);}$files=[];$iterator=new RecursiveIteratorIterator(new RecursiveDirectoryIterator($root,FilesystemIterator::SKIP_DOTS));foreach($iterator as $file){$full=$file->getPathname();$rel=str_replace(DIRECTORY_SEPARATOR,"/",substr($full,strlen(rtrim($root,DIRECTORY_SEPARATOR))+1));if($file->isLink()){$files[$rel]=[null,hash("sha256","symlink\0".readlink($full),true)];continue;}if(!$file->isFile()){continue;}$files[$rel]=[$full,null];}ksort($files,SORT_STRING);$hash=hash_init("sha256");foreach($files as $rel=>$entry){$content=$entry[1]??hash_file("sha256",$entry[0],true);if($content===false){exit(1);}hash_update($hash,$rel."\0".$content);}echo hash_final($hash);}catch(Throwable $error){exit(1);}`
+}
+
+func applyRepoPluginCodeStatus(statuses []wordpressPluginStatus, root string, remote bool) {
+	for i := range statuses {
+		status := &statuses[i]
+		if status.Extra || !pluginSourceIsRepo(status.Plugin) {
+			continue
+		}
+		sourceDir, err := repoPluginSourceDir(root, status.Plugin)
+		if err != nil {
+			status.Code = repoPluginCodeUnavailable
+			status.CodeReason = "local-source"
+			continue
+		}
+		localFingerprint, err := pluginSourceFingerprint(sourceDir)
+		if err != nil {
+			status.Code = repoPluginCodeUnavailable
+			status.CodeReason = "local-source"
+			continue
+		}
+		if !status.Installed {
+			status.Code = repoPluginCodeUnavailable
+			status.CodeReason = "not-installed"
+			continue
+		}
+		if !remote {
+			status.Code = repoPluginCodeCurrent
+			continue
+		}
+		decoded, err := hex.DecodeString(status.RemoteFingerprint)
+		if err != nil || len(decoded) != sha256.Size {
+			status.Code = repoPluginCodeUnavailable
+			status.CodeReason = "remote-fingerprint"
+			continue
+		}
+		if status.RemoteFingerprint == localFingerprint {
+			status.Code = repoPluginCodeCurrent
+		} else {
+			status.Code = repoPluginCodeDrifted
+		}
+	}
 }
 
 func parseWordPressPluginDiffStatusOutput(plugins []wordpressPluginSpec, output string) []wordpressPluginStatus {

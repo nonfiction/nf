@@ -18835,7 +18835,13 @@ func TestRunEnvPluginsStatusRemoteShowsConfiguredState(t *testing.T) {
 	if err := os.Mkdir(filepath.Join(repoRoot, ".git"), 0o755); err != nil {
 		t.Fatalf("Mkdir(.git) error = %v", err)
 	}
-	project := map[string]any{"version": 2, "project": map[string]any{"slug": "client", "password_version": 0}, "wordpress": map[string]any{"themes": []any{"twentytwentyfive"}, "plugins": []any{"stream", map[string]any{"slug": "acf-pro", "source": "private/acf-pro.zip"}}}, "remotes": map[string]any{"production": "client-kinsta:live"}}
+	repoPluginDir := filepath.Join(repoRoot, "plugins", "client-plugin")
+	writeRepoPluginTestPayload(t, repoPluginDir)
+	repoFingerprint, err := pluginSourceFingerprint(repoPluginDir)
+	if err != nil {
+		t.Fatalf("pluginSourceFingerprint() error = %v", err)
+	}
+	project := map[string]any{"version": 2, "project": map[string]any{"slug": "client", "password_version": 0}, "wordpress": map[string]any{"themes": []any{"twentytwentyfive"}, "plugins": []any{"stream", map[string]any{"slug": "client-plugin", "source": "repo"}, map[string]any{"slug": "acf-pro", "source": "private/acf-pro.zip"}}}, "remotes": map[string]any{"production": "client-kinsta:live"}}
 	data, err := json.MarshalIndent(project, "", "  ")
 	if err != nil {
 		t.Fatalf("MarshalIndent(project) error = %v", err)
@@ -18855,7 +18861,7 @@ func TestRunEnvPluginsStatusRemoteShowsConfiguredState(t *testing.T) {
 	var sshArgs []string
 	runSSHOutputFn = func(args []string) ([]byte, error) {
 		sshArgs = append([]string(nil), args...)
-		return []byte("stream\tyes\tyes\tyes\nacf-pro\tno\tno\tno\n"), nil
+		return []byte("stream\tyes\tyes\tyes\nclient-plugin\tyes\tyes\tyes\trepo:" + repoFingerprint + "\nacf-pro\tno\tno\tno\n"), nil
 	}
 	t.Cleanup(func() { runSSHOutputFn = oldRunSSHOutput })
 
@@ -18864,7 +18870,7 @@ func TestRunEnvPluginsStatusRemoteShowsConfiguredState(t *testing.T) {
 			t.Fatalf("Run(plugin status remote) = %d, want 0", got)
 		}
 	})
-	for _, want := range []string{"Plugin status:", "remote:   production", "site:     client-kinsta", "env:      live", "provider: kinsta", "stream", "wordpress.org", "yes", "acf-pro", "private/acf-pro.zip", "no"} {
+	for _, want := range []string{"Plugin status:", "remote:   production", "site:     client-kinsta", "env:      live", "provider: kinsta", "stream", "wordpress.org", "yes", "client-plugin", "repo", "current", "acf-pro", "private/acf-pro.zip", "no"} {
 		if !strings.Contains(output, want) {
 			t.Fatalf("plugin remote status output missing %q:\n%s", want, output)
 		}
@@ -18873,7 +18879,7 @@ func TestRunEnvPluginsStatusRemoteShowsConfiguredState(t *testing.T) {
 		t.Fatalf("ssh args = %#v", sshArgs)
 	}
 	script := sshArgs[len(sshArgs)-1]
-	for _, want := range []string{"wp_cmd plugin is-installed stream", "wp_cmd plugin is-active stream", "wp_cmd plugin auto-updates status stream --enabled-only --field=name", "printf '%s\\t%s\\t%s\\t%s\\n' stream"} {
+	for _, want := range []string{"wp_cmd plugin is-installed stream", "wp_cmd plugin is-active stream", "wp_cmd plugin auto-updates status stream --enabled-only --field=name", "printf '%s\\t%s\\t%s\\t%s\\n' stream", "wp_cmd eval", "WP_PLUGIN_DIR", "repo:%s"} {
 		if !strings.Contains(script, want) {
 			t.Fatalf("remote plugin status script missing %q:\n%s", want, script)
 		}
@@ -18890,7 +18896,8 @@ func TestRunEnvPluginsDiffRemoteShowsDrift(t *testing.T) {
 	if err := os.Mkdir(filepath.Join(repoRoot, ".git"), 0o755); err != nil {
 		t.Fatalf("Mkdir(.git) error = %v", err)
 	}
-	project := map[string]any{"version": 2, "project": map[string]any{"slug": "client", "password_version": 0}, "wordpress": map[string]any{"themes": []any{"twentytwentyfive"}, "plugins": []any{"stream", "wp-crontrol"}}, "remotes": map[string]any{"production": "client-kinsta:live"}}
+	writeRepoPluginTestPayload(t, filepath.Join(repoRoot, "plugins", "client-plugin"))
+	project := map[string]any{"version": 2, "project": map[string]any{"slug": "client", "password_version": 0}, "wordpress": map[string]any{"themes": []any{"twentytwentyfive"}, "plugins": []any{"stream", map[string]any{"slug": "client-plugin", "source": "repo"}, "wp-crontrol"}}, "remotes": map[string]any{"production": "client-kinsta:live"}}
 	data, err := json.MarshalIndent(project, "", "  ")
 	if err != nil {
 		t.Fatalf("MarshalIndent(project) error = %v", err)
@@ -18908,7 +18915,7 @@ func TestRunEnvPluginsDiffRemoteShowsDrift(t *testing.T) {
 	t.Cleanup(func() { _ = os.Chdir(oldwd) })
 	oldRunSSHOutput := runSSHOutputFn
 	runSSHOutputFn = func(args []string) ([]byte, error) {
-		return []byte("stream\tyes\tyes\tyes\nwp-crontrol\tno\tno\tno\nimsanity\tyes\tyes\tyes\textra\n"), nil
+		return []byte("stream\tyes\tyes\tyes\nclient-plugin\tyes\tno\tno\trepo:" + strings.Repeat("0", 64) + "\nwp-crontrol\tno\tno\tno\nimsanity\tyes\tyes\tyes\textra\n"), nil
 	}
 	t.Cleanup(func() { runSSHOutputFn = oldRunSSHOutput })
 
@@ -18919,7 +18926,7 @@ func TestRunEnvPluginsDiffRemoteShowsDrift(t *testing.T) {
 	if got != 2 {
 		t.Fatalf("Run(plugin diff remote) = %d, want 2", got)
 	}
-	for _, want := range []string{"Plugin diff:", "remote:   production", "site:     client-kinsta", "env:      live", "provider: kinsta", "stream", "ok", "wp-crontrol", "install, activate, enable auto-update", "imsanity", "extra (active, auto-update on)"} {
+	for _, want := range []string{"Plugin diff:", "remote:   production", "site:     client-kinsta", "env:      live", "provider: kinsta", "stream", "ok", "client-plugin", "refresh repo source, activate, enable auto-update", "wp-crontrol", "install, activate, enable auto-update", "imsanity", "extra (active, auto-update on)"} {
 		if !strings.Contains(output, want) {
 			t.Fatalf("plugin remote diff output missing %q:\n%s", want, output)
 		}
