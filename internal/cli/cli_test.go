@@ -458,7 +458,12 @@ func TestGroupedHelpScreensUseIntendedOrder(t *testing.T) {
 		{
 			name:   "plugin",
 			render: func() string { return captureStdout(t, func() { _ = runPlugin([]string{"help"}) }) },
-			values: []string{"list, ls", "status [remote]", "diff [remote]", "\n\n  install [remote]", "\n\n  add <plugin>", "remove, rm <plugin>", "\nAdd Options:\n", "--source <source>", "--manual", "--note <note>", "--no-auto-update", "\nInstall Options:\n", "--dry-run", "--yes", "\nCache Commands:\n", "cache add <plugin> <zip>", "cache remove, cache rm <plugin>"},
+			values: []string{"list, ls", "status [remote]", "diff [remote]", "\n\n  install [remote]", "pull [plugin] [remote]", "\n\n  add <plugin>", "remove, rm <plugin>", "\nAdd Options:\n", "--source <source>", "--manual", "--note <note>", "--no-auto-update", "\nInstall Options:\n", "--dry-run", "--yes", "\nCache Commands:\n", "cache add <plugin> <zip>", "cache pull [plugin] [remote]", "cache remove, cache rm <plugin>"},
+		},
+		{
+			name:   "theme",
+			render: func() string { return captureStdout(t, func() { _ = runTheme([]string{"help"}) }) },
+			values: []string{"list, ls", "status [remote]", "diff [remote]", "\n\n  install [remote]", "pull [remote]", "\n\n  add <theme>", "activate <theme>", "remove, rm <theme>", "\nCache Commands:\n", "cache add <theme> <zip>", "cache pull [theme] [remote]", "cache remove, cache rm <theme>"},
 		},
 	}
 
@@ -1195,6 +1200,13 @@ func TestRunCompleteSuggestsStaticAndCachedValues(t *testing.T) {
 
 func TestRunCompleteSuggestsProjectValues(t *testing.T) {
 	workdir := t.TempDir()
+	dataHome := t.TempDir()
+	t.Setenv("NF_DATA_HOME", dataHome)
+	for _, dir := range []string{filepath.Join(dataHome, "plugins", "cached-pro"), filepath.Join(dataHome, "themes", "paid-parent")} {
+		if err := os.MkdirAll(dir, 0o755); err != nil {
+			t.Fatalf("MkdirAll(%s) error = %v", dir, err)
+		}
+	}
 	for _, dir := range []string{".git"} {
 		if err := os.Mkdir(filepath.Join(workdir, dir), 0o755); err != nil {
 			t.Fatalf("Mkdir(%s) error = %v", dir, err)
@@ -1330,6 +1342,34 @@ func TestRunCompleteSuggestsProjectValues(t *testing.T) {
 		t.Fatalf("theme deploy completion order = %q, want %q", got, want)
 	}
 
+	themePullOutput := captureStdout(t, func() {
+		if got := Run([]string{"__complete", "--", "theme", "pull", ""}); got != 0 {
+			t.Fatalf("Run(__complete theme pull) = %d, want 0", got)
+		}
+	})
+	if strings.TrimSpace(themePullOutput) != "production" {
+		t.Fatalf("theme pull completion = %q, want production", themePullOutput)
+	}
+
+	themeCachePullOutput := captureStdout(t, func() {
+		if got := Run([]string{"__complete", "--", "theme", "cache", "pull", ""}); got != 0 {
+			t.Fatalf("Run(__complete theme cache pull) = %d, want 0", got)
+		}
+	})
+	for _, want := range []string{"client\n", "paid-parent\n"} {
+		if !strings.Contains(themeCachePullOutput, want) {
+			t.Fatalf("theme cache pull completion missing %q:\n%s", want, themeCachePullOutput)
+		}
+	}
+	themeCacheRemoteOutput := captureStdout(t, func() {
+		if got := Run([]string{"__complete", "--", "theme", "cache", "pull", "paid-parent", ""}); got != 0 {
+			t.Fatalf("Run(__complete theme cache pull remote) = %d, want 0", got)
+		}
+	})
+	if strings.TrimSpace(themeCacheRemoteOutput) != "production" {
+		t.Fatalf("theme cache pull remote completion = %q, want production", themeCacheRemoteOutput)
+	}
+
 	pluginOutput := captureStdout(t, func() {
 		if got := Run([]string{"__complete", "--", "pl"}); got != 0 {
 			t.Fatalf("Run(__complete pl) = %d, want 0", got)
@@ -1397,6 +1437,41 @@ func TestRunCompleteSuggestsProjectValues(t *testing.T) {
 		if !strings.Contains(pluginInstallOutput, want) {
 			t.Fatalf("plugin install completion missing %q:\n%s", want, pluginInstallOutput)
 		}
+	}
+
+	pluginPullOutput := captureStdout(t, func() {
+		if got := Run([]string{"__complete", "--", "plugin", "pull", ""}); got != 0 {
+			t.Fatalf("Run(__complete plugin pull) = %d, want 0", got)
+		}
+	})
+	if strings.TrimSpace(pluginPullOutput) != "stream" {
+		t.Fatalf("plugin pull completion = %q, want stream", pluginPullOutput)
+	}
+	pluginPullRemoteOutput := captureStdout(t, func() {
+		if got := Run([]string{"__complete", "--", "plugin", "pull", "stream", ""}); got != 0 {
+			t.Fatalf("Run(__complete plugin pull remote) = %d, want 0", got)
+		}
+	})
+	if strings.TrimSpace(pluginPullRemoteOutput) != "production" {
+		t.Fatalf("plugin pull remote completion = %q, want production", pluginPullRemoteOutput)
+	}
+	pluginCachePullOutput := captureStdout(t, func() {
+		if got := Run([]string{"__complete", "--", "plugin", "cache", "pull", ""}); got != 0 {
+			t.Fatalf("Run(__complete plugin cache pull) = %d, want 0", got)
+		}
+	})
+	for _, want := range []string{"cached-pro\n", "stream\n"} {
+		if !strings.Contains(pluginCachePullOutput, want) {
+			t.Fatalf("plugin cache pull completion missing %q:\n%s", want, pluginCachePullOutput)
+		}
+	}
+	pluginCacheRemoteOutput := captureStdout(t, func() {
+		if got := Run([]string{"__complete", "--", "plugin", "cache", "pull", "cached-pro", ""}); got != 0 {
+			t.Fatalf("Run(__complete plugin cache pull remote) = %d, want 0", got)
+		}
+	})
+	if strings.TrimSpace(pluginCacheRemoteOutput) != "production" {
+		t.Fatalf("plugin cache pull remote completion = %q, want production", pluginCacheRemoteOutput)
 	}
 
 	aliasOutput := captureStdout(t, func() {

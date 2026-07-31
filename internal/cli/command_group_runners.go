@@ -111,6 +111,7 @@ func runPluginHelp() int {
 		{"diff [remote]", "show plugin changes needed to match nf.json"},
 		{},
 		{"install [remote]", "apply configured plugin installation settings"},
+		{"pull [plugin] [remote]", "pull private remote plugin code into the repo"},
 		{},
 		{"add <plugin>", "add a WordPress plugin to nf.json"},
 		{"remove, rm <plugin>", "remove a WordPress plugin from nf.json"},
@@ -126,6 +127,7 @@ func runPluginHelp() int {
 	}}, helpSection{"Cache Commands", []helpLine{
 		{"cache add <plugin> <zip>", "add a plugin zip to the local nf plugin cache"},
 		{"cache save <plugin>", "save an installed local plugin to the local nf plugin cache"},
+		{"cache pull [plugin] [remote]", "classify and pull an installed remote plugin"},
 		{"cache list, cache ls", "list cached WordPress plugin zips"},
 		{"cache show <plugin>", "show local plugin cache details"},
 		{"cache remove, cache rm <plugin>", "remove a plugin from the local nf plugin cache"},
@@ -137,6 +139,7 @@ func runPluginCacheHelp() int {
 	printGroupHelp("plugin cache", []helpLine{
 		{"add <plugin> <zip>", "add a plugin zip to the local nf plugin cache"},
 		{"save <plugin>", "save an installed local plugin to the local nf plugin cache"},
+		{"pull [plugin] [remote]", "classify and pull an installed remote plugin"},
 		{"list, ls", "list cached WordPress plugin zips"},
 		{"show <plugin>", "show local plugin cache details"},
 		{"remove, rm <plugin>", "remove a plugin from the local nf plugin cache"},
@@ -151,6 +154,7 @@ func runThemeHelp() int {
 		{"diff [remote]", "show theme changes needed to match nf.json"},
 		{},
 		{"install [remote]", "apply configured theme installation settings"},
+		{"pull [remote]", "pull the active private remote theme into the repo"},
 		{},
 		{"add <theme>", "add a WordPress theme to nf.json"},
 		{"activate <theme>", "make a configured theme first and active in nf.json"},
@@ -173,6 +177,7 @@ func runThemeHelp() int {
 	}}, helpSection{"Cache Commands", []helpLine{
 		{"cache add <theme> <zip>", "add a theme zip to the local nf theme cache"},
 		{"cache save <theme>", "save an installed local theme to the local nf theme cache"},
+		{"cache pull [theme] [remote]", "classify and pull an installed remote theme"},
 		{"cache list, cache ls", "list cached WordPress theme zips"},
 		{"cache show <theme>", "show local theme cache details"},
 		{"cache remove, cache rm <theme>", "remove a theme from the local nf theme cache"},
@@ -201,6 +206,7 @@ func runThemeCacheHelp() int {
 	printGroupHelp("theme cache", []helpLine{
 		{"add <theme> <zip>", "add a theme zip to the local nf theme cache"},
 		{"save <theme>", "save an installed local theme to the local nf theme cache"},
+		{"pull [theme] [remote]", "classify and pull an installed remote theme"},
 		{"list, ls", "list cached WordPress theme zips"},
 		{"show <theme>", "show local theme cache details"},
 		{"remove, rm <theme>", "remove a theme from the local nf theme cache"},
@@ -447,6 +453,14 @@ func runTheme(argv []string) int {
 			fmt.Fprintln(os.Stderr, "theme pull takes at most one remote")
 			return 1
 		}
+		remote := ""
+		if len(argv) == 2 {
+			remote = strings.TrimSpace(argv[1])
+			if strings.HasPrefix(remote, "-") {
+				fmt.Fprintln(os.Stderr, "theme pull remote must not be a flag")
+				return 1
+			}
+		}
 		if err := requireProjectContext("theme pull"); err != nil {
 			fmt.Fprintln(os.Stderr, err)
 			return 1
@@ -460,10 +474,6 @@ func runTheme(argv []string) int {
 		if err != nil {
 			fmt.Fprintln(os.Stderr, err)
 			return 1
-		}
-		remote := ""
-		if len(argv) == 2 {
-			remote = argv[1]
 		}
 		return cmdEnvThemePull(root, metadata, remote)
 	case "cache":
@@ -967,6 +977,10 @@ func runPlugin(argv []string) int {
 		}
 		if len(args) == 2 {
 			remoteName = strings.TrimSpace(args[1])
+		}
+		if strings.HasPrefix(removeSlug, "-") || strings.HasPrefix(remoteName, "-") {
+			fmt.Fprintln(os.Stderr, "plugin pull arguments must not be flags")
+			return 1
 		}
 	case "cache":
 		if len(args) == 0 || (len(args) == 1 && (args[0] == "help" || args[0] == "--help" || args[0] == "-h")) {

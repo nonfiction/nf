@@ -734,49 +734,31 @@ Planned model:
 * removing a local cache entry does not remove the shared artifact
 * if the shared server becomes the only durable copy of an artifact, it needs backup and version-retention policy beyond the cache feature itself
 
-### Planned plugin and theme pulls
+### Plugin and theme pulls
 
-`nf` may support pulling one installed plugin or theme from a configured Kinsta or Linode repo remote back to the developer's machine. This is separate from `nf env pull`, which moves the database and mutable `wp-content`, and from shared artifact cache fetches, which copy an already-published zip between caches.
-
-Primary use cases:
-
-* refresh a local cache zip after a paid plugin or theme updates itself on a remote site
-* recover theme or plugin changes made directly on a remote site by a third-party developer
-* bring those remote source changes into a clean Git worktree for review, local testing, a normal commit, and a later explicit install or deploy
-
-Planned command shape:
+Remote code can be recovered from a configured Kinsta or Linode repo remote independently of `nf env pull`:
 
 ```text
-nf plugin pull [remote] [plugin]
-nf theme pull [remote] [theme]
+nf plugin cache pull [plugin] [remote]
+nf theme cache pull [theme] [remote]
+nf plugin pull [plugin] [remote]
+nf theme pull [remote]
 ```
 
-Omitted values may use interactive selectors. Non-interactive execution requires an explicit remote and plugin or theme. The configured `source` determines the local destination:
+Omitted plugin, theme, and remote values use interactive selectors. Cache pulls may select any installed remote item except a known repo source. They classify the selected slug through the official WordPress.org information API. A public item is not downloaded and is added or normalized in `nf.json` as a simple wordpress.org string entry. A private item is downloaded, strictly validated, packaged with the normal source packager, atomically stored under `NF_DATA_HOME/plugins|themes/<slug>/<slug>.zip`, and configured with `source: "cache"`. Existing plugin install/activation/auto-update/note settings and applicable theme settings are retained when converting a private item.
 
-* `source: "cache"` downloads the installed remote directory, packages it under the configured slug, validates it, and atomically replaces the local cache zip
-* `source: "repo"` mirrors the installed remote directory into the configured repo source path so the resulting changes are visible to Git
-* other source types are rejected initially rather than guessing whether to mutate a cache or repo path
+`nf plugin pull` recovers one private plugin into `plugins/<slug>`. `nf theme pull` always recovers the remote's active theme into the configured repo theme path, or `theme/` when adopting it. Existing matching repo entries may be refreshed without WordPress.org classification. An absent or non-repo item must be private and is adopted as `source: "repo"`; an adopted theme becomes the first configured theme. A configured repo theme and a different active remote theme is an error.
 
-Repo-source safety rules:
+Repo pull safety rules:
 
-* require the entire Git worktree to be clean before downloading or applying remote files
-* download into temporary local storage and validate the complete transfer before mutating the repo
-* recheck that the worktree is still clean immediately before applying the staged transfer
-* print an itemized plan showing additions, modifications, and deletions before execution
-* mirror remote additions, modifications, and deletions for deployable/runtime files
-* preserve local files and directories intentionally excluded by that resource's packaging rules, such as theme package manifests, lockfiles, development tooling config, and development-only directories
-* leave the worktree dirty after a successful pull; nf does not stage, commit, run build tasks, install, or deploy the result
+* require the entire Git worktree, including untracked files, to be clean before remote discovery and again immediately before applying files
+* download and validate into temporary storage before mutating the repo
+* reject unsafe symlinks, traversal, unexpected archive roots, and unsupported archive entries
+* overlay remote regular files, overwriting matching paths while preserving local-only files and directories intentionally excluded from deploy artifacts
+* reject file/directory type conflicts instead of deleting local paths
+* leave resulting changes unstaged for review; nf does not commit, build, install, or deploy them
 
-General transfer rules:
-
-* cache pulls do not require a clean Git worktree because they write only under `NF_DATA_HOME`
-* validate configured slugs and remote paths, reject unsafe symlinks or traversal, and keep transfers inside the expected `wp-content/plugins/<slug>` or `wp-content/themes/<slug>` directory
-* use temporary files/directories, archive validation, SHA-256 verification where an archive is produced, and atomic replacement of cache zips
-* show the selected project, provider, environment, remote path, local destination, source type, and execution mode in a reviewable preflight
-* support `--dry-run`; interactive execution prompts for confirmation, while non-interactive execution requires `--execute --yes --non-interactive`
-* do not update `nf.json`, plugin/theme activation state, licenses, or WordPress auto-update settings
-* do not automatically publish a newly pulled cache zip to the planned shared artifact cache; publishing remains a separate explicit operation
-* do not add generic plugin/theme `push` commands: remote `plugin/theme install` and `theme deploy` remain the outbound workflows
+Remote inspection and archive creation are provider-aware and use one inventory command per selection. Cache pulls do not require a clean worktree because their artifacts live under `NF_DATA_HOME`, though a public classification can update `nf.json`. These commands do not alter remote activation, auto-update, or license state and do not add generic push commands; `plugin/theme install` and `theme deploy` remain outbound workflows.
 
 Snapshots:
 

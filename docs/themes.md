@@ -70,6 +70,7 @@ nf theme remove twentytwentyfive
 ```sh
 nf theme cache add paid-parent-theme ~/Downloads/paid-parent-theme.zip
 nf theme cache save paid-parent-theme
+nf theme cache pull paid-parent-theme production
 nf theme cache list
 nf theme cache show paid-parent-theme
 nf theme cache remove paid-parent-theme
@@ -79,7 +80,19 @@ nf theme cache remove paid-parent-theme
 
 `nf theme cache save <theme>` archives the theme currently installed in the local WordPress env and stores it as the cached zip. Use this as a local recovery aid for paid/manual themes that were installed through WordPress admin or vendor updaters.
 
+`nf theme cache pull [theme] [remote]` inspects an installed remote theme. Omit either value to choose interactively. If the slug exists on WordPress.org, nf downloads no code and adds or normalizes its `nf.json` entry as a simple string. Otherwise nf validates and packages the remote directory into `$NF_DATA_HOME/themes/<slug>/<slug>.zip`, configures `source: "cache"`, and retains applicable existing settings. A theme already configured with `source: "repo"` must use `nf theme pull` instead.
+
 `nf theme cache list` and `nf theme cache show <theme>` inspect the local cache. `nf theme cache remove <theme>` deletes one cached theme zip. Cached zips are local machine state, not project metadata, and are not committed.
+
+## Pull the Active Private Theme into the Repo
+
+```sh
+nf theme pull production
+```
+
+Omit the remote to choose interactively. nf always pulls the active remote theme. If a repo theme is configured, its slug must match that active theme and nf uses its configured path. Otherwise the active theme can be adopted only when it is private; nf writes it to `theme/`, configures it as `source: "repo"`, and moves it first in `wordpress.themes`.
+
+The whole Git worktree, including untracked files, must be clean before nf contacts the remote and immediately before it applies files. The pull overlays remote files, overwriting matching paths while preserving local-only development files excluded from release packages. It rejects unsafe archives, symlinks, and file/directory conflicts, then leaves the resulting Git changes unstaged for review.
 
 ## Compare Config to WordPress State
 

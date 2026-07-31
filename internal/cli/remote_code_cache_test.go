@@ -47,4 +47,10 @@ func TestParseCachePullArgs(t *testing.T) {
 	if !ok || theme.Slug != "" || theme.RemoteName != "" {
 		t.Fatalf("theme cache pull picker args = %#v, %v", theme, ok)
 	}
+	if _, ok := parseEnvPluginCacheArgs([]string{"pull", "--bad"}); ok {
+		t.Fatal("plugin cache pull accepted a flag as a slug")
+	}
+	if _, ok := parseEnvThemeCacheArgs([]string{"pull", "private-theme", "--bad"}); ok {
+		t.Fatal("theme cache pull accepted a flag as a remote")
+	}
 }

@@ -62,6 +62,7 @@ nf plugin remove stream
 ```sh
 nf plugin cache add acf-pro ~/Downloads/acf-pro.zip
 nf plugin cache save sitepress-multilingual-cms
+nf plugin cache pull acf-pro production
 nf plugin cache list
 nf plugin cache show acf-pro
 nf plugin cache remove acf-pro
@@ -71,7 +72,19 @@ nf plugin cache remove acf-pro
 
 `nf plugin cache save <plugin>` archives the plugin currently installed in the local WordPress env and stores it as the cached zip. Use this as a local recovery aid for paid/manual plugins that were installed through WordPress admin or vendor updaters.
 
+`nf plugin cache pull [plugin] [remote]` inspects an installed remote plugin. Omit either value to choose interactively. If the slug exists on WordPress.org, nf downloads no code and adds or normalizes its `nf.json` entry as a simple string. Otherwise nf validates and packages the remote directory into `$NF_DATA_HOME/plugins/<slug>/<slug>.zip`, configures `source: "cache"`, and retains existing install, activation, auto-update, and note settings. A plugin already configured with `source: "repo"` must use `nf plugin pull` instead.
+
 `nf plugin cache list` and `nf plugin cache show <plugin>` inspect the local cache. `nf plugin cache remove <plugin>` deletes one cached plugin zip. Cached zips are local machine state, not project metadata, and are not committed.
+
+## Pull Private Plugin Code into the Repo
+
+```sh
+nf plugin pull acf-pro production
+```
+
+Omit the plugin or remote to choose interactively. The whole Git worktree, including untracked files, must be clean before nf contacts the remote and immediately before it applies files. Known repo plugins are refreshed directly. Other installed plugins can be adopted only when they are private; nf creates or converts their `nf.json` entry to `source: "repo"` and writes to `plugins/<slug>`.
+
+The pull overlays remote files, overwriting matching paths while preserving local-only development files excluded from deployment packages. It rejects unsafe archives, symlinks, and file/directory conflicts. The resulting Git changes are left unstaged for review and a normal commit.
 
 ## Compare Config to WordPress State
 

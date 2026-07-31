@@ -9,6 +9,7 @@ import (
 	"sort"
 	"strings"
 
+	"github.com/nonfiction/nf/internal/config"
 	"github.com/nonfiction/nf/internal/state"
 )
 
@@ -436,7 +437,7 @@ func envCompletionCandidates(args []string) []string {
 
 func pluginCompletionCandidates(args []string) []string {
 	if len(args) == 0 {
-		return []string{"list", "ls", "add", "remove", "rm", "status", "diff", "install", "cache", "help"}
+		return []string{"list", "ls", "add", "remove", "rm", "status", "diff", "install", "pull", "cache", "help"}
 	}
 	args[0] = cliCommandAlias(args[0])
 	if args[0] == "add" {
@@ -451,6 +452,15 @@ func pluginCompletionCandidates(args []string) []string {
 	if args[0] == "status" || args[0] == "diff" {
 		return projectRemoteCompletionNames()
 	}
+	if args[0] == "pull" {
+		if len(args) == 1 {
+			return projectPluginCompletionNames()
+		}
+		if len(args) == 2 {
+			return projectRemoteCompletionNames()
+		}
+		return nil
+	}
 	if args[0] == "cache" {
 		return pluginCacheCompletionCandidates(args[1:])
 	}
@@ -459,12 +469,20 @@ func pluginCompletionCandidates(args []string) []string {
 
 func pluginCacheCompletionCandidates(args []string) []string {
 	if len(args) == 0 {
-		return []string{"add", "save", "list", "ls", "show", "remove", "rm", "help"}
+		return []string{"add", "save", "pull", "list", "ls", "show", "remove", "rm", "help"}
 	}
 	args[0] = cliCommandAlias(args[0])
 	switch args[0] {
 	case "save", "show", "remove":
 		return projectPluginCompletionNames()
+	case "pull":
+		if len(args) == 1 {
+			return uniqueSortedStrings(append(projectPluginCompletionNames(), cachedCodeCompletionNames(config.PluginCacheDir())...))
+		}
+		if len(args) == 2 {
+			return projectRemoteCompletionNames()
+		}
+		return nil
 	default:
 		return nil
 	}
@@ -492,7 +510,7 @@ func envSnapshotCompletionCandidates(args []string) []string {
 
 func themeCompletionCandidates(args []string) []string {
 	if len(args) == 0 {
-		candidates := []string{"list", "ls", "add", "activate", "remove", "rm", "status", "diff", "install", "cache", "tasks", "package", "deploy", "rollback", "help"}
+		candidates := []string{"list", "ls", "add", "activate", "remove", "rm", "status", "diff", "install", "pull", "cache", "tasks", "package", "deploy", "rollback", "help"}
 		candidates = append(candidates, projectTaskCompletionNames()...)
 		return uniqueSortedStrings(candidates)
 	}
@@ -508,6 +526,12 @@ func themeCompletionCandidates(args []string) []string {
 	}
 	if args[0] == "status" || args[0] == "diff" {
 		return projectRemoteCompletionNames()
+	}
+	if args[0] == "pull" {
+		if len(args) == 1 {
+			return projectRemoteCompletionNames()
+		}
+		return nil
 	}
 	if args[0] == "cache" {
 		return themeCacheCompletionCandidates(args[1:])
@@ -526,15 +550,37 @@ func themeCompletionCandidates(args []string) []string {
 
 func themeCacheCompletionCandidates(args []string) []string {
 	if len(args) == 0 {
-		return []string{"add", "save", "list", "ls", "show", "remove", "rm", "help"}
+		return []string{"add", "save", "pull", "list", "ls", "show", "remove", "rm", "help"}
 	}
 	args[0] = cliCommandAlias(args[0])
 	switch args[0] {
 	case "save", "show", "remove":
 		return projectThemeCompletionNames()
+	case "pull":
+		if len(args) == 1 {
+			return uniqueSortedStrings(append(projectThemeCompletionNames(), cachedCodeCompletionNames(config.ThemeCacheDir())...))
+		}
+		if len(args) == 2 {
+			return projectRemoteCompletionNames()
+		}
+		return nil
 	default:
 		return nil
 	}
+}
+
+func cachedCodeCompletionNames(cacheDir string) []string {
+	entries, err := os.ReadDir(cacheDir)
+	if err != nil {
+		return nil
+	}
+	values := make([]string, 0, len(entries))
+	for _, entry := range entries {
+		if entry.IsDir() {
+			values = append(values, entry.Name())
+		}
+	}
+	return uniqueSortedStrings(values)
 }
 
 func aliasCompletionCandidates(args []string) []string {
