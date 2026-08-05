@@ -210,6 +210,7 @@ func envSnapshotCreateScript(cfg envConfig, name string) string {
 	excludes := envMutableWpContentTarExcludeArgs(cfg)
 	return fmt.Sprintf(`set -eu
 mkdir -p "%s"
+wp config get table_prefix > "%s"
 wp db export "%s/database.sql"
 gzip -f "%s/database.sql"
 dirs=""
@@ -224,7 +225,7 @@ if [ -n "$dirs" ]; then
 else
   tar -C /var/www/html -czf "%s" --files-from /dev/null
 fi
-`, containerDir, containerDir, containerDir, excludes, wpContentArchive, wpContentArchive)
+`, containerDir, envSnapshotContainerTablePrefixPath(name), containerDir, containerDir, excludes, wpContentArchive, wpContentArchive)
 }
 
 func envSnapshotCreateWpContentTransferArchiveScript(cfg envConfig, name string) string {
@@ -253,9 +254,10 @@ func envPushTransferCreateScript(cfg envConfig, name string) string {
 	wpContentArchiveScript := envSnapshotCreateWpContentTransferArchiveScript(cfg, name)
 	return fmt.Sprintf(`set -eu
 mkdir -p "%s"
+wp config get table_prefix > "%s"
 wp db export "%s/database.sql"
 gzip -f "%s/database.sql"
-%s`, containerDir, containerDir, containerDir, wpContentArchiveScript)
+%s`, containerDir, envSnapshotContainerTablePrefixPath(name), containerDir, containerDir, wpContentArchiveScript)
 }
 
 func envSnapshotRestoreScript(cfg envConfig, name string) string {
@@ -423,6 +425,15 @@ func envSnapshotRestoreArchives(cfg envConfig, name string) error {
 func envSnapshotRestoreArchivesWithUploads(cfg envConfig, name string, includeUploads bool) error {
 	if err := ensureLocalSnapshotRestoreDiskSpace(cfg, name); err != nil {
 		return err
+	}
+	prefix, found, err := readWordPressTablePrefixFile(envSnapshotHostTablePrefixPath(cfg, name))
+	if err != nil {
+		return err
+	}
+	if found {
+		if err := applyLocalWordPressTablePrefix(cfg, prefix); err != nil {
+			return err
+		}
 	}
 	if err := runCommandSpecNoPreview(execSpec{Dir: localEnvDir(cfg), Args: envSnapshotComposeArgs(cfg, envSnapshotRestoreScriptWithUploads(cfg, name, includeUploads))}); err != nil {
 		return err

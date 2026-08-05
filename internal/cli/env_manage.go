@@ -36,6 +36,13 @@ func ensureManagedEnv(cfg envConfig) error {
 	if err := validateDockerUser(firstNonEmpty(cfg.DockerUser, defaultDockerUser)); err != nil {
 		return err
 	}
+	currentPrefix, err := managedEnvTablePrefix(cfg)
+	if err != nil {
+		return err
+	}
+	if cfg.TablePrefix == "" {
+		cfg.TablePrefix = currentPrefix
+	}
 	if err := os.MkdirAll(envDir, 0o755); err != nil {
 		return err
 	}
@@ -58,6 +65,77 @@ func ensureManagedEnv(cfg envConfig) error {
 		if err := writeManagedFile(path, contents, 0o644); err != nil {
 			return err
 		}
+	}
+	return nil
+}
+
+func managedEnvTablePrefix(cfg envConfig) (string, error) {
+	values, err := config.ReadEnvFile(filepath.Join(localEnvDir(cfg), ".env"))
+	if err != nil {
+		return "", err
+	}
+	prefix := firstNonEmpty(values["WP_TABLE_PREFIX"], defaultWordPressTablePrefix)
+	return normalizeWordPressTablePrefix(prefix)
+}
+
+func setManagedEnvTablePrefix(cfg envConfig, value string) error {
+	prefix, err := normalizeWordPressTablePrefix(value)
+	if err != nil {
+		return err
+	}
+	envPath := filepath.Join(localEnvDir(cfg), ".env")
+	data, err := os.ReadFile(envPath)
+	if err != nil {
+		return err
+	}
+	lines := strings.Split(strings.TrimSuffix(string(data), "\n"), "\n")
+	found := false
+	for i, line := range lines {
+		if strings.HasPrefix(line, "WP_TABLE_PREFIX=") {
+			lines[i] = "WP_TABLE_PREFIX=" + envFileValue(prefix)
+			found = true
+			break
+		}
+	}
+	if !found {
+		lines = append(lines, "WP_TABLE_PREFIX="+envFileValue(prefix))
+	}
+	return os.WriteFile(envPath, []byte(strings.Join(lines, "\n")+"\n"), 0o644)
+}
+
+func applyLocalWordPressTablePrefix(cfg envConfig, value string) error {
+	prefix, err := normalizeWordPressTablePrefix(value)
+	if err != nil {
+		return err
+	}
+	current, err := managedEnvTablePrefix(cfg)
+	if err != nil {
+		return err
+	}
+	if current == prefix {
+		return nil
+	}
+	if err := setManagedEnvTablePrefix(cfg, prefix); err != nil {
+		return err
+	}
+	envDir := localEnvDir(cfg)
+	service := firstNonEmpty(cfg.WordpressService, "wordpress")
+	if err := runCommandSpec(execSpec{Dir: envDir, Args: envComposeArgs(cfg, "up", "-d", "--no-deps", "--force-recreate", service)}); err != nil {
+		return err
+	}
+	if err := runCommandSpecWithPreview(execSpec{Dir: envDir, Args: envWpBootstrapReadyArgs(cfg)}, envWpBootstrapPreviewArgs(cfg, "wait for WordPress files")); err != nil {
+		return err
+	}
+	output, err := runCommandSpecOutputSilentFn(execSpec{Dir: envDir, Args: envWpArgs(cfg, "config", "get", "table_prefix")})
+	if err != nil {
+		return err
+	}
+	active, err := normalizeWordPressTablePrefix(output)
+	if err != nil {
+		return err
+	}
+	if active != prefix {
+		return fmt.Errorf("local WordPress table prefix is %q after configuring %q", active, prefix)
 	}
 	return nil
 }

@@ -429,7 +429,7 @@ func envCompletionCandidates(args []string) []string {
 	case "snapshot":
 		return envSnapshotCompletionCandidates(args[1:])
 	case "import":
-		return []string{"--db", "--source-url", "--name", "--dry-run", "--yes"}
+		return []string{"--db", "--source-url", "--table-prefix", "--name", "--dry-run", "--yes"}
 	default:
 		return nil
 	}

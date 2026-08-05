@@ -276,13 +276,17 @@ func remoteExportScriptWithUploads(target envRemoteSyncTarget, remoteTmp string,
 	if includeUploads {
 		dirs = "wp-content/uploads " + dirs
 	}
+	remoteTmpArg := shellQuoteArg(remoteTmp)
+	wordpressPathArg := shellQuoteArg(target.WordPressPath)
 	return fmt.Sprintf(`set -eu
 rm -rf %s
 mkdir -p %s
 chmod 777 %s
 cd %s
+%s --path=%s config get table_prefix > %s/%s
 %s --path=%s db export %s/database.sql
 %sgzip -f %s/database.sql
+%schmod 644 %s/%s
 %schmod 644 %s/database.sql.gz
 dirs=""
 for dir in %s; do
@@ -290,10 +294,25 @@ for dir in %s; do
 done
 if [ -n "$dirs" ]; then %star -C %s -czf %s/wp-content.tar.gz $dirs; else %star -C %s -czf %s/wp-content.tar.gz --files-from /dev/null; fi
 %schmod 644 %s/wp-content.tar.gz
-`, shellQuoteArg(remoteTmp), shellQuoteArg(remoteTmp), shellQuoteArg(remoteTmp), shellQuoteArg(target.WordPressPath), target.WPCommand, shellQuoteArg(target.WordPressPath), shellQuoteArg(remoteTmp), fileOp, shellQuoteArg(remoteTmp), fileOp, shellQuoteArg(remoteTmp), dirs, shellQuoteArg(target.WordPressPath), fileOp, shellQuoteArg(target.WordPressPath), shellQuoteArg(remoteTmp), fileOp, shellQuoteArg(target.WordPressPath), shellQuoteArg(remoteTmp), fileOp, shellQuoteArg(remoteTmp))
+`, remoteTmpArg, remoteTmpArg, remoteTmpArg, wordpressPathArg, target.WPCommand, wordpressPathArg, remoteTmpArg, tablePrefixFilename, target.WPCommand, wordpressPathArg, remoteTmpArg, fileOp, remoteTmpArg, fileOp, remoteTmpArg, tablePrefixFilename, fileOp, remoteTmpArg, dirs, wordpressPathArg, fileOp, wordpressPathArg, remoteTmpArg, fileOp, wordpressPathArg, remoteTmpArg, fileOp, remoteTmpArg)
 }
 
-func remoteImportScript(cfg envConfig, target envRemoteSyncTarget, remoteTmp string) string {
+func remoteWordPressTablePrefixCheckScript(target envRemoteSyncTarget, expected string) (string, error) {
+	prefix, err := normalizeWordPressTablePrefix(expected)
+	if err != nil {
+		return "", err
+	}
+	return fmt.Sprintf(`set -eu
+expected=%s
+actual=$(%s --path=%s config get table_prefix)
+if [ "$actual" != "$expected" ]; then
+  printf 'Refusing env push: local WordPress table prefix %%s does not match remote prefix %%s. Pull the remote env before pushing.\n' "$expected" "$actual" >&2
+  exit 1
+fi
+`, shellQuoteArg(prefix), target.WPCommand, shellQuoteArg(target.WordPressPath)), nil
+}
+
+func remoteImportScript(cfg envConfig, target envRemoteSyncTarget, remoteTmp, sourcePrefix string) string {
 	fileOp := remoteFileOpPrefix(target)
 	repoPlugins := shellQuoteArg(envRepoPluginSlugList(cfg))
 	excludes := envMutableWpContentTarExcludeArgs(cfg)
@@ -302,6 +321,12 @@ func remoteImportScript(cfg envConfig, target envRemoteSyncTarget, remoteTmp str
 		chown = fmt.Sprintf("sudo chown -R www-data:www-data %s/wp-content/plugins %s/wp-content/languages 2>/dev/null || true\n", shellQuoteArg(target.WordPressPath), shellQuoteArg(target.WordPressPath))
 	}
 	return fmt.Sprintf(`set -eu
+source_prefix=%s
+target_prefix=$(%s --path=%s config get table_prefix)
+if [ "$source_prefix" != "$target_prefix" ]; then
+  printf 'Refusing database import: source WordPress table prefix %%s does not match destination prefix %%s.\n' "$source_prefix" "$target_prefix" >&2
+  exit 1
+fi
 if [ -f %s/wp-content.tar.gz ]; then
   %star %s -tzf %s/wp-content.tar.gz >/dev/null
 fi
@@ -328,7 +353,7 @@ if [ -f %s/wp-content.tar.gz ]; then
   done
   %star %s -xzf %s/wp-content.tar.gz -C %s
 fi
-%s`, shellQuoteArg(remoteTmp), fileOp, excludes, shellQuoteArg(remoteTmp), shellQuoteArg(remoteTmp), shellQuoteArg(remoteTmp), target.WPCommand, shellQuoteArg(target.WordPressPath), shellQuoteArg(remoteTmp), fileOp, fileOp, fileOp, shellQuoteArg(target.WordPressPath), fileOp, shellQuoteArg(target.WordPressPath), repoPlugins, shellQuoteArg(target.WordPressPath), shellQuoteArg(target.WordPressPath), shellQuoteArg(target.WordPressPath), fileOp, fileOp, excludes, shellQuoteArg(remoteTmp), shellQuoteArg(target.WordPressPath), chown)
+%s`, shellQuoteArg(sourcePrefix), target.WPCommand, shellQuoteArg(target.WordPressPath), shellQuoteArg(remoteTmp), fileOp, excludes, shellQuoteArg(remoteTmp), shellQuoteArg(remoteTmp), shellQuoteArg(remoteTmp), target.WPCommand, shellQuoteArg(target.WordPressPath), shellQuoteArg(remoteTmp), fileOp, fileOp, fileOp, shellQuoteArg(target.WordPressPath), fileOp, shellQuoteArg(target.WordPressPath), repoPlugins, shellQuoteArg(target.WordPressPath), shellQuoteArg(target.WordPressPath), shellQuoteArg(target.WordPressPath), fileOp, fileOp, excludes, shellQuoteArg(remoteTmp), shellQuoteArg(target.WordPressPath), chown)
 }
 
 func remoteWPSearchReplaceLine(target envRemoteSyncTarget, sourceURL, destinationURL string) string {
@@ -593,6 +618,18 @@ func executeEnvPush(cfg envConfig, target envRemoteSyncTarget) int {
 		fmt.Fprintln(os.Stderr, err)
 		return 1
 	}
+	localPrefix, found, err := readWordPressTablePrefixFile(envSnapshotHostTablePrefixPath(cfg, name))
+	if err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		return 1
+	}
+	if !found {
+		localPrefix, err = managedEnvTablePrefix(cfg)
+		if err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			return 1
+		}
+	}
 	uploadsDir := cfg.managedUploadsDir()
 	if info, err := os.Stat(uploadsDir); err != nil {
 		fmt.Fprintln(os.Stderr, err)
@@ -621,6 +658,16 @@ func executeEnvPush(cfg envConfig, target envRemoteSyncTarget) int {
 	}
 	backupTmp := remoteSyncTempDir(cfg, target, "backup")
 	if err := ensureRemoteDiskSpace(target, path.Dir(backupTmp), "push backup workspace", envTransferRequiredBytes(remoteEstimate)); err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		return 1
+	}
+	prefixCheckScript, err := remoteWordPressTablePrefixCheckScript(target, localPrefix)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		return 1
+	}
+	fmt.Println("Checking local and remote WordPress table prefixes...")
+	if err := runSSHCommandFn(remoteSSHArgs(target, prefixCheckScript)); err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		return 1
 	}
@@ -675,7 +722,7 @@ func executeEnvPush(cfg envConfig, target envRemoteSyncTarget) int {
 	}
 	remoteChangeStarted = true
 	fmt.Println("Importing pushed database and non-upload wp-content on remote...")
-	if err := runSSHCommandFn(remoteSSHArgs(target, remoteImportScript(cfg, target, remoteTmp))); err != nil {
+	if err := runSSHCommandFn(remoteSSHArgs(target, remoteImportScript(cfg, target, remoteTmp, localPrefix))); err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		return 1
 	}

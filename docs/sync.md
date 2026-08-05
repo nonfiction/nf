@@ -31,6 +31,7 @@ In non-interactive mode, provide the remote explicitly.
 Sync includes:
 
 * database
+* active WordPress database table prefix
 * `wp-content/uploads`
 * `wp-content/plugins`
 * `wp-content/languages`
@@ -42,6 +43,8 @@ Sync also does not reconcile `wp-config.php` defines. Use `nf define status [rem
 Theme deployment is separate. Use [Themes](themes.md) for theme releases.
 
 After the destination database is imported, `nf` updates the destination URLs, runs search-replace when needed, activates the configured theme when installed, and runs `wp rewrite flush`. This regenerates WordPress rewrite rules without `--hard`. The existing object-cache flush remains a separate later step. A rewrite failure fails the sync and prevents the cache step from being reported as complete.
+
+Pulls automatically configure the generated local WordPress environment to use the source database's active table prefix before import and finalization. This is local generated state, not `nf.json` project configuration. Pushes require the local and remote prefixes to match and stop before creating a remote backup or changing remote data when they differ; pull the remote env first rather than importing tables that remote WordPress would not read.
 
 ## Review Before Execution
 

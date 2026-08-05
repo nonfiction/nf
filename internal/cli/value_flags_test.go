@@ -170,8 +170,8 @@ func TestManualValueFlagSyntaxParity(t *testing.T) {
 		},
 		{
 			name:   "env import db source url and name",
-			spaced: []string{"source", "--db", "db.sql", "--source-url", "https://example.com/?a=b", "--name", "import"},
-			equals: []string{"source", "--db=db.sql", "--source-url=https://example.com/?a=b", "--name=import"},
+			spaced: []string{"source", "--db", "db.sql", "--source-url", "https://example.com/?a=b", "--table-prefix", "wpmc_", "--name", "import"},
+			equals: []string{"source", "--db=db.sql", "--source-url=https://example.com/?a=b", "--table-prefix=wpmc_", "--name=import"},
 			parse: func(args []string) (any, error) {
 				return parseEnvImportArgs(args)
 			},

@@ -38,19 +38,23 @@ func siteExportFilesDir(dir string) string {
 
 func remoteSiteExportScript(target envRemoteSyncTarget, remoteTmp string) string {
 	fileOp := remoteFileOpPrefix(target)
+	remoteTmpArg := shellQuoteArg(remoteTmp)
+	wordpressPathArg := shellQuoteArg(target.WordPressPath)
 	filesArchive := ""
 	if target.SudoFileOps {
-		filesArchive = fmt.Sprintf("%star -C %s -czf %s/files.tar.gz .\n%schmod 644 %s/files.tar.gz\n", fileOp, shellQuoteArg(target.WordPressPath), shellQuoteArg(remoteTmp), fileOp, shellQuoteArg(remoteTmp))
+		filesArchive = fmt.Sprintf("%star -C %s -czf %s/files.tar.gz .\n%schmod 644 %s/files.tar.gz\n", fileOp, wordpressPathArg, remoteTmpArg, fileOp, remoteTmpArg)
 	}
 	return fmt.Sprintf(`set -eu
 rm -rf %s
 mkdir -p %s
 chmod 777 %s
 cd %s
+%s --path=%s config get table_prefix > %s/%s
 %s --path=%s db export %s/database.sql
 %sgzip -f %s/database.sql
+%schmod 644 %s/%s
 %schmod 644 %s/database.sql.gz
-%s`, shellQuoteArg(remoteTmp), shellQuoteArg(remoteTmp), shellQuoteArg(remoteTmp), shellQuoteArg(target.WordPressPath), target.WPCommand, shellQuoteArg(target.WordPressPath), shellQuoteArg(remoteTmp), fileOp, shellQuoteArg(remoteTmp), fileOp, shellQuoteArg(remoteTmp), filesArchive)
+%s`, remoteTmpArg, remoteTmpArg, remoteTmpArg, wordpressPathArg, target.WPCommand, wordpressPathArg, remoteTmpArg, tablePrefixFilename, target.WPCommand, wordpressPathArg, remoteTmpArg, fileOp, remoteTmpArg, fileOp, remoteTmpArg, tablePrefixFilename, fileOp, remoteTmpArg, filesArchive)
 }
 
 func remoteRsyncSource(target envRemoteSyncTarget, remotePath string) string {
@@ -136,6 +140,10 @@ func cmdSiteExport(envRef string, opts siteExportOptions) int {
 		fmt.Fprintln(os.Stderr, err)
 		return 1
 	}
+	if err := runRsyncCommandFn([]string{"rsync", "-az", "-e", remoteRsyncSSH(target), remoteRsyncSource(target, path.Join(remoteTmp, tablePrefixFilename)), outputDir + string(filepath.Separator)}); err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		return 1
+	}
 	if target.SudoFileOps {
 		archivePath := filepath.Join(outputDir, "files.tar.gz")
 		if err := runRsyncCommandFn([]string{"rsync", "-az", "-e", remoteRsyncSSH(target), remoteRsyncSource(target, path.Join(remoteTmp, "files.tar.gz")), archivePath}); err != nil {
@@ -151,7 +159,16 @@ func cmdSiteExport(envRef string, opts siteExportOptions) int {
 		fmt.Fprintln(os.Stderr, err)
 		return 1
 	}
-	manifest := siteExportManifest{Schema: siteExportSchema, Source: "remote-site-export", EnvID: envID, SiteID: siteID, Env: env, Provider: target.Provider, Target: target.TargetRef, URL: target.URL, CreatedAt: now.Format(time.RFC3339), WordPressPath: target.WordPressPath, Files: "files", Database: "database.sql.gz"}
+	tablePrefix, found, err := readWordPressTablePrefixFile(filepath.Join(outputDir, tablePrefixFilename))
+	if err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		return 1
+	}
+	if !found {
+		fmt.Fprintln(os.Stderr, "site export did not include a WordPress table prefix")
+		return 1
+	}
+	manifest := siteExportManifest{Schema: siteExportSchema, Source: "remote-site-export", EnvID: envID, SiteID: siteID, Env: env, Provider: target.Provider, Target: target.TargetRef, URL: target.URL, CreatedAt: now.Format(time.RFC3339), WordPressPath: target.WordPressPath, Files: "files", Database: "database.sql.gz", TablePrefix: tablePrefix}
 	if err := writeSiteExportManifest(outputDir, manifest); err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		return 1
@@ -178,6 +195,7 @@ func writeSiteExportReadme(outputDir string, manifest siteExportManifest) error 
 
 Source env: %s
 Source URL: %s
+WordPress table prefix: %s
 
 Contents:
 - files/ contains the full WordPress filesystem from the source document root.
@@ -190,7 +208,7 @@ Restore outline:
 4. Update URLs if the destination URL differs from the source URL.
 
 Security note: files/wp-config.php may contain source server credentials and salts.
-`, manifest.EnvID, firstNonEmpty(manifest.URL, "unknown"))
+`, manifest.EnvID, firstNonEmpty(manifest.URL, "unknown"), firstNonEmpty(manifest.TablePrefix, "unknown"))
 	return os.WriteFile(filepath.Join(outputDir, "README.txt"), []byte(text), 0o644)
 }
 
@@ -253,7 +271,7 @@ func extractTarGzArchive(archivePath, destination string) error {
 }
 
 func parseEnvImportArgs(args []string) (envImportOptions, error) {
-	args = normalizeLongFlagValues(args, "--db", "--source-url", "--name")
+	args = normalizeLongFlagValues(args, "--db", "--source-url", "--table-prefix", "--name")
 	var opts envImportOptions
 	positionals := make([]string, 0, 1)
 	for i := 0; i < len(args); i++ {
@@ -275,6 +293,16 @@ func parseEnvImportArgs(args []string) (envImportOptions, error) {
 			}
 			i++
 			opts.sourceURL = args[i]
+		case arg == "--table-prefix":
+			if i+1 >= len(args) || strings.TrimSpace(args[i+1]) == "" {
+				return opts, ProjectError{Msg: "env import --table-prefix requires a value"}
+			}
+			i++
+			prefix, err := normalizeWordPressTablePrefix(args[i])
+			if err != nil {
+				return opts, err
+			}
+			opts.tablePrefix = prefix
 		case arg == "--name":
 			if i+1 >= len(args) || strings.TrimSpace(args[i+1]) == "" {
 				return opts, ProjectError{Msg: "env import --name requires a name"}
@@ -300,6 +328,7 @@ type envImportSource struct {
 	FilesPath   string
 	Database    string
 	SourceURL   string
+	TablePrefix string
 	Description string
 }
 
@@ -315,7 +344,7 @@ func resolveEnvImportSource(opts envImportOptions) (envImportSource, error) {
 	if !info.IsDir() {
 		return envImportSource{}, ProjectError{Msg: "env import source must be a directory"}
 	}
-	source := envImportSource{InputPath: inputPath, FilesPath: inputPath, Database: opts.database, SourceURL: normalizeWordPressURL(opts.sourceURL, true), Description: "WordPress filesystem directory"}
+	source := envImportSource{InputPath: inputPath, FilesPath: inputPath, Database: opts.database, SourceURL: normalizeWordPressURL(opts.sourceURL, true), TablePrefix: opts.tablePrefix, Description: "WordPress filesystem directory"}
 	manifestPath := siteExportManifestPath(inputPath)
 	if data, err := os.ReadFile(manifestPath); err == nil {
 		var manifest siteExportManifest
@@ -331,9 +360,25 @@ func resolveEnvImportSource(opts envImportOptions) (envImportSource, error) {
 		if source.SourceURL == "" {
 			source.SourceURL = normalizeWordPressURL(manifest.URL, true)
 		}
+		if source.TablePrefix == "" && manifest.TablePrefix != "" {
+			prefix, err := normalizeWordPressTablePrefix(manifest.TablePrefix)
+			if err != nil {
+				return envImportSource{}, err
+			}
+			source.TablePrefix = prefix
+		}
 		source.Description = "nf site export"
 	} else if strings.TrimSpace(source.Database) == "" {
 		source.Database = envImportDatabasePath(inputPath)
+	}
+	if source.TablePrefix == "" {
+		prefix, found, err := readWordPressTablePrefixFile(filepath.Join(inputPath, tablePrefixFilename))
+		if err != nil {
+			return envImportSource{}, err
+		}
+		if found {
+			source.TablePrefix = prefix
+		}
 	}
 	if strings.TrimSpace(source.Database) == "" {
 		return envImportSource{}, ProjectError{Msg: "env import requires --db unless the source contains manifest.json or a .sql/.sql.gz file"}
@@ -396,6 +441,9 @@ func cmdEnvImport(cfg envConfig, opts envImportOptions) int {
 	fmt.Printf("  database:      %s\n", source.Database)
 	if source.SourceURL != "" {
 		fmt.Printf("  source url:    %s\n", source.SourceURL)
+	}
+	if source.TablePrefix != "" {
+		fmt.Printf("  table prefix:  %s\n", source.TablePrefix)
 	}
 	fmt.Printf("  local url:     %s\n", envLocalWordPressURL(cfg))
 	fmt.Printf("  snapshot:      %s\n", normalized)
@@ -479,7 +527,13 @@ func createEnvImportSnapshot(cfg envConfig, name string, source envImportSource,
 	if err != nil {
 		return err
 	}
-	return os.WriteFile(envSnapshotMetadataPath(cfg, name), []byte(jsonText), 0o644)
+	if err := os.WriteFile(envSnapshotMetadataPath(cfg, name), []byte(jsonText), 0o644); err != nil {
+		return err
+	}
+	if source.TablePrefix != "" {
+		return writeWordPressTablePrefixFile(envSnapshotHostTablePrefixPath(cfg, name), source.TablePrefix)
+	}
+	return nil
 }
 
 func copyOrGzipDatabase(sourcePath, destinationPath string) error {

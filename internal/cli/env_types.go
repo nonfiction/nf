@@ -34,6 +34,7 @@ type envConfig struct {
 	AdminUser        string
 	AdminEmail       string
 	AdminPassword    string
+	TablePrefix      string
 	Themes           []wordpressThemeSpec
 	RepoThemeMounts  []envThemeMount
 	RepoPluginMounts []envPluginMount
@@ -162,15 +163,17 @@ type siteExportManifest struct {
 	WordPressPath string `json:"wordpress_path,omitempty"`
 	Files         string `json:"files"`
 	Database      string `json:"database"`
+	TablePrefix   string `json:"table_prefix,omitempty"`
 }
 
 type envImportOptions struct {
-	source    string
-	database  string
-	sourceURL string
-	name      string
-	dryRun    bool
-	yes       bool
+	source      string
+	database    string
+	sourceURL   string
+	tablePrefix string
+	name        string
+	dryRun      bool
+	yes         bool
 }
 
 const envSnapshotSchema = 1

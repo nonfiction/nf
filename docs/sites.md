@@ -128,6 +128,7 @@ Each export contains:
 
 * `files/`
 * `database.sql.gz`
+* `table-prefix.txt`
 * `manifest.json`
 * `README.txt`
 

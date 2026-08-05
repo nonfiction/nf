@@ -52,6 +52,7 @@ func runEnvHelp() int {
 	}}, helpSection{"Import Options", []helpLine{
 		{"--db <path>", "database dump path"},
 		{"--source-url <url>", "source URL for import search-replace"},
+		{"--table-prefix <prefix>", "WordPress table prefix when source metadata is unavailable"},
 		{"--name <name>", "snapshot name for the imported source"},
 		{"--dry-run", "show the import plan without making changes"},
 		{"--yes", "skip destructive import confirmation"},
@@ -67,10 +68,11 @@ func runEnvHelp() int {
 func runEnvImportHelp() int {
 	fmt.Println("env import")
 	fmt.Println("\nUsage:")
-	fmt.Println("  nf env import <source> [--db path] [--source-url url] [--name name] [--dry-run] [--yes]")
+	fmt.Println("  nf env import <source> [--db path] [--source-url url] [--table-prefix prefix] [--name name] [--dry-run] [--yes]")
 	fmt.Println("\nSource layout:")
 	fmt.Println("  source/")
 	fmt.Println("    database.sql.gz        # preferred; any *.sql.gz or *.sql is also detected")
+	fmt.Println("    table-prefix.txt       # optional for generic imports")
 	fmt.Println("    wp-content/")
 	fmt.Println("      uploads/")
 	fmt.Println("      plugins/")
@@ -84,6 +86,7 @@ func runEnvImportHelp() int {
 	fmt.Println("  export/")
 	fmt.Println("    manifest.json")
 	fmt.Println("    database.sql.gz")
+	fmt.Println("    table-prefix.txt")
 	fmt.Println("    files/")
 	fmt.Println("      wp-content/")
 	fmt.Println("        uploads/")
@@ -97,6 +100,7 @@ func runEnvImportHelp() int {
 	printHelpLines([]helpLine{
 		{"--db <path>", "database dump path when source does not contain a .sql/.sql.gz file"},
 		{"--source-url <url>", "source URL for import search-replace"},
+		{"--table-prefix <prefix>", "WordPress table prefix when source metadata is unavailable"},
 		{"--name <name>", "snapshot name for the imported source"},
 		{"--dry-run", "show the import plan only"},
 		{"--yes", "confirm destructive local import"},

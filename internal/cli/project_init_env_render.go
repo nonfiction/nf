@@ -219,6 +219,7 @@ func renderEnvCompose(cfg envConfig) string {
       WORDPRESS_DB_NAME: ${DB_NAME}
       WORDPRESS_DB_USER: ${DB_USER}
       WORDPRESS_DB_PASSWORD: ${DB_PASSWORD}
+      WORDPRESS_TABLE_PREFIX: ${WP_TABLE_PREFIX}
       WP_URL: ${WP_URL}
       WP_TITLE: ${WP_TITLE}
       ADMIN_USER: ${ADMIN_USER}
@@ -326,12 +327,13 @@ DB_NAME=%s
 DB_USER=%s
 DB_PASSWORD=%s
 DB_ROOT_PASSWORD=root
+WP_TABLE_PREFIX=%s
 WP_URL=http://localhost:%d
 WP_TITLE=%s
 ADMIN_USER=%s
 ADMIN_PASSWORD=%s
 ADMIN_EMAIL=%s
-`, envComposeProjectName(cfg.ProjectSlug), cfg.WordpressPort, cfg.MailpitPort, cfg.AdminerPort, cfg.ProjectSlug, envFileValue(dbUser), envFileValue(dbPassword), cfg.WordpressPort, envFileValue(wpTitle), envFileValue(adminUser), envFileValue(adminPassword), envFileValue(adminEmail))
+`, envComposeProjectName(cfg.ProjectSlug), cfg.WordpressPort, cfg.MailpitPort, cfg.AdminerPort, cfg.ProjectSlug, envFileValue(dbUser), envFileValue(dbPassword), envFileValue(firstNonEmpty(cfg.TablePrefix, defaultWordPressTablePrefix)), cfg.WordpressPort, envFileValue(wpTitle), envFileValue(adminUser), envFileValue(adminPassword), envFileValue(adminEmail))
 }
 
 func envFileValue(value string) string {

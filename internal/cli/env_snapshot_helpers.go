@@ -15,6 +15,11 @@ import (
 	"github.com/nonfiction/nf/internal/config"
 )
 
+const (
+	defaultWordPressTablePrefix = "wp_"
+	tablePrefixFilename         = "table-prefix.txt"
+)
+
 func defaultEnvSnapshotName(now time.Time) string {
 	return now.Format("2006-01-02-150405")
 }
@@ -43,6 +48,10 @@ func remoteSnapshotWpContentArchive(dir string) string {
 	return filepath.Join(dir, "wp-content.tar.gz")
 }
 
+func remoteSnapshotTablePrefixPath(dir string) string {
+	return filepath.Join(dir, tablePrefixFilename)
+}
+
 func envSnapshotDir(cfg envConfig, name string) string {
 	return config.SnapshotDir(cfg.ProjectSlug, name)
 }
@@ -63,6 +72,10 @@ func envSnapshotContainerWpContentTransferArchive(name string) string {
 	return path.Join(envSnapshotContainerDir(name), ".wp-content-transfer.tar.gz")
 }
 
+func envSnapshotContainerTablePrefixPath(name string) string {
+	return path.Join(envSnapshotContainerDir(name), tablePrefixFilename)
+}
+
 func envSnapshotHostDatabaseArchive(cfg envConfig, name string) string {
 	return filepath.Join(envSnapshotDir(cfg, name), "database.sql.gz")
 }
@@ -75,8 +88,49 @@ func envSnapshotHostWpContentTransferArchive(cfg envConfig, name string) string 
 	return filepath.Join(envSnapshotDir(cfg, name), ".wp-content-transfer.tar.gz")
 }
 
+func envSnapshotHostTablePrefixPath(cfg envConfig, name string) string {
+	return filepath.Join(envSnapshotDir(cfg, name), tablePrefixFilename)
+}
+
 func envSnapshotMetadataPath(cfg envConfig, name string) string {
 	return filepath.Join(envSnapshotDir(cfg, name), "snapshot.json")
+}
+
+func normalizeWordPressTablePrefix(value string) (string, error) {
+	prefix := strings.TrimSpace(value)
+	if prefix == "" {
+		return "", ProjectError{Msg: "WordPress table prefix cannot be empty"}
+	}
+	for _, r := range prefix {
+		if r >= 'a' && r <= 'z' || r >= 'A' && r <= 'Z' || r >= '0' && r <= '9' || r == '_' {
+			continue
+		}
+		return "", ProjectError{Msg: fmt.Sprintf("invalid WordPress table prefix %q; use only letters, numbers, and underscores", prefix)}
+	}
+	return prefix, nil
+}
+
+func readWordPressTablePrefixFile(filePath string) (string, bool, error) {
+	data, err := os.ReadFile(filePath)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return "", false, nil
+		}
+		return "", false, err
+	}
+	prefix, err := normalizeWordPressTablePrefix(string(data))
+	if err != nil {
+		return "", true, err
+	}
+	return prefix, true, nil
+}
+
+func writeWordPressTablePrefixFile(filePath, value string) error {
+	prefix, err := normalizeWordPressTablePrefix(value)
+	if err != nil {
+		return err
+	}
+	return os.WriteFile(filePath, []byte(prefix+"\n"), 0o644)
 }
 
 func envSnapshotComposeMount(cfg envConfig) string {

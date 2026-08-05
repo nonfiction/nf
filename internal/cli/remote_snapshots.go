@@ -226,6 +226,13 @@ func createEnvSnapshotFromRemote(cfg envConfig, record remoteSnapshotRecord, loc
 	if err := copyFile(record.WpContentArchive, envSnapshotHostWpContentArchive(cfg, normalizedLocalName)); err != nil {
 		return "", err
 	}
+	if prefix, found, err := readWordPressTablePrefixFile(remoteSnapshotTablePrefixPath(record.Directory)); err != nil {
+		return "", err
+	} else if found {
+		if err := writeWordPressTablePrefixFile(envSnapshotHostTablePrefixPath(cfg, normalizedLocalName), prefix); err != nil {
+			return "", err
+		}
+	}
 	meta := newEnvSnapshotMetadata(cfg, normalizedLocalName, time.Now())
 	meta.WordpressURL = firstNonEmpty(normalizeWordPressURL(record.Metadata.URL, true), meta.WordpressURL)
 	jsonText, err := envSnapshotMetadataJSON(meta)

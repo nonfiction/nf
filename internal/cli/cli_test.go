@@ -1142,7 +1142,7 @@ func TestRunCompleteSuggestsStaticAndCachedValues(t *testing.T) {
 			t.Fatalf("Run(__complete env import) = %d, want 0", got)
 		}
 	})
-	for _, want := range []string{"--db\n", "--source-url\n", "--name\n", "--dry-run\n", "--yes\n"} {
+	for _, want := range []string{"--db\n", "--source-url\n", "--table-prefix\n", "--name\n", "--dry-run\n", "--yes\n"} {
 		if !strings.Contains(envImportOutput, want) {
 			t.Fatalf("env import completion missing %q:\n%s", want, envImportOutput)
 		}
@@ -13900,6 +13900,9 @@ func TestRunSiteExportCreatesFullHandoffExport(t *testing.T) {
 	var rsyncCommands [][]string
 	runRsyncCommandFn = func(args []string) error {
 		rsyncCommands = append(rsyncCommands, append([]string(nil), args...))
+		if strings.Contains(args[len(args)-2], tablePrefixFilename) {
+			return os.WriteFile(filepath.Join(outputDir, tablePrefixFilename), []byte("wpmc_\n"), 0o644)
+		}
 		return nil
 	}
 	t.Cleanup(func() { runRsyncCommandFn = oldRunRsync })
@@ -13920,20 +13923,20 @@ func TestRunSiteExportCreatesFullHandoffExport(t *testing.T) {
 	if !strings.Contains(sshCommands[0][len(sshCommands[0])-1], "wp --path=/www/client/public db export") {
 		t.Fatalf("export ssh command = %#v", sshCommands[0])
 	}
-	if len(rsyncCommands) != 2 {
-		t.Fatalf("rsync commands len = %d, want database and files downloads: %#v", len(rsyncCommands), rsyncCommands)
+	if len(rsyncCommands) != 3 {
+		t.Fatalf("rsync commands len = %d, want database, prefix, and files downloads: %#v", len(rsyncCommands), rsyncCommands)
 	}
 	if got, want := rsyncCommands[0][3], "ssh -p 12345"; got != want {
 		t.Fatalf("database rsync ssh option = %q, want %q", got, want)
 	}
-	if got, want := rsyncCommands[1][len(rsyncCommands[1])-1], siteExportFilesDir(outputDir)+string(filepath.Separator); got != want {
+	if got, want := rsyncCommands[2][len(rsyncCommands[2])-1], siteExportFilesDir(outputDir)+string(filepath.Separator); got != want {
 		t.Fatalf("files rsync output = %q, want %q", got, want)
 	}
 	data, err := os.ReadFile(siteExportManifestPath(outputDir))
 	if err != nil {
 		t.Fatalf("ReadFile(manifest.json) error = %v", err)
 	}
-	for _, want := range []string{`"source": "remote-site-export"`, `"env_id": "client-kinsta:live"`, `"files": "files"`, `"database": "database.sql.gz"`} {
+	for _, want := range []string{`"source": "remote-site-export"`, `"env_id": "client-kinsta:live"`, `"files": "files"`, `"database": "database.sql.gz"`, `"table_prefix": "wpmc_"`} {
 		if !strings.Contains(string(data), want) {
 			t.Fatalf("export manifest missing %q:\n%s", want, data)
 		}
@@ -15513,6 +15516,104 @@ func TestNormalizeWordPressDestinationURLRejectsMalformedURL(t *testing.T) {
 	}
 }
 
+func TestNormalizeWordPressTablePrefix(t *testing.T) {
+	for _, value := range []string{"wp_", "wpmc_", "client2_"} {
+		if got, err := normalizeWordPressTablePrefix(value); err != nil || got != value {
+			t.Fatalf("normalizeWordPressTablePrefix(%q) = %q, %v", value, got, err)
+		}
+	}
+	for _, value := range []string{"", "wp-prefix", "wp prefix", "wp;drop"} {
+		if _, err := normalizeWordPressTablePrefix(value); err == nil {
+			t.Fatalf("normalizeWordPressTablePrefix(%q) error = nil", value)
+		}
+	}
+}
+
+func TestParseEnvImportTablePrefix(t *testing.T) {
+	opts, err := parseEnvImportArgs([]string{"source", "--table-prefix=wpmc_"})
+	if err != nil {
+		t.Fatalf("parseEnvImportArgs() error = %v", err)
+	}
+	if opts.tablePrefix != "wpmc_" {
+		t.Fatalf("parseEnvImportArgs() tablePrefix = %q", opts.tablePrefix)
+	}
+	if _, err := parseEnvImportArgs([]string{"source", "--table-prefix=wp-prefix"}); err == nil {
+		t.Fatal("parseEnvImportArgs(invalid prefix) error = nil")
+	}
+}
+
+func TestApplyLocalWordPressTablePrefixRecreatesWordPress(t *testing.T) {
+	envDir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(envDir, ".env"), []byte("COMPOSE_PROJECT_NAME=nf_client_env\nWP_TABLE_PREFIX=wp_\n"), 0o644); err != nil {
+		t.Fatalf("WriteFile(.env) error = %v", err)
+	}
+	dockerDir := t.TempDir()
+	logPath := filepath.Join(dockerDir, "docker.log")
+	dockerScript := []byte("#!/bin/sh\nprintf '%s\\n' \"$@\" >> \"$DOCKER_LOG\"\nexit 0\n")
+	if err := os.WriteFile(filepath.Join(dockerDir, "docker"), dockerScript, 0o755); err != nil {
+		t.Fatalf("WriteFile(docker) error = %v", err)
+	}
+	t.Setenv("DOCKER_LOG", logPath)
+	t.Setenv("PATH", dockerDir+string(os.PathListSeparator)+os.Getenv("PATH"))
+	oldRunOutput := runCommandSpecOutputSilentFn
+	runCommandSpecOutputSilentFn = func(spec execSpec) (string, error) {
+		return "wpmc_\n", nil
+	}
+	t.Cleanup(func() { runCommandSpecOutputSilentFn = oldRunOutput })
+	cfg := envConfig{EnvDir: envDir, Compose: "docker compose", WordpressService: "wordpress", DockerUser: "nonfiction"}
+
+	if err := applyLocalWordPressTablePrefix(cfg, "wpmc_"); err != nil {
+		t.Fatalf("applyLocalWordPressTablePrefix() error = %v", err)
+	}
+	envData, err := os.ReadFile(filepath.Join(envDir, ".env"))
+	if err != nil {
+		t.Fatalf("ReadFile(.env) error = %v", err)
+	}
+	if !strings.Contains(string(envData), "WP_TABLE_PREFIX=wpmc_\n") {
+		t.Fatalf("managed .env did not persist table prefix:\n%s", envData)
+	}
+	logData, err := os.ReadFile(logPath)
+	if err != nil {
+		t.Fatalf("ReadFile(docker.log) error = %v", err)
+	}
+	assertContainsInOrder(t, string(logData), []string{"up\n-d\n--no-deps\n--force-recreate\nwordpress", "exec\n--user\nnonfiction\nwordpress\nsh\n-lc"})
+}
+
+func TestDatabaseExportScriptsCaptureWordPressTablePrefix(t *testing.T) {
+	cfg := envConfig{}
+	target := envRemoteSyncTarget{WordPressPath: "/www/client/public", WPCommand: "wp"}
+	for name, script := range map[string]string{
+		"local snapshot": envSnapshotCreateScript(cfg, "snapshot"),
+		"local push":     envPushTransferCreateScript(cfg, "push"),
+		"remote":         remoteExportScript(target, "/tmp/export"),
+		"site export":    remoteSiteExportScript(target, "/tmp/export"),
+	} {
+		if !strings.Contains(script, "config get table_prefix") || !strings.Contains(script, tablePrefixFilename) {
+			t.Fatalf("%s script does not capture table prefix:\n%s", name, script)
+		}
+		if strings.Contains(script, "%!") {
+			t.Fatalf("%s script contains fmt error:\n%s", name, script)
+		}
+	}
+}
+
+func TestEnsureManagedEnvPreservesTablePrefixState(t *testing.T) {
+	cfg := envConfig{ProjectSlug: "client", EnvDir: t.TempDir(), WordpressPort: 18432, MailpitPort: 18433, AdminerPort: 18434, DBUser: "client", DBPassword: "db-pass", AdminUser: "admin", AdminPassword: "admin-pass", AdminEmail: "admin@example.test"}
+	if err := os.WriteFile(filepath.Join(cfg.EnvDir, ".env"), []byte("WP_TABLE_PREFIX=wpmc_\n"), 0o644); err != nil {
+		t.Fatalf("WriteFile(.env) error = %v", err)
+	}
+	if err := ensureManagedEnv(cfg); err != nil {
+		t.Fatalf("ensureManagedEnv() error = %v", err)
+	}
+	data, err := os.ReadFile(filepath.Join(cfg.EnvDir, ".env"))
+	if err != nil {
+		t.Fatalf("ReadFile(.env) error = %v", err)
+	}
+	if !strings.Contains(string(data), "WP_TABLE_PREFIX=wpmc_\n") {
+		t.Fatalf("ensureManagedEnv() reset table prefix state:\n%s", data)
+	}
+}
+
 func TestExecuteEnvPushFinalizesRemoteDestinationThemeAndCache(t *testing.T) {
 	configHome := t.TempDir()
 	t.Setenv("NF_CONFIG_HOME", configHome)
@@ -15559,11 +15660,14 @@ func TestExecuteEnvPushFinalizesRemoteDestinationThemeAndCache(t *testing.T) {
 	if matches, err := filepath.Glob(filepath.Join(envSnapshotProjectDir(cfg), "push-live-*")); err != nil || len(matches) != 0 {
 		t.Fatalf("push left local transfer workspace matches = %#v, err = %v", matches, err)
 	}
-	if len(sshCommands) != 6 {
-		t.Fatalf("ssh commands len = %d, want mkdir/export/import/finalize/cleanup/cleanup: %#v", len(sshCommands), sshCommands)
+	if len(sshCommands) != 7 {
+		t.Fatalf("ssh commands len = %d, want prefix-check/export/mkdir/import/finalize/cleanup/cleanup: %#v", len(sshCommands), sshCommands)
 	}
-	importScript := sshCommands[2][len(sshCommands[2])-1]
-	finalizeScript := sshCommands[3][len(sshCommands[3])-1]
+	if !strings.Contains(sshCommands[0][len(sshCommands[0])-1], "config get table_prefix") {
+		t.Fatalf("first remote command did not check table prefix: %#v", sshCommands[0])
+	}
+	importScript := sshCommands[3][len(sshCommands[3])-1]
+	finalizeScript := sshCommands[4][len(sshCommands[4])-1]
 	if !strings.Contains(importScript, "db import") {
 		t.Fatalf("remote import script missing db import:\n%s", importScript)
 	}
@@ -15586,8 +15690,55 @@ func TestExecuteEnvPushFinalizesRemoteDestinationThemeAndCache(t *testing.T) {
 	if rsyncCommands[2][len(rsyncCommands[2])-2] != cfg.managedUploadsDir()+string(filepath.Separator) || !strings.Contains(rsyncCommands[2][len(rsyncCommands[2])-1], "/wp-content/uploads/") || !slices.Contains(rsyncCommands[2], "--rsync-path=sudo rsync") || !slices.Contains(rsyncCommands[2], "--chown=www-data:www-data") {
 		t.Fatalf("push uploads rsync args = %#v", rsyncCommands[2])
 	}
-	if !strings.Contains(sshCommands[4][len(sshCommands[4])-1], "rm -rf -- /tmp/nf-push-") || !strings.Contains(sshCommands[5][len(sshCommands[5])-1], "rm -rf -- /tmp/nf-backup-") {
-		t.Fatalf("push cleanup commands = %#v", sshCommands[4:])
+	if !strings.Contains(sshCommands[5][len(sshCommands[5])-1], "rm -rf -- /tmp/nf-push-") || !strings.Contains(sshCommands[6][len(sshCommands[6])-1], "rm -rf -- /tmp/nf-backup-") {
+		t.Fatalf("push cleanup commands = %#v", sshCommands[5:])
+	}
+}
+
+func TestExecuteEnvPushRejectsTablePrefixMismatchBeforeBackup(t *testing.T) {
+	configHome := t.TempDir()
+	t.Setenv("NF_CONFIG_HOME", configHome)
+	t.Setenv("NF_DATA_HOME", configHome)
+	dockerDir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dockerDir, "docker"), []byte("#!/bin/sh\nexit 0\n"), 0o755); err != nil {
+		t.Fatalf("WriteFile(docker) error = %v", err)
+	}
+	t.Setenv("PATH", dockerDir+string(os.PathListSeparator)+os.Getenv("PATH"))
+	cfg := envConfig{ProjectSlug: "client", EnvDir: config.EnvDir("client"), Compose: "docker compose", WordpressService: "wordpress", DockerUser: "nonfiction", UploadsPath: "uploads", WordpressPort: 18432}
+	if err := os.MkdirAll(cfg.managedUploadsDir(), 0o755); err != nil {
+		t.Fatalf("MkdirAll(uploads) error = %v", err)
+	}
+	target := envRemoteSyncTarget{RemoteName: "production", Provider: "kinsta", SiteID: "client-kinsta", Env: "live", URL: "https://www.example.com/", SSHUser: "client", SSHHost: "203.0.113.10", SSHPort: "12345", WordPressPath: "/www/client/public", WPCommand: "wp"}
+	stubEnvRemoteDiskOutput(t, "1024\n", "1073741824\n")
+	stubLocalAvailableDisk(t, 1073741824)
+	stubLocalWordPressTransferEstimate(t, 1024)
+	stubLocalPushTransferSizes(t, 1024, 1024)
+	oldRunSSH := runSSHCommandFn
+	var sshCommands [][]string
+	runSSHCommandFn = func(args []string) error {
+		sshCommands = append(sshCommands, append([]string(nil), args...))
+		return fmt.Errorf("table prefix mismatch")
+	}
+	t.Cleanup(func() { runSSHCommandFn = oldRunSSH })
+	oldRunRsync := runRsyncCommandFn
+	runRsyncCommandFn = func(args []string) error {
+		t.Fatalf("runRsyncCommandFn called after prefix mismatch: %#v", args)
+		return nil
+	}
+	t.Cleanup(func() { runRsyncCommandFn = oldRunRsync })
+
+	stderr := captureStderr(t, func() {
+		captureStdout(t, func() {
+			if got := executeEnvPush(cfg, target); got != 1 {
+				t.Fatalf("executeEnvPush() = %d, want 1", got)
+			}
+		})
+	})
+	if !strings.Contains(stderr, "table prefix mismatch") {
+		t.Fatalf("stderr missing prefix mismatch:\n%s", stderr)
+	}
+	if len(sshCommands) != 1 || !strings.Contains(sshCommands[0][len(sshCommands[0])-1], "config get table_prefix") || strings.Contains(sshCommands[0][len(sshCommands[0])-1], "db export") {
+		t.Fatalf("ssh commands = %#v, want prefix check only", sshCommands)
 	}
 }
 
@@ -15631,8 +15782,8 @@ func TestExecuteEnvPushRetainsRemoteBackupAfterRemoteChangeFailure(t *testing.T)
 		})
 	})
 	assertContainsInOrder(t, stderr, []string{"rewrite flush failed", "Remote backup retained for recovery: /tmp/nf-backup-", "Remove it after recovery to free production disk space."})
-	if len(sshCommands) != 5 || !strings.Contains(sshCommands[4][len(sshCommands[4])-1], "rm -rf -- /tmp/nf-push-") {
-		t.Fatalf("ssh commands = %#v, want backup/export/import/finalize plus push cleanup", sshCommands)
+	if len(sshCommands) != 6 || !strings.Contains(sshCommands[5][len(sshCommands[5])-1], "rm -rf -- /tmp/nf-push-") {
+		t.Fatalf("ssh commands = %#v, want prefix-check/backup/export/import/finalize plus push cleanup", sshCommands)
 	}
 	for _, command := range sshCommands {
 		if strings.Contains(command[len(command)-1], "rm -rf -- /tmp/nf-backup-") {
@@ -15729,8 +15880,8 @@ func TestExecuteEnvPushChecksPostBackupSpaceBeforeRsync(t *testing.T) {
 	if !strings.Contains(stderr, "not enough disk space for remote push workspace at /tmp") {
 		t.Fatalf("stderr missing remote push workspace error:\n%s", stderr)
 	}
-	if len(sshCommands) != 2 || !strings.Contains(sshCommands[0][len(sshCommands[0])-1], "db export") || !strings.Contains(sshCommands[0][len(sshCommands[0])-1], "/tmp/nf-backup-") || !strings.Contains(sshCommands[1][len(sshCommands[1])-1], "rm -rf -- /tmp/nf-backup-") {
-		t.Fatalf("ssh commands = %#v, want backup export then backup cleanup", sshCommands)
+	if len(sshCommands) != 3 || !strings.Contains(sshCommands[0][len(sshCommands[0])-1], "config get table_prefix") || !strings.Contains(sshCommands[1][len(sshCommands[1])-1], "db export") || !strings.Contains(sshCommands[1][len(sshCommands[1])-1], "/tmp/nf-backup-") || !strings.Contains(sshCommands[2][len(sshCommands[2])-1], "rm -rf -- /tmp/nf-backup-") {
+		t.Fatalf("ssh commands = %#v, want prefix check, backup export, then backup cleanup", sshCommands)
 	}
 }
 
@@ -15828,7 +15979,7 @@ func TestExecuteEnvPullCleansRemoteTempAfterExportFailure(t *testing.T) {
 func TestRemoteImportScriptPreservesRepoPluginDirs(t *testing.T) {
 	cfg := envConfig{RepoPluginMounts: []envPluginMount{{Slug: "agency-credit", Host: "/repo/plugins/agency-credit"}}}
 	target := envRemoteSyncTarget{WordPressPath: "/var/www/sites/client/public", WPCommand: "sudo -u www-data wp", SudoFileOps: true}
-	script := remoteImportScript(cfg, target, "/tmp/nf-push-client")
+	script := remoteImportScript(cfg, target, "/tmp/nf-push-client", "wp_")
 	for _, want := range []string{"repo_plugins=agency-credit", "case \" $repo_plugins \" in *\" $base \"*) continue ;; esac", "sudo rm -rf \"$entry\"", "sudo tar --exclude=wp-content/plugins/agency-credit --exclude=wp-content/mu-plugins --exclude='wp-content/mu-plugins/*' -tzf /tmp/nf-push-client/wp-content.tar.gz >/dev/null", "sudo tar --exclude=wp-content/plugins/agency-credit --exclude=wp-content/mu-plugins --exclude='wp-content/mu-plugins/*' -xzf /tmp/nf-push-client/wp-content.tar.gz -C /var/www/sites/client/public", "sudo chown -R www-data:www-data /var/www/sites/client/public/wp-content/plugins /var/www/sites/client/public/wp-content/languages"} {
 		if !strings.Contains(script, want) {
 			t.Fatalf("remote import script missing %q:\n%s", want, script)
@@ -17038,7 +17189,7 @@ func writeTestWPDefaults(t *testing.T, salt string) {
 func TestRenderEnvFileUsesComposeProjectName(t *testing.T) {
 	wpPort, mailpitPort, adminerPort := envDerivedPorts("client")
 	cfg := envConfig{ProjectSlug: "client", WordpressPort: wpPort, MailpitPort: mailpitPort, AdminerPort: adminerPort, DBUser: "client", DBPassword: "db-pass"}
-	want := fmt.Sprintf("COMPOSE_PROJECT_NAME=nf_client_env\nWP_PORT=%d\nMAILPIT_PORT=%d\nDB_UI_PORT=%d\nDB_NAME=client\nDB_USER=client\nDB_PASSWORD=db-pass\nDB_ROOT_PASSWORD=root\nWP_URL=http://localhost:%d\nWP_TITLE=Client\nADMIN_USER=nonfiction\nADMIN_PASSWORD=admin\nADMIN_EMAIL=web@nonfiction.ca\n", wpPort, mailpitPort, adminerPort, wpPort)
+	want := fmt.Sprintf("COMPOSE_PROJECT_NAME=nf_client_env\nWP_PORT=%d\nMAILPIT_PORT=%d\nDB_UI_PORT=%d\nDB_NAME=client\nDB_USER=client\nDB_PASSWORD=db-pass\nDB_ROOT_PASSWORD=root\nWP_TABLE_PREFIX=wp_\nWP_URL=http://localhost:%d\nWP_TITLE=Client\nADMIN_USER=nonfiction\nADMIN_PASSWORD=admin\nADMIN_EMAIL=web@nonfiction.ca\n", wpPort, mailpitPort, adminerPort, wpPort)
 	if got := renderEnvFile(cfg); got != want {
 		t.Fatalf("renderEnvFile() = %q, want %q", got, want)
 	}

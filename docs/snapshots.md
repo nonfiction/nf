@@ -22,11 +22,12 @@ Each snapshot contains:
 
 * `snapshot.json`
 * `database.sql.gz`
+* `table-prefix.txt`
 * `wp-content.tar.gz`
 
 The `wp-content` archive includes only `uploads/`, `plugins/`, and `languages/`. It skips themes and target-owned `mu-plugins/`.
 
-`nf env snapshot use` creates a safety snapshot named `YYYY-MM-DD-HHMMSS-pre-restore` before restoring the selected snapshot. Add `--yes` to skip the interactive confirmation.
+`nf env snapshot use` creates a safety snapshot named `YYYY-MM-DD-HHMMSS-pre-restore` before restoring the selected snapshot. The restore automatically configures the generated local WordPress environment to use the recorded table prefix before importing the database. Add `--yes` to skip the interactive confirmation. Older snapshots without `table-prefix.txt` keep the local environment's current prefix.
 
 ## Remote Snapshots
 
@@ -70,10 +71,10 @@ Use dry-run before pruning when possible.
 ## Import a Handoff Into Local Development
 
 ```sh
-nf env import <source> [--db path] [--source-url url] [--name name] [--dry-run] [--yes]
+nf env import <source> [--db path] [--source-url url] [--table-prefix prefix] [--name name] [--dry-run] [--yes]
 ```
 
-`nf env import` imports into the current project's local env only. It accepts an `nf site export` directory, or a generic WordPress filesystem directory when paired with `--db`.
+`nf env import` imports into the current project's local env only. It accepts an `nf site export` directory, or a generic WordPress filesystem directory when paired with `--db`. `nf` exports include the active table prefix automatically; use `--table-prefix` only for generic database dumps without nf metadata.
 
 The import creates an import snapshot, creates the normal pre-restore safety snapshot, restores the database plus `wp-content/uploads`, `plugins`, and `languages`, runs URL search-replace when a source URL is known, activates the configured local theme when installed, regenerates WordPress rewrite rules with `wp rewrite flush`, and then flushes object cache as a separate step. Local snapshot restores use the same finalization sequence.
 
