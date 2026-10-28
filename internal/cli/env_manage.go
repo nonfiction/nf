@@ -33,7 +33,13 @@ func ensureManagedEnv(cfg envConfig) error {
 	if strings.TrimSpace(envDir) == "" {
 		return fmt.Errorf("missing managed env directory")
 	}
-	if err := validateDockerUser(firstNonEmpty(cfg.DockerUser, defaultDockerUser)); err != nil {
+	// Every writer must resolve credentials, including commands that only inspect
+	// running containers. Those containers can hide a bad .env until recreation.
+	cfg, err := envConfigWithCredentials(cfg)
+	if err != nil {
+		return err
+	}
+	if err := validateDockerUser(cfg.DockerUser); err != nil {
 		return err
 	}
 	currentPrefix, err := managedEnvTablePrefix(cfg)
@@ -141,18 +147,23 @@ func applyLocalWordPressTablePrefix(cfg envConfig, value string) error {
 }
 
 func envConfigWithAdminCredentials(cfg envConfig) (envConfig, error) {
+	cfg, err := envConfigWithCredentials(cfg)
+	if err != nil {
+		return cfg, err
+	}
+	if cfg.AdminEmail == "" {
+		return cfg, ProjectError{Msg: fmt.Sprintf("Expected default_wp_email in %s. Set it with nf config set-default-wp-email <email>.", config.ConfigFile())}
+	}
+	return cfg, nil
+}
+
+func envConfigWithCredentials(cfg envConfig) (envConfig, error) {
 	values, err := loadGlobalConfig()
 	if err != nil {
 		return cfg, err
 	}
 	cfg = envConfigWithDockerSettings(cfg, values)
-	if cfg.AdminUser != "" && cfg.AdminEmail != "" && cfg.AdminPassword != "" && cfg.DBUser != "" && cfg.DBPassword != "" {
-		return cfg, nil
-	}
 	adminEmail := firstNonEmpty(cfg.AdminEmail, values["default_wp_email"])
-	if adminEmail == "" {
-		return cfg, ProjectError{Msg: fmt.Sprintf("Expected default_wp_email in %s. Set it with nf config set-default-wp-email <email>.", config.ConfigFile())}
-	}
 	adminUser := firstNonEmpty(cfg.AdminUser, values["default_wp_user"], defaultWordPressAdminUser)
 	adminPassword, err := envAdminPassword(cfg)
 	if err != nil {

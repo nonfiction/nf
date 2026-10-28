@@ -14665,6 +14665,8 @@ func TestRunEnvSnapshotHelpShowsDedicatedCommands(t *testing.T) {
 }
 
 func TestRunEnvSnapshotAddSkipsComposeUpWhenReady(t *testing.T) {
+	t.Setenv("NF_PASSWORD_SALT", "test-salt")
+	t.Setenv("NF_STATE_HOME", t.TempDir())
 	configHome := t.TempDir()
 	t.Setenv("NF_CONFIG_HOME", configHome)
 	t.Setenv("NF_DATA_HOME", configHome)
@@ -14894,6 +14896,8 @@ func TestRunEnvSnapshotImportDefaultNameSanitizesRemoteSnapshotName(t *testing.T
 }
 
 func TestRunEnvSnapshotUseSkipsComposeUpWhenReady(t *testing.T) {
+	t.Setenv("NF_PASSWORD_SALT", "test-salt")
+	t.Setenv("NF_STATE_HOME", t.TempDir())
 	configHome := t.TempDir()
 	t.Setenv("NF_CONFIG_HOME", configHome)
 	t.Setenv("NF_DATA_HOME", configHome)
@@ -14994,6 +14998,8 @@ func TestRunEnvSnapshotUseSkipsComposeUpWhenReady(t *testing.T) {
 }
 
 func TestRunEnvSnapshotUseYesSkipsInteractiveConfirmation(t *testing.T) {
+	t.Setenv("NF_PASSWORD_SALT", "test-salt")
+	t.Setenv("NF_STATE_HOME", t.TempDir())
 	repoRoot, cfg := writeTestEnvProject(t)
 	writeTestEnvSnapshot(t, cfg, "restore-source", "2026-05-28T09:30:12Z", 2, 7)
 	dockerDir := t.TempDir()
@@ -15040,6 +15046,8 @@ func TestRunEnvSnapshotUseYesSkipsInteractiveConfirmation(t *testing.T) {
 }
 
 func TestRunEnvSnapshotUseRemoteImportsThenRestores(t *testing.T) {
+	t.Setenv("NF_PASSWORD_SALT", "test-salt")
+	t.Setenv("NF_STATE_HOME", t.TempDir())
 	repoRoot, cfg := writeTestEnvProject(t)
 	remoteName := "client-kinsta.live-2026-06-04-120000"
 	writeTestRemoteSnapshot(t, remoteName, "client-kinsta:live", "2026-06-04T12:00:00Z", 2, 7)
@@ -15091,6 +15099,8 @@ func TestRunEnvSnapshotUseRemoteImportsThenRestores(t *testing.T) {
 }
 
 func TestRunEnvImportRestoresSiteExportIntoLocalEnv(t *testing.T) {
+	t.Setenv("NF_PASSWORD_SALT", "test-salt")
+	t.Setenv("NF_STATE_HOME", t.TempDir())
 	repoRoot, cfg := writeTestEnvProject(t)
 	exportDir := filepath.Join(t.TempDir(), "client-export")
 	for _, dir := range []string{
@@ -15403,6 +15413,8 @@ func TestEnvSnapshotCreateArchivesChecksLocalSpaceBeforeDocker(t *testing.T) {
 }
 
 func TestExecuteEnvPullFinalizesLocalDestinationThemeAndCache(t *testing.T) {
+	t.Setenv("NF_PASSWORD_SALT", "test-salt")
+	t.Setenv("NF_STATE_HOME", t.TempDir())
 	configHome := t.TempDir()
 	t.Setenv("NF_CONFIG_HOME", configHome)
 	t.Setenv("NF_DATA_HOME", configHome)
@@ -15458,6 +15470,8 @@ func TestExecuteEnvPullFinalizesLocalDestinationThemeAndCache(t *testing.T) {
 }
 
 func TestExecuteEnvPullSkipsMissingLocalDestinationTheme(t *testing.T) {
+	t.Setenv("NF_PASSWORD_SALT", "test-salt")
+	t.Setenv("NF_STATE_HOME", t.TempDir())
 	configHome := t.TempDir()
 	t.Setenv("NF_CONFIG_HOME", configHome)
 	t.Setenv("NF_DATA_HOME", configHome)
@@ -15598,6 +15612,9 @@ func TestDatabaseExportScriptsCaptureWordPressTablePrefix(t *testing.T) {
 }
 
 func TestEnsureManagedEnvPreservesTablePrefixState(t *testing.T) {
+	t.Setenv("NF_CONFIG_HOME", t.TempDir())
+	t.Setenv("NF_STATE_HOME", t.TempDir())
+	t.Setenv("NF_DATA_HOME", t.TempDir())
 	cfg := envConfig{ProjectSlug: "client", EnvDir: t.TempDir(), WordpressPort: 18432, MailpitPort: 18433, AdminerPort: 18434, DBUser: "client", DBPassword: "db-pass", AdminUser: "admin", AdminPassword: "admin-pass", AdminEmail: "admin@example.test"}
 	if err := os.WriteFile(filepath.Join(cfg.EnvDir, ".env"), []byte("WP_TABLE_PREFIX=wpmc_\n"), 0o644); err != nil {
 		t.Fatalf("WriteFile(.env) error = %v", err)
@@ -15615,6 +15632,8 @@ func TestEnsureManagedEnvPreservesTablePrefixState(t *testing.T) {
 }
 
 func TestExecuteEnvPushFinalizesRemoteDestinationThemeAndCache(t *testing.T) {
+	t.Setenv("NF_PASSWORD_SALT", "test-salt")
+	t.Setenv("NF_STATE_HOME", t.TempDir())
 	configHome := t.TempDir()
 	t.Setenv("NF_CONFIG_HOME", configHome)
 	t.Setenv("NF_DATA_HOME", configHome)
@@ -15696,6 +15715,8 @@ func TestExecuteEnvPushFinalizesRemoteDestinationThemeAndCache(t *testing.T) {
 }
 
 func TestExecuteEnvPushRejectsTablePrefixMismatchBeforeBackup(t *testing.T) {
+	t.Setenv("NF_PASSWORD_SALT", "test-salt")
+	t.Setenv("NF_STATE_HOME", t.TempDir())
 	configHome := t.TempDir()
 	t.Setenv("NF_CONFIG_HOME", configHome)
 	t.Setenv("NF_DATA_HOME", configHome)
@@ -15743,6 +15764,8 @@ func TestExecuteEnvPushRejectsTablePrefixMismatchBeforeBackup(t *testing.T) {
 }
 
 func TestExecuteEnvPushRetainsRemoteBackupAfterRemoteChangeFailure(t *testing.T) {
+	t.Setenv("NF_PASSWORD_SALT", "test-salt")
+	t.Setenv("NF_STATE_HOME", t.TempDir())
 	configHome := t.TempDir()
 	t.Setenv("NF_CONFIG_HOME", configHome)
 	t.Setenv("NF_DATA_HOME", configHome)
@@ -15793,6 +15816,8 @@ func TestExecuteEnvPushRetainsRemoteBackupAfterRemoteChangeFailure(t *testing.T)
 }
 
 func TestExecuteEnvPushChecksRemoteSpaceBeforeRsync(t *testing.T) {
+	t.Setenv("NF_PASSWORD_SALT", "test-salt")
+	t.Setenv("NF_STATE_HOME", t.TempDir())
 	configHome := t.TempDir()
 	t.Setenv("NF_CONFIG_HOME", configHome)
 	t.Setenv("NF_DATA_HOME", configHome)
@@ -15839,6 +15864,8 @@ func TestExecuteEnvPushChecksRemoteSpaceBeforeRsync(t *testing.T) {
 }
 
 func TestExecuteEnvPushChecksPostBackupSpaceBeforeRsync(t *testing.T) {
+	t.Setenv("NF_PASSWORD_SALT", "test-salt")
+	t.Setenv("NF_STATE_HOME", t.TempDir())
 	configHome := t.TempDir()
 	t.Setenv("NF_CONFIG_HOME", configHome)
 	t.Setenv("NF_DATA_HOME", configHome)
@@ -15886,6 +15913,8 @@ func TestExecuteEnvPushChecksPostBackupSpaceBeforeRsync(t *testing.T) {
 }
 
 func TestExecuteEnvPullChecksLocalSpaceBeforeRsync(t *testing.T) {
+	t.Setenv("NF_PASSWORD_SALT", "test-salt")
+	t.Setenv("NF_STATE_HOME", t.TempDir())
 	configHome := t.TempDir()
 	t.Setenv("NF_CONFIG_HOME", configHome)
 	t.Setenv("NF_DATA_HOME", configHome)
@@ -15930,6 +15959,8 @@ func TestExecuteEnvPullChecksLocalSpaceBeforeRsync(t *testing.T) {
 }
 
 func TestExecuteEnvPullCleansRemoteTempAfterExportFailure(t *testing.T) {
+	t.Setenv("NF_PASSWORD_SALT", "test-salt")
+	t.Setenv("NF_STATE_HOME", t.TempDir())
 	configHome := t.TempDir()
 	t.Setenv("NF_CONFIG_HOME", configHome)
 	t.Setenv("NF_DATA_HOME", configHome)
@@ -18204,6 +18235,9 @@ func TestRunEnvPluginsRemoveRejectsMissing(t *testing.T) {
 }
 
 func TestRunEnvPluginsInstallInstallsMissingAndActivatesInstalled(t *testing.T) {
+	t.Setenv("NF_PASSWORD_SALT", "test-salt")
+	t.Setenv("NF_STATE_HOME", t.TempDir())
+	t.Setenv("NF_CONFIG_HOME", t.TempDir())
 	repoRoot := t.TempDir()
 	if err := os.Mkdir(filepath.Join(repoRoot, ".git"), 0o755); err != nil {
 		t.Fatalf("Mkdir(.git) error = %v", err)
@@ -18274,6 +18308,9 @@ func TestRunEnvPluginsInstallInstallsMissingAndActivatesInstalled(t *testing.T) 
 }
 
 func TestRunEnvPluginsInstallUsesMountedRepoPluginSource(t *testing.T) {
+	t.Setenv("NF_PASSWORD_SALT", "test-salt")
+	t.Setenv("NF_STATE_HOME", t.TempDir())
+	t.Setenv("NF_CONFIG_HOME", t.TempDir())
 	repoRoot := t.TempDir()
 	if err := os.Mkdir(filepath.Join(repoRoot, ".git"), 0o755); err != nil {
 		t.Fatalf("Mkdir(.git) error = %v", err)
@@ -18509,6 +18546,9 @@ func TestRunEnvThemesCacheRemoveDeletesCachedTheme(t *testing.T) {
 }
 
 func TestRunEnvPluginsCacheSaveArchivesInstalledPlugin(t *testing.T) {
+	t.Setenv("NF_PASSWORD_SALT", "test-salt")
+	t.Setenv("NF_STATE_HOME", t.TempDir())
+	t.Setenv("NF_CONFIG_HOME", t.TempDir())
 	repoRoot := t.TempDir()
 	if err := os.Mkdir(filepath.Join(repoRoot, ".git"), 0o755); err != nil {
 		t.Fatalf("Mkdir(.git) error = %v", err)
@@ -18574,6 +18614,9 @@ func TestRunEnvPluginsCacheSaveArchivesInstalledPlugin(t *testing.T) {
 }
 
 func TestRunEnvPluginsInstallUsesCachePluginSource(t *testing.T) {
+	t.Setenv("NF_PASSWORD_SALT", "test-salt")
+	t.Setenv("NF_STATE_HOME", t.TempDir())
+	t.Setenv("NF_CONFIG_HOME", t.TempDir())
 	repoRoot := t.TempDir()
 	if err := os.Mkdir(filepath.Join(repoRoot, ".git"), 0o755); err != nil {
 		t.Fatalf("Mkdir(.git) error = %v", err)
@@ -18641,6 +18684,9 @@ func TestRunEnvPluginsInstallUsesCachePluginSource(t *testing.T) {
 }
 
 func TestRunEnvPluginsInstallSkipsUnavailableLocalSources(t *testing.T) {
+	t.Setenv("NF_PASSWORD_SALT", "test-salt")
+	t.Setenv("NF_STATE_HOME", t.TempDir())
+	t.Setenv("NF_CONFIG_HOME", t.TempDir())
 	repoRoot := t.TempDir()
 	if err := os.Mkdir(filepath.Join(repoRoot, ".git"), 0o755); err != nil {
 		t.Fatalf("Mkdir(.git) error = %v", err)
@@ -18801,6 +18847,9 @@ func TestEnvSnapshotScriptsExcludeRepoPluginMounts(t *testing.T) {
 }
 
 func TestRunEnvPluginsInstallSkipsSatisfiedPlugins(t *testing.T) {
+	t.Setenv("NF_PASSWORD_SALT", "test-salt")
+	t.Setenv("NF_STATE_HOME", t.TempDir())
+	t.Setenv("NF_CONFIG_HOME", t.TempDir())
 	repoRoot := t.TempDir()
 	if err := os.Mkdir(filepath.Join(repoRoot, ".git"), 0o755); err != nil {
 		t.Fatalf("Mkdir(.git) error = %v", err)
@@ -19917,6 +19966,8 @@ func TestRunEnvUpPrintsUnderlyingCommands(t *testing.T) {
 }
 
 func TestRunEnvDownRemovesManagedUploadsSymlink(t *testing.T) {
+	t.Setenv("NF_PASSWORD_SALT", "test-salt")
+	t.Setenv("NF_STATE_HOME", t.TempDir())
 	repoRoot := filepath.Join(t.TempDir(), "client-site")
 	if err := os.MkdirAll(filepath.Join(repoRoot, ".git"), 0o755); err != nil {
 		t.Fatalf("MkdirAll() error = %v", err)
