@@ -70,7 +70,7 @@ func TestNterchangeInitInspectAndWordPressGuards(t *testing.T) {
 			t.Fatalf("show = %d", code)
 		}
 	})
-	if !strings.Contains(out, "Application: nterchange") || !strings.Contains(out, filepath.Join(repo, "public_html/upload")) {
+	if !strings.Contains(out, "Application   nterchange") || !strings.Contains(out, filepath.Join(repo, "public_html/upload")) {
 		t.Fatalf("bad show: %s", out)
 	}
 	for _, argv := range [][]string{{"env", "up"}, {"env", "reset"}, {"env", "push", "review", "--execute", "--yes"}, {"env", "pull", "review", "--execute", "--yes"}, {"theme", "deploy", "review"}, {"plugin", "update"}, {"define", "set", "A", "B"}, {"alias", "add", "x"}, {"init", "--force"}} {

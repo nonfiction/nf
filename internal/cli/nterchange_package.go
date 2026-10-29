@@ -72,7 +72,14 @@ func cmdNterchangePackage(root string, current *projectMetadata, args []string) 
 		fmt.Fprintln(os.Stderr, "nterchange package:", err)
 		return 1
 	}
-	fmt.Printf("Package: %s\nContents/integrity: %s\nNo activation performed.\n", result, filepath.Join(result, "manifest.json"))
+	fmt.Println("Package created.")
+	printIndentedDetailRows([]detailRow{
+		{label: "Project", value: current.Project.Slug},
+		{label: "Commit", value: *ref},
+		{label: "Path", value: result},
+		{label: "Manifest", value: filepath.Join(result, "manifest.json")},
+	}, 2)
+	fmt.Println("\nNo activation performed.")
 	return 0
 }
 
@@ -149,13 +156,14 @@ func packageNterchange(root string, current *projectMetadata, ref string) (resul
 	if err != nil {
 		return "", err
 	}
+	fmt.Println("Installing locked production dependencies in staging. Composer scripts/plugins disabled.")
 	for _, args := range [][]string{
 		{"validate", "--check-lock", "--no-check-publish", "--no-check-all"},
 		{"install", "--no-dev", "--prefer-dist", "--optimize-autoloader", "--no-progress"},
 		{"check-platform-reqs", "--no-dev"},
 	} {
 		args = append(args, "--no-interaction", "--no-plugins", "--no-scripts")
-		fmt.Printf("> (staging only) composer %s\n", strings.Join(args, " "))
+		printCommandArgs(append([]string{"composer"}, args...))
 		cmd := exec.Command("composer", args...)
 		cmd.Dir = code
 		cmd.Env = []string{"PATH=" + os.Getenv("PATH"), "HOME=" + work, "TMPDIR=" + work,

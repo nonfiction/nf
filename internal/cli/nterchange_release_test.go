@@ -74,7 +74,7 @@ func TestNterchangeReleasePlansAndGuards(t *testing.T) {
 			t.Fatalf("plan = %d", code)
 		}
 	})
-	if !strings.Contains(out, "Plan only") || !strings.Contains(out, "client.test-host:review") {
+	if !strings.Contains(out, "Plan only") || !strings.Contains(out, "Env rollback plan:") || !strings.Contains(out, "client.test-host") {
 		t.Fatal(out)
 	}
 	for _, args := range [][]string{{"deploy", "review"}, {"deploy", "review", "--package=/missing"}, {"rollback", "missing"}, {"rollback", "review", "--yes"}, {"rollback", "review", "--execute", "--dry-run"}, {"rollback", "review", "--package=/bad"}, {"rollback", "review", "--unexpected"}} {

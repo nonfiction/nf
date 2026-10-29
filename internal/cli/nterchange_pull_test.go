@@ -86,7 +86,7 @@ func TestNterchangePullPlanAndExecutionGuardsNeverConnect(t *testing.T) {
 				t.Fatalf("plan %v = %d", args, code)
 			}
 		})
-		if !strings.Contains(out, "client.test-host:review -> local client") || !strings.Contains(out, "Plan only") || strings.Contains(out, "private-marker") {
+		if !strings.Contains(out, "Env pull preflight:") || !strings.Contains(out, "client.test-host") || !strings.Contains(out, "Plan only") || strings.Contains(out, "private-marker") {
 			t.Fatalf("bad plan: %s", out)
 		}
 	}

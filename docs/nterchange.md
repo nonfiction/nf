@@ -37,6 +37,8 @@ Media paths must be clean, non-overlapping paths below `public_html`. Hidden pat
 
 The local recipe uses services named `app` and `db`. Existing database volumes, bind mounts, credentials, integration restrictions and mail capture remain owned by that recipe. `nf env show` reads metadata only. It does not start containers, load application code, or generate environment files.
 
+Human-readable output follows the existing WordPress conventions: `project:local` headings, aligned detail rows, separate sections, shared pull preflight layout and operation plans. Nterchange details remain application-specific; `env show` does not infer or expose database credentials or runtime settings. Target/site/remote tables and details still use the shared handlers; supported JSON output is unchanged.
+
 ## Prepare a target without a provisioner
 
 Use the [agent setup prompt](nterchange-target-setup.org) and [single-client configuration examples](../examples/nterchange-target/) for a future target. They are reviewed inputs for an operator, not an installer or permission to create resources. Supply approved source/images, private credential files, hostnames, certificates, schema/account setup and persistent directories before starting anything. Do not install the fictional example over an existing stack. The example images/configuration have not been booted with a real CMS by this documentation change.

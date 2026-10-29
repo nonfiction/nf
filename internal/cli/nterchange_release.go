@@ -143,7 +143,7 @@ func inspectNterchangeRemoteRoot(target sshTarget, root, compose, service string
 		return "", err
 	}
 	args := append(sshTargetArgs(target), renderCommandArgs([]string{"sudo", "-n", "python3", "-c", nterchangeReleaseScript, "--inspect-root", string(request)}))
-	fmt.Printf("> ssh %s@%s: inspect nterchange code ownership (read-only)\n", target.User, target.Host)
+	printCommandArgs(append(sshTargetArgs(target), "sudo -n python3 <nf read-only code ownership check>"))
 	data, err := runSSHOutputFn(args)
 	if err != nil {
 		return "", fmt.Errorf("remote code ownership check: %w", err)
@@ -167,7 +167,7 @@ type nterchangeReleaseRequest struct {
 var nterchangeReleaseRunFn = func(target sshTarget, input *os.File) error {
 	args := append(sshTargetArgs(target), renderCommandArgs([]string{"sudo", "-n", "python3", "-c", nterchangeReleaseScript}))
 	// The embedded program is fixed, not a user-supplied remote shell command.
-	fmt.Printf("> ssh %s@%s: sudo -n python3 <nf release worker>\n", target.User, target.Host)
+	printCommandArgs(append(sshTargetArgs(target), "sudo -n python3 <nf release worker>"))
 	cmd := exec.Command(args[0], args[1:]...)
 	cmd.Stdin, cmd.Stdout, cmd.Stderr = input, os.Stdout, os.Stderr
 	return cmd.Run()
@@ -211,10 +211,28 @@ func cmdNterchangeRelease(root string, metadata *projectMetadata, operation stri
 		}
 		request.Manifest = &manifest
 	}
-	fmt.Printf("Nterchange %s: %s.%s:%s\nTarget: %s\nSite: %s\nCompose: %s\nApp service: %s\nPreserve: database, credentials, media, var, base Compose and original source tree\n", operation, target.Site.Name, target.SSH.Name, target.Site.Env, target.SSH.Host, target.Site.Path, target.Site.ComposeFile, target.Site.Service)
-	if request.Manifest != nil {
-		fmt.Printf("Package commit: %s\nPackage: %s\n", request.Manifest.Commit, *location)
+	fmt.Printf("Env %s plan:\n", operation)
+	rows := []detailRow{
+		{label: "remote:", value: remote},
+		{label: "site:", value: target.Site.Name + "." + target.SSH.Name},
+		{label: "env:", value: target.Site.Env},
+		{label: "provider:", value: "ssh"},
+		{label: "target:", value: target.SSH.Name},
+		{label: "url:", value: target.Site.URL},
+		{label: "path:", value: target.Site.Path},
+		{label: "compose:", value: target.Site.ComposeFile},
+		{label: "app service:", value: target.Site.Service},
+		{label: "preserve:", value: "database, credentials, media, var, base Compose and original source tree"},
 	}
+	if request.Manifest != nil {
+		rows = append(rows, detailRow{label: "commit:", value: request.Manifest.Commit}, detailRow{label: "package:", value: *location})
+	}
+	mode := "dry-run"
+	if *execute {
+		mode = "execute"
+	}
+	rows = append(rows, detailRow{label: "mode:", value: mode})
+	printIndentedDetailRows(rows, 2)
 	if !*execute {
 		fmt.Println("Plan only. No SSH, writes, health requests or container changes.")
 		return 0

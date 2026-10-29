@@ -132,14 +132,11 @@ func TestNterchangePackageSelectedCommitExclusionsAndIntegrity(t *testing.T) {
 			t.Fatalf("package dispatch = %d", code)
 		}
 	})
-	for _, line := range strings.Split(out, "\n") {
-		if strings.HasPrefix(line, "Package: ") {
-			result = strings.TrimPrefix(line, "Package: ")
-		}
+	packages, err := os.ReadDir(filepath.Join(config.DataHome(), "nterchange", "packages"))
+	if err != nil || len(packages) != 1 {
+		t.Fatalf("package result: %v %v; output: %s", packages, err, out)
 	}
-	if result == "" {
-		t.Fatalf("missing result: %s", out)
-	}
+	result = filepath.Join(config.DataHome(), "nterchange", "packages", packages[0].Name())
 	data, err := os.ReadFile(filepath.Join(result, "manifest.json"))
 	if err != nil {
 		t.Fatal(err)

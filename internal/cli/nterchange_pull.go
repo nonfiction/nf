@@ -325,7 +325,23 @@ func cmdNterchangePull(root string, metadata *projectMetadata, argv []string) in
 		fmt.Fprintln(os.Stderr, err)
 		return 1
 	}
-	fmt.Printf("Nterchange data pull: %s.%s:%s -> local %s\nSource: %s (%s)\nDestination: %s\nCompose: %s\nMedia: %s\nPreserve: local settings, credentials, source, var, mail capture and integration restrictions\n", target.Site.Name, target.SSH.Name, target.Site.Env, metadata.Project.Slug, target.Site.URL, target.SSH.Host, root, filepath.Join(root, "compose.yaml"), strings.Join(metadata.Nterchange.MediaPaths(), ", "))
+	mode := "dry-run"
+	if check {
+		mode = "check"
+	} else if opts.execute {
+		mode = "execute"
+	}
+	printEnvRemoteSyncPreflight("pull", envConfig{ProjectSlug: metadata.Project.Slug, EnvDir: root}, envRemoteSyncTarget{
+		RemoteName: remote, SiteID: target.Site.Name + "." + target.SSH.Name, Env: target.Site.Env,
+		Provider: "ssh", TargetLabel: "target", TargetRef: target.SSH.Name, URL: target.Site.URL,
+		SSHHost: target.SSH.Host, SSHUser: target.SSH.User, SSHPort: fmt.Sprint(target.SSH.Port),
+	}, mode)
+	fmt.Println("\nData:")
+	printIndentedDetailRows([]detailRow{
+		{label: "compose:", value: filepath.Join(root, "compose.yaml")},
+		{label: "media:", value: strings.Join(metadata.Nterchange.MediaPaths(), ", ")},
+		{label: "preserve:", value: "local settings, credentials, source, var, mail capture and integration restrictions"},
+	}, 2)
 	if !check && !opts.execute {
 		fmt.Println("Plan only. No SSH, Docker, database or filesystem changes. Use --check to inspect source and destination without importing data.")
 		return 0
@@ -367,7 +383,20 @@ func cmdNterchangePull(root string, metadata *projectMetadata, argv []string) in
 		fmt.Fprintln(os.Stderr, "Remote preflight:", err)
 		return 1
 	}
-	fmt.Printf("Verified source: schema %s, default %s/%s, storage %s, engines %s\nVerified local: schema %s, default %s/%s, storage %s, internal networks, event scheduler off\n", source.Database, source.SQL.Charset, source.SQL.Collation, source.Storage, strings.Join(source.SQL.Engines, "; "), local.Database, local.SQL.Charset, local.SQL.Collation, local.Storage)
+	fmt.Println("\nVerified source")
+	printIndentedDetailRows([]detailRow{
+		{label: "Schema", value: source.Database},
+		{label: "Defaults", value: source.SQL.Charset + "/" + source.SQL.Collation},
+		{label: "Storage", value: source.Storage},
+		{label: "Engines", value: strings.Join(source.SQL.Engines, "; ")},
+	}, 2)
+	fmt.Println("\nVerified local")
+	printIndentedDetailRows([]detailRow{
+		{label: "Schema", value: local.Database},
+		{label: "Defaults", value: local.SQL.Charset + "/" + local.SQL.Collation},
+		{label: "Storage", value: local.Storage},
+		{label: "Isolation", value: "internal networks, event scheduler off"},
+	}, 2)
 	if opts.execute {
 		if err := executeNterchangePull(root, metadata.Project.Slug, target, local, source); err != nil {
 			fmt.Fprintln(os.Stderr, err)
