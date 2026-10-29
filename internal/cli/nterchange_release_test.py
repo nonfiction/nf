@@ -180,6 +180,65 @@ class ReleaseTests(unittest.TestCase):
         with self.assertRaisesRegex(RuntimeError, 'mountpoint must remain empty'):
             self.invoke('rollback')
 
+    def read_root(self, mounted=None, image=None):
+        request = dict(root=str(self.root), compose=str(self.recipe), service='app', media=self.site['media'], database='client', image=image or self.image,
+                       mounted=mounted or next(m['Source'] for m in self.mounts if m['Destination'] == worker.SITE))
+        before = {str(p.relative_to(self.base)): p.read_bytes() for p in self.base.rglob('*') if p.is_file()}
+        calls_before = len(self.calls)
+        with patch.object(worker, 'INVENTORY', self.inventory), patch.object(worker, 'run', self.docker), patch.object(worker, 'atomic_json', side_effect=AssertionError('read-only inspector attempted a write')):
+            result = worker.inspect_root(request)
+        self.assertEqual(before, {str(p.relative_to(self.base)): p.read_bytes() for p in self.base.rglob('*') if p.is_file()})
+        self.assertTrue(all(call[-3:] == ['config', '--format', 'json'] for call in self.calls[calls_before:]))
+        return result
+
+    def test_read_only_root_inspection_baseline_managed_and_rollback(self):
+        self.assertEqual(self.read_root(), {'root': str(self.root), 'managed': False})
+        self.assertFalse(self.state.parent.exists())
+        self.invoke()
+        selected = next(m['Source'] for m in self.mounts if m['Destination'] == worker.SITE)
+        self.assertEqual(self.read_root(), {'root': selected, 'managed': True})
+        self.invoke('rollback')
+        self.assertEqual(self.read_root(), {'root': str(self.root), 'managed': True})
+
+    def test_read_only_root_inspection_rejects_drift(self):
+        self.invoke()
+        state_path = self.state / 'state.json'
+        state_bytes = state_path.read_bytes()
+        state = json.loads(state_bytes)
+        with self.assertRaisesRegex(RuntimeError, 'recorded release'):
+            self.read_root(mounted=str(self.root))
+        with self.assertRaisesRegex(RuntimeError, 'site/image'):
+            self.read_root(image='sha256:wrong-image')
+        state_path.unlink()
+        with self.assertRaisesRegex(RuntimeError, 'Missing state'):
+            self.read_root()
+        state_path.write_bytes(state_bytes)
+        state['site']['database'] = 'other'
+        state_path.write_text(json.dumps(state))
+        with self.assertRaisesRegex(RuntimeError, 'site/image'):
+            self.read_root()
+        state_path.write_bytes(state_bytes)
+        journal = self.state / 'pending.json'
+        journal.write_text('{}')
+        with self.assertRaisesRegex(RuntimeError, 'Pending release'):
+            self.read_root()
+        journal.unlink()
+        with open(self.state / 'operation.lock', 'r+') as lock:
+            fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            with self.assertRaisesRegex(RuntimeError, 'in progress'):
+                self.read_root()
+        code = self.state / state['current'] / 'code'
+        (code / 'public_html/index.php').write_text('TAMPERED')
+        with self.assertRaisesRegex(RuntimeError, 'integrity'):
+            self.read_root()
+
+    def test_read_only_root_inspection_rejects_symlinked_state(self):
+        outside = self.base / 'outside'
+        outside.mkdir()
+        self.state.parent.symlink_to(outside, target_is_directory=True)
+        with self.assertRaisesRegex(RuntimeError, 'symlinked directory'):
+            self.read_root()
+
     def test_concurrent_lock_blocks_without_recreate(self):
         self.state.mkdir(parents=True)
         with open(self.state / 'operation.lock', 'w') as lock:

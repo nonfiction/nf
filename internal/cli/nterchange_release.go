@@ -130,6 +130,34 @@ func verifyNterchangePackage(location string, current *projectMetadata) (ntercha
 	return manifest, verifyNterchangeInstalled(code, deps)
 }
 
+// Use the release worker's read-only verifier so pull and activation agree on code ownership.
+func inspectNterchangeRemoteRoot(target sshTarget, root, compose, service string, media []string, database string, app nterchangeContainer) (string, error) {
+	mounted := ""
+	for _, mount := range app.Mounts {
+		if mount.Destination == "/var/www/site" && mount.Type == "bind" && !mount.RW {
+			mounted = mount.Source
+		}
+	}
+	request, err := json.Marshal(map[string]any{"root": root, "compose": compose, "service": service, "media": media, "database": database, "mounted": mounted, "image": app.Image})
+	if err != nil {
+		return "", err
+	}
+	args := append(sshTargetArgs(target), renderCommandArgs([]string{"sudo", "-n", "python3", "-c", nterchangeReleaseScript, "--inspect-root", string(request)}))
+	fmt.Printf("> ssh %s@%s: inspect nterchange code ownership (read-only)\n", target.User, target.Host)
+	data, err := runSSHOutputFn(args)
+	if err != nil {
+		return "", fmt.Errorf("remote code ownership check: %w", err)
+	}
+	var result struct {
+		Root    string `json:"root"`
+		Managed bool   `json:"managed"`
+	}
+	if err := decodeSSHJSON(data, &result); err != nil || result.Root == "" {
+		return "", fmt.Errorf("invalid remote code ownership result")
+	}
+	return result.Root, nil
+}
+
 type nterchangeReleaseRequest struct {
 	Operation string                     `json:"operation"`
 	Site      sshSiteEnv                 `json:"site"`

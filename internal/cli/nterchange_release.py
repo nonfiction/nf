@@ -145,6 +145,90 @@ def receive_package(stream, directory, manifest):
     (code / '.env').touch(mode=0o600)
 
 
+def baseline_fingerprint(root, media):
+    baseline = hashlib.sha256()
+    for directory, dirs, files in os.walk(root, followlinks=False):
+        parent = Path(directory)
+        for name in list(dirs):
+            relative = (parent / name).relative_to(root).as_posix()
+            if relative in ['var'] + media or (parent == root and name not in ('app', 'conf', 'lib', 'public_html', 'vendor')):
+                dirs.remove(name)
+            elif (parent / name).is_symlink():
+                dirs.remove(name)
+                files.append(name)
+        dirs.sort()
+        for name in sorted(files):
+            full = parent / name
+            relative = full.relative_to(root).as_posix()
+            if parent == root and name not in ('nf.json', 'composer.json', 'composer.lock'):
+                continue
+            content = os.readlink(full).encode() if full.is_symlink() else full.read_bytes()
+            baseline.update(json.dumps([relative, full.lstat().st_mode & 0o777, digest(content)]).encode())
+    return baseline.hexdigest()
+
+
+def inspect_root(request):
+    """Read-only pull preflight. Never initialize state, recreate a service or request HTTP."""
+    root = Path(request['root'])
+    real_directory(root)
+    inventory = json.loads(INVENTORY.read_bytes())
+    matches = [s for s in inventory if s['path'] == str(root) and s['compose_file'] == request['compose'] and s['service'] == request['service']]
+    require(len(matches) == 1, 'Managed-root inventory identity missing or duplicated')
+    site = dict(matches[0])
+    site['media'] = site.get('media') or ['public_html/upload']
+    require(site['kind'] == 'nterchange' and site['media'] == request['media'] and site['database'] == request['database'], 'Managed-root inventory differs from pull source')
+    for field in ('name', 'env'):
+        require(re.fullmatch(r'[A-Za-z0-9][A-Za-z0-9_-]*', site[field]), 'Unsafe managed-root identity')
+    state_parent = root.parent / '.nf-releases'
+    state_dir = state_parent / (site['name'] + '-' + site['env'])
+    if not state_parent.exists() and not state_parent.is_symlink():
+        require(request['mounted'] == str(root), 'Unmanaged code root differs from inventory')
+        return {'root': str(root), 'managed': False}
+    real_directory(state_parent)
+    if not state_dir.exists() and not state_dir.is_symlink():
+        require(request['mounted'] == str(root), 'Missing state for managed code root')
+        return {'root': str(root), 'managed': False}
+    real_directory(state_dir)
+    lock_path = state_dir / 'operation.lock'
+    lock = None
+    try:
+        if lock_path.exists() or lock_path.is_symlink():
+            lock = os.open(lock_path, os.O_RDONLY | os.O_NOFOLLOW)
+            try:
+                fcntl.flock(lock, fcntl.LOCK_SH | fcntl.LOCK_NB)
+            except BlockingIOError:
+                raise RuntimeError('Release operation in progress; retry pull after review')
+        journal = state_dir / 'pending.json'
+        require(not journal.exists() and not journal.is_symlink(), 'Pending release recovery blocks pull preflight')
+        state_file = state_dir / 'state.json'
+        if not state_file.exists() and not state_file.is_symlink():
+            require(request['mounted'] == str(root), 'Missing state for managed code root')
+            return {'root': str(root), 'managed': False}
+        require(lock is not None and state_file.is_file() and not state_file.is_symlink(), 'Invalid managed release state or lock')
+        state = json.loads(state_file.read_bytes())
+        require(state['site'] == site and state['image'] == request['image'], 'Managed release site/image differs from running app')
+        compose_hash = digest(run(['docker', 'compose', '-f', request['compose'], 'config', '--format', 'json']))
+        require(state['compose_sha256'] == compose_hash and state['baseline_sha256'] == baseline_fingerprint(root, site['media']), 'Managed release base recipe/original code changed')
+        current = state['current']
+        require(current is None or re.fullmatch(r'release-[a-zA-Z0-9_-]+', current), 'Unsafe managed release ID')
+        expected = root
+        if current is not None:
+            directory = state_dir / current
+            real_directory(directory)
+            expected = directory / 'code'
+            real_directory(expected)
+            manifest_file = directory / 'manifest.json'
+            require(manifest_file.is_file() and not manifest_file.is_symlink(), 'Invalid managed package manifest')
+            manifest = json.loads(manifest_file.read_bytes())
+            require(manifest['version'] == 1 and manifest['project'] == site['name'] and manifest['excluded_media'] == site['media'], 'Managed package identity differs from inventory')
+            verify_code(expected, manifest, mountpoints=True)
+        require(request['mounted'] == str(expected), 'Running code root differs from recorded release')
+        return {'root': str(expected), 'managed': True}
+    finally:
+        if lock is not None:
+            os.close(lock)
+
+
 def main(stream):
     os.umask(0o077)
     header = stream.readline(8 * 1024 * 1024 + 1)
@@ -225,25 +309,7 @@ def main(stream):
     if state:
         require(state['compose_sha256'] == compose_hash and state['image'] == original['Image'] and state['site'] == site, 'Base Compose, image or inventory changed; manual review required')
     # The initial unmanaged code tree is never renamed or copied. Detect later host edits before relying on it for recovery.
-    baseline = hashlib.sha256()
-    for directory, dirs, files in os.walk(root, followlinks=False):
-        parent = Path(directory)
-        for name in list(dirs):
-            relative = (parent / name).relative_to(root).as_posix()
-            if relative in ['var'] + site['media'] or (parent == root and name not in ('app', 'conf', 'lib', 'public_html', 'vendor')):
-                dirs.remove(name)
-            elif (parent / name).is_symlink():
-                dirs.remove(name)
-                files.append(name)
-        dirs.sort()
-        for name in sorted(files):
-            full = parent / name
-            relative = full.relative_to(root).as_posix()
-            if parent == root and name not in ('nf.json', 'composer.json', 'composer.lock'):
-                continue
-            content = os.readlink(full).encode() if full.is_symlink() else full.read_bytes()
-            baseline.update(json.dumps([relative, full.lstat().st_mode & 0o777, digest(content)]).encode())
-    baseline_hash = baseline.hexdigest()
+    baseline_hash = baseline_fingerprint(root, site['media'])
     if state:
         require(state['baseline_sha256'] == baseline_hash, 'Original site code changed since first activation; manual review required')
     previous = state['current'] if state else None
@@ -321,7 +387,10 @@ def main(stream):
 
 if __name__ == '__main__':
     try:
-        main(sys.stdin.buffer)
+        if len(sys.argv) == 3 and sys.argv[1] == '--inspect-root':
+            print(json.dumps(inspect_root(json.loads(sys.argv[2]))))
+        else:
+            main(sys.stdin.buffer)
     except Exception as error:
         print('nterchange release: ' + str(error), file=sys.stderr)
         sys.exit(1)

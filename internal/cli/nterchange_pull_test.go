@@ -102,6 +102,8 @@ func TestNterchangePullPlanAndExecutionGuardsNeverConnect(t *testing.T) {
 
 func TestNterchangePullCheckReadsMetadataWithoutMutations(t *testing.T) {
 	root, site, inventory := nterchangePullTestProject(t)
+	managedRoot := filepath.Join(filepath.Dir(site.Path), ".nf-releases", "client-review", "release-fixture", "code")
+	ownershipResult, ownershipFailure := managedRoot, false
 	oldSSH, oldLocal := runSSHOutputFn, nterchangeOutputFn
 	t.Cleanup(func() { runSSHOutputFn, nterchangeOutputFn = oldSSH, oldLocal })
 	localCalls, remoteCalls := 0, 0
@@ -121,7 +123,11 @@ func TestNterchangePullCheckReadsMetadataWithoutMutations(t *testing.T) {
 			return []byte(args[len(args)-1] + "-id\n"), nil
 		case len(args) > 2 && args[0] == "docker" && args[1] == "inspect":
 			service := strings.TrimSuffix(args[2], "-id")
-			return json.Marshal([]any{nterchangeTestInspection(location, service, remote)})
+			inspection := nterchangeTestInspection(location, service, remote)
+			if remote && service == site.Service {
+				inspection["Mounts"].([]map[string]any)[0]["Source"] = managedRoot
+			}
+			return json.Marshal([]any{inspection})
 		case strings.HasPrefix(joined, "realpath "):
 			return []byte(args[len(args)-1] + "\n"), nil
 		case strings.HasPrefix(joined, "docker network inspect "):
@@ -148,6 +154,12 @@ func TestNterchangePullCheckReadsMetadataWithoutMutations(t *testing.T) {
 			t.Fatalf("missing noninteractive sudo: %v", args)
 		}
 		command = strings.TrimPrefix(command, "sudo -n ")
+		if strings.Contains(command, "--inspect-root") {
+			if ownershipFailure {
+				return nil, fmt.Errorf("pending release recovery")
+			}
+			return json.Marshal(map[string]any{"root": ownershipResult, "managed": true})
+		}
 		if strings.HasPrefix(command, "python3 ") {
 			return answer([]string{"python3", "-c", "script", "/srv/secrets/client.env"}, true)
 		}
@@ -164,6 +176,15 @@ func TestNterchangePullCheckReadsMetadataWithoutMutations(t *testing.T) {
 	if localCalls == 0 || remoteCalls == 0 || !strings.Contains(out, "Read-only preflight passed") || !strings.Contains(out, "MyISAM") || strings.Contains(out, "private-marker") {
 		t.Fatalf("missing/unsafe inspection: local=%d remote=%d %s", localCalls, remoteCalls, out)
 	}
+	ownershipFailure = true
+	if code := Run([]string{"env", "pull", "review", "--check"}); code == 0 {
+		t.Fatal("failed ownership verifier passed preflight")
+	}
+	ownershipFailure, ownershipResult = false, "/unrecognized-root"
+	if code := Run([]string{"env", "pull", "review", "--check"}); code == 0 {
+		t.Fatal("mismatched managed root passed preflight")
+	}
+	ownershipResult = managedRoot
 	// A successful check does not rewrite even the disposable inventory cache.
 	before, err := os.ReadFile(state.StatePath("sites"))
 	if err != nil {

@@ -25,8 +25,8 @@ type nterchangePullTarget struct {
 }
 
 type nterchangeContainer struct {
-	ID    string
-	State struct {
+	ID, Image string
+	State     struct {
 		Status string
 		Paused bool
 		Health *struct{ Status string }
@@ -149,7 +149,15 @@ func inspectNterchangeRuntime(root, compose, appService string, media []string, 
 		}
 		return false
 	}
-	if !mount(app, "/var/www/site", root, false) || !mount(app, "/var/www/site/var", filepath.Join(root, "var"), true) {
+	codeRoot := root
+	if target != nil {
+		var err error
+		codeRoot, err = inspectNterchangeRemoteRoot(*target, root, compose, appService, media, database, app)
+		if err != nil {
+			return facts, err
+		}
+	}
+	if !mount(app, "/var/www/site", codeRoot, false) || !mount(app, "/var/www/site/var", filepath.Join(root, "var"), true) {
 		return facts, fmt.Errorf("app must bind this site's root read-only and its var directory writable")
 	}
 	for _, m := range media {
