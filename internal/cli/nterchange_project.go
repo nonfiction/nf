@@ -57,12 +57,16 @@ func maybeRunNterchangeEnv(argv []string) (int, bool) {
 	if len(argv) == 0 || argv[0] == "help" || argv[0] == "--help" || argv[0] == "-h" {
 		printGroupHelp("env (nterchange)", []helpLine{
 			{"show", "inspect existing local Compose paths and repo remotes"},
+			{"package --ref <full-commit-id>", "stage reviewed code and locked production dependencies"},
 			{"pull <remote> --dry-run", "preview a data pull without connections"},
 			{"pull <remote> --check", "verify source and local runtime read-only"},
 			{"pull <remote> --execute [--yes]", "replace local SQL/media with a safety copy"},
 		})
 		fmt.Println("\nCode deployment and local container lifecycle are not available yet.")
 		return 0, true
+	}
+	if argv[0] == "package" {
+		return cmdNterchangePackage(root, metadata, argv[1:]), true
 	}
 	if argv[0] == "pull" {
 		return cmdNterchangePull(root, metadata, argv[1:]), true

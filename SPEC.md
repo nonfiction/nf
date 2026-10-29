@@ -28,13 +28,15 @@ It should replace scattered per-project scripts with one command surface for:
 
 ## Nterchange extension
 
-Nterchange projects use the same version 2 manifest with a `nterchange` object instead of WordPress configuration. They do not need fake themes. Implemented commands include project initialization, `env show`, existing SSH target registration, read-only site discovery, repo remote aliases and guarded SQL/media pull. Unsupported nterchange operations are rejected rather than passed through WordPress code.
+Nterchange projects use the same version 2 manifest with a `nterchange` object instead of WordPress configuration. They do not need fake themes. Implemented commands include project initialization, `env show`, existing SSH target registration, read-only site discovery, repo remote aliases, guarded SQL/media pull and locked code packaging. Unsupported nterchange operations are rejected rather than passed through WordPress code.
 
 Registered SSH targets live in `ssh-targets.json` under the config home, separate from disposable provider cache. Discovery reads non-secret application records from `/var/lib/nf/sites.json` with strict SSH host-key checking. Registration does not provision infrastructure. See [the nterchange guide](docs/nterchange.md) for the inventory format and current limits.
 
 `nf env pull <remote> --dry-run` prints a no-connection plan. `--check` verifies fresh remote inventory, current Compose containers/mounts, schema defaults/engines and local isolation without exporting or importing data. Local app/db networks must be internal, local URLs loopback-only, and the MySQL event scheduler disabled. `--execute` imports after confirmation; non-interactive execution requires `--execute --yes`. Pull stages SQL/media first, saves a local safety copy with the local app paused, then replaces only local data. Apply failure restores the previous SQL/media; failed recovery leaves the app paused with recovery files retained. InnoDB exports are transactional; mixed MyISAM/InnoDB exports use per-schema table READ locks, never a global lock. Stored SQL objects and broadly privileged local import accounts are rejected. Local settings, source and runtime state stay unchanged. SQL/media transfers are not atomic across concurrent editorial changes.
 
-Code deployment remains unimplemented. It must preserve databases, media, runtime state and environment credentials. Local container lifecycle and a nterchange safety-copy restore command also remain unimplemented.
+`nf env package --ref <full-commit-id>` stages only the selected immutable commit, installs locked production Composer dependencies with scripts/plugins disabled, checks actual PHP/extensions and writes a private code tree plus a SHA-256 file manifest under `NF_DATA_HOME/nterchange/packages/`. Source dependencies and locks are never updated. Media, environment/credential files, SQL, runtime/cache paths, Git metadata and development tooling stay out. Legacy tracked vendor libraries remain; Composer-owned generated paths are rebuilt. No frontend build or application boot runs. See the nterchange guide for supported inputs and exclusions.
+
+Release activation, health checks and rollback remain unimplemented. They must preserve databases, media, runtime state and environment credentials. Local container lifecycle and a nterchange safety-copy restore command also remain unimplemented.
 
 ## System contexts
 

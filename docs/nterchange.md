@@ -1,6 +1,6 @@
 # Nterchange and SSH targets
 
-Nterchange support covers project metadata, registration of an existing SSH target, read-only site discovery, repo remote aliases, local configuration inspection and guarded SQL/media pull. It does not provision DigitalOcean resources, deploy code, roll back releases or manage local container lifecycle yet.
+Nterchange support covers project metadata, registration of an existing SSH target, read-only site discovery, repo remote aliases, local configuration inspection, guarded SQL/media pull and locked code packaging. It does not provision DigitalOcean resources, activate code, roll back releases or manage local container lifecycle yet.
 
 WordPress commands stay separate. In a nterchange project, unsupported environment mutations and WordPress theme/plugin/define/alias commands fail without changing the environment.
 
@@ -131,8 +131,28 @@ After staging, nf rechecks the local runtime, pauses only the local app and save
 
 If apply fails, nf restores the previous SQL/media and resumes the app. If recovery fails, it leaves the app paused and prints the retained recovery directory. A killed process can leave the local app paused and a `pull.lock` containing its PID/root. Inspect the app state and retained safety copy before removing that lock or retrying. There is no nterchange `snapshot use` command yet; interrupted or failed recovery requires manual restoration. Safety copies have no automatic retention policy. They contain site data and must stay private.
 
+## Package a reviewed code commit
+
+```sh
+nf env package --ref <full-reviewed-commit-id>
+```
+
+The full lowercase Git commit ID is required. Branch names, `HEAD`, abbreviated IDs and dirty-worktree packaging are not accepted. The operation reads Git objects directly, without index/worktree files, export attributes, replacement objects or submodule fetching. Changes staged or edited after that commit cannot enter its payload. The selected commit must contain a valid nterchange `nf.json` matching the current project slug and ordered media declarations, non-empty `composer.json`, `composer.lock`, `conf/conf.php`, `public_html/index.php` and site `app/` code. Uncommitted consumer setup cannot be packaged until it belongs to a reviewed commit. This command does not authorize creating or publishing that commit.
+
+Packages contain `code/` and `manifest.json`, under private `NF_DATA_HOME/nterchange/packages/<project>-<commit-prefix>-<unique>/`. Build trees stay private in the same parent and are removed on ordinary failure. A killed process may leave a `.building-*` directory; inspect it before removing it. There is no retention policy. Data storage must not overlap the checkout, config home or state home, including through existing symlinks. No SSH, Docker, site cache, settings or runtime operation occurs.
+
+Only committed `app/`, `conf/`, `lib/`, `public_html/`, legacy `vendor/`, `nf.json` and root Composer manifests are source inputs. Composer-owned `vendor/autoload.php`, `vendor/composer/` and `vendor/nonfiction/` are never copied from source. Composer rebuilds those paths in staging. Existing tracked legacy libraries under other vendor directories remain, as required by six current consumers. The two existing `public_html/nterchange -> ../vendor/nonfiction/nterchange/nterchange` links are supported; other source links and included submodules are rejected. Final links must be relative, resolve within the package and not target excluded data.
+
+Both the source selection and final dependency tree exclude declared media, always including `public_html/upload`, plus hidden paths except `.htaccess`, environment/key/auth files, SQL/database dumps, sessions, `var`, caches, logs, temporary files, backups and node_modules. Declared extra media such as `public_html/videos` stays out. Git metadata, Compose/Docker recipes, tests, frontend tooling and other root files are not code inputs. Name-based exclusions cannot recognize arbitrary credentials embedded in PHP or assets. Review the selected source for secrets before packaging.
+
+Composer runs `validate --check-lock`, `install --no-dev --prefer-dist --optimize-autoloader` and `check-platform-reqs --no-dev` in staging, always with `--no-interaction --no-plugins --no-scripts`. Its environment contains only tool paths and private temporary home/cache paths, not inherited authentication, database or application environment values. Stale locks, missing platform requirements, install failures, changed staged locks and an installed dependency set differing from the production lock reject the package. No `update` runs. Only library/metapackage dependencies are supported; libraries require an HTTPS zip and full commit reference, with a matching HTTPS Git source fallback if present. Custom repositories and Composer config outside the current consumers' `platform`, `allow-plugins` and `sort-packages` settings are rejected rather than allowed to redirect filesystem writes. Private dependency authentication is not implemented. Composer is not a general sandbox for untrusted source.
+
+The manifest records source commit, project, excluded media, lock SHA-256, production dependency versions/references and each file's path, size, mode and SHA-256. Link entries record the target and hash its bytes. This is an inspectable directory package, not a signed artifact or an activation command. Composer home/cache files do not survive in it.
+
+No npm/webpack build or application bootstrap runs. Required assets must already be committed in the selected code tree; the packager does not know every inherited frontend output convention. Successful packaging and PHP platform checks do not prove CMS behavior, integrations or target health. Existing duplicate-class Composer warnings remain visible and need application review, not a packaging workaround.
+
 ## Remaining code deployment work
 
-Code deployment will package reviewed source and locked production dependencies, then activate a per-site release with health checks and rollback. A normal code deployment must not replace a database, media, `var`, or environment credentials. Schema/content migrations need separate approval.
+Per-site release activation, health checks and rollback require a separate implementation and review. A normal code deployment must not replace a database, media, `var`, or environment credentials. Schema/content migrations need separate approval.
 
 DigitalOcean automatic backups are the host-recovery baseline. They are not a development sync mechanism. No recurring whole-host download to a developer's machine is needed for either workflow.
