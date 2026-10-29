@@ -275,13 +275,18 @@ func nterchangePackagePath(name string, media []string, generated bool) bool {
 	if !generated && (name == "vendor/autoload.php" || name == "vendor/composer" || strings.HasPrefix(name, "vendor/composer/") || name == "vendor/nonfiction" || strings.HasPrefix(name, "vendor/nonfiction/")) {
 		return false
 	}
+	const pearCache = "vendor/nonfiction/nterchange/compat/pear/Cache"
 	for _, part := range parts {
 		lower := strings.ToLower(part)
 		if strings.HasPrefix(part, ".") && part != ".htaccess" || strings.HasPrefix(lower, "sess_") || strings.Contains(lower, ".sql.") || strings.Contains(lower, ".env.") {
 			return false
 		}
+		// PEAR Cache is locked dependency code, not mutable cache data.
+		if lower == "cache" && !(part == "Cache" && (name == pearCache || strings.HasPrefix(name, pearCache+"/"))) {
+			return false
+		}
 		switch lower {
-		case "var", "cache", "caches", "tmp", "temp", "logs", "sessions", "scratch", "backups", "node_modules", "auth.json", "credentials.json", "credentials.yml", "credentials.yaml", "credentials.ini", "secrets.json", "secrets.yml", "secrets.yaml", "secrets.ini", "id_rsa", "id_ed25519":
+		case "var", "caches", "tmp", "temp", "logs", "sessions", "scratch", "backups", "node_modules", "auth.json", "credentials.json", "credentials.yml", "credentials.yaml", "credentials.ini", "secrets.json", "secrets.yml", "secrets.yaml", "secrets.ini", "id_rsa", "id_ed25519":
 			return false
 		}
 		for _, suffix := range []string{".env", ".pem", ".key", ".p12", ".pfx", ".sql", ".sql.gz", ".sql.bz2", ".sql.zip", ".sqlite", ".sqlite3", ".db", ".log", ".bak"} {

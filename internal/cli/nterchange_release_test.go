@@ -66,8 +66,9 @@ func TestNterchangeReleasePackageVerification(t *testing.T) {
 
 func TestNterchangeReleaseArchiveRoundTrip(t *testing.T) {
 	repo, metadata := nterchangePackageFixture(t)
-	packageComposerMock(t, `mkdir -p vendor/nonfiction/nterchange/compat/pear/Log
-printf '<?php // PEAR logging library' > vendor/nonfiction/nterchange/compat/pear/Log/file.php`)
+	packageComposerMock(t, `mkdir -p vendor/nonfiction/nterchange/compat/pear/Log vendor/nonfiction/nterchange/compat/pear/Cache
+printf '<?php // PEAR logging library' > vendor/nonfiction/nterchange/compat/pear/Log/file.php
+printf '<?php class Cache_Lite {}' > vendor/nonfiction/nterchange/compat/pear/Cache/Lite.php`)
 	location, err := packageNterchange(repo, metadata, packageCommit(t, repo))
 	if err != nil {
 		t.Fatal(err)
@@ -93,6 +94,7 @@ directory = Path(sys.argv[1])
 worker.receive_package(sys.stdin.buffer, directory, request['manifest'])
 worker.verify_code(directory / 'code', request['manifest'], mountpoints=True)
 assert (directory / 'code/vendor/nonfiction/nterchange/compat/pear/Log/file.php').is_file()
+assert (directory / 'code/vendor/nonfiction/nterchange/compat/pear/Cache/Lite.php').is_file(), 'Required PEAR Cache library omitted'
 `, t.TempDir())
 	cmd.Dir = directory
 	cmd.Stdin = &stream
@@ -103,7 +105,7 @@ assert (directory / 'code/vendor/nonfiction/nterchange/compat/pear/Log/file.php'
 
 func TestNterchangeReleasePathPolicy(t *testing.T) {
 	nterchangeTestHomes(t)
-	cases := []string{"nf.json", "composer.json", "composer.lock", "public_html/.htaccess", "app/site.php", "app/Session/handler.php", "lib/backup/helper.php", "vendor/nonfiction/nterchange/compat/pear/Log/file.php",
+	cases := []string{"nf.json", "composer.json", "composer.lock", "public_html/.htaccess", "app/site.php", "app/Session/handler.php", "lib/backup/helper.php", "vendor/nonfiction/nterchange/compat/pear/Log/file.php", "vendor/nonfiction/nterchange/compat/pear/Cache/Lite.php", "vendor/library/Cache/sentinel.php", "vendor/nonfiction/nterchange/compat/pear/Cache/private.key",
 		"app", "var/session", "public_html/upload/media.jpg", "public_html/videos/media.mp4", "../escape", "/absolute", "app/../escape", "app/.env", "app/.git/config", "app/sess_private", "app/dump.sql", "app/dump.sql.gz", "app/dump.sql.custom", "app/settings.env", "app/settings.env.local", "app/private.pem", "app/private.key", "app/private.p12", "app/private.pfx", "app/data.sqlite", "app/data.sqlite3", "app/data.db", "app/runtime.log", "app/source.bak"}
 	for _, directory := range []string{"var", "cache", "caches", "tmp", "temp", "logs", "sessions", "scratch", "backups", "node_modules"} {
 		cases = append(cases, "vendor/library/"+directory+"/sentinel.php")
@@ -115,6 +117,9 @@ func TestNterchangeReleasePathPolicy(t *testing.T) {
 	accepted := map[string]bool{}
 	for _, name := range cases {
 		accepted[name] = nterchangePackagePath(name, media, true)
+	}
+	if !accepted["vendor/nonfiction/nterchange/compat/pear/Cache/Lite.php"] || accepted["vendor/library/Cache/sentinel.php"] || accepted["vendor/nonfiction/nterchange/compat/pear/Cache/private.key"] {
+		t.Fatal("locked PEAR Cache code must survive without allowing arbitrary caches or private keys")
 	}
 	data, err := json.Marshal(accepted)
 	if err != nil {

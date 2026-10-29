@@ -57,10 +57,12 @@ def package_path(name, media):
     require(name in ('nf.json', 'composer.json', 'composer.lock') if len(p.parts) == 1 else p.parts[0] in ('app', 'conf', 'lib', 'public_html', 'vendor'), 'Unexpected package root: ' + name)
     for excluded in ['var', 'public_html/upload'] + media:
         require(name != excluded and not name.startswith(excluded + '/'), 'Package contains persistent data')
+    pear_cache = 'vendor/nonfiction/nterchange/compat/pear/Cache'
     for part in p.parts:
         lower = part.lower()
-        # Match the Go packager's generated-path policy. PEAR's Log/ is library code, not runtime logs.
-        require((not part.startswith('.') or part == '.htaccess') and lower not in ('var', 'cache', 'caches', 'tmp', 'temp', 'logs', 'sessions', 'scratch', 'backups', 'node_modules', 'auth.json', 'credentials.json', 'credentials.yml', 'credentials.yaml', 'credentials.ini', 'secrets.json', 'secrets.yml', 'secrets.yaml', 'secrets.ini', 'id_rsa', 'id_ed25519') and not lower.startswith('sess_') and '.sql.' not in lower and '.env.' not in lower and not lower.endswith(('.env', '.pem', '.key', '.p12', '.pfx', '.sql', '.sql.gz', '.sql.bz2', '.sql.zip', '.sqlite', '.sqlite3', '.db', '.log', '.bak')), 'Package contains excluded data: ' + name)
+        # Match Go: PEAR Cache is locked library code, not mutable cache data.
+        require(lower != 'cache' or (part == 'Cache' and (name == pear_cache or name.startswith(pear_cache + '/'))), 'Package contains excluded cache data: ' + name)
+        require((not part.startswith('.') or part == '.htaccess') and lower not in ('var', 'caches', 'tmp', 'temp', 'logs', 'sessions', 'scratch', 'backups', 'node_modules', 'auth.json', 'credentials.json', 'credentials.yml', 'credentials.yaml', 'credentials.ini', 'secrets.json', 'secrets.yml', 'secrets.yaml', 'secrets.ini', 'id_rsa', 'id_ed25519') and not lower.startswith('sess_') and '.sql.' not in lower and '.env.' not in lower and not lower.endswith(('.env', '.pem', '.key', '.p12', '.pfx', '.sql', '.sql.gz', '.sql.bz2', '.sql.zip', '.sqlite', '.sqlite3', '.db', '.log', '.bak')), 'Package contains excluded data: ' + name)
     return p
 
 
@@ -347,7 +349,7 @@ def main(stream):
         expected = str(root) if release is None else str(state_dir / release / 'code')
         host = urlsplit(site['url']).netloc
         require(host and '\r' not in host and '\n' not in host, 'Invalid health Host')
-        php = '$c=stream_context_create(["http"=>["timeout"=>3,"ignore_errors"=>true,"follow_location"=>0,"header"=>"Host: ".' + 'hex2bin("' + host.encode().hex() + '")' + '."\\r\\n"]]); @file_get_contents("http://127.0.0.1/",false,$c); exit(isset($http_response_header[0]) && preg_match("~^HTTP/\\S+ 200(?: |$)~",$http_response_header[0]) ? 0 : 1);'
+        php = '$c=stream_context_create(["http"=>["timeout"=>3,"ignore_errors"=>true,"follow_location"=>0,"header"=>"Host: ".' + 'hex2bin("' + host.encode().hex() + '")' + '."\\r\\n"]]); @file_get_contents("http://127.0.0.1/",false,$c); echo isset($http_response_header[0]) && preg_match("~^HTTP/\\S+ ([0-9]{3})(?: |$)~",$http_response_header[0],$m) ? $m[1] : "none";'
         # Docker can reorder unchanged mount records between inspections.
         database_mounts = sorted(database['Mounts'], key=lambda mount: mount['Destination'])
         failure = None
@@ -362,7 +364,8 @@ def main(stream):
                     require(any(m['Destination'] == mount['Destination'] and m['Source'] == mount['Source'] and m['RW'] == mount['RW'] for m in app['Mounts']), 'Persistent bind changed')
                 db = inspect('db')
                 require(db['Id'] == database['Id'] and sorted(db['Mounts'], key=lambda mount: mount['Destination']) == database_mounts, 'Database container/storage changed')
-                run(['docker', 'exec', app['Id'], 'php', '-r', php])
+                status = run(['docker', 'exec', app['Id'], 'php', '-r', php]).decode().strip()
+                require(status == '200', 'Container-local HTTP returned ' + status)
                 return
             except (RuntimeError, subprocess.TimeoutExpired) as error:
                 failure = error
@@ -375,14 +378,14 @@ def main(stream):
         switch(selected)
         healthy(selected)
         atomic_json(state_file, {'current': selected, 'previous': previous, 'site': site, 'image': original['Image'], 'compose_sha256': compose_hash, 'baseline_sha256': baseline_hash})
-    except BaseException:
+    except BaseException as error:
         try:
             switch(previous)
             healthy(previous)
-        except BaseException:
-            raise RuntimeError('Release failed AND recovery failed; manual repair required: ' + str(journal))
+        except BaseException as recovery_error:
+            raise RuntimeError('Release failed AND recovery failed; original: ' + str(error) + '; recovery: ' + str(recovery_error) + '; manual repair required: ' + str(journal)) from error
         journal.unlink()
-        raise RuntimeError('Release failed; previous code restored and container-local HTTP/mount health passed')
+        raise RuntimeError('Release failed: ' + str(error) + '; previous code restored and container-local HTTP/mount health passed') from error
     journal.unlink()
     print('Release operation passed. Current: ' + str(selected) + '; previous: ' + str(previous))
     print('State/recovery: ' + str(state_dir))

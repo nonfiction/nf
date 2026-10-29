@@ -67,13 +67,13 @@ class ReleaseTests(unittest.TestCase):
             return json.dumps([self.container(args[-1])]).encode()
         if args[:2] == ['docker', 'exec']:
             root = Path(next(m['Source'] for m in self.mounts if m['Destination'] == worker.SITE))
-            if self.fail_recovery or 'BAD' in (root / 'public_html/index.php').read_text():
+            if self.fail_recovery:
                 raise RuntimeError('injected HTTP failure')
-            return b''
+            return b'500' if 'BAD' in (root / 'public_html/index.php').read_text() else b'200'
         self.fail('unexpected command ' + str(args))
 
     def archive(self, text='GOOD', bad_member=None):
-        files = {'nf.json': '{}', 'composer.json': '{}', 'composer.lock': '{}', 'conf/conf.php': '<?php', 'public_html/index.php': text, 'vendor/autoload.php': '<?php', 'vendor/nonfiction/nterchange/compat/pear/Log/file.php': '<?php // logging library'}
+        files = {'nf.json': '{}', 'composer.json': '{}', 'composer.lock': '{}', 'conf/conf.php': '<?php', 'public_html/index.php': text, 'vendor/autoload.php': '<?php', 'vendor/nonfiction/nterchange/compat/pear/Log/file.php': '<?php // logging library', 'vendor/nonfiction/nterchange/compat/pear/Cache/Lite.php': '<?php class Cache_Lite {}'}
         manifest = dict(version=1, project='client', commit='1' * 40, excluded_media=self.site['media'], composer_lock_sha256=hashlib.sha256(b'{}').hexdigest(), dependencies=[], files=[dict(path=p, size=len(data), mode='0644', sha256=hashlib.sha256(data.encode()).hexdigest()) for p, data in files.items()])
         body = io.BytesIO()
         with tarfile.open(fileobj=body, mode='w') as archive:
@@ -158,6 +158,21 @@ class ReleaseTests(unittest.TestCase):
                 self.assertEqual((self.state / 'state.json').read_bytes(), previous_state)
                 self.assertFalse((self.state / 'pending.json').exists())
 
+    def test_health_status_diagnostics_preserve_previous_state(self):
+        self.invoke()
+        previous_state = (self.state / 'state.json').read_bytes()
+        original = self.docker
+        for status in (b'302', b'none'):
+            with self.subTest(status=status):
+                def run(args):
+                    if args[:2] == ['docker', 'exec'] and self.app_serial % 2 == 0:
+                        return status
+                    return original(args)
+                with patch.object(self, 'docker', run), self.assertRaisesRegex(RuntimeError, 'HTTP returned ' + status.decode() + '.*previous code restored'):
+                    self.invoke()
+                self.assertEqual((self.state / 'state.json').read_bytes(), previous_state)
+                self.assertFalse((self.state / 'pending.json').exists())
+
     def test_first_rollback_uses_untouched_baseline(self):
         self.invoke()
         self.invoke('rollback')
@@ -166,11 +181,11 @@ class ReleaseTests(unittest.TestCase):
     def test_failed_health_and_recreation_restore_previous(self):
         self.invoke()
         before = (self.state / 'state.json').read_bytes()
-        with self.assertRaisesRegex(RuntimeError, 'previous code restored'):
+        with self.assertRaisesRegex(RuntimeError, 'HTTP returned 500.*previous code restored'):
             self.invoke(text='BAD')
         self.assertEqual((self.state / 'state.json').read_bytes(), before)
         self.fail_up_once = True
-        with self.assertRaisesRegex(RuntimeError, 'previous code restored'):
+        with self.assertRaisesRegex(RuntimeError, 'injected recreation error.*previous code restored'):
             self.invoke()
         self.assertEqual((self.state / 'state.json').read_bytes(), before)
         self.assertFalse((self.state / 'pending.json').exists())
