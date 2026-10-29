@@ -16828,7 +16828,7 @@ func TestRunInitRejectsUnsupportedProjectType(t *testing.T) {
 			t.Fatalf("Run() = %d, want 1", got)
 		}
 	})
-	if !strings.Contains(output, "unsupported init type \"wordpress-plugin\"; only wordpress-theme is supported") {
+	if !strings.Contains(output, "unsupported init type \"wordpress-plugin\"; use wordpress-theme or nterchange") {
 		t.Fatalf("Run() stderr = %q, want unsupported type error", output)
 	}
 }

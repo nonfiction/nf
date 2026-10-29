@@ -78,6 +78,9 @@ func runTarget(argv []string) int {
 }
 
 func runTargetAdd(argv []string) int {
+	if len(argv) > 0 && argv[0] == "ssh" {
+		return runAddSSHTarget(argv[1:])
+	}
 	return target.RunAdd(argv, os.Stderr)
 }
 
@@ -176,11 +179,11 @@ func runSite(argv []string) int {
 	case "staging":
 		return runSiteStaging(argv[1:])
 	case "refresh":
-		if len(argv) != 1 {
-			fmt.Fprintln(os.Stderr, "site refresh takes no arguments")
+		if len(argv) > 2 || (len(argv) == 2 && (strings.TrimSpace(argv[1]) == "" || strings.HasPrefix(argv[1], "-"))) {
+			fmt.Fprintln(os.Stderr, "usage: nf site refresh [target]")
 			return 1
 		}
-		return cmdSiteRefresh()
+		return cmdSiteRefresh(argv[1:]...)
 	case "cache":
 		envRef, ok := parseSiteCacheArgs(argv[1:])
 		if !ok {

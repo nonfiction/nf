@@ -18,7 +18,7 @@ func runInitHelp() int {
 		"--project-slug string   project slug (defaults to the current git root name)",
 		"--theme-slug string     WordPress theme slug",
 		"--theme-source string   theme source directory",
-		"--type string           project type (default wordpress-theme)",
+		"--type string           wordpress-theme (default) or nterchange",
 		"--force                 overwrite nf.json",
 	} {
 		fmt.Printf("  %s\n", line)
@@ -27,6 +27,9 @@ func runInitHelp() int {
 }
 
 func runEnvHelp() int {
+	if code, handled := maybeRunNterchangeEnv(nil); handled {
+		return code
+	}
 	printCommandHelp("env", []helpLine{
 		{"up", "start the local env"},
 		{"down", "stop the local env"},
@@ -290,6 +293,10 @@ func runInit(argv []string) int {
 	if len(argv) > 0 && (argv[0] == "help" || argv[0] == "--help" || argv[0] == "-h") {
 		return runInitHelp()
 	}
+	if _, _, ok := currentNterchangeProject(); ok {
+		fmt.Fprintln(os.Stderr, "This repository already has nterchange metadata; init did not change it.")
+		return 1
+	}
 	fs := flag.NewFlagSet("init", flag.ContinueOnError)
 	projectSlug := fs.String("project-slug", "", "")
 	themeSlug := fs.String("theme-slug", "", "")
@@ -300,8 +307,8 @@ func runInit(argv []string) int {
 	if err := fs.Parse(argv); err != nil {
 		return 1
 	}
-	if strings.TrimSpace(*projectType) != "wordpress-theme" {
-		fmt.Fprintf(os.Stderr, "unsupported init type %q; only wordpress-theme is supported\n", *projectType)
+	if strings.TrimSpace(*projectType) != "wordpress-theme" && strings.TrimSpace(*projectType) != "nterchange" {
+		fmt.Fprintf(os.Stderr, "unsupported init type %q; use wordpress-theme or nterchange\n", *projectType)
 		return 1
 	}
 	if strings.TrimSpace(*projectSlug) == "" {
@@ -311,6 +318,13 @@ func runInit(argv []string) int {
 			return 1
 		}
 		projectSlug = &derivedSlug
+	}
+	if strings.TrimSpace(*projectType) == "nterchange" {
+		if *themeSlug != "" || *themeSource != "" || *force || fs.NArg() != 0 {
+			fmt.Fprintln(os.Stderr, "nterchange init does not accept theme options, --force, or positional arguments")
+			return 1
+		}
+		return cmdInitNterchange(*projectSlug)
 	}
 	return cmdProjectInit(projectInitArgs{projectSlug: *projectSlug, themeSlug: *themeSlug, themeSource: *themeSource, projectType: *projectType, force: *force})
 }
@@ -677,6 +691,9 @@ func runAlias(argv []string) int {
 }
 
 func runEnv(argv []string) int {
+	if code, handled := maybeRunNterchangeEnv(argv); handled {
+		return code
+	}
 	if len(argv) == 0 || argv[0] == "help" || argv[0] == "--help" || argv[0] == "-h" {
 		return runEnvHelp()
 	}
@@ -1472,15 +1489,19 @@ func runHelp() int {
 		{"password", "manage and derive passwords"},
 	}
 	if projectContextAvailable() {
-		lines = append(lines,
-			helpLine{},
-			helpLine{"env", "manage the local development env"},
-			helpLine{"theme", "manage configured WordPress themes"},
-			helpLine{"plugin", "manage configured WordPress plugins"},
-			helpLine{"define", "manage configured WordPress constants"},
-			helpLine{"alias", "manage root-level WordPress content aliases"},
-			helpLine{"remote", "manage repo remotes"},
-		)
+		if _, _, nterchange := currentNterchangeProject(); nterchange {
+			lines = append(lines, helpLine{}, helpLine{"env", "inspect the nterchange Compose setup"}, helpLine{"remote", "manage repo remotes"})
+		} else {
+			lines = append(lines,
+				helpLine{},
+				helpLine{"env", "manage the local development env"},
+				helpLine{"theme", "manage configured WordPress themes"},
+				helpLine{"plugin", "manage configured WordPress plugins"},
+				helpLine{"define", "manage configured WordPress constants"},
+				helpLine{"alias", "manage root-level WordPress content aliases"},
+				helpLine{"remote", "manage repo remotes"},
+			)
+		}
 	}
 	lines = append(lines,
 		helpLine{},
@@ -1511,6 +1532,12 @@ func rejectOutsideProject(command string) bool {
 	if err := requireProjectContext(command); err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		return true
+	}
+	if command == "theme" || command == "plugin" || command == "define" || command == "alias" {
+		if _, _, nterchange := currentNterchangeProject(); nterchange {
+			fmt.Fprintf(os.Stderr, "%s is a WordPress-only command; nterchange state was not changed.\n", command)
+			return true
+		}
 	}
 	return false
 }

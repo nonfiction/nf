@@ -15,11 +15,12 @@ import (
 const ManifestVersion = 2
 
 type Manifest struct {
-	Version   int        `json:"version"`
-	Project   Project    `json:"project"`
-	WordPress WordPress  `json:"wordpress"`
-	Local     *Local     `json:"local,omitempty"`
-	Remotes   RemoteRefs `json:"remotes,omitempty"`
+	Version    int         `json:"version"`
+	Project    Project     `json:"project"`
+	WordPress  WordPress   `json:"wordpress,omitzero"`
+	Nterchange *Nterchange `json:"nterchange,omitempty"`
+	Local      *Local      `json:"local,omitempty"`
+	Remotes    RemoteRefs  `json:"remotes,omitempty"`
 }
 
 type Project struct {
@@ -106,6 +107,12 @@ func (m *Manifest) Validate() error {
 	}
 	if err := validateSlug(m.Project.Slug); err != nil {
 		return fmt.Errorf("nf.json project.slug: %w", err)
+	}
+	if m.Nterchange != nil {
+		if len(m.WordPress.Themes)+len(m.WordPress.Plugins)+len(m.WordPress.Defines)+len(m.WordPress.Aliases) != 0 || m.Local != nil {
+			return fmt.Errorf("nf.json nterchange cannot be combined with WordPress configuration or local overrides")
+		}
+		return m.Nterchange.Validate()
 	}
 	if len(m.WordPress.Themes) == 0 {
 		return fmt.Errorf("nf.json wordpress.themes must include at least one theme")

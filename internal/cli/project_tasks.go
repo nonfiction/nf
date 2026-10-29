@@ -152,6 +152,17 @@ func loadProjectMetadataOrError(root string) (*projectMetadata, error) {
 }
 
 func validateProjectMetadata(metadata *projectMetadata) error {
+	if metadata != nil && metadata.Nterchange != nil {
+		if err := metadata.Validate(); err != nil {
+			return err
+		}
+		for name := range metadata.Remotes {
+			if _, _, _, err := projectRemoteAlias(metadata, name); err != nil {
+				return err
+			}
+		}
+		return nil
+	}
 	if _, err := loadWordPressThemeSpecs(metadata); err != nil {
 		return err
 	}

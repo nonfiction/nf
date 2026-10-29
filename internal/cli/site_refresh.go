@@ -149,7 +149,7 @@ func targetSSHCommand(record map[string]any) string {
 	return "ssh " + destination
 }
 
-func cmdSiteRefresh() int {
+func cmdSiteRefresh(selected ...string) int {
 	if err := os.MkdirAll(config.StateDir(), 0o755); err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		return 1
@@ -159,6 +159,17 @@ func cmdSiteRefresh() int {
 		fmt.Fprintln(os.Stderr, err)
 		return 1
 	}
+	filter := ""
+	shown := targets
+	if len(selected) > 0 {
+		filter = selected[0]
+		target := matchingTargetByName(targets, filter)
+		if target == nil {
+			fmt.Fprintf(os.Stderr, "No target matched %q.\n", filter)
+			return 1
+		}
+		shown = []map[string]any{target}
+	}
 	fmt.Println("Site refresh discovers sites from cached targets.")
 	fmt.Printf("Sites cache: %s\n", state.StatePath("sites"))
 	fmt.Printf("Targets cache: %s\n", state.StatePath("providers"))
@@ -166,11 +177,11 @@ func cmdSiteRefresh() int {
 		fmt.Println("No cached targets found. Run nf provider check <provider> to refresh target metadata.")
 		return 0
 	}
-	fmt.Printf("Targets: %d\n", len(targets))
-	for _, target := range targets {
+	fmt.Printf("Targets: %d\n", len(shown))
+	for _, target := range shown {
 		fmt.Printf("  %s (%s)\n", firstRecordString(target, "_state_key", "target_name", "target", "name", "slug", "hostname", "label", "id"), recordValueString(target["provider"]))
 	}
-	result, err := refreshRemoteTargetSites(targets)
+	result, err := refreshRemoteTargetSites(targets, filter)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		return 1
@@ -213,18 +224,36 @@ type siteRefreshResult struct {
 	Warnings   []string
 }
 
-func refreshRemoteTargetSites(targets []map[string]any) (siteRefreshResult, error) {
+func refreshRemoteTargetSites(targets []map[string]any, selected ...string) (siteRefreshResult, error) {
 	result := siteRefreshResult{}
+	filter := ""
+	if len(selected) > 0 {
+		filter = normalizedRecordString(selected[0])
+	}
 	currentTargets := currentTargetNames(targets)
 	refreshedTargets := map[string]bool{}
 	discovered := []map[string]any{}
 	for _, target := range targets {
+		targetName := firstRecordString(target, "_state_key", "target_name", "target", "name", "slug", "hostname", "label", "id")
+		if filter != "" && normalizedRecordString(targetName) != filter {
+			continue
+		}
 		provider := strings.ToLower(strings.TrimSpace(recordValueString(target["provider"])))
-		if provider != "linode" && provider != "kinsta" {
+		if provider != "linode" && provider != "kinsta" && provider != "ssh" {
 			result.Skipped++
 			continue
 		}
-		targetName := firstRecordString(target, "_state_key", "target_name", "target", "name", "slug", "hostname", "label", "id")
+		if provider == "ssh" {
+			remote, err := discoverSSHTargetSites(target)
+			if err != nil {
+				result.Warnings = append(result.Warnings, fmt.Sprintf("target %q: %v", targetName, err))
+				continue
+			}
+			result.Refreshed++
+			refreshedTargets[normalizedRecordString(targetName)] = true
+			discovered = append(discovered, remote...)
+			continue
+		}
 		if provider == "kinsta" {
 			remote, err := discoverKinstaTargetSites(target)
 			if err != nil {
@@ -259,7 +288,7 @@ func refreshRemoteTargetSites(targets []map[string]any) (siteRefreshResult, erro
 	}
 	merged := make([]map[string]any, 0, len(existing)+len(discovered))
 	for _, record := range existing {
-		if staleSiteTarget(record, currentTargets) {
+		if filter == "" && staleSiteTarget(record, currentTargets) {
 			result.Pruned++
 			continue
 		}
@@ -296,7 +325,7 @@ func currentTargetNames(targets []map[string]any) map[string]bool {
 
 func staleSiteTarget(site map[string]any, currentTargets map[string]bool) bool {
 	provider := strings.ToLower(strings.TrimSpace(recordValueString(site["provider"])))
-	if provider != "linode" {
+	if provider != "linode" && provider != "ssh" {
 		return false
 	}
 	target := normalizedRecordString(siteProviderTarget(site))

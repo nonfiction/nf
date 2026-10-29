@@ -2,9 +2,9 @@
 
 <img width="150" align="right" src="docs/nf.svg">
 
-`nf` is nonfiction's internal CLI for agency WordPress theme work.
+`nf` is nonfiction's internal CLI for agency website work. WordPress workflows are established. [Nterchange support](docs/nterchange.md) covers project metadata, SSH/Compose discovery and guarded SQL/media pulls.
 
-It gives the team one command surface for project metadata, local WordPress dev envs, theme tasks, theme packaging, provider inventory, repo remotes, password derivation, and guarded future deploy/sync workflows.
+It manages local WordPress environments, theme and plugin work, provider inventory, repo remotes, password derivation, and guarded deployment and data sync.
 
 This is an internal agency tool, not a general-purpose public WordPress framework.
 
@@ -54,6 +54,7 @@ Start with the [documentation index](docs/index.md) or the [usage guide](docs/us
 Common practical guides:
 
 - [Local development](docs/local-development.md)
+- [Nterchange and SSH targets](docs/nterchange.md)
 - [Targets](docs/targets.md)
 - [Sites](docs/sites.md)
 - [Staging](docs/staging.md)

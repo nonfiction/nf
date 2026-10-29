@@ -86,9 +86,13 @@ func cachedTargets() ([]map[string]any, error) {
 	}
 	targets := providerTargetRecords(providers)
 	if len(providers) > 0 {
-		return targets, nil
+		return appendSSHTargets(targets)
 	}
-	return state.LoadStateRecords("servers")
+	legacy, err := state.LoadStateRecords("servers")
+	if err != nil {
+		return nil, err
+	}
+	return appendSSHTargets(legacy)
 }
 
 func reconcileProviderTargetHandoffs(providers []map[string]any) bool {

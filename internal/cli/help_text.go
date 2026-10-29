@@ -107,6 +107,7 @@ func runTargetHelp() int {
 		{"refresh", "refresh targets from providers"},
 		{},
 		{"add linode <name>", "create a Linode target"},
+		{"add ssh <name> --host <host>", "register an existing SSH/Compose target"},
 		{"remove, rm [target]", "remove an empty Linode target"},
 	}, helpSection{"Show Options", []helpLine{
 		{"--json", "print JSON output"},
@@ -131,6 +132,11 @@ func runTargetHelp() int {
 		{"--show-cloud-init", "print the cloud-init preview"},
 		{"--wait", "wait for SSH, TLS, and health checks"},
 		{"--no-wait", "skip SSH, TLS, and health checks"},
+	}}, helpSection{"SSH Registration Options", []helpLine{
+		{"--user <user>", "SSH user, defaults to nonfiction"},
+		{"--port <port>", "SSH port, defaults to 22"},
+		{"--identity-file <path>", "existing local private key; never uploaded"},
+		{"--known-hosts-file <path>", "existing local host-trust file; strict checking stays enabled"},
 	}}, helpSection{"Mutation Options", []helpLine{
 		{"--dry-run", "show the plan without making changes"},
 		{"--execute", "apply the plan"},
@@ -155,7 +161,7 @@ func runSiteHelp() int {
 	printCommandHelp("site", []helpLine{
 		{"list, ls [--envs [site]]", "list sites or remote envs"},
 		{"show [site|env]", "show a site or remote env"},
-		{"refresh", "refresh local site cache"},
+		{"refresh [target]", "refresh all targets or only the named target"},
 		{"cache [site|env]", "clear cache for a remote env"},
 		{"repair [site|env]", "repair provider platform state"},
 		{},
