@@ -54,12 +54,13 @@ def real_directory(path):
 def package_path(name, media):
     p = PurePosixPath(name)
     require(name == str(p) and not p.is_absolute() and '..' not in p.parts and '\\' not in name and not any(ord(c) < 32 for c in name), 'Unsafe package path')
-    require(p.parts[0] in ('app', 'conf', 'lib', 'public_html', 'vendor') or name in ('nf.json', 'composer.json', 'composer.lock'), 'Unexpected package root')
+    require(name in ('nf.json', 'composer.json', 'composer.lock') if len(p.parts) == 1 else p.parts[0] in ('app', 'conf', 'lib', 'public_html', 'vendor'), 'Unexpected package root: ' + name)
     for excluded in ['var', 'public_html/upload'] + media:
         require(name != excluded and not name.startswith(excluded + '/'), 'Package contains persistent data')
     for part in p.parts:
         lower = part.lower()
-        require((not part.startswith('.') or part == '.htaccess') and lower not in ('var', 'cache', 'caches', 'sessions', 'session', 'tmp', 'temp', 'logs', 'log', 'node_modules', 'backups', 'backup', 'auth.json') and not lower.startswith(('sess_', '.env')) and '.sql' not in lower and not lower.endswith(('.pem', '.key', '.p12', '.pfx', '.sqlite', '.sqlite3', '.db')), 'Package contains excluded data')
+        # Match the Go packager's generated-path policy. PEAR's Log/ is library code, not runtime logs.
+        require((not part.startswith('.') or part == '.htaccess') and lower not in ('var', 'cache', 'caches', 'tmp', 'temp', 'logs', 'sessions', 'scratch', 'backups', 'node_modules', 'auth.json', 'credentials.json', 'credentials.yml', 'credentials.yaml', 'credentials.ini', 'secrets.json', 'secrets.yml', 'secrets.yaml', 'secrets.ini', 'id_rsa', 'id_ed25519') and not lower.startswith('sess_') and '.sql.' not in lower and '.env.' not in lower and not lower.endswith(('.env', '.pem', '.key', '.p12', '.pfx', '.sql', '.sql.gz', '.sql.bz2', '.sql.zip', '.sqlite', '.sqlite3', '.db', '.log', '.bak')), 'Package contains excluded data: ' + name)
     return p
 
 

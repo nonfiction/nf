@@ -73,7 +73,7 @@ class ReleaseTests(unittest.TestCase):
         self.fail('unexpected command ' + str(args))
 
     def archive(self, text='GOOD', bad_member=None):
-        files = {'nf.json': '{}', 'composer.json': '{}', 'composer.lock': '{}', 'conf/conf.php': '<?php', 'public_html/index.php': text, 'vendor/autoload.php': '<?php'}
+        files = {'nf.json': '{}', 'composer.json': '{}', 'composer.lock': '{}', 'conf/conf.php': '<?php', 'public_html/index.php': text, 'vendor/autoload.php': '<?php', 'vendor/nonfiction/nterchange/compat/pear/Log/file.php': '<?php // logging library'}
         manifest = dict(version=1, project='client', commit='1' * 40, excluded_media=self.site['media'], composer_lock_sha256=hashlib.sha256(b'{}').hexdigest(), dependencies=[], files=[dict(path=p, size=len(data), mode='0644', sha256=hashlib.sha256(data.encode()).hexdigest()) for p, data in files.items()])
         body = io.BytesIO()
         with tarfile.open(fileobj=body, mode='w') as archive:
@@ -185,7 +185,7 @@ class ReleaseTests(unittest.TestCase):
             self.invoke()
 
     def test_bad_archives_never_recreate_and_are_removed(self):
-        for name in ('../escape', 'public_html/upload/secret', '/absolute'):
+        for name in ('../escape', 'public_html/upload/secret', '/absolute', 'vendor/library/runtime.log', 'conf/credentials.json', 'conf/secrets.ini'):
             with self.assertRaises(RuntimeError):
                 self.invoke(bad_member=name)
             self.assertFalse(any('up' in call for call in self.calls))
