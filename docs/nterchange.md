@@ -70,7 +70,7 @@ The target must have a readable `/var/lib/nf/sites.json`. It is an array of site
 [
   {
     "name": "client",
-    "env": "review",
+    "env": "live",
     "kind": "nterchange",
     "url": "https://client.php85.nfweb.ca",
     "path": "/var/www/sites/client",
@@ -84,11 +84,11 @@ The target must have a readable `/var/lib/nf/sites.json`. It is an array of site
 
 These are application facts, not credentials. Never put passwords, private keys, environment file contents or API tokens in this file. Unknown fields, duplicate environments, invalid paths, credential-bearing URLs and inventories above 1 MiB are rejected. A failed refresh preserves the existing site cache for that target.
 
-Discovery produces normal nf environment refs such as `client.php85:review`. Connect a project to that environment with existing remote commands:
+Discovery produces normal nf environment refs such as `client.php85:live`. Use `live` for the canonical environment when a site has one deployment on this target. A protected review hostname can still serve that environment; public-domain cutover and integration approval are separate decisions, not inferred from the nf name. Connect a project to that environment with existing remote commands:
 
 ```sh
-nf remote add review client.php85:review
-nf remote show review
+nf remote add live client.php85:live
+nf remote show live
 nf env show
 ```
 
@@ -117,11 +117,11 @@ Alaris's `public_html/videos` currently sits inside its read-only site tree but 
 Run from the site's nterchange repository with an explicit configured remote:
 
 ```sh
-nf env pull review --dry-run
-nf env pull review --check
+nf env pull live --dry-run
+nf env pull live --check
 ```
 
-`--dry-run` prints the source site/environment, SSH host, local Compose file and media paths without SSH or Docker calls. Bare `pull review` and `--non-interactive` without execution also print a plan only. `--check` makes read-only SSH, Docker and SQL metadata calls. It does not export rows, transfer media, create snapshots, restart containers or write the site cache. Do not combine `--check` with `--dry-run` or `--execute`. To import, use `--execute` and confirm the local replacement. Non-interactive import requires `--execute --yes`.
+`--dry-run` prints the source site/environment, SSH host, local Compose file and media paths without SSH or Docker calls. Bare `pull live` and `--non-interactive` without execution also print a plan only. `--check` makes read-only SSH, Docker and SQL metadata calls. It does not export rows, transfer media, create snapshots, restart containers or write the site cache. Do not combine `--check` with `--dry-run` or `--execute`. To import, use `--execute` and confirm the local replacement. Non-interactive import requires `--execute --yes`.
 
 Preflight requires the project slug and media declarations to match the selected remote. It re-reads target inventory so stale cached paths or database names cannot silently select a different source. Both runtimes must have one running, healthy app and db container, a read-only code-root bind, writable site-specific `var` and upload binds, real media directories and persistent MySQL storage. Local code must remain bound to the project checkout. Remote code may use the original inventory root or a verified managed release root. Additional media such as Alaris videos is checked too.
 
@@ -132,9 +132,9 @@ The current remote adapter follows php85's Compose contract: the app service com
 ## Pull SQL and media into local development
 
 ```sh
-nf env pull review --execute
+nf env pull live --execute
 # Explicit non-interactive replacement of local data:
-nf env pull review --execute --yes --non-interactive
+nf env pull live --execute --yes --non-interactive
 ```
 
 Pull stages one schema dump and all declared media before changing local data. Media staging is seeded from local files and updated with checksum-based rsync, so only changed bytes travel over SSH. Removed source files are removed from the local media copy too. The source needs rsync and non-interactive sudo access to Docker and media.
@@ -171,12 +171,12 @@ No npm/webpack build or application bootstrap runs. Required assets must already
 
 ```sh
 # Connection-free plans, including local package validation:
-nf env deploy review --package /absolute/path/to/reviewed-package --dry-run
-nf env rollback review --dry-run
+nf env deploy live --package /absolute/path/to/reviewed-package --dry-run
+nf env rollback live --dry-run
 
 # Only after target-specific approval:
-nf env deploy review --package /absolute/path/to/reviewed-package --execute
-nf env rollback review --execute
+nf env deploy live --package /absolute/path/to/reviewed-package --execute
+nf env rollback live --execute
 ```
 
 Both commands require a configured remote and default to a plan. `--execute` asks for confirmation before any connection; unattended use requires `--execute --yes`. `--yes` alone and `--execute --dry-run` are rejected. Deploy consumes an existing package rather than rebuilding current source. It validates project/media identity, complete file hashes/modes, links, lock/dependency metadata and installed production dependencies before connecting. It does not run Composer on the target. Upload staging is private under `NF_DATA_HOME/nterchange/transfers/`, separate from checkout/config/state/package, and removed on ordinary return. The target requires Python 3.9+, Docker Compose v2 and non-interactive sudo permission for the fixed worker. This is privileged code deployment, not a sandbox for untrusted code.

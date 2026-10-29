@@ -55,7 +55,7 @@ Preserve =form-action 'self'= and the site's existing CSP rather than weakening 
 - Obtain separate authorization before SQL/media import, initial activation, CMS writes or live integrations. Never use this prompt to refresh existing authoritative data from an older review snapshot.
 
 ** Register and discover
-Publish only validated non-secret records in =/var/lib/nf/sites.json=. Each nterchange record needs =name=, =env=, =kind=, =url=, =path=, =compose_file=, =service=, =database= and =media=. Paths must match real stable mounts. Aero/Tagg or other brochure applications must not be falsely labeled nterchange merely to appear in discovery.
+Publish only validated non-secret records in =/var/lib/nf/sites.json=. Each nterchange record needs =name=, =env=, =kind=, =url=, =path=, =compose_file=, =service=, =database= and =media=. Paths must match real stable mounts. Use =live= for the canonical nf environment when a site has a single deployment on this target, even while served at a protected review hostname. Environment identity does not authorize public-domain cutover, mail or other integrations; track those acceptance gates separately. Aero/Tagg or other brochure applications must not be falsely labeled nterchange merely to appear in discovery.
 
 After verified host trust and an explicit target name have been supplied, registration uses the existing CLI, not a new provision command:
 
