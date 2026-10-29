@@ -35,13 +35,15 @@ class ReleaseTests(unittest.TestCase):
         self.mounts = [dict(Type='bind', Source=str(self.root), Destination=worker.SITE, RW=False)]
         self.mounts += [dict(Type='bind', Source=str(self.root / p), Destination=worker.SITE + '/' + p, RW=rw) for p, rw in [('var', True), ('.env', False), ('public_html/upload', True)]]
         self.image = 'sha256:fixture'
+        self.database_mounts = [dict(Type='bind', Source='/stable/mysql', Destination='/var/lib/mysql', RW=True),
+                                dict(Type='bind', Source='/stable/client.cnf', Destination='/run/secrets/mysql-client.cnf', RW=False)]
         self.calls = []
         self.app_serial = 0
         self.fail_recovery = False
         self.fail_up_once = False
 
     def container(self, service):
-        return dict(Id='database-fixed' if service == 'db' else 'app-' + str(self.app_serial), State=dict(Running=True), Image=self.image, Config=dict(Env=['SITE=unchanged']), Mounts=[] if service == 'db' else copy.deepcopy(self.mounts), NetworkSettings=dict(Networks={'internal': {}}))
+        return dict(Id='database-fixed' if service == 'db' else 'app-' + str(self.app_serial), State=dict(Running=True), Image=self.image, Config=dict(Env=['SITE=unchanged']), Mounts=copy.deepcopy(self.database_mounts if service == 'db' else self.mounts), NetworkSettings=dict(Networks={'internal': {}}))
 
     def docker(self, args):
         self.calls.append(args)
@@ -113,6 +115,48 @@ class ReleaseTests(unittest.TestCase):
             self.assertEqual((self.root / p).read_bytes(), data)
         self.assertFalse((self.state / 'pending.json').exists())
         self.assertTrue(any(m['Destination'] == worker.SITE + '/public_html/videos' and not m['RW'] for m in self.mounts))
+
+    def test_reordered_database_mounts_allow_activation_recovery_and_rollback(self):
+        original = self.container
+        def inspect(service):
+            value = original(service)
+            if service == 'db' and self.app_serial % 2:
+                value['Mounts'].reverse()
+            return value
+        with patch.object(self, 'container', inspect):
+            self.invoke()
+            first_state = (self.state / 'state.json').read_bytes()
+            with self.assertRaisesRegex(RuntimeError, 'previous code restored'):
+                self.invoke(text='BAD')
+            self.assertEqual((self.state / 'state.json').read_bytes(), first_state)
+            self.assertFalse((self.state / 'pending.json').exists())
+            self.invoke(text='GOOD SECOND')
+            self.invoke('rollback')
+            self.assertEqual(json.loads((self.state / 'state.json').read_bytes())['current'], json.loads(first_state)['current'])
+            self.assertFalse((self.state / 'pending.json').exists())
+
+    def test_database_identity_and_mount_changes_still_fail_health(self):
+        self.invoke()
+        previous_state = (self.state / 'state.json').read_bytes()
+        original = self.container
+        for change in ('id', 'source', 'destination', 'access', 'type', 'missing'):
+            with self.subTest(change=change):
+                def inspect(service):
+                    value = original(service)
+                    if service == 'db' and self.app_serial % 2 == 0:
+                        if change == 'id':
+                            value['Id'] = 'replaced-database'
+                        elif change == 'missing':
+                            value['Mounts'].pop()
+                        else:
+                            field, replacement = {'source': ('Source', '/other/mysql'), 'destination': ('Destination', '/other/data'),
+                                                  'access': ('RW', False), 'type': ('Type', 'volume')}[change]
+                            value['Mounts'][0][field] = replacement
+                    return value
+                with patch.object(self, 'container', inspect), self.assertRaisesRegex(RuntimeError, 'previous code restored'):
+                    self.invoke(text='GOOD CANDIDATE')
+                self.assertEqual((self.state / 'state.json').read_bytes(), previous_state)
+                self.assertFalse((self.state / 'pending.json').exists())
 
     def test_first_rollback_uses_untouched_baseline(self):
         self.invoke()

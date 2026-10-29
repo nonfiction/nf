@@ -347,6 +347,8 @@ def main(stream):
         host = urlsplit(site['url']).netloc
         require(host and '\r' not in host and '\n' not in host, 'Invalid health Host')
         php = '$c=stream_context_create(["http"=>["timeout"=>3,"ignore_errors"=>true,"follow_location"=>0,"header"=>"Host: ".' + 'hex2bin("' + host.encode().hex() + '")' + '."\\r\\n"]]); @file_get_contents("http://127.0.0.1/",false,$c); exit(isset($http_response_header[0]) && preg_match("~^HTTP/\\S+ 200(?: |$)~",$http_response_header[0]) ? 0 : 1);'
+        # Docker can reorder unchanged mount records between inspections.
+        database_mounts = sorted(database['Mounts'], key=lambda mount: mount['Destination'])
         failure = None
         for _ in range(15):
             try:
@@ -358,7 +360,7 @@ def main(stream):
                 for mount in persistent:
                     require(any(m['Destination'] == mount['Destination'] and m['Source'] == mount['Source'] and m['RW'] == mount['RW'] for m in app['Mounts']), 'Persistent bind changed')
                 db = inspect('db')
-                require(db['Id'] == database['Id'] and db['Mounts'] == database['Mounts'], 'Database container/storage changed')
+                require(db['Id'] == database['Id'] and sorted(db['Mounts'], key=lambda mount: mount['Destination']) == database_mounts, 'Database container/storage changed')
                 run(['docker', 'exec', app['Id'], 'php', '-r', php])
                 return
             except (RuntimeError, subprocess.TimeoutExpired) as error:
