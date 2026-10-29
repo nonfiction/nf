@@ -19,6 +19,7 @@
           src = ./.;
           modRoot = ".";
           subPackages = ["cmd/nf"];
+          nativeCheckInputs = [pkgs.python3];
           vendorHash = "sha256-QnECZnfGhWlF4GF94rvEuAgzrVVmV0cbcaanHXKiVM8=";
           ldflags = [
             "-s"
@@ -64,7 +65,7 @@
         };
 
         devShells.default = pkgs.mkShell {
-          packages = [pkgs.go pkgs.gotools nf nf-build];
+          packages = [pkgs.go pkgs.gotools pkgs.python3 nf nf-build];
           shellHook = ''
             echo "nf dev: run nf-build to refresh ~/.local/bin/nf"
           '';

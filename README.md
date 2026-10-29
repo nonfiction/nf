@@ -2,7 +2,7 @@
 
 <img width="150" align="right" src="docs/nf.svg">
 
-`nf` is nonfiction's internal CLI for agency website work. WordPress workflows are established. [Nterchange support](docs/nterchange.md) covers project metadata, SSH/Compose discovery, guarded SQL/media pulls and locked code packaging. Activation and rollback are not implemented.
+`nf` is nonfiction's internal CLI for agency website work. WordPress workflows are established. [Nterchange support](docs/nterchange.md) covers project metadata, SSH/Compose discovery, guarded SQL/media pulls, locked code packaging and per-site code activation/rollback. Activation has been tested only on a disposable synthetic PHP target, not an existing CMS site.
 
 It manages local WordPress environments, theme and plugin work, provider inventory, repo remotes, password derivation, and guarded deployment and data sync.
 

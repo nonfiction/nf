@@ -1,6 +1,6 @@
 # Nterchange and SSH targets
 
-Nterchange support covers project metadata, registration of an existing SSH target, read-only site discovery, repo remote aliases, local configuration inspection, guarded SQL/media pull and locked code packaging. It does not provision DigitalOcean resources, activate code, roll back releases or manage local container lifecycle yet.
+Nterchange support covers project metadata, registration of an existing SSH target, read-only site discovery, repo remote aliases, local configuration inspection, guarded SQL/media pull, locked code packaging and per-site code activation/rollback. It does not provision DigitalOcean resources or manage local container lifecycle. Release tests used a disposable synthetic PHP target only; existing CMS deployment still requires separate review.
 
 WordPress commands stay separate. In a nterchange project, unsupported environment mutations and WordPress theme/plugin/define/alias commands fail without changing the environment.
 
@@ -151,8 +151,36 @@ The manifest records source commit, project, excluded media, lock SHA-256, produ
 
 No npm/webpack build or application bootstrap runs. Required assets must already be committed in the selected code tree; the packager does not know every inherited frontend output convention. Successful packaging and PHP platform checks do not prove CMS behavior, integrations or target health. Existing duplicate-class Composer warnings remain visible and need application review, not a packaging workaround.
 
-## Remaining code deployment work
+## Activate or roll back code
 
-Per-site release activation, health checks and rollback require a separate implementation and review. A normal code deployment must not replace a database, media, `var`, or environment credentials. Schema/content migrations need separate approval.
+```sh
+# Connection-free plans, including local package validation:
+nf env deploy review --package /absolute/path/to/reviewed-package --dry-run
+nf env rollback review --dry-run
+
+# Only after target-specific approval:
+nf env deploy review --package /absolute/path/to/reviewed-package --execute
+nf env rollback review --execute
+```
+
+Both commands require a configured remote and default to a plan. `--execute` asks for confirmation before any connection; unattended use requires `--execute --yes`. `--yes` alone and `--execute --dry-run` are rejected. Deploy consumes an existing package rather than rebuilding current source. It validates project/media identity, complete file hashes/modes, links, lock/dependency metadata and installed production dependencies before connecting. It does not run Composer on the target. Upload staging is private under `NF_DATA_HOME/nterchange/transfers/`, separate from checkout/config/state/package, and removed on ordinary return. The target requires Python 3.9+, Docker Compose v2 and non-interactive sudo permission for the fixed worker. This is privileged code deployment, not a sandbox for untrusted code.
+
+The worker rereads `/var/lib/nf/sites.json` and rejects changed inventory or a service shared by two records. It requires running healthy app/db containers, a read-only code-root bind at `/var/www/site`, stable writable site-specific `var` and upload binds, and a read-only regular environment-file bind. Unrecognized nested code mounts fail. Declared extra media receives an explicit stable bind if it was previously visible only through the original root, read-only by default; an existing media bind keeps its access mode. Docker volumes and database schemas are never imported, replaced or migrated by this operation.
+
+State lives beside the original site root, in `<site-root-parent>/.nf-releases/<site>-<env>/`. A per-site flock excludes concurrent operations. Uploads go into private temporary directories and are verified against the file manifest before becoming `release-*` directories. The code bind is read-only. Empty `.env`, `var` and declared-media mount targets are added to staged code because Docker cannot create nested targets through a read-only bind. These empty targets are not credentials or runtime content; stable host binds cover them. Verification rejects content written into those empty targets. Other files and links remain covered by the manifest.
+
+A private `active.compose.json` changes only the selected service's root bind and stable nested binds, pinning its currently running image ID. Compose recreates that app with `--no-deps --no-build --pull never`; it does not restart db, mail or other sites. Base Compose files and the original site tree remain unchanged. Subsequent operations reject changes to base Compose, image, inventory, original code fingerprint or managed package contents. Container replacement invalidates that app's PHP process cache and causes brief downtime. This is not zero-downtime deployment or an image-upgrade command.
+
+Health requires the selected app to run without a failing Docker health status, with the expected image/environment and mounts, and the same network names. The db container ID and mounts must remain unchanged. PHP inside the app requests `http://127.0.0.1/` on port 80 with the inventory URL's Host header and requires HTTP 200 without following redirects. It retries up to 15 times, sleeping one second between failures; commands have separate 90-second limits. The URL is never requested over the public network. Redirect-only roots, non-port-80 apps and missing PHP fail this contract. HTTP 200 is a smoke check, not proof of CMS functions, schema compatibility or integrations. The request boots the app and can have normal application side effects. Separately review migrations and integration restrictions before approving a real site.
+
+`state.json` records current/previous release IDs, stable site identity, image and base/original-code fingerprints. First activation records the untouched original code tree as the previous baseline. Rollback restores the previous recorded code, or that baseline after the first activation, without building/uploading anything. A successful rollback swaps current and previous, so another rollback toggles those two versions. Old and failed release directories are retained; there is no automatic pruning.
+
+Before recreating the app, `pending.json` records the intended transition. If recreation, health or state recording fails, nf recreates the previous code and runs the same health checks. Successful recovery leaves recorded state unchanged and removes the journal, but the command still fails. Failed recovery retains the journal and reports its path. Interrupts, SSH loss or process termination may leave either release running and the journal present. Further deploy/rollback commands refuse to proceed. An interrupted upload before the journal can leave a private `.upload-*` directory without switching the app.
+
+For manual recovery, inspect `pending.json`, `state.json`, `active.compose.json` and the actual app root mount before editing or deleting anything. `null` means the original inventory root; a release ID means that directory's `code/`. Restore the selected known-good root in `active.compose.json`, then use the original Compose recipe plus that override to recreate only the inventory app service with the same no-deps/no-build/pull-never flags. Verify HTTP, image, all stable mounts and the unchanged database container. Reconcile recorded current/previous state with what is actually running before removing the journal; inspect leftover `.tmp` files if an atomic write was interrupted. No automatic journal-repair command exists. Keep these files private and do not copy environment files into release directories.
+
+After activation, manual service recreation must include the managed override; base Compose alone would mount the original code. The accepted data-pull preflight still requires the original root bind and therefore rejects an activated remote. Pull support for managed release roots needs a separate reviewed change. It fails closed rather than silently treating an unexpected mount as safe.
+
+Release verification used real loopback SSH, Docker Compose, PHP/Apache HTTP and a MySQL sentinel on an agent-owned target, with synthetic zero-dependency packages. The fixture exercised two activations, rollback, HTTP 500 recovery, integrity rejection, concurrent locking and an injected exit after real HTTP calls to test failed-recovery journaling. It stripped sudo in a forced-command SSH adapter, so it does not establish production sudo permissions. No existing CMS, frontend build, target health or php85 deployment was accepted by these tests. A normal code deployment must not replace a database, media, `var`, or environment credentials. Schema/content migrations need separate approval.
 
 DigitalOcean automatic backups are the host-recovery baseline. They are not a development sync mechanism. No recurring whole-host download to a developer's machine is needed for either workflow.

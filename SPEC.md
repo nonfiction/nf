@@ -28,7 +28,7 @@ It should replace scattered per-project scripts with one command surface for:
 
 ## Nterchange extension
 
-Nterchange projects use the same version 2 manifest with a `nterchange` object instead of WordPress configuration. They do not need fake themes. Implemented commands include project initialization, `env show`, existing SSH target registration, read-only site discovery, repo remote aliases, guarded SQL/media pull and locked code packaging. Unsupported nterchange operations are rejected rather than passed through WordPress code.
+Nterchange projects use the same version 2 manifest with a `nterchange` object instead of WordPress configuration. They do not need fake themes. Implemented commands include project initialization, `env show`, existing SSH target registration, read-only site discovery, repo remote aliases, guarded SQL/media pull, locked code packaging and per-site code activation/rollback. Unsupported nterchange operations are rejected rather than passed through WordPress code.
 
 Registered SSH targets live in `ssh-targets.json` under the config home, separate from disposable provider cache. Discovery reads non-secret application records from `/var/lib/nf/sites.json` with strict SSH host-key checking. Registration does not provision infrastructure. See [the nterchange guide](docs/nterchange.md) for the inventory format and current limits.
 
@@ -36,7 +36,7 @@ Registered SSH targets live in `ssh-targets.json` under the config home, separat
 
 `nf env package --ref <full-commit-id>` stages only the selected immutable commit, installs locked production Composer dependencies with scripts/plugins disabled, checks actual PHP/extensions and writes a private code tree plus a SHA-256 file manifest under `NF_DATA_HOME/nterchange/packages/`. Source dependencies and locks are never updated. Media, environment/credential files, SQL, runtime/cache paths, Git metadata and development tooling stay out. Legacy tracked vendor libraries remain; Composer-owned generated paths are rebuilt. No frontend build or application boot runs. See the nterchange guide for supported inputs and exclusions.
 
-Release activation, health checks and rollback remain unimplemented. They must preserve databases, media, runtime state and environment credentials. Local container lifecycle and a nterchange safety-copy restore command also remain unimplemented.
+`nf env deploy <remote> --package <directory>` and `nf env rollback <remote>` default to connection-free plans. Execution requires `--execute` plus confirmation (`--execute --yes` unattended). A fixed Python 3 SSH worker rechecks inventory and package integrity, then uses a private per-site Compose override to recreate only the selected app, pinning its current image. The original code tree, base recipe, database and stable media/var/environment binds stay in place. Container-local HTTP 200 and mount/container checks gate success; failed activation restores prior code and checks again. Releases, current/previous state and interruption/recovery journals live beside the stable site tree under `.nf-releases/<site>-<env>/`. Interrupted or failed recovery blocks further operations until manual repair. No automatic retention or image upgrade is implemented. These paths have been tested with a synthetic PHP/Apache app and real SSH/Compose, not an existing CMS or production sudo configuration. See the nterchange guide for health and recovery limits. Local container lifecycle and a nterchange safety-copy restore command remain unimplemented.
 
 ## System contexts
 
