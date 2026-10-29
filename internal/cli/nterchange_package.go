@@ -504,7 +504,18 @@ func nterchangePackageContents(code string, media []string) ([]nterchangePackage
 		if err != nil {
 			return err
 		}
-		file := nterchangePackageFile{Path: name, Mode: fmt.Sprintf("%04o", info.Mode().Perm())}
+		mode := info.Mode().Perm()
+		if info.Mode().IsRegular() {
+			// Private build umasks must not make deployed code unreadable or change executable modes.
+			mode = 0644
+			if info.Mode().Perm()&0111 != 0 {
+				mode = 0755
+			}
+			if err := os.Chmod(full, mode); err != nil {
+				return err
+			}
+		}
+		file := nterchangePackageFile{Path: name, Mode: fmt.Sprintf("%04o", mode)}
 		var sum [32]byte
 		if info.Mode()&os.ModeSymlink != 0 {
 			target, err := os.Readlink(full)

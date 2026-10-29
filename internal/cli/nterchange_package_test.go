@@ -5,10 +5,12 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"syscall"
 	"testing"
 
 	"github.com/nonfiction/nf/internal/config"
@@ -105,6 +107,55 @@ esac
 	t.Setenv("COMPOSER", "/not/to/be/used.json")
 	t.Setenv("DB_PASSWORD", "not-to-be-inherited")
 	return log
+}
+
+func TestNterchangePackageRestrictiveUmask(t *testing.T) {
+	repo, metadata := nterchangePackageFixture(t)
+	if err := os.Chmod(filepath.Join(repo, "public_html/assets/built.js"), 0755); err != nil {
+		t.Fatal(err)
+	}
+	ref := packageCommit(t, repo)
+	packageComposerMock(t, "")
+	old := syscall.Umask(0077)
+	defer syscall.Umask(old)
+	location, err := packageNterchange(repo, metadata, ref)
+	if err != nil {
+		t.Fatal(err)
+	}
+	manifest, err := verifyNterchangePackage(location, metadata)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, file := range manifest.Files {
+		expected := "0644"
+		if file.Path == "public_html/assets/built.js" {
+			expected = "0755"
+		}
+		if file.Mode != expected {
+			t.Fatalf("%s mode %s, want %s despite umask 0077", file.Path, file.Mode, expected)
+		}
+	}
+	if err := writeNterchangeReleaseInput(io.Discard, nterchangeReleaseRequest{Manifest: &manifest}, location); err != nil {
+		t.Fatal(err)
+	}
+	info, err := os.Stat(location)
+	if err != nil || info.Mode().Perm() != 0700 {
+		t.Fatal("package parent must remain private", err)
+	}
+	manifest.Files[0].Mode = "0700"
+	if err := os.Chmod(filepath.Join(location, "code", manifest.Files[0].Path), 0700); err != nil {
+		t.Fatal(err)
+	}
+	data, err := json.Marshal(manifest)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(location, "manifest.json"), data, 0600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := verifyNterchangePackage(location, metadata); err == nil || !strings.Contains(err.Error(), "unsupported package mode") {
+		t.Fatalf("dry-run must reject unsupported modes: %v", err)
+	}
 }
 
 func TestNterchangePackageSelectedCommitExclusionsAndIntegrity(t *testing.T) {

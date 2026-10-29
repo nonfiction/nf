@@ -46,6 +46,9 @@ func verifyNterchangePackage(location string, current *projectMetadata) (ntercha
 	}
 	expected := map[string]nterchangePackageFile{}
 	for _, file := range manifest.Files {
+		if file.Target == "" && file.Mode != "0600" && file.Mode != "0644" && file.Mode != "0755" {
+			return manifest, fmt.Errorf("unsupported package mode: %s", file.Path)
+		}
 		if !nterchangePackagePath(file.Path, manifest.Media, true) {
 			return manifest, fmt.Errorf("excluded package path %q", file.Path)
 		}
