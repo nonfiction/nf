@@ -1,0 +1,250 @@
+{
+  "name": "nf-review",
+  "services": {
+    "db": {
+      "cpus": 2,
+      "command": [
+        "--sql-mode=NO_ENGINE_SUBSTITUTION",
+        "--innodb-buffer-pool-size=256M",
+        "--max-connections=80",
+        "--local-infile=OFF",
+        "--event-scheduler=OFF"
+      ],
+      "entrypoint": null,
+      "environment": {
+        "MYSQL_ROOT_PASSWORD_FILE": "/run/secrets/mysql-root"
+      },
+      "healthcheck": {
+        "test": [
+          "CMD",
+          "mysql",
+          "--defaults-extra-file=/run/secrets/mysql-client.cnf",
+          "--protocol=TCP",
+          "-h",
+          "127.0.0.1",
+          "-NBe",
+          "SELECT 1"
+        ],
+        "timeout": "5s",
+        "interval": "5s",
+        "retries": 40
+      },
+      "image": "mysql:8.4",
+      "logging": {
+        "driver": "json-file",
+        "options": {
+          "max-file": "3",
+          "max-size": "10m"
+        }
+      },
+      "mem_limit": "1610612736",
+      "networks": {
+        "client": null
+      },
+      "pids_limit": 256,
+      "restart": "unless-stopped",
+      "volumes": [
+        {
+          "type": "bind",
+          "source": "/var/lib/nf/nterchange/mysql",
+          "target": "/var/lib/mysql",
+          "bind": {
+            "create_host_path": false
+          }
+        },
+        {
+          "type": "bind",
+          "source": "/etc/nf/nterchange/secrets/mysql-root",
+          "target": "/run/secrets/mysql-root",
+          "read_only": true,
+          "bind": {
+            "create_host_path": false
+          }
+        },
+        {
+          "type": "bind",
+          "source": "/etc/nf/nterchange/secrets/mysql-client.cnf",
+          "target": "/run/secrets/mysql-client.cnf",
+          "read_only": true,
+          "bind": {
+            "create_host_path": false
+          }
+        }
+      ]
+    },
+    "client": {
+      "build": {
+        "context": "/etc/nf/nterchange",
+        "dockerfile": "docker/Dockerfile"
+      },
+      "cap_drop": [
+        "NET_RAW"
+      ],
+      "cpus": 1,
+      "command": null,
+      "depends_on": {
+        "db": {
+          "condition": "service_healthy",
+          "required": true
+        },
+        "mailpit": {
+          "condition": "service_started",
+          "required": true
+        }
+      },
+      "entrypoint": null,
+      "image": "nf-nterchange-app:8.5.12",
+      "logging": {
+        "driver": "json-file",
+        "options": {
+          "max-file": "3",
+          "max-size": "10m"
+        }
+      },
+      "mem_limit": "536870912",
+      "networks": {
+        "client": null
+      },
+      "pids_limit": 128,
+      "read_only": true,
+      "restart": "unless-stopped",
+      "security_opt": [
+        "no-new-privileges:true"
+      ],
+      "tmpfs": [
+        "/tmp",
+        "/run",
+        "/var/lock/apache2"
+      ],
+      "volumes": [
+        {
+          "type": "bind",
+          "source": "/var/www/sites/client",
+          "target": "/var/www/site",
+          "read_only": true,
+          "bind": {
+            "create_host_path": false
+          }
+        },
+        {
+          "type": "bind",
+          "source": "/var/www/sites/client/var",
+          "target": "/var/www/site/var",
+          "bind": {
+            "create_host_path": false
+          }
+        },
+        {
+          "type": "bind",
+          "source": "/var/www/sites/client/public_html/upload",
+          "target": "/var/www/site/public_html/upload",
+          "bind": {
+            "create_host_path": false
+          }
+        },
+        {
+          "type": "bind",
+          "source": "/etc/nf/nterchange/secrets/client.env",
+          "target": "/var/www/site/.env",
+          "read_only": true,
+          "bind": {
+            "create_host_path": false
+          }
+        }
+      ]
+    },
+    "gateway": {
+      "cpus": 0.5,
+      "command": null,
+      "depends_on": {
+        "client": {
+          "condition": "service_started",
+          "required": true
+        }
+      },
+      "entrypoint": null,
+      "image": "nginx:1.28-alpine",
+      "logging": {
+        "driver": "json-file",
+        "options": {
+          "max-file": "3",
+          "max-size": "10m"
+        }
+      },
+      "mem_limit": "134217728",
+      "networks": {
+        "client": null,
+        "ingress": null
+      },
+      "pids_limit": 64,
+      "ports": [
+        {
+          "host_ip": "127.0.0.1",
+          "published": "18080",
+          "target": 8080,
+          "protocol": "tcp"
+        }
+      ],
+      "restart": "unless-stopped",
+      "volumes": [
+        {
+          "type": "bind",
+          "source": "/etc/nf/nterchange/docker/gateway.conf",
+          "target": "/etc/nginx/conf.d/default.conf",
+          "read_only": true,
+          "bind": {
+            "create_host_path": false
+          }
+        },
+        {
+          "type": "bind",
+          "source": "/etc/nf/nterchange/sites/taggcollective/public_html",
+          "target": "/srv/tagg",
+          "read_only": true,
+          "bind": {
+            "create_host_path": false
+          }
+        }
+      ]
+    },
+    "mailpit": {
+      "cpus": 0.5,
+      "command": null,
+      "entrypoint": null,
+      "environment": {
+        "MP_DATABASE": "/data/mailpit.db",
+        "MP_MAX_MESSAGES": "500"
+      },
+      "image": "axllent/mailpit:v1.27.10",
+      "logging": {
+        "driver": "json-file",
+        "options": {
+          "max-file": "3",
+          "max-size": "10m"
+        }
+      },
+      "mem_limit": "268435456",
+      "networks": {
+        "client": null
+      },
+      "pids_limit": 64,
+      "restart": "unless-stopped",
+      "volumes": [
+        {
+          "type": "bind",
+          "source": "/var/lib/nf/nterchange/mailpit",
+          "target": "/data",
+          "bind": {
+            "create_host_path": false
+          }
+        }
+      ]
+    }
+  },
+  "networks": {
+    "client": {
+      "internal": true
+    },
+    "ingress": {}
+  }
+}

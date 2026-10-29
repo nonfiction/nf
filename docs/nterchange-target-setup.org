@@ -1,0 +1,78 @@
+#+TITLE: Prepare a nterchange SSH target for nf
+
+* Prepare a nterchange SSH target for nf
+** Mandate and authority
+Set up a hostname-neutral nterchange Docker Compose host that nf can discover and operate through its existing SSH adapter. Do not add an nf provisioner, cloud-provider integration or generic deployment framework. This prompt is a reusable procedure, not permission to create paid resources, modify an existing host, import data, issue certificates, change DNS or activate code. Obtain a bounded mandate for those actions before executing them. Default to inspection and a concrete proposal when authorization is absent.
+
+Use the logical project at =~/org/work/nonfiction/nterchange/nterchange.org= and the relevant nf/site task records. Keep their checklists current. Do not delegate without Jon's request. Read the current nf repository's =AGENTS.md= and =docs/nterchange.md= before relying on this prompt. Treat historical commands and pins as evidence, not current authority or a guarantee of compatibility.
+
+** Inputs to resolve
+- Existing host address, SSH user/key and independently verified host key. If there is no host yet, propose provider, region, OS, size, cost and backup policy, then stop for creation approval. Never reuse the old php85 address as a default for a new target.
+- Target alias, review hostname policy and explicitly authorized DNS/TLS scope. The alias and hostname must not determine filesystem roots.
+- Approved sites, environment names, immutable source commits, locked production dependencies and approved application/container image references.
+- Required native document roots, media directories, schema names, runtime directories, PHP extensions, upload limits and session policy. Check site-specific exceptions such as Alaris videos and PetroChina's database engine mix.
+- Recovery baseline and allowed downtime. Do not infer permission for data imports or assume review snapshots are authoritative production data.
+- Explicit policy for mail, schedulers and provider/network integrations. Protected review defaults to captured mail, blocked external integrations and no duplicate jobs.
+
+Do not request credentials in chat or put them in command arguments, logs, Org or Git. Use owner-only local files or approved secret storage. Generate distinct database credentials per site and keep application, review HTTP and CMS credentials separate.
+
+** Host layout
+Use these roots unless an existing, justified host constraint requires a reviewed alternative:
+
+#+begin_example
+/var/www/sites/<site>/                    native app/conf/vendor/public_html/var layout
+/var/www/sites/.nf-releases/<site>-<env>/  nf's existing managed release state location
+/etc/nf/nterchange/compose.yaml           explicit Compose project configuration
+/etc/nf/nterchange/docker/                Dockerfiles and PHP/Apache/gateway configuration
+/etc/nf/nterchange/secrets/               private environment and database client files
+/etc/nf/nterchange/nginx-sites.conf       retained source of the TLS proxy vhost
+/var/lib/nf/nterchange/mysql/             persistent MySQL data
+/var/lib/nf/nterchange/mailpit/           captured mail data
+/var/lib/nf/sites.json                    current non-secret SSH discovery inventory
+#+end_example
+
+Do not create =.nf-releases= by hand; the release worker owns it. Keep =public_html= rather than renaming native site directories to imitate WordPress. Do not repurpose =/var/www/nf=, which the existing WordPress host uses for its landing page, or create empty directories merely to copy that host's appearance. Do not fabricate a WordPress/Linode =/etc/nf/server.json= for this SSH target. Keep the existing SSH inventory contract until nf explicitly supports another one.
+
+Choose one stable Compose project name independent of the hostname and PHP version. Existing hosts retain their current project/network identities during a layout-only migration. Preserve numeric ownership and least-privilege modes appropriate to the real container users. Secrets must not become readable through a web root. Use explicit read-only code/config/credential binds and writable site-specific var/media binds. Disable automatic creation of missing persistent bind sources so a path typo cannot initialize an empty database.
+
+** Version-controlled configuration
+Review the non-secret examples in =examples/nterchange-target/= before changing a host. They show one fictional client and are not an installer or an exact copy of the running stack. Commit and push logical groups if the mandate authorizes publication. Keep host-generated private settings, secrets, database files, authenticated sessions, logs and recovery archives outside Git. Do not publish an application's private source or embedded secrets as a configuration example. Install/render the reviewed templates to the paths above and record their source revision. Avoid a new repository or template engine unless Jon asks for one.
+
+The same-host HTTPS redirect correction must be in the tracked nginx template, not just a hand-edited server file. TLS terminates at the host proxy while the application sees HTTP. In its HTTPS proxy location retain the correct Host and forwarded protocol, and apply:
+
+#+begin_src conf
+proxy_redirect http://$host/ https://$host/;
+#+end_src
+
+Preserve =form-action 'self'= and the site's existing CSP rather than weakening it. For protected review, preserve HTTP Basic Auth, noindex/no-store and the rule stripping review Authorization before it reaches the app. A static health URL is the only intended authentication exception. Keep the application-side HTTPS/proxy settings consistent with the trusted proxy. Do not rewrite external-host destinations indiscriminately.
+
+** Runtime setup and data boundaries
+- Inspect the target OS and existing services before installing anything. Use that host's supported configuration workflow, not commands copied blindly from kit's NixOS environment. Expose only approved SSH/HTTP/HTTPS ports; database and mail UI must not be publicly published.
+- Use reviewed PHP/MySQL images and bounded worker/resource settings. Keep each CMS on its own schema/account and internal application network. Validate that one site's account cannot read another site's schema.
+- Bind code read-only at the adapter's existing =/var/www/site= container root, preserve writable =var= and declared media, mount environment files read-only and provide the expected read-only MySQL client configuration. Do not put mutable data inside release payloads.
+- Maintain stable session storage and the agreed session-expiry/garbage-collection policy across container recreation. Do not purge existing sessions during migration.
+- Install source and locked production dependencies only from approved inputs. No lock updates or dependency scripts/plugins against real site state. Existing nf package commands are preferred over ad hoc worktree copies when their preconditions hold.
+- Obtain separate authorization before SQL/media import, initial activation, CMS writes or live integrations. Never use this prompt to refresh existing authoritative data from an older review snapshot.
+
+** Register and discover
+Publish only validated non-secret records in =/var/lib/nf/sites.json=. Each nterchange record needs =name=, =env=, =kind=, =url=, =path=, =compose_file=, =service=, =database= and =media=. Paths must match real stable mounts. Aero/Tagg or other brochure applications must not be falsely labeled nterchange merely to appear in discovery.
+
+After verified host trust and an explicit target name have been supplied, registration uses the existing CLI, not a new provision command:
+
+#+begin_src sh
+nf target add ssh TARGET --host HOST --user USER --identity-file KEY_PATH --known-hosts-file TRUST_PATH
+nf site refresh TARGET
+#+end_src
+
+For a real site's already-configured repository, inspect =nf env show= and =nf remote show= first. Add a remote only when absent and approved. Keep existing project slugs, Composer locks and package pins unless changing them is part of the mandate. Use isolated =NF_CONFIG_HOME=, =NF_STATE_HOME= and =NF_DATA_HOME= for tests; update normal operator registration/cache only when authorized.
+
+** Verification and stop points
+1. Validate Compose configuration and nginx syntax before activation or reload. Verify every bind source, identity, mode and image explicitly. Do not let a missing data directory trigger first-run initialization.
+2. Check protected frontend, CMS login and slash/no-slash directory routes. Every same-host redirect on the HTTPS origin must stay HTTPS; confirm query strings survive. Authentication guards and CSP must remain intact. Use a real owned browser context for an authorized login check; do not report HTTP scripting as browser evidence.
+3. Verify schema/account isolation, persistent media/session paths and the approved mail/egress/job restrictions. An HTTP 200 is not acceptance of CMS edits, forms, mail or integrations.
+4. Verify nf discovery and connection-free pull/deploy plans. Full pull =--check= also requires a safe running local destination; do not start or replace unrelated local environments solely to make that check pass. Do not execute data transfer or release operations without their own approval.
+5. Reuse existing verified recovery material when work only changes paths/configuration. Do not launch full backups, dumps, restores or downloads merely for ceremony. If usable recovery material is missing, report that and seek the smallest safe alternative. Never delete existing backups or enable the retired whole-stack timer as a side effect.
+6. Report exactly what was built, provisioned, registered and tested, including what was mocked or untested. Record configuration revision, private credential-file locations without contents, recovery references and remaining approval gates. Remove only owned temporary resources and leave established review services running.
+
+** Existing-host relocation warning
+This is not a command to rebuild php85. The existing-host migration plan and execution record belong to the linked project task. Use same-filesystem renames while affected services are stopped, retain current images/Compose identity and reverse the moves for rollback. Never copy or restore raw MySQL data while it is running. If managed releases or recovery journals now exist, stop and revise the state-migration plan rather than blindly replacing paths in state files.

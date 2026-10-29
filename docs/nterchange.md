@@ -37,6 +37,14 @@ Media paths must be clean, non-overlapping paths below `public_html`. Hidden pat
 
 The local recipe uses services named `app` and `db`. Existing database volumes, bind mounts, credentials, integration restrictions and mail capture remain owned by that recipe. `nf env show` reads metadata only. It does not start containers, load application code, or generate environment files.
 
+## Prepare a target without a provisioner
+
+Use the [agent setup prompt](nterchange-target-setup.org) and [single-client configuration examples](../examples/nterchange-target/) for a future target. They are reviewed inputs for an operator, not an installer or permission to create resources. Supply approved source/images, private credential files, hostnames, certificates, schema/account setup and persistent directories before starting anything. Do not install the fictional example over an existing stack. The example images/configuration have not been booted with a real CMS by this documentation change.
+
+Copy the selected Compose, Docker and nginx configuration to `/etc/nf/nterchange/`, excluding any real secrets from Git and the Docker build context. Adapt the example's client and certificate names explicitly. Create bind sources with the verified ownership/modes first; `create_host_path: false` deliberately rejects missing paths. Only approved data imports or activation may populate a site/database. The example captures mail and disables MySQL events, but actual integration restrictions and session retention still require site review.
+
+The TLS proxy template includes `proxy_redirect http://$host/ https://$host/;` so Apache-generated same-host directory redirects stay on HTTPS. Preserve CSP and review authentication rather than disabling `form-action 'self'`. It does not rewrite external-host redirects. The example's static health endpoint is `/_nf/health`; existing targets may retain their established health URL.
+
 ## Register an existing SSH target
 
 ```sh
@@ -63,8 +71,8 @@ The target must have a readable `/var/lib/nf/sites.json`. It is an array of site
     "env": "review",
     "kind": "nterchange",
     "url": "https://client.php85.nfweb.ca",
-    "path": "/srv/php85/sites/client",
-    "compose_file": "/srv/php85/compose.yaml",
+    "path": "/var/www/sites/client",
+    "compose_file": "/etc/nf/nterchange/compose.yaml",
     "service": "client",
     "database": "client",
     "media": ["public_html/upload"]
@@ -84,15 +92,21 @@ nf env show
 
 Only nterchange records are supported by this SSH inventory reader. Aero Rentals and Tagg need a separate application model; do not label those sites as nterchange to make discovery accept them.
 
-## Data ownership on php85
+## Host layout and data ownership
 
-All persistent Docker mounts on the current php85 host are bind mounts:
+Use hostname-neutral paths. The target alias, DNS name and PHP version do not determine filesystem roots. The original review stack used `/srv/php85`; nf did not require that prefix. Explicit inventory and Compose paths are authoritative, so existing targets can be relocated without changing application code or consumer manifests.
 
-- MySQL data is under `/srv/php85/data/mysql`, shared by seven isolated schemas.
-- Site code is under `/srv/php85/sites/<site>` and mounted read-only.
-- Each site's `public_html/upload` and `var` directories are writable bind mounts.
-- Environment files are under `/srv/php85/secrets` and mounted read-only.
-- Mailpit data is under `/srv/php85/data/mailpit`.
+The recommended bind-mount layout is:
+
+- Site code under `/var/www/sites/<site>`, mounted read-only with its native `public_html` directory.
+- Writable site-specific `public_html/upload` and `var` binds; never reset sessions during container replacement.
+- Compose, Docker/Apache/gateway and retained TLS proxy configuration under `/etc/nf/nterchange/`.
+- Private environment/client files under `/etc/nf/nterchange/secrets`, mounted read-only.
+- MySQL data under `/var/lib/nf/nterchange/mysql`, with a separate schema/account per CMS.
+- Mailpit data under `/var/lib/nf/nterchange/mailpit`.
+- Non-secret discovery inventory at `/var/lib/nf/sites.json`; do not fabricate WordPress/Linode target metadata for an SSH target.
+
+A layout migration needs its own approval. Stop writers and shut MySQL down cleanly before same-filesystem renames, update every bind/inventory/tool reference and recreate services with existing cached images and unchanged Compose project/network identity. Refuse a cross-filesystem copy fallback or an empty database bind. Keep a small config/rename rollback record and existing recovery archives, not a duplicate live data tree. Do not run a full backup, dump or restore merely to rename directories. This is separate from nf code activation and from any public cutover.
 
 Alaris's `public_html/videos` currently sits inside its read-only site tree but is untracked media. It must be transferred as media and kept outside future code replacement. Local recipes currently use named database volumes plus bind-mounted source, uploads and runtime directories. Container replacement does not erase either kind of persistent storage.
 
