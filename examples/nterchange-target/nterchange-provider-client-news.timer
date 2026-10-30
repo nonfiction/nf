@@ -1,0 +1,10 @@
+[Unit]
+Description=Refresh client news every ten minutes after approved cutover
+
+[Timer]
+OnCalendar=*-*-* *:00,10,20,30,40,50:00 UTC
+Unit=nterchange-provider-refresh@client-news.service
+Persistent=false
+
+[Install]
+WantedBy=timers.target

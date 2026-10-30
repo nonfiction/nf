@@ -1,0 +1,32 @@
+# Merge only after configuring the fixed provider paths and approving access.
+services:
+  client:
+    environment:
+      NEWS_RELEASE_FEED_URL: http://provider-relay:8080/feeds/client
+  provider-relay:
+    image: nginx:1.28-alpine
+    user: "101:101"
+    restart: unless-stopped
+    cpus: 0.25
+    mem_limit: 128m
+    pids_limit: 64
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+    tmpfs: [/tmp]
+    networks: [client, provider-egress]
+    logging:
+      driver: json-file
+      options:
+        max-size: 10m
+        max-file: "3"
+    volumes:
+      - type: bind
+        source: /etc/nf/nterchange/docker/provider-relay.conf
+        target: /etc/nginx/nginx.conf
+        read_only: true
+        bind:
+          create_host_path: false
+networks:
+  provider-egress:
+    internal: false

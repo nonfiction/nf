@@ -1,0 +1,14 @@
+[Unit]
+Description=Nterchange provider refresh %i
+ConditionPathExists=/etc/nf/nterchange/provider-jobs.enabled
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/sbin/nterchange-provider-jobs.py %i --execute
+TimeoutStartSec=15min
+UMask=0077
+NoNewPrivileges=yes
+PrivateTmp=yes
+ProtectHome=yes
+ProtectSystem=strict
+ReadWritePaths=/var/lib/nf/provider-jobs/locks

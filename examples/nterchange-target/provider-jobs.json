@@ -1,0 +1,7 @@
+{
+  "client-news": {
+    "site": "client",
+    "public_host": "www.client.example.com",
+    "action": "news"
+  }
+}
