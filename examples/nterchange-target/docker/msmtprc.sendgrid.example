@@ -1,0 +1,17 @@
+# Install a separate private file per site; never commit its real password.
+# Apache must be able to read the bound file, but not the host secrets directory.
+defaults
+host smtp-relay
+port 2525
+timeout 15
+auth on
+user apikey
+password REPLACE_WITH_SITE_MAIL_SEND_API_KEY
+tls on
+tls_starttls on
+tls_trust_file /etc/ssl/certs/ca-certificates.crt
+tls_host_override smtp.sendgrid.net
+from client@notifications.example.com
+allow_from_override off
+set_from_header off
+account default

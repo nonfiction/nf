@@ -1,0 +1,50 @@
+# Optional production-mail overlay. Keep apps on their existing internal networks.
+# Install real per-site credentials outside Git before enabling this overlay.
+services:
+  client:
+    environment:
+      NF_MAIL_FROM: client@notifications.example.com
+      NF_MAIL_NAME: Client website
+    volumes:
+      - type: bind
+        source: /etc/nf/nterchange/secrets/client.msmtprc
+        target: /etc/msmtprc
+        read_only: true
+        bind:
+          create_host_path: false
+      - type: bind
+        source: /etc/nf/nterchange/docker/sendmail.php
+        target: /usr/local/lib/nf/sendmail.php
+        read_only: true
+        bind:
+          create_host_path: false
+      - type: bind
+        source: /etc/nf/nterchange/docker/transactional-mail.ini
+        target: /usr/local/etc/php/conf.d/zz-transactional-mail.ini
+        read_only: true
+        bind:
+          create_host_path: false
+  smtp-relay:
+    image: nginx:1.28-alpine
+    user: "101:101"
+    entrypoint: [nginx, -g, "daemon off;"]
+    read_only: true
+    restart: unless-stopped
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    tmpfs: [/tmp]
+    cpus: 0.25
+    mem_limit: 64m
+    pids_limit: 64
+    volumes:
+      - type: bind
+        source: /etc/nf/nterchange/docker/smtp-relay.conf
+        target: /etc/nginx/nginx.conf
+        read_only: true
+        bind:
+          create_host_path: false
+    networks: [client, mail-egress]
+    # No published ports. STARTTLS passes through to SendGrid without termination.
+networks:
+  mail-egress:
+    internal: false
