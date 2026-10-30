@@ -46,6 +46,26 @@ proxy_redirect http://$host/ https://$host/;
 
 Preserve =form-action 'self'= and the site's existing CSP rather than weakening it. For protected review, preserve HTTP Basic Auth, noindex/no-store and the rule stripping review Authorization before it reaches the app. A static health URL is the only intended authentication exception. Keep the application-side HTTPS/proxy settings consistent with the trusted proxy. Do not rewrite external-host destinations indiscriminately.
 
+** Public hostnames and HTTPS before cutover
+Public hostname preparation is separate from public traffic cutover. Keep DNS address records and reserved-IP assignment unchanged until explicitly approved. Use =examples/nterchange-target/nginx-public-sites.conf= as a separate public vhost, not a replacement for protected review configuration. Public names get normal access/indexing policy; review names retain Basic Auth/noindex/no-store and always reach the local deployment. Keep mail, integrations and schedulers under their existing gates.
+
+Resolve both apex/www public names, the current public proxy, independent old origins, required Host/SNI, current certificates and renewal ownership before edits. Add the approved public names to the existing gateway's matching site server, preserving review names. Do not start a second application stack or change site code/configuration merely to add hostname routing.
+
+HTTP-01 can be prepared without DNS cutover by delegating only missing ACME challenge tokens from the old public proxy to the new host. The example =nginx-acme-delegation.conf= preserves tokens in the old webroot first, so existing old-server renewals still work. Include it only in the migrating vhosts, including their HTTPS challenge path when a CDN or redirect requires it. Leave all other old public proxy routes unchanged. This needs explicit authority and privileged access on the old proxy; do not bypass missing access, copy private keys casually or expose a DNS API token to avoid asking.
+
+On the new host, serve challenge files at =/var/www/acme= under each approved public hostname, then issue its apex/www certificate with the existing Certbot account:
+
+#+begin_src sh
+sudo certbot certonly --webroot -w /var/www/acme --cert-name client.example.com -d client.example.com -d www.client.example.com --non-interactive
+sudo certbot renew --cert-name client.example.com --dry-run --run-deploy-hooks --no-random-sleep-on-renew --non-interactive
+#+end_src
+
+Install the public HTTPS vhost only with a certificate covering its real names. Confirm the existing renewal timer and syntax-check/reload deploy hook. Test both names directly against the new IP with normal certificate verification, for example =curl --resolve www.client.example.com:443:192.0.2.20 https://www.client.example.com/=. A syntax check using a substituted review certificate is not public-name TLS acceptance. Test HTTP redirects, CMS login/assets, security headers and protected review behavior separately. Never use =curl -k= to declare public TLS ready.
+
+For nginx files bind-mounted into the existing gateway, preserve the mounted inode when applying an approved replacement or deliberately recreate only that gateway. Validate the candidate in its actual network namespace before a graceful reload. Do not recreate application/database containers for a hostname-only routing change. Preserve source/data, active release state and existing sessions; normal authorized HTTP checks can create sessions/audit rows.
+
+Keep per-site proxy-back blocks commented out by default. To switch one public site later, record switch time, comment its local proxy block and uncomment only its complete reviewed old-origin block, then run =nginx -t= before a graceful nginx reload. Review routes stay local. Use a stable origin-specific host/IP independent of public DNS or the movable reserved IP, correct Host and HTTPS SNI, explicit redirect mappings and no automatic upstream retries. Validate old-origin TLS; record an inherited expired/unverified origin as a limitation rather than silently weakening the normal route. Jon may accept temporarily stale/divergent content for emergency proxy-back. Preserve both data sets and reconcile later, without overwriting new data or replaying requests. Remove temporary alternatives after the rollback window and separate approval to retire old origins.
+
 ** Runtime setup and data boundaries
 - Inspect the target OS and existing services before installing anything. Use that host's supported configuration workflow, not commands copied blindly from kit's NixOS environment. Expose only approved SSH/HTTP/HTTPS ports; database and mail UI must not be publicly published.
 - Use reviewed PHP/MySQL images and bounded worker/resource settings. Keep each CMS on its own schema/account and internal application network. Validate that one site's account cannot read another site's schema.
