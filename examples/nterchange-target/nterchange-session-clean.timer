@@ -1,0 +1,10 @@
+[Unit]
+Description=Clean nterchange sessions every 30 minutes
+
+[Timer]
+OnCalendar=*-*-* *:09,39:00
+Persistent=true
+Unit=nterchange-session-clean.service
+
+[Install]
+WantedBy=timers.target

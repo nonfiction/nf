@@ -1,0 +1,18 @@
+[Unit]
+Description=Clean expired nterchange PHP file sessions
+
+[Service]
+Type=oneshot
+User=www-data
+Group=www-data
+ExecStart=/usr/bin/python3 /usr/local/sbin/nterchange-session-clean.py
+UMask=0077
+Nice=10
+TimeoutStartSec=60
+NoNewPrivileges=true
+PrivateTmp=true
+PrivateNetwork=true
+ProtectHome=true
+ProtectSystem=strict
+# Render the real, stable session directories and verify their worker UID/GID.
+ReadWritePaths=/var/www/sites/client/var/sessions
