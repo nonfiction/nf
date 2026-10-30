@@ -144,6 +144,15 @@
         },
         {
           "type": "bind",
+          "source": "/etc/nf/nterchange/docker/apache.conf",
+          "target": "/etc/apache2/sites-available/000-default.conf",
+          "read_only": true,
+          "bind": {
+            "create_host_path": false
+          }
+        },
+        {
+          "type": "bind",
           "source": "/etc/nf/nterchange/secrets/client.env",
           "target": "/var/www/site/.env",
           "read_only": true,
