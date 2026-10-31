@@ -1,5 +1,5 @@
 [Unit]
-Description=Nterchange provider refresh %i
+Description=nterchange provider refresh %i
 ConditionPathExists=/etc/nf/nterchange/provider-jobs.enabled
 
 [Service]

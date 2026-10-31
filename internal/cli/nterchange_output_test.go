@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -11,7 +12,8 @@ import (
 )
 
 func TestNterchangeOutputEnvDetails(t *testing.T) {
-	root, _, _ := nterchangePullTestProject(t)
+	root := nterchangeLocalTestProject(t)
+	nterchangeEnvDocker(t, nterchangeEnvTestConfig)
 	metadata, err := project.Load(root)
 	if err != nil {
 		t.Fatal(err)
@@ -33,28 +35,45 @@ func TestNterchangeOutputEnvDetails(t *testing.T) {
 			t.Fatalf("show = %d", code)
 		}
 	})
-	want := `client:local
+	_, _, dbPort := envDerivedPorts("nterchange-client-local")
+	want := fmt.Sprintf(`> docker compose -f '/checkout/compose.yaml' config --format json
+client:local
 ────────────
 Site          client
 Env           local
 Application   nterchange
 Path          /checkout
-Compose       /checkout/compose.yaml
-Services      app, db
+Compose       client-local
+File          /checkout/compose.yaml
+Services      app, db, db-ui, gateway
+
+Database
+  DB URL        http://127.0.0.1:%d/?db=client&mysql=db&username=client
+
+Email
+  Mailpit URL   http://127.0.0.1:18093
+
+nterchange
+  Site URL      http://127.0.0.1:18083
 
 Runtime
-  Var      /checkout/var
+  Var           /checkout/var
 
 Media (excluded from code deployment)
-  Path     /checkout/public_html/upload
-  Path     /checkout/public_html/videos
+  Path          /checkout/public_html/upload
+  Path          /checkout/public_html/videos
 
 Remotes
-  review   client.test-host:review
-  zeta     client.other-host:review
-`
+  review        client.test-host:review
+  zeta          client.other-host:review
+`, dbPort)
 	if got := strings.ReplaceAll(out, root, "/checkout"); got != want {
 		t.Fatalf("env show:\n%s\nwant:\n%s", got, want)
+	}
+	for _, secret := range []string{"never-print-this", "private-db-value", "private-root-value"} {
+		if strings.Contains(out, secret) {
+			t.Fatal("env show exposed a credential")
+		}
 	}
 	after, err := os.ReadFile(config.ProjectFile(root))
 	if err != nil || string(before) != string(after) {
@@ -204,7 +223,12 @@ func TestNterchangeOutputHelpUsesGroupHeading(t *testing.T) {
 	if !strings.HasPrefix(out, "env\n\nCommands:\n") {
 		t.Fatalf("nonstandard group heading: %s", out)
 	}
-	if !strings.Contains(out, "Local container lifecycle is not available yet.") {
-		t.Fatal("capability limit omitted")
+	for _, command := range []string{"up", "down", "show", "logs", "shell, sh", "pull <remote>", "package --ref", "deploy <remote>", "rollback <remote>", "--rebuild", "--check"} {
+		if !strings.Contains(out, command) {
+			t.Fatalf("help omitted %q: %s", command, out)
+		}
+	}
+	if !strings.Contains(out, "Logs and shell are local only.") || !strings.Contains(out, "Reset, push, snapshots and password are not available.") {
+		t.Fatal("capability limits omitted")
 	}
 }

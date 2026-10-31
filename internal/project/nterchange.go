@@ -6,7 +6,7 @@ import (
 	"strings"
 )
 
-// Nterchange uses the repository's existing app/db Compose services.
+// nterchange uses the repository's existing app/db Compose services.
 // Media paths are data, not part of a code release.
 type Nterchange struct {
 	Media []string `json:"media,omitempty"`

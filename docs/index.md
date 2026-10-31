@@ -15,7 +15,7 @@ This documentation expands on the concise repo [README](https://github.com/nonfi
 ## Practical Guides
 
 - [Local Development](local-development.md): spin up a local WordPress env from a repo.
-- [Nterchange and SSH targets](nterchange.md): project metadata and read-only discovery on existing Compose hosts.
+- [nterchange and SSH targets](nterchange.md): project metadata and read-only discovery on existing Compose hosts.
 - [Targets](targets.md): add and inspect deployable targets.
 - [Sites](sites.md): add remote WordPress sites and inspect envs.
 - [Staging](staging.md): create, inspect, and remove staging envs.

@@ -54,6 +54,7 @@ func TestNterchangeInitInspectAndWordPressGuards(t *testing.T) {
 	if code := Run([]string{"init", "--type", "nterchange"}); code != 0 {
 		t.Fatalf("init = %d", code)
 	}
+	nterchangeEnvDocker(t, nterchangeEnvTestConfig)
 	manifest, err := project.Load(repo)
 	if err != nil {
 		t.Fatal(err)
@@ -73,7 +74,7 @@ func TestNterchangeInitInspectAndWordPressGuards(t *testing.T) {
 	if !strings.Contains(out, "Application   nterchange") || !strings.Contains(out, filepath.Join(repo, "public_html/upload")) {
 		t.Fatalf("bad show: %s", out)
 	}
-	for _, argv := range [][]string{{"env", "up"}, {"env", "reset"}, {"env", "push", "review", "--execute", "--yes"}, {"env", "pull", "review", "--execute", "--yes"}, {"theme", "deploy", "review"}, {"plugin", "update"}, {"define", "set", "A", "B"}, {"alias", "add", "x"}, {"init", "--force"}} {
+	for _, argv := range [][]string{{"env", "up", "--unknown"}, {"env", "reset"}, {"env", "push", "review", "--execute", "--yes"}, {"env", "pull", "review", "--execute", "--yes"}, {"theme", "deploy", "review"}, {"plugin", "update"}, {"define", "set", "A", "B"}, {"alias", "add", "x"}, {"init", "--force"}} {
 		out := captureStderr(t, func() {
 			if code := Run(argv); code == 0 {
 				t.Fatalf("unsafe/unsupported command succeeded: %v", argv)

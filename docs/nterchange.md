@@ -1,6 +1,6 @@
-# Nterchange and SSH targets
+# nterchange and SSH targets
 
-Nterchange support covers project metadata, registration of an existing SSH target, read-only site discovery, repo remote aliases, local configuration inspection, guarded SQL/media pull, locked code packaging and per-site code activation/rollback. It does not provision DigitalOcean resources or manage local container lifecycle. Release tests used a disposable synthetic PHP target only; existing CMS deployment still requires separate review.
+nterchange support covers project metadata, registration of an existing SSH target, read-only site discovery, repo remote aliases, local Compose lifecycle and inspection, guarded SQL/media pull, locked code packaging and per-site code activation/rollback. It does not provision DigitalOcean resources or generate a local stack. Release tests used a disposable synthetic PHP target only; existing CMS deployment still requires separate review.
 
 WordPress commands stay separate. In a nterchange project, unsupported environment mutations and WordPress theme/plugin/define/alias commands fail without changing the environment.
 
@@ -35,9 +35,30 @@ The default media directory is `public_html/upload`. Declare additional mutable 
 
 Media paths must be clean, non-overlapping paths below `public_html`. Hidden paths and directory traversal are rejected. WordPress configuration and its `local` overrides cannot be combined with `nterchange`.
 
-The local recipe uses services named `app` and `db`. Existing database volumes, bind mounts, credentials, integration restrictions and mail capture remain owned by that recipe. `nf env show` reads metadata only. It does not start containers, load application code, or generate environment files.
+The local recipe uses services named `app` and `db`. Existing database volumes, bind mounts, credentials, integration restrictions and mail capture remain owned by that recipe. `nf env show` resolves the existing `compose.yaml` with `docker compose config --format json` and shows its project name, services, labelled site/Mailpit/database UI links and other published loopback ports alongside paths and remotes. It requires Docker Compose but does not contact the daemon, start containers, load application code, or generate environment files. Resolved environment values and raw Compose diagnostics are not printed.
 
-Human-readable output follows the existing WordPress conventions: `project:local` headings, aligned detail rows, separate sections, shared pull preflight layout and operation plans. Nterchange details remain application-specific; `env show` does not infer or expose database credentials or runtime settings. Target/site/remote tables and details still use the shared handlers; supported JSON output is unchanged.
+Human-readable output follows the existing WordPress conventions: `project:local` headings, aligned detail rows, separate sections, shared pull preflight layout and operation plans. nterchange details remain application-specific. The database UI link prefills the existing Compose `db` service's `MYSQL_USER` and `MYSQL_DATABASE` when available. Passwords and other runtime settings stay out of the output. Target/site/remote tables and details still use the shared handlers; supported JSON output is unchanged.
+
+## Run the existing local environment
+
+```sh
+nf env up
+nf env up --rebuild
+nf env show
+nf env logs
+nf env shell  # sh is an alias
+nf env down
+```
+
+Commands use the repository-root `compose.yaml`, even from a subdirectory, and print the underlying command before execution. `up` starts the existing stack using existing site images, without building or pulling those images. If a site image is missing, prepare it explicitly through the existing recipe. `up --rebuild` builds only `app` before starting the stack; a failed build prevents startup. Startup requires internal networks for `app` and `db`, and explicit loopback bindings for all published ports. This is a configuration check, not the full SQL/media pull preflight.
+
+nf adds a local AdminNeo 5.4.1 service through `NF_DATA_HOME/nterchange/envs/<compose-project>/db-ui.compose.json`. The repository recipe stays unchanged. The UI uses the same PHP runtime image as the default WordPress database UI; nf pulls that image only when missing. Its port is derived from the Compose project name and binds only `127.0.0.1`. It joins the database's existing internal networks plus a separate egress network to download AdminNeo at startup. App/db networks and database grants remain unchanged. An existing `db-ui` service is used as configured, without an nf override.
+
+`env show` prints `Database / DB URL`, `Email / Mailpit URL` and `nterchange / Site URL` sections. Log into AdminNeo with the existing local database password. No new credentials are generated or printed. These are configured URLs, not a check that services are running.
+
+`down` includes the managed UI override and runs Compose down without volume removal or orphan cleanup. Named database volumes and existing bind-mounted data/settings remain in place. Anonymous volumes are not reattached automatically by Compose on a later up; use the recipe's named volumes or bind mounts for persistent data. `logs` follows only `app`; `shell` opens `sh` inside `app` as its configured container user. Both commands are local only and reject remote names or extra arguments.
+
+These commands do not generate credentials, reset databases, import data, install dependencies inside the checkout, or change the recipe. `up --rebuild` does execute the recipe's existing app build. Reset, push, snapshots, password output and WordPress-specific commands remain unavailable. `Env started.` reports successful Compose execution, not CMS readiness or a passed health check.
 
 ## Prepare a target without a provisioner
 

@@ -181,6 +181,8 @@ func marshalProjectJSONValue(value any) ([]byte, error) {
 	return bytes.TrimSuffix(output.Bytes(), []byte{'\n'}), nil
 }
 
+const localAdminNeoURL = "https://www.adminneo.org/files/5.4.1/mysql_en_default/adminneo-5.4.1.php"
+
 func renderEnvCompose(cfg envConfig) string {
 	wordpressService := firstNonEmpty(cfg.WordpressService, "wordpress")
 	dbImage := firstNonEmpty(cfg.DockerDBImage, defaultDockerDBImage)
@@ -253,7 +255,7 @@ func renderEnvCompose(cfg envConfig) string {
         condition: service_healthy
     command: >
       sh -lc "mkdir -p /var/www/html
-      && php -r 'copy(\"https://www.adminneo.org/files/5.4.1/mysql_en_default/adminneo-5.4.1.php\", \"/var/www/html/index.php\");'
+      && php -r 'copy(\"%s\", \"/var/www/html/index.php\");'
       && php -S 0.0.0.0:80 -t /var/www/html"
     ports:
       - "${DB_UI_PORT}:80"
@@ -263,7 +265,7 @@ func renderEnvCompose(cfg envConfig) string {
 volumes:
   db_data:
   wp_data:
-`, dbImage, wordpressService, dockerUser, repoMounts, uploadsPath, envTransferPath, path.Join("/", "env", "uploads"), envSnapshotComposeMount(cfg), wordpressImage)
+`, dbImage, wordpressService, dockerUser, repoMounts, uploadsPath, envTransferPath, path.Join("/", "env", "uploads"), envSnapshotComposeMount(cfg), wordpressImage, localAdminNeoURL)
 }
 
 func renderEnvRepoThemeMounts(cfg envConfig) string {
