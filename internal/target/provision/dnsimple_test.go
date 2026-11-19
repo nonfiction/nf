@@ -170,6 +170,39 @@ func TestDNSimpleProviderUpsertARecordCreatesUpdatesAndUsesDecimalIDs(t *testing
 	})
 }
 
+func TestDNSimpleProviderUpsertFindsExistingRecordOnLaterPage(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet || r.URL.Path != "/v2/14/zones/example.test/records" || r.URL.Query().Get("type") != "TXT" {
+			t.Errorf("unexpected request: %s %s", r.Method, r.URL)
+			http.Error(w, `{"message":"Validation failed"}`, http.StatusBadRequest)
+			return
+		}
+		switch r.URL.Query().Get("page") {
+		case "", "1":
+			_, _ = io.WriteString(w, `{"data":[{"id":1,"name":"_verify.other","type":"TXT"}],"pagination":{"current_page":1,"per_page":1,"total_entries":2,"total_pages":2}}`)
+		case "2":
+			_, _ = io.WriteString(w, `{"data":[{"id":2,"name":"_verify.app","type":"TXT","content":"verification-token","ttl":300}],"pagination":{"current_page":2,"per_page":1,"total_entries":2,"total_pages":2}}`)
+		default:
+			t.Errorf("unexpected page: %s", r.URL)
+			http.Error(w, `{"message":"Unexpected page"}`, http.StatusBadRequest)
+		}
+	}))
+	defer srv.Close()
+
+	provider, err := newDNSimpleProvider(context.Background(), "secret-token", "14")
+	if err != nil {
+		t.Fatal(err)
+	}
+	provider.client.BaseURL = srv.URL
+	record, action, err := provider.upsertRecord(context.Background(), "example.test", "_verify.app", "TXT", "verification-token", 300)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if action != "already points" || record.ID != "2" {
+		t.Fatalf("upsertRecord() = %+v, %q; want existing record 2, already points", record, action)
+	}
+}
+
 func TestDefaultDNSimpleUpsertARecordPrintsFQDNs(t *testing.T) {
 	tests := []struct {
 		name        string

@@ -55,15 +55,21 @@ func (p *dnsimpleProvider) listRecords(ctx context.Context, zone, recordType str
 	if recordType == "" {
 		recordType = "A"
 	}
-	resp, err := p.client.Zones.ListRecords(ctx, p.accountID, zone, &dnsimple.ZoneRecordListOptions{Type: dnsimple.String(recordType)})
-	if err != nil {
-		return nil, Error{Msg: fmt.Sprintf("Listing DNSimple %s records for zone %s: %v", recordType, zone, err)}
+	options := &dnsimple.ZoneRecordListOptions{Type: dnsimple.String(recordType)}
+	var records []DNSRecord
+	for page := 1; ; page++ {
+		resp, err := p.client.Zones.ListRecords(ctx, p.accountID, zone, options)
+		if err != nil {
+			return nil, Error{Msg: fmt.Sprintf("Listing DNSimple %s records for zone %s: %v", recordType, zone, err)}
+		}
+		for _, record := range resp.Data {
+			records = append(records, dnsRecordFromZoneRecord(record))
+		}
+		if resp.Pagination == nil || page >= resp.Pagination.TotalPages {
+			return records, nil
+		}
+		options.Page = dnsimple.Int(page + 1)
 	}
-	records := make([]DNSRecord, 0, len(resp.Data))
-	for _, record := range resp.Data {
-		records = append(records, dnsRecordFromZoneRecord(record))
-	}
-	return records, nil
 }
 
 func (p *dnsimpleProvider) listARecords(ctx context.Context, zone string) ([]DNSRecord, error) {
@@ -84,10 +90,7 @@ func (p *dnsimpleProvider) upsertRecord(ctx context.Context, zone, name, recordT
 	if ttl <= 0 {
 		ttl = 300
 	}
-	records, err := p.listARecords(ctx, zone)
-	if recordType != "A" {
-		records, err = p.listRecords(ctx, zone, recordType)
-	}
+	records, err := p.listRecords(ctx, zone, recordType)
 	if err != nil {
 		return DNSRecord{}, "", err
 	}
