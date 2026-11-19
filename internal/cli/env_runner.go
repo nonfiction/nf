@@ -3,6 +3,7 @@ package cli
 // Local env command runner and snapshot archive helpers.
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -11,6 +12,7 @@ import (
 	"os/exec"
 	"path"
 	"path/filepath"
+	"regexp"
 	"sort"
 	"strings"
 	"time"
@@ -23,13 +25,37 @@ type envCommandRunner struct {
 	rebuild  bool
 }
 
+var missingDockerNetworkError = regexp.MustCompile(`(?m)^Error response from daemon: (failed to set up container networking: )?network \S+ not found\r?$`)
+
+func startEnvCompose(cfg envConfig, envDir string) error {
+	args := envComposeArgs(cfg, "up", "-d")
+	printCommandArgs(args)
+	cmd := exec.Command(args[0], args[1:]...)
+	cmd.Dir = envDir
+	cmd.Stdout = os.Stdout
+	var stderr bytes.Buffer
+	cmd.Stderr = io.MultiWriter(os.Stderr, &stderr)
+	cmd.Stdin = os.Stdin
+	if err := cmd.Run(); err != nil {
+		if !missingDockerNetworkError.MatchString(stderr.String()) {
+			return err
+		}
+		// Recreate stale network attachments while retaining Compose volumes.
+		fmt.Fprintln(os.Stderr, "Docker containers reference a missing network. Recreating this env's containers once, preserving volumes and bind mounts.")
+		if err := runCommandSpec(execSpec{Dir: envDir, Args: envComposeArgs(cfg, "up", "-d", "--force-recreate")}); err != nil {
+			return fmt.Errorf("env startup failed after recreating containers for a missing Docker network: %w", err)
+		}
+	}
+	return nil
+}
+
 func (c envCommandRunner) ensureUpInstalledActive(envDir string) error {
 	if c.rebuild {
 		if err := runCommandSpec(execSpec{Dir: envDir, Args: envComposeArgs(c.cfg, "build")}); err != nil {
 			return err
 		}
 	}
-	if err := runCommandSpec(execSpec{Dir: envDir, Args: envComposeArgs(c.cfg, "up", "-d")}); err != nil {
+	if err := startEnvCompose(c.cfg, envDir); err != nil {
 		return err
 	}
 	if err := runCommandSpecWithPreview(execSpec{Dir: envDir, Args: envWpBootstrapReadyArgs(c.cfg)}, envWpBootstrapPreviewArgs(c.cfg, "wait for WordPress files")); err != nil {

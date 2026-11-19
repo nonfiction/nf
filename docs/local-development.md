@@ -19,6 +19,8 @@ nf env show
 
 `nf env up` is idempotent. It starts Docker Compose, configures Mailpit SMTP, reconciles configured `wp-config.php` defines, installs WordPress if needed, and ensures the mounted theme is active.
 
+If Docker reports that an existing container's network no longer exists, nf explains the failure and retries once with `docker compose up -d --force-recreate`. This recreates the local env's containers while preserving volumes and bind mounts, including database files and uploads. Other startup errors stop without automatic recreation.
+
 Local env commands use built-in defaults when `local` is absent from `nf.json`. Add `local` only for non-default overrides:
 
 ```json
