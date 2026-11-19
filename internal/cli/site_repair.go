@@ -638,7 +638,9 @@ EOF
     error_log /var/log/nginx/sites/$selected_file_slug.error.log;
     include /etc/nginx/snippets/nf-wordpress.conf;
     include /etc/nginx/snippets/nf-static-assets.conf;
-    location ~ \.php$ { include /etc/nginx/snippets/nf-fastcgi-php.conf; fastcgi_cache $cache_zone; include /etc/nginx/snippets/nf-fastcgi-cache.conf; fastcgi_pass unix:/run/php/php${php_version}-fpm.sock; }
+`)
+	b.WriteString(linodeNginxCachedPHPLocation("php_version"))
+	b.WriteString(`
 }
 EOF
 } >"$tmp"

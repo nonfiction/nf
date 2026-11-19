@@ -1,5 +1,11 @@
 package cli
 
+func linodeNginxCachedPHPLocation(phpVersionVar string) string {
+	// Use the original URL before WordPress rewrites it to /index.php. Keep
+	// nginx variables literal when the provisioning heredoc expands.
+	return `    location ~ \.php$ { include /etc/nginx/snippets/nf-fastcgi-php.conf; fastcgi_cache $cache_zone; fastcgi_cache_key "\$scheme|\$request_method|\$host|\$request_uri"; include /etc/nginx/snippets/nf-fastcgi-cache.conf; fastcgi_pass unix:/run/php/php${` + phpVersionVar + `}-fpm.sock; }`
+}
+
 func linodeNginxCacheShellFunctions() string {
 	return `nf_linode_write_cache_snippets() {
   install -d -m 0755 /etc/nginx/snippets
